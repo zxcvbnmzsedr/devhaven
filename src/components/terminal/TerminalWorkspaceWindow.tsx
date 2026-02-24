@@ -207,63 +207,69 @@ export default function TerminalWorkspaceWindow({
             return (
               <div key={project.id} className="flex flex-col gap-1" title={project.path}>
                 <div
-                  className={`group flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px] font-semibold transition-colors ${
+                  className={`group relative flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px] font-semibold transition-colors ${
                     isActive
                       ? "bg-[var(--terminal-accent-bg)] text-[var(--terminal-fg)]"
                       : "text-[var(--terminal-muted-fg)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)]"
                   }`}
                 >
-                  <button className="min-w-0 flex-1 truncate text-left" onClick={() => onSelectProject(project.id)}>
+                  <button
+                    className="min-w-0 flex-1 truncate pr-6 text-left"
+                    title={project.name}
+                    onClick={() => onSelectProject(project.id)}
+                  >
                     {project.name}
                   </button>
-                  {codexRunningCount > 0 ? (
-                    <span
-                      className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--terminal-accent)]"
-                      title={`Codex 运行中（${codexRunningCount} 个会话）`}
-                      aria-label={`Codex 运行中（${codexRunningCount} 个会话）`}
+                  <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
+                    {codexRunningCount > 0 ? (
+                      <span
+                        className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--terminal-accent)]"
+                        title={`Codex 运行中（${codexRunningCount} 个会话）`}
+                        aria-label={`Codex 运行中（${codexRunningCount} 个会话）`}
+                      >
+                        <span className="sr-only">Codex 运行中</span>
+                      </span>
+                    ) : null}
+                    <button
+                      className="hidden h-6 w-6 items-center justify-center rounded-md border border-transparent text-[var(--terminal-muted-fg)] transition-colors hover:border-[var(--terminal-divider)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] group-hover:inline-flex group-focus-within:inline-flex"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onRefreshWorktrees(project.id);
+                      }}
+                      aria-label={`刷新 ${project.name} worktree`}
+                      title="刷新 worktree"
+                      type="button"
                     >
-                      <span className="sr-only">Codex 运行中</span>
-                    </span>
-                  ) : null}
-                  <button
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-transparent text-[var(--terminal-muted-fg)] opacity-0 transition-opacity hover:border-[var(--terminal-divider)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] group-hover:opacity-100"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onRefreshWorktrees(project.id);
-                    }}
-                    aria-label={`刷新 ${project.name} worktree`}
-                    title="刷新 worktree"
-                    type="button"
-                  >
-                    ↻
-                  </button>
-                  <button
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-transparent text-[var(--terminal-muted-fg)] opacity-0 transition-opacity hover:border-[var(--terminal-divider)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] group-hover:opacity-100"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onCreateWorktree(project.id);
-                    }}
-                    aria-label={`为 ${project.name} 创建 worktree`}
-                    title="创建 worktree"
-                    type="button"
-                  >
-                    +
-                  </button>
-                  <button
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-transparent text-[var(--terminal-muted-fg)] opacity-0 transition-opacity hover:border-[var(--terminal-divider)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] group-hover:opacity-100"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onCloseProject(project.id);
-                    }}
-                    aria-label={`关闭 ${project.name}`}
-                    title="关闭项目"
-                    type="button"
-                  >
-                    ×
-                  </button>
+                      ↻
+                    </button>
+                    <button
+                      className="hidden h-6 w-6 items-center justify-center rounded-md border border-transparent text-[var(--terminal-muted-fg)] transition-colors hover:border-[var(--terminal-divider)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] group-hover:inline-flex group-focus-within:inline-flex"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onCreateWorktree(project.id);
+                      }}
+                      aria-label={`为 ${project.name} 创建 worktree`}
+                      title="创建 worktree"
+                      type="button"
+                    >
+                      +
+                    </button>
+                    <button
+                      className="hidden h-6 w-6 items-center justify-center rounded-md border border-transparent text-[var(--terminal-muted-fg)] transition-colors hover:border-[var(--terminal-divider)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] group-hover:inline-flex group-focus-within:inline-flex"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        onCloseProject(project.id);
+                      }}
+                      aria-label={`关闭 ${project.name}`}
+                      title="关闭项目"
+                      type="button"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </div>
 
                 {hasWorktrees ? (
