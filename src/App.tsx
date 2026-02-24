@@ -253,7 +253,20 @@ function shouldBlockReloadShortcut(event: KeyboardEvent): boolean {
   if (key !== "r") {
     return false;
   }
-  return (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey;
+
+  if (!(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey) {
+    return false;
+  }
+
+  const activeTarget =
+    event.target instanceof Element ? event.target : document.activeElement instanceof Element ? document.activeElement : null;
+
+  // 允许终端里的 Ctrl+R 透传给 shell（例如历史命令搜索），避免被误判成页面刷新快捷键。
+  if (event.ctrlKey && !event.metaKey && activeTarget?.closest(".terminal-pane, .xterm, .xterm-helper-textarea")) {
+    return false;
+  }
+
+  return true;
 }
 
 /** 应用主布局，负责筛选、状态联动与面板展示。 */
