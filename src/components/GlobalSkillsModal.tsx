@@ -310,73 +310,165 @@ type SkillMatrixTableProps = {
   onOpenSkillPath: (path: string, name: string) => Promise<void>;
 };
 
-function SkillMatrixTable({ agents, skills, onCopySkillPath, onOpenSkillPath }: SkillMatrixTableProps) {
+type TruncatedTextWithTooltipProps = {
+  value: string;
+  wrapperClassName?: string;
+  contentClassName?: string;
+  onShowTooltip: (value: string, x: number, y: number) => void;
+  onMoveTooltip: (x: number, y: number) => void;
+  onHideTooltip: () => void;
+};
+
+function TruncatedTextWithTooltip({
+  value,
+  wrapperClassName,
+  contentClassName,
+  onShowTooltip,
+  onMoveTooltip,
+  onHideTooltip,
+}: TruncatedTextWithTooltipProps) {
   return (
-    <div className="max-h-[460px] overflow-auto rounded-lg border border-border/70">
-      <table className="min-w-max border-collapse text-[12px]">
-        <thead className="sticky top-0 z-20 bg-secondary-background">
-          <tr>
-            <th className="sticky left-0 z-30 min-w-[320px] border-b border-r border-border bg-secondary-background px-3 py-2 text-left font-semibold text-text">
-              Skill
-            </th>
-            {agents.map((agent) => (
-              <th
-                key={`skill-agent-head-${agent.id}`}
-                className="min-w-[120px] border-b border-border px-2 py-2 text-center font-semibold text-secondary-text"
-              >
-                {agent.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {skills.map((skill) => {
-            const enabledAgentIds = new Set(skill.agents.map((agent) => agent.id));
-            return (
-              <tr key={`global-skill-row-${skill.name}`}>
-                <td className="sticky left-0 z-10 border-b border-r border-border bg-card-bg px-3 py-2 align-top">
-                  <div className="text-[13px] font-semibold text-text">{skill.name}</div>
-                  <div className="mt-0.5 text-[11px] text-secondary-text break-words">{skill.description || "无描述"}</div>
-                  <div className="mt-1 break-all text-[11px] text-secondary-text">{skill.canonicalPath}</div>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <button
-                      className="btn btn-outline !px-2 !py-0.5 text-[11px]"
-                      onClick={() => void onOpenSkillPath(skill.canonicalPath, skill.name)}
-                    >
-                      打开
-                    </button>
-                    <button
-                      className="btn btn-outline !px-2 !py-0.5 text-[11px]"
-                      onClick={() => void onCopySkillPath(skill.canonicalPath, skill.name)}
-                    >
-                      复制
-                    </button>
-                  </div>
-                </td>
-                {agents.map((agent) => {
-                  const enabled = enabledAgentIds.has(agent.id);
-                  return (
-                    <td
-                      key={`global-skill-cell-${skill.name}-${agent.id}`}
-                      className="border-b border-border px-2 py-2 text-center"
-                    >
-                      <span
-                        className={`inline-flex min-w-[44px] items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          enabled
-                            ? "bg-[rgba(34,197,94,0.18)] text-[rgb(22,163,74)]"
-                            : "bg-button-bg text-secondary-text"
-                        }`}
-                      >
-                        {enabled ? "启用" : "-"}
-                      </span>
-                    </td>
-                  );
-                })}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div
+      className={`min-w-0 ${wrapperClassName ?? ""}`}
+      onMouseEnter={(event) => onShowTooltip(value, event.clientX, event.clientY)}
+      onMouseMove={(event) => onMoveTooltip(event.clientX, event.clientY)}
+      onMouseLeave={onHideTooltip}
+    >
+      <div className={`overflow-hidden text-ellipsis whitespace-nowrap ${contentClassName ?? ""}`}>{value}</div>
     </div>
+  );
+}
+
+function SkillMatrixTable({ agents, skills, onCopySkillPath, onOpenSkillPath }: SkillMatrixTableProps) {
+  const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+
+  const handleShowTooltip = useCallback((value: string, x: number, y: number) => {
+    setTooltip({ text: value, x, y });
+  }, []);
+
+  const handleMoveTooltip = useCallback((x: number, y: number) => {
+    setTooltip((previous) => (previous ? { ...previous, x, y } : previous));
+  }, []);
+
+  const handleHideTooltip = useCallback(() => {
+    setTooltip(null);
+  }, []);
+
+  const tooltipStyle = useMemo(() => {
+    if (!tooltip) {
+      return undefined;
+    }
+
+    const viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+    const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight;
+    const tooltipWidth = 520;
+    const tooltipHeight = 260;
+    const offsetX = 14;
+    const offsetY = 18;
+
+    return {
+      left: Math.max(8, Math.min(tooltip.x + offsetX, viewportWidth - tooltipWidth - 8)),
+      top: Math.max(8, Math.min(tooltip.y + offsetY, viewportHeight - tooltipHeight - 8)),
+    };
+  }, [tooltip]);
+
+  return (
+    <>
+      <div className="max-h-[460px] overflow-auto rounded-lg border border-border/70">
+        <table className="min-w-max border-collapse text-[12px]">
+          <thead className="sticky top-0 z-20 bg-secondary-background">
+            <tr>
+              <th className="sticky left-0 z-30 w-[320px] max-w-[320px] border-b border-r border-border bg-secondary-background px-3 py-2 text-left font-semibold text-text">
+                Skill
+              </th>
+              {agents.map((agent) => (
+                <th
+                  key={`skill-agent-head-${agent.id}`}
+                  className="min-w-[120px] border-b border-border px-2 py-2 text-center font-semibold text-secondary-text"
+                >
+                  {agent.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {skills.map((skill) => {
+              const enabledAgentIds = new Set(skill.agents.map((agent) => agent.id));
+              const skillDescription = skill.description || "无描述";
+              return (
+                <tr key={`global-skill-row-${skill.name}`}>
+                  <td className="sticky left-0 z-10 w-[320px] max-w-[320px] border-b border-r border-border bg-card-bg px-3 py-2 align-top">
+                    <TruncatedTextWithTooltip
+                      value={skill.name}
+                      contentClassName="text-[13px] font-semibold text-text"
+                      onShowTooltip={handleShowTooltip}
+                      onMoveTooltip={handleMoveTooltip}
+                      onHideTooltip={handleHideTooltip}
+                    />
+                    <TruncatedTextWithTooltip
+                      value={skillDescription}
+                      wrapperClassName="mt-0.5"
+                      contentClassName="text-[11px] text-secondary-text"
+                      onShowTooltip={handleShowTooltip}
+                      onMoveTooltip={handleMoveTooltip}
+                      onHideTooltip={handleHideTooltip}
+                    />
+                    <TruncatedTextWithTooltip
+                      value={skill.canonicalPath}
+                      wrapperClassName="mt-1"
+                      contentClassName="text-[11px] text-secondary-text"
+                      onShowTooltip={handleShowTooltip}
+                      onMoveTooltip={handleMoveTooltip}
+                      onHideTooltip={handleHideTooltip}
+                    />
+                    <div className="mt-2 flex items-center gap-1.5">
+                      <button
+                        className="btn btn-outline !px-2 !py-0.5 text-[11px]"
+                        onClick={() => void onOpenSkillPath(skill.canonicalPath, skill.name)}
+                      >
+                        打开
+                      </button>
+                      <button
+                        className="btn btn-outline !px-2 !py-0.5 text-[11px]"
+                        onClick={() => void onCopySkillPath(skill.canonicalPath, skill.name)}
+                      >
+                        复制
+                      </button>
+                    </div>
+                  </td>
+                  {agents.map((agent) => {
+                    const enabled = enabledAgentIds.has(agent.id);
+                    return (
+                      <td
+                        key={`global-skill-cell-${skill.name}-${agent.id}`}
+                        className="border-b border-border px-2 py-2 text-center"
+                      >
+                        <span
+                          className={`inline-flex min-w-[44px] items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            enabled
+                              ? "bg-[rgba(34,197,94,0.18)] text-[rgb(22,163,74)]"
+                              : "bg-button-bg text-secondary-text"
+                          }`}
+                        >
+                          {enabled ? "启用" : "-"}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {tooltip ? (
+        <div
+          className="pointer-events-none fixed z-[999] max-h-[260px] max-w-[520px] overflow-auto whitespace-normal break-words rounded-md border border-border bg-secondary-background px-2.5 py-2 text-[11px] leading-4 text-text shadow-lg"
+          style={tooltipStyle}
+        >
+          {tooltip.text}
+        </div>
+      ) : null}
+    </>
   );
 }
