@@ -12,7 +12,7 @@ import {
   parseTerminalThemeSetting,
 } from "../themes/terminalThemes";
 import { normalizeGitIdentities } from "../utils/gitIdentity";
-import { IconX } from "./Icons";
+import { IconMaximize2, IconMinimize2, IconX } from "./Icons";
 import SharedScriptsManagerModal from "./SharedScriptsManagerModal";
 
 type UpdateState =
@@ -39,7 +39,7 @@ type SettingsCategory = {
 const SETTINGS_CATEGORIES: SettingsCategory[] = [
   { id: "general", label: "常规", description: "应用更新与版本信息。" },
   { id: "terminal", label: "终端", description: "终端渲染与主题显示设置。" },
-  { id: "scripts", label: "脚本", description: "通用脚本清单与文件管理。" },
+  { id: "scripts", label: "脚本", description: "" },
   { id: "workflow", label: "协作", description: "Git 身份与提交配置。" },
 ];
 
@@ -85,6 +85,7 @@ export default function SettingsModal({
   const [versionLabel, setVersionLabel] = useState("");
   const [updateState, setUpdateState] = useState<UpdateState>({ status: "idle" });
   const [isSaving, setIsSaving] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [activeCategoryId, setActiveCategoryId] = useState<SettingsCategoryId>("general");
   const dialogTitleId = useId();
   const terminalSingleThemeSelectId = useId();
@@ -383,21 +384,18 @@ export default function SettingsModal({
     if (activeCategoryId === "scripts") {
       return (
         <div className="flex flex-col gap-3">
-          <SettingsSectionCard
-            title="通用脚本"
-            description="统一管理共享脚本清单与文件。"
-          >
-            <div className="flex flex-wrap items-center gap-2">
+          <SharedScriptsManagerModal
+            root={sharedScriptsRoot}
+            inline
+            headerActions={(
               <button
                 className={`btn btn-outline min-h-[40px] ${BUTTON_FOCUS_RING_CLASS}`}
                 onClick={() => void handleOpenSharedScriptsRoot()}
               >
                 打开目录
               </button>
-            </div>
-          </SettingsSectionCard>
-
-          <SharedScriptsManagerModal root={sharedScriptsRoot} inline />
+            )}
+          />
         </div>
       );
     }
@@ -481,7 +479,10 @@ export default function SettingsModal({
     <>
       <div className="modal-overlay" role="presentation">
         <div
-          className="modal-panel min-w-[320px] w-[min(980px,96vw)] h-[min(88vh,760px)] overflow-hidden"
+          className={[
+            "modal-panel min-w-[320px] overflow-hidden",
+            isExpanded ? "w-[min(1520px,99vw)] h-[96vh]" : "w-[min(980px,96vw)] h-[min(88vh,760px)]",
+          ].join(" ")}
           role="dialog"
           aria-modal="true"
           aria-labelledby={dialogTitleId}
@@ -508,6 +509,16 @@ export default function SettingsModal({
                 >
                   {isDirty ? "有未保存变更" : "已同步"}
                 </div>
+
+                <button
+                  className={`icon-btn min-h-[40px] min-w-[40px] ${BUTTON_FOCUS_RING_CLASS}`}
+                  onClick={() => setIsExpanded((prev) => !prev)}
+                  title={isExpanded ? "还原" : "放大"}
+                  aria-label={isExpanded ? "还原设置窗口大小" : "放大设置窗口"}
+                  disabled={isSaving}
+                >
+                  {isExpanded ? <IconMinimize2 size={14} /> : <IconMaximize2 size={14} />}
+                </button>
 
                 <button
                   className={`icon-btn min-h-[40px] min-w-[40px] ${BUTTON_FOCUS_RING_CLASS}`}
@@ -540,7 +551,9 @@ export default function SettingsModal({
                       aria-current={isActive ? "page" : undefined}
                     >
                       <div className="text-[13px] font-semibold">{category.label}</div>
-                      <div className="mt-0.5 text-fs-caption leading-5 opacity-90">{category.description}</div>
+                      {category.description ? (
+                        <div className="mt-0.5 text-fs-caption leading-5 opacity-90">{category.description}</div>
+                      ) : null}
                     </button>
                   );
                 })}
@@ -550,7 +563,9 @@ export default function SettingsModal({
             <section className="flex min-h-0 flex-col rounded-xl border border-border bg-card-bg p-4">
               <div className="mb-3 border-b border-divider pb-3">
                 <div className="text-[14px] font-semibold text-text">{activeCategory.label}</div>
-                <div className="mt-1 text-fs-caption text-secondary-text">{activeCategory.description}</div>
+                {activeCategory.description ? (
+                  <div className="mt-1 text-fs-caption text-secondary-text">{activeCategory.description}</div>
+                ) : null}
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto pr-1">{renderCategoryContent()}</div>
             </section>

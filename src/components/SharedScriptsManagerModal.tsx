@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type {
   ScriptParamField,
@@ -18,6 +18,7 @@ type SharedScriptsManagerModalProps = {
   root: string;
   onClose?: () => void;
   inline?: boolean;
+  headerActions?: ReactNode;
 };
 
 const DEFAULT_COMMAND_TEMPLATE = 'bash "${scriptPath}"';
@@ -31,6 +32,7 @@ export default function SharedScriptsManagerModal({
   root,
   onClose,
   inline = false,
+  headerActions,
 }: SharedScriptsManagerModalProps) {
   const [scripts, setScripts] = useState<SharedScriptDraft[]>([]);
   const [selectedScriptKey, setSelectedScriptKey] = useState<string | null>(null);
@@ -221,15 +223,20 @@ export default function SharedScriptsManagerModal({
           : "modal-panel min-w-[900px] w-[min(1120px,96vw)] max-h-[92vh] overflow-y-auto"
       }
     >
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-start justify-between gap-3">
         <div>
           <div className="text-[16px] font-semibold">通用脚本管理</div>
           <div className="text-fs-caption text-secondary-text">目录：{root}</div>
         </div>
-        {!inline && onClose ? (
-          <button className="icon-btn" onClick={onClose} aria-label="关闭">
-            <IconX size={14} />
-          </button>
+        {headerActions || (!inline && onClose) ? (
+          <div className="flex items-center gap-2">
+            {headerActions}
+            {!inline && onClose ? (
+              <button className="icon-btn" onClick={onClose} aria-label="关闭">
+                <IconX size={14} />
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <section className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
