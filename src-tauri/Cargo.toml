@@ -1,6 +1,6 @@
 [package]
 name = "DevHaven"
-version = "2.5.2"
+version = "2.6.0"
 description = "a project manage tool"
 authors = ["tianzeng"]
 license = "GPL-3.0-only"
