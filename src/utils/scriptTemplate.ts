@@ -48,7 +48,8 @@ export function buildTemplateParams(
 export function renderScriptTemplateCommand(script: ProjectScript):
   | { ok: true; command: string; templateParams: Record<string, string>; schema: ScriptParamField[] }
   | { ok: false; error: string } {
-  const schema = mergeScriptParamSchema(script.start ?? "", script.paramSchema, script.templateParams);
+  const commandSource = normalizeShellTemplateText(script.start ?? "");
+  const schema = mergeScriptParamSchema(commandSource, script.paramSchema, script.templateParams);
   const templateParams = buildTemplateParams(schema, script.templateParams);
 
   for (const field of schema) {
@@ -61,7 +62,7 @@ export function renderScriptTemplateCommand(script: ProjectScript):
     }
   }
 
-  let command = script.start ?? "";
+  let command = commandSource;
   for (const field of schema) {
     command = replaceTemplateVariable(command, field.key, shellQuote(templateParams[field.key] ?? ""));
   }
@@ -78,9 +79,18 @@ export function applySharedScriptCommandTemplate(
   commandTemplate: string | null | undefined,
   absolutePath: string,
 ): string {
-  const resolvedTemplate = commandTemplate?.trim() ? commandTemplate.trim() : 'bash "${scriptPath}"';
+  const resolvedTemplate = commandTemplate?.trim()
+    ? normalizeShellTemplateText(commandTemplate.trim())
+    : 'bash "${scriptPath}"';
   const escapedPath = absolutePath.replace(/\\/g, "/").replace(/"/g, '\\"');
   return replaceTemplateVariable(resolvedTemplate, "scriptPath", escapedPath);
+}
+
+function normalizeShellTemplateText(source: string): string {
+  return source
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E]/g, '"')
+    .replace(/\u00A0/g, " ");
 }
 
 function collectTemplateParamKeys(command: string): string[] {

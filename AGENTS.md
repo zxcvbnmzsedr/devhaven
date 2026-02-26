@@ -59,8 +59,8 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 - 详情面板容器：`src/components/DetailPanel.tsx`
 - 项目卡片：`src/components/ProjectCard.tsx`（通常在主列表中触发打开详情）
 - 项目快捷命令（配置/编辑/删除/运行/停止）：`src/components/DetailPanel.tsx`（入口）→ `src/App.tsx`（打开终端并派发事件）→ `src/services/terminalQuickCommands.ts` → `src/components/terminal/TerminalWorkspaceView.tsx`（执行）；持久化在 `projects.json`（字段：`Project.scripts`，模型：`src/models/types.ts`）
-- 通用脚本中心（跨项目复用 + 参数化）：设置 `AppSettings.sharedScriptsRoot`（`src/components/SettingsModal.tsx`）→ 读取共享脚本 `src/services/sharedScripts.ts` ↔ `src-tauri/src/shared_scripts.rs`（Command：`list_shared_scripts`，优先 `manifest.json`，回退目录扫描）→ 详情面板为快捷命令填充模板与参数快照（`src/components/DetailPanel.tsx`，`ProjectScript.paramSchema/templateParams`）→ 执行前在终端渲染模板参数（`src/components/terminal/TerminalWorkspaceView.tsx`、`src/utils/scriptTemplate.ts`）
-- 通用脚本可视化编辑：设置页“可视化管理”打开 `src/components/SharedScriptsManagerModal.tsx`，可编辑清单字段（id/路径/命令模板/参数）并直接编辑脚本文件内容；前端 `src/services/sharedScripts.ts` ↔ 后端 `src-tauri/src/shared_scripts.rs`（Commands：`save_shared_scripts_manifest`、`read_shared_script_file`、`write_shared_script_file`）
+- 通用脚本中心（跨项目复用 + 参数化）：默认目录 `~/.devhaven/scripts`（设置页不再提供动态路径配置）→ 读取共享脚本 `src/services/sharedScripts.ts` ↔ `src-tauri/src/shared_scripts.rs`（Command：`list_shared_scripts`，优先 `manifest.json`，回退目录扫描）→ 详情面板为快捷命令填充模板与参数快照（`src/components/DetailPanel.tsx`，`ProjectScript.paramSchema/templateParams`）→ 执行前在终端渲染模板参数（`src/components/terminal/TerminalWorkspaceView.tsx`、`src/utils/scriptTemplate.ts`）
+- 通用脚本可视化编辑：设置页“脚本”分类内嵌 `src/components/SharedScriptsManagerModal.tsx`，可编辑清单字段（id/路径/命令模板/参数）并直接编辑脚本文件内容；前端 `src/services/sharedScripts.ts` ↔ 后端 `src-tauri/src/shared_scripts.rs`（Commands：`save_shared_scripts_manifest`、`read_shared_script_file`、`write_shared_script_file`）
 - Git 分支列表：
   - 前端：`src/services/git.ts`
   - 后端：`src-tauri/src/git_ops.rs`（`list_branches`）
@@ -135,11 +135,12 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 ### J. 更新检查
 - GitHub Releases latest 检查：`src/services/update.ts`
 
-### K. 设置（更新/Git 身份/终端渲染/通用脚本目录）
+### K. 设置（更新/终端渲染/脚本管理/Git 身份）
 - UI：`src/components/SettingsModal.tsx`
+- 设置分类：`常规`（版本/更新）、`终端`（渲染/主题）、`脚本`（通用脚本管理）、`协作`（Git 身份）
 - 设置模型：`src/models/types.ts`（`AppSettings`）
 - 保存入口：`src/App.tsx`（打开/关闭设置弹窗 + 保存设置）与 `src/state/useDevHaven.ts`（`updateSettings` 持久化到 `app_state.json`）
-- 通用脚本目录：`AppSettings.sharedScriptsRoot`（默认 `~/.devhaven/scripts`，在设置页配置；共享脚本列表由 `list_shared_scripts` 提供）
+- 通用脚本目录：`AppSettings.sharedScriptsRoot`（默认 `~/.devhaven/scripts`，设置页固定使用默认目录；共享脚本列表由 `list_shared_scripts` 提供）
 - 通用脚本可视化管理入口：`src/components/SettingsModal.tsx` → `src/components/SharedScriptsManagerModal.tsx`（清单与脚本文件编辑）
 - 终端主题配色（Ghostty 风格 `light:xxx,dark:yyy`）：`src/themes/terminalThemes.ts`、`src/hooks/useSystemColorScheme.ts`、`src/components/terminal/*`
 - 主内容视图模式持久化（卡片/列表）：`AppSettings.projectListViewMode`（`src/models/types.ts`、`src/state/useDevHaven.ts`、`src/App.tsx`、`src-tauri/src/models.rs`）

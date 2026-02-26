@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ScriptParamField,
@@ -16,22 +16,29 @@ import { IconX } from "./Icons";
 
 type SharedScriptsManagerModalProps = {
   root: string;
-  onClose: () => void;
+  onClose?: () => void;
+  inline?: boolean;
 };
 
 const DEFAULT_COMMAND_TEMPLATE = 'bash "${scriptPath}"';
 
-/** 通用脚本可视化管理弹窗。 */
+type SharedScriptDraft = SharedScriptManifestScript & {
+  draftKey: string;
+};
+
+/** 通用脚本可视化管理（支持弹窗/内嵌两种模式）。 */
 export default function SharedScriptsManagerModal({
   root,
   onClose,
+  inline = false,
 }: SharedScriptsManagerModalProps) {
-  const [scripts, setScripts] = useState<SharedScriptManifestScript[]>([]);
-  const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
+  const [scripts, setScripts] = useState<SharedScriptDraft[]>([]);
+  const [selectedScriptKey, setSelectedScriptKey] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSavingManifest, setIsSavingManifest] = useState(false);
   const [manifestError, setManifestError] = useState<string | null>(null);
   const [manifestMessage, setManifestMessage] = useState<string | null>(null);
+  const draftKeyRef = useRef(0);
 
   const [scriptContent, setScriptContent] = useState("");
   const [scriptContentPath, setScriptContentPath] = useState<string | null>(null);
@@ -40,10 +47,17 @@ export default function SharedScriptsManagerModal({
   const [scriptContentMessage, setScriptContentMessage] = useState<string | null>(null);
   const [scriptContentError, setScriptContentError] = useState<string | null>(null);
 
+  const nextDraftKey = () => {
+    draftKeyRef.current += 1;
+    return `shared-script-${draftKeyRef.current}-${Date.now().toString(36)}`;
+  };
+
   const selectedScript = useMemo(
-    () => scripts.find((item) => item.id === selectedScriptId) ?? null,
-    [scripts, selectedScriptId],
+    () => scripts.find((item) => item.draftKey === selectedScriptKey) ?? null,
+    [scripts, selectedScriptKey],
   );
+
+  const manifestScripts = useMemo(() => scripts.map(toManifestScript), [scripts]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,16 +69,16 @@ export default function SharedScriptsManagerModal({
         if (cancelled) {
           return;
         }
-        const normalized = entries.map(mapSharedEntryToManifestScript);
+        const normalized = entries.map((entry) => mapSharedEntryToScriptDraft(entry, nextDraftKey()));
         setScripts(normalized);
-        setSelectedScriptId(normalized[0]?.id ?? null);
+        setSelectedScriptKey(normalized[0]?.draftKey ?? null);
       })
       .catch((error) => {
         if (cancelled) {
           return;
         }
         setScripts([]);
-        setSelectedScriptId(null);
+        setSelectedScriptKey(null);
         setManifestError(error instanceof Error ? error.message : "加载通用脚本失败");
       })
       .finally(() => {
@@ -116,12 +130,12 @@ export default function SharedScriptsManagerModal({
     return () => {
       cancelled = true;
     };
-  }, [root, selectedScript?.id, selectedScript?.path]);
+  }, [root, selectedScript?.draftKey, selectedScript?.path]);
 
   const handleAddScript = () => {
-    const draft = createEmptyScriptDraft(scripts.length + 1);
+    const draft = createEmptyScriptDraft(scripts.length + 1, nextDraftKey());
     setScripts((prev) => [...prev, draft]);
-    setSelectedScriptId(draft.id);
+    setSelectedScriptKey(draft.draftKey);
     setManifestError(null);
     setManifestMessage(null);
   };
@@ -131,8 +145,8 @@ export default function SharedScriptsManagerModal({
       return;
     }
     setScripts((prev) => {
-      const next = prev.filter((item) => item.id !== selectedScript.id);
-      setSelectedScriptId(next[0]?.id ?? null);
+      const next = prev.filter((item) => item.draftKey !== selectedScript.draftKey);
+      setSelectedScriptKey(next[0]?.draftKey ?? null);
       return next;
     });
     setManifestError(null);
@@ -145,7 +159,7 @@ export default function SharedScriptsManagerModal({
     }
     setScripts((prev) =>
       prev.map((item) =>
-        item.id === selectedScript.id
+        item.draftKey === selectedScript.draftKey
           ? {
               ...item,
               ...patch,
@@ -158,7 +172,7 @@ export default function SharedScriptsManagerModal({
   };
 
   const handleSaveManifest = async () => {
-    const validationError = validateScripts(scripts);
+    const validationError = validateScripts(manifestScripts);
     if (validationError) {
       setManifestError(validationError);
       return;
@@ -167,7 +181,7 @@ export default function SharedScriptsManagerModal({
     setManifestMessage(null);
     setIsSavingManifest(true);
     try {
-      await saveSharedScriptsManifest(scripts, root);
+      await saveSharedScriptsManifest(manifestScripts, root);
       setManifestMessage("通用脚本清单已保存。");
     } catch (error) {
       setManifestError(error instanceof Error ? error.message : "保存通用脚本清单失败");
@@ -199,54 +213,58 @@ export default function SharedScriptsManagerModal({
     }
   };
 
-  return (
-    <div className="modal-overlay" role="dialog" aria-modal>
-      <div className="modal-panel min-w-[900px] w-[min(1120px,96vw)] max-h-[92vh] overflow-y-auto">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-[16px] font-semibold">通用脚本管理</div>
-            <div className="text-fs-caption text-secondary-text">
-              在当前目录管理共享脚本清单与脚本文件：{root}
-            </div>
-          </div>
+  const panel = (
+    <div
+      className={
+        inline
+          ? "flex flex-col gap-3 rounded-xl border border-border bg-secondary-background p-3"
+          : "modal-panel min-w-[900px] w-[min(1120px,96vw)] max-h-[92vh] overflow-y-auto"
+      }
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[16px] font-semibold">通用脚本管理</div>
+          <div className="text-fs-caption text-secondary-text">目录：{root}</div>
+        </div>
+        {!inline && onClose ? (
           <button className="icon-btn" onClick={onClose} aria-label="关闭">
             <IconX size={14} />
           </button>
-        </div>
-
-        <section className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
-          <div className="rounded-xl border border-border bg-card-bg p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="text-[13px] font-semibold">脚本列表</div>
-              <button className="btn btn-outline" onClick={handleAddScript}>
-                新增
-              </button>
-            </div>
-            {isLoading ? (
-              <div className="text-fs-caption text-secondary-text">加载中...</div>
-            ) : scripts.length === 0 ? (
-              <div className="text-fs-caption text-secondary-text">暂无脚本，点击“新增”创建。</div>
-            ) : (
-              <div className="flex max-h-[380px] flex-col gap-1 overflow-y-auto">
-                {scripts.map((item) => (
-                  <button
-                    key={item.id}
-                    className={`text-left rounded-md border px-2.5 py-2 ${
-                      item.id === selectedScriptId
-                        ? "border-accent bg-[rgba(69,59,231,0.08)]"
-                        : "border-border bg-card-bg hover:bg-secondary-background"
-                    }`}
-                    onClick={() => setSelectedScriptId(item.id)}
-                  >
-                    <div className="truncate text-[13px] font-semibold">{item.name || item.id}</div>
-                    <div className="truncate text-fs-caption text-secondary-text">{item.path || "--"}</div>
-                  </button>
-                ))}
-              </div>
-            )}
-            {manifestError ? <div className="mt-2 text-fs-caption text-error">{manifestError}</div> : null}
-            {manifestMessage ? <div className="mt-2 text-fs-caption text-success">{manifestMessage}</div> : null}
+        ) : null}
+      </div>
+      <section className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
+        <div className="rounded-xl border border-border bg-card-bg p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-[13px] font-semibold">脚本列表</div>
+            <button className="btn btn-outline" onClick={handleAddScript} disabled={isLoading}>
+              新增
+            </button>
           </div>
+          {isLoading ? (
+            <div className="text-fs-caption text-secondary-text">加载中...</div>
+          ) : scripts.length === 0 ? (
+            <div className="text-fs-caption text-secondary-text">暂无脚本，点击“新增”创建。</div>
+          ) : (
+            <div className="flex max-h-[380px] flex-col gap-1 overflow-y-auto">
+              {scripts.map((item) => (
+                <button
+                  key={item.draftKey}
+                  className={`text-left rounded-md border px-2.5 py-2 ${
+                    item.draftKey === selectedScriptKey
+                      ? "border-accent bg-[rgba(69,59,231,0.08)]"
+                      : "border-border bg-card-bg hover:bg-secondary-background"
+                  }`}
+                  onClick={() => setSelectedScriptKey(item.draftKey)}
+                >
+                  <div className="truncate text-[13px] font-semibold">{item.name || item.id}</div>
+                  <div className="truncate text-fs-caption text-secondary-text">{item.path || "--"}</div>
+                </button>
+              ))}
+            </div>
+          )}
+          {manifestError ? <div className="mt-2 text-fs-caption text-error">{manifestError}</div> : null}
+          {manifestMessage ? <div className="mt-2 text-fs-caption text-success">{manifestMessage}</div> : null}
+        </div>
 
           <div className="flex flex-col gap-3 rounded-xl border border-border bg-card-bg p-3">
             {!selectedScript ? (
@@ -369,28 +387,39 @@ export default function SharedScriptsManagerModal({
           </div>
         </section>
 
-        <div className="flex justify-between gap-2">
-          <button
-            className="btn btn-outline"
-            onClick={handleRemoveSelectedScript}
-            disabled={!selectedScript}
-          >
-            删除当前脚本
-          </button>
-          <div className="flex gap-2">
+      <div className="flex justify-between gap-2">
+        <button
+          className="btn btn-outline"
+          onClick={handleRemoveSelectedScript}
+          disabled={!selectedScript}
+        >
+          删除当前脚本
+        </button>
+        <div className="flex gap-2">
+          {!inline && onClose ? (
             <button className="btn" onClick={onClose}>
               关闭
             </button>
-            <button
-              className="btn btn-primary"
-              onClick={() => void handleSaveManifest()}
-              disabled={isSavingManifest}
-            >
-              {isSavingManifest ? "保存中..." : "保存清单"}
-            </button>
-          </div>
+          ) : null}
+          <button
+            className="btn btn-primary"
+            onClick={() => void handleSaveManifest()}
+            disabled={isSavingManifest}
+          >
+            {isSavingManifest ? "保存中..." : "保存清单"}
+          </button>
         </div>
       </div>
+    </div>
+  );
+
+  if (inline) {
+    return panel;
+  }
+
+  return (
+    <div className="modal-overlay" role="dialog" aria-modal>
+      {panel}
     </div>
   );
 }
@@ -453,8 +482,9 @@ function ParameterEditor({ value, onChange, onRemove }: ParameterEditorProps) {
   );
 }
 
-function mapSharedEntryToManifestScript(entry: SharedScriptEntry): SharedScriptManifestScript {
+function mapSharedEntryToScriptDraft(entry: SharedScriptEntry, draftKey: string): SharedScriptDraft {
   return {
+    draftKey,
     id: entry.id,
     name: entry.name,
     path: entry.relativePath,
@@ -463,10 +493,20 @@ function mapSharedEntryToManifestScript(entry: SharedScriptEntry): SharedScriptM
   };
 }
 
-function createEmptyScriptDraft(index: number): SharedScriptManifestScript {
-  const suffix = Date.now().toString(36);
+function toManifestScript(script: SharedScriptDraft): SharedScriptManifestScript {
   return {
-    id: `shared-script-${index}-${suffix}`,
+    id: script.id,
+    name: script.name,
+    path: script.path,
+    commandTemplate: script.commandTemplate,
+    params: script.params,
+  };
+}
+
+function createEmptyScriptDraft(index: number, draftKey: string): SharedScriptDraft {
+  return {
+    draftKey,
+    id: `shared-script-${index}-${draftKey}`,
     name: "",
     path: "",
     commandTemplate: DEFAULT_COMMAND_TEMPLATE,

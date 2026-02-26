@@ -28,7 +28,7 @@ const BUTTON_FOCUS_RING_CLASS =
 const INPUT_CLASS =
   "w-full rounded-md border border-border bg-card-bg px-3 py-2 text-text focus:outline-2 focus:outline-accent focus:outline-offset-[-1px]";
 
-type SettingsCategoryId = "general" | "terminal" | "workflow";
+type SettingsCategoryId = "general" | "terminal" | "scripts" | "workflow";
 
 type SettingsCategory = {
   id: SettingsCategoryId;
@@ -39,7 +39,8 @@ type SettingsCategory = {
 const SETTINGS_CATEGORIES: SettingsCategory[] = [
   { id: "general", label: "常规", description: "应用更新与版本信息。" },
   { id: "terminal", label: "终端", description: "终端渲染与主题显示设置。" },
-  { id: "workflow", label: "协作", description: "通用脚本与 Git 身份。" },
+  { id: "scripts", label: "脚本", description: "通用脚本清单与文件管理。" },
+  { id: "workflow", label: "协作", description: "Git 身份与提交配置。" },
 ];
 
 const isSameIdentities = (left: GitIdentity[], right: GitIdentity[]) => {
@@ -81,17 +82,11 @@ export default function SettingsModal({
   );
   const [terminalLightTheme, setTerminalLightTheme] = useState("iTerm2 Solarized Light");
   const [terminalDarkTheme, setTerminalDarkTheme] = useState("iTerm2 Solarized Dark");
-  const [sharedScriptsRoot, setSharedScriptsRoot] = useState(
-    settings.sharedScriptsRoot || DEFAULT_SHARED_SCRIPTS_ROOT,
-  );
   const [versionLabel, setVersionLabel] = useState("");
   const [updateState, setUpdateState] = useState<UpdateState>({ status: "idle" });
   const [isSaving, setIsSaving] = useState(false);
   const [activeCategoryId, setActiveCategoryId] = useState<SettingsCategoryId>("general");
-  const [showSharedScriptsManager, setShowSharedScriptsManager] = useState(false);
-
   const dialogTitleId = useId();
-  const sharedScriptsRootInputId = useId();
   const terminalSingleThemeSelectId = useId();
   const terminalLightThemeSelectId = useId();
   const terminalDarkThemeSelectId = useId();
@@ -107,20 +102,24 @@ export default function SettingsModal({
   }, [terminalDarkTheme, terminalFollowSystem, terminalLightTheme, terminalSingleTheme]);
 
   const terminalThemeOptions = useMemo(() => TERMINAL_THEME_PRESETS.map((preset) => preset.name), []);
+  const sharedScriptsRoot = useMemo(
+    () => settings.sharedScriptsRoot?.trim() || DEFAULT_SHARED_SCRIPTS_ROOT,
+    [settings.sharedScriptsRoot],
+  );
   const nextSettings = useMemo<AppSettings>(
     () => ({
       ...settings,
       terminalUseWebglRenderer,
       terminalTheme: terminalThemeSetting,
       gitIdentities: normalizedGitIdentities,
-      sharedScriptsRoot: sharedScriptsRoot.trim() || DEFAULT_SHARED_SCRIPTS_ROOT,
+      sharedScriptsRoot,
     }),
     [
       normalizedGitIdentities,
       settings,
-      sharedScriptsRoot,
       terminalThemeSetting,
       terminalUseWebglRenderer,
+      sharedScriptsRoot,
     ],
   );
   const isDirty = useMemo(() => {
@@ -147,10 +146,8 @@ export default function SettingsModal({
       setTerminalFollowSystem(false);
       setTerminalSingleTheme(getTerminalThemePresetByName(parsedTerminalTheme.name).name);
     }
-    setSharedScriptsRoot(settings.sharedScriptsRoot || DEFAULT_SHARED_SCRIPTS_ROOT);
   }, [
     settings.gitIdentities,
-    settings.sharedScriptsRoot,
     settings.terminalUseWebglRenderer,
     settings.terminalTheme,
   ]);
@@ -254,9 +251,8 @@ export default function SettingsModal({
   };
 
   const handleOpenSharedScriptsRoot = async () => {
-    const normalizedPath = sharedScriptsRoot.trim() || DEFAULT_SHARED_SCRIPTS_ROOT;
     try {
-      const resolvedPath = await resolveHomePath(normalizedPath);
+      const resolvedPath = await resolveHomePath(sharedScriptsRoot);
       await openInFinder(resolvedPath);
     } catch (error) {
       console.error("打开通用脚本目录失败。", error);
@@ -384,24 +380,13 @@ export default function SettingsModal({
       );
     }
 
-    if (activeCategoryId === "workflow") {
+    if (activeCategoryId === "scripts") {
       return (
         <div className="flex flex-col gap-3">
           <SettingsSectionCard
             title="通用脚本"
-            description="管理共享脚本根目录与脚本清单。"
+            description="统一管理共享脚本清单与文件。"
           >
-            <label className="flex flex-col gap-1.5 text-[13px] text-secondary-text" htmlFor={sharedScriptsRootInputId}>
-              <span>脚本目录</span>
-              <input
-                id={sharedScriptsRootInputId}
-                className={INPUT_CLASS}
-                value={sharedScriptsRoot}
-                onChange={(event) => setSharedScriptsRoot(event.target.value)}
-                placeholder={DEFAULT_SHARED_SCRIPTS_ROOT}
-              />
-            </label>
-
             <div className="flex flex-wrap items-center gap-2">
               <button
                 className={`btn btn-outline min-h-[40px] ${BUTTON_FOCUS_RING_CLASS}`}
@@ -409,19 +394,17 @@ export default function SettingsModal({
               >
                 打开目录
               </button>
-              <button
-                className={`btn min-h-[40px] ${BUTTON_FOCUS_RING_CLASS}`}
-                onClick={() => setShowSharedScriptsManager(true)}
-              >
-                可视化管理
-              </button>
-            </div>
-
-            <div className="text-fs-caption text-secondary-text">
-              目录下可维护 manifest.json 与通用脚本，供项目快捷命令复用。
             </div>
           </SettingsSectionCard>
 
+          <SharedScriptsManagerModal root={sharedScriptsRoot} inline />
+        </div>
+      );
+    }
+
+    if (activeCategoryId === "workflow") {
+      return (
+        <div className="flex flex-col gap-3">
           <SettingsSectionCard
             title="Git 身份"
             description="维护常用提交身份，保存时自动清理空行。"
@@ -510,7 +493,7 @@ export default function SettingsModal({
                   设置
                 </div>
                 <div className="mt-1 text-fs-caption text-secondary-text">
-                  统一管理应用更新、终端体验与协作配置。
+                  统一管理应用更新、终端体验、脚本与协作配置。
                 </div>
               </div>
 
@@ -592,12 +575,6 @@ export default function SettingsModal({
         </div>
       </div>
 
-      {showSharedScriptsManager ? (
-        <SharedScriptsManagerModal
-          root={nextSettings.sharedScriptsRoot}
-          onClose={() => setShowSharedScriptsManager(false)}
-        />
-      ) : null}
     </>
   );
 }
