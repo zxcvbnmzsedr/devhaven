@@ -7,6 +7,7 @@ mod markdown;
 mod models;
 mod notes;
 mod project_loader;
+mod skills;
 mod storage;
 mod system;
 mod terminal;
@@ -25,16 +26,17 @@ use tauri_plugin_log::{Target, TargetKind};
 use crate::models::{
     AppStateFile, BranchListItem, CodexMonitorSnapshot, FsListResponse, FsReadResponse,
     FsWriteResponse, GitDailyResult, GitDiffContents, GitIdentity, GitRepoStatus,
-    GitWorktreeAddResult, GitWorktreeListItem, HeatmapCacheFile, InteractionLockPayload,
-    MarkdownFileEntry, Project, ProjectNotesPreview, TerminalCodexPaneOverlay, TerminalWorkspace,
-    TerminalWorkspaceSummary, WorktreeInitCancelResult, WorktreeInitCreateBlockingResult,
-    WorktreeInitJobStatus, WorktreeInitRetryRequest, WorktreeInitStartRequest,
-    WorktreeInitStartResult, WorktreeInitStatusQuery, WorktreeInitStep,
+    GitWorktreeAddResult, GitWorktreeListItem, GlobalSkillInstallRequest, GlobalSkillInstallResult,
+    GlobalSkillsSnapshot, HeatmapCacheFile, InteractionLockPayload, MarkdownFileEntry, Project,
+    ProjectNotesPreview, TerminalCodexPaneOverlay, TerminalWorkspace, TerminalWorkspaceSummary,
+    WorktreeInitCancelResult, WorktreeInitCreateBlockingResult, WorktreeInitJobStatus,
+    WorktreeInitRetryRequest, WorktreeInitStartRequest, WorktreeInitStartResult,
+    WorktreeInitStatusQuery, WorktreeInitStep,
 };
 use crate::system::EditorOpenParams;
 use crate::terminal::{
-    TerminalState, terminal_create_session, terminal_get_codex_pane_overlay, terminal_kill,
-    terminal_resize, terminal_write,
+    terminal_create_session, terminal_get_codex_pane_overlay, terminal_kill, terminal_resize,
+    terminal_write, TerminalState,
 };
 
 const INTERACTION_LOCK_REASON_WORKTREE_CREATE: &str = "worktree-create";
@@ -55,6 +57,31 @@ fn save_app_state(app: AppHandle, state: AppStateFile) -> Result<(), String> {
 /// 读取项目缓存列表。
 fn load_projects(app: AppHandle) -> Result<Vec<Project>, String> {
     log_command_result("load_projects", || storage::load_projects(&app))
+}
+
+#[tauri::command]
+/// 扫描并返回全局可用的 Skills 列表。
+fn list_global_skills() -> Result<GlobalSkillsSnapshot, String> {
+    log_command_result("list_global_skills", skills::list_global_skills)
+}
+
+#[tauri::command]
+/// 安装全局 Skill（参考开源 skills 的安装流程，在应用内执行）。
+fn install_global_skill(
+    request: GlobalSkillInstallRequest,
+) -> Result<GlobalSkillInstallResult, String> {
+    let source = request.source.clone();
+    let skill_count = request.skill_names.len();
+    let agent_count = request.agent_ids.len();
+    log_command_result("install_global_skill", move || {
+        log::info!(
+            "install_global_skill source={} skills={} agents={}",
+            source,
+            skill_count,
+            agent_count
+        );
+        skills::install_global_skill(request)
+    })
 }
 
 #[tauri::command]
@@ -731,6 +758,8 @@ pub fn run() {
             load_app_state,
             save_app_state,
             load_projects,
+            list_global_skills,
+            install_global_skill,
             save_projects,
             discover_projects,
             build_projects,

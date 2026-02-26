@@ -11,6 +11,7 @@ import SearchBar from "./SearchBar";
 import {
   IconCalendar,
   IconChartLine,
+  IconCode,
   IconList,
   IconSearch,
   IconSettings,
@@ -37,6 +38,7 @@ export type MainContentProps = {
   onToggleDetailPanel: () => void;
   onOpenDashboard: () => void;
   onOpenSettings: () => void;
+  onOpenGlobalSkills: () => void;
   availableTags: string[];
   selectedProjects: Set<string>;
   onSelectProject: (project: Project, event: React.MouseEvent<HTMLDivElement>) => void;
@@ -77,6 +79,7 @@ export default function MainContent({
   onToggleDetailPanel,
   onOpenDashboard,
   onOpenSettings,
+  onOpenGlobalSkills,
   availableTags,
   selectedProjects,
   onSelectProject,
@@ -176,6 +179,9 @@ export default function MainContent({
         </button>
         <button className="icon-btn" aria-label="设置" onClick={onOpenSettings}>
           <IconSettings size={18} />
+        </button>
+        <button className="icon-btn" aria-label="全局 Skills" onClick={onOpenGlobalSkills} title="全局 Skills">
+          <IconCode size={18} />
         </button>
         <SearchBar value={searchText} onChange={onSearchTextChange} ref={searchInputRef} />
         <label className="inline-flex items-center gap-1.5 rounded-md border border-search-border bg-search-bg px-2 py-1 text-[12px] font-semibold text-titlebar-icon">

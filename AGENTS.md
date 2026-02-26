@@ -141,6 +141,12 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 - 终端主题配色（Ghostty 风格 `light:xxx,dark:yyy`）：`src/themes/terminalThemes.ts`、`src/hooks/useSystemColorScheme.ts`、`src/components/terminal/*`
 - 主内容视图模式持久化（卡片/列表）：`AppSettings.projectListViewMode`（`src/models/types.ts`、`src/state/useDevHaven.ts`、`src/App.tsx`、`src-tauri/src/models.rs`）
 
+### L. 全局 Skills 管理（独立页面）
+- 入口/UI：`src/components/MainContent.tsx`（标题栏独立按钮）→ `src/components/GlobalSkillsModal.tsx`
+- 展示：`src/components/GlobalSkillsModal.tsx` 采用「Skill × Agent」矩阵表格，左侧 Skill 列 sticky 固定，右侧按 Agent 标记启用状态
+- 安装：`src/components/GlobalSkillsModal.tsx`（来源/skill 名/agent 选择）→ `src/services/skills.ts`（`installGlobalSkill`）→ `src-tauri/src/lib.rs`（`install_global_skill`）→ `src-tauri/src/skills.rs`（参考开源 skills 的发现/安装流程，在应用内完成 clone + 安装，不依赖外部 skills CLI）
+- 扫描：`src/services/skills.ts`（`listGlobalSkills`）→ `src-tauri/src/lib.rs`（`list_global_skills`）→ `src-tauri/src/skills.rs`（固定扫描 `~/.agents/skills` 与常见 Agent 全局目录并聚合，不暴露扫描范围配置）
+
 ## 3) 回写（维护）AGENTS.md 的逻辑
 
 本文件是“给 LLM/新同学看的项目索引”，要求随代码演进同步更新（回写）。

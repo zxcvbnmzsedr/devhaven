@@ -135,6 +135,52 @@ pub struct GitIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSkillAgent {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSkillSummary {
+    pub name: String,
+    pub description: String,
+    pub canonical_path: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub agents: Vec<GlobalSkillAgent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSkillsSnapshot {
+    #[serde(default)]
+    pub agents: Vec<GlobalSkillAgent>,
+    #[serde(default)]
+    pub skills: Vec<GlobalSkillSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSkillInstallRequest {
+    pub source: String,
+    #[serde(default)]
+    pub skill_names: Vec<String>,
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSkillInstallResult {
+    pub command: String,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagData {
     pub name: String,
     pub color: ColorData,

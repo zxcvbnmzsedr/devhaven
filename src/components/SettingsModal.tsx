@@ -42,7 +42,7 @@ export type SettingsModalProps = {
   onSaveSettings: (settings: AppSettings) => Promise<void>;
 };
 
-/** 设置弹窗，提供更新检查与 Git 身份配置。 */
+/** 设置弹窗，提供更新检查、终端与 Git 身份配置。 */
 export default function SettingsModal({
   settings,
   onClose,

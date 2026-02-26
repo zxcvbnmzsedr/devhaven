@@ -55,6 +55,36 @@ export type GitIdentity = {
   email: string;
 };
 
+export type GlobalSkillAgent = {
+  id: string;
+  label: string;
+};
+
+export type GlobalSkillSummary = {
+  name: string;
+  description: string;
+  canonicalPath: string;
+  paths: string[];
+  agents: GlobalSkillAgent[];
+};
+
+export type GlobalSkillsSnapshot = {
+  agents: GlobalSkillAgent[];
+  skills: GlobalSkillSummary[];
+};
+
+export type GlobalSkillInstallRequest = {
+  source: string;
+  skillNames: string[];
+  agentIds: string[];
+};
+
+export type GlobalSkillInstallResult = {
+  command: string;
+  stdout: string;
+  stderr: string;
+};
+
 export type ProjectListViewMode = "card" | "list";
 
 export type AppSettings = {

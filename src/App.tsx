@@ -9,6 +9,7 @@ import DetailPanel from "./components/DetailPanel";
 import TagEditDialog from "./components/TagEditDialog";
 import DashboardModal from "./components/DashboardModal";
 import SettingsModal from "./components/SettingsModal";
+import GlobalSkillsModal from "./components/GlobalSkillsModal";
 import RecycleBinModal from "./components/RecycleBinModal";
 import MonitorWindow from "./components/MonitorWindow";
 import InteractionLockOverlay from "./components/InteractionLockOverlay";
@@ -334,6 +335,7 @@ function AppLayout() {
   );
   const [showDashboard, setShowDashboard] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showGlobalSkills, setShowGlobalSkills] = useState(false);
   const [showRecycleBin, setShowRecycleBin] = useState(false);
   const [showTerminalWorkspace, setShowTerminalWorkspace] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
@@ -2365,6 +2367,7 @@ function AppLayout() {
           onToggleDetailPanel={handleToggleDetail}
           onOpenDashboard={() => setShowDashboard(true)}
           onOpenSettings={() => setShowSettings(true)}
+          onOpenGlobalSkills={() => setShowGlobalSkills(true)}
           availableTags={appState.tags.map((tag) => tag.name)}
           selectedProjects={selectedProjects}
           onSelectProject={handleSelectProject}
@@ -2435,6 +2438,7 @@ function AppLayout() {
           onSaveSettings={handleSaveSettings}
         />
       ) : null}
+      {showGlobalSkills ? <GlobalSkillsModal onClose={() => setShowGlobalSkills(false)} /> : null}
 
       <WorktreeCreateDialog
         isOpen={Boolean(worktreeDialogProjectId)}
