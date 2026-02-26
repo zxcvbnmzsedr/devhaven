@@ -13,7 +13,7 @@ use std::os::windows::fs as windows_fs;
 
 use crate::models::{
     GlobalSkillAgent, GlobalSkillInstallRequest, GlobalSkillInstallResult, GlobalSkillSummary,
-    GlobalSkillsSnapshot,
+    GlobalSkillUninstallRequest, GlobalSkillsSnapshot,
 };
 
 const SKILL_SOURCE_SEARCH_DIRS: &[&str] = &[
@@ -136,12 +136,72 @@ pub fn list_global_skills() -> Result<GlobalSkillsSnapshot, String> {
 pub fn install_global_skill(
     request: GlobalSkillInstallRequest,
 ) -> Result<GlobalSkillInstallResult, String> {
+    let home_dir = resolve_home_dir()?;
+    let agent_scopes = build_agent_scopes(&home_dir);
+    let target_agents = resolve_target_agents(&agent_scopes, &request.agent_ids)?;
+
+    let canonical_base = home_dir.join(".agents").join("skills");
+    fs::create_dir_all(&canonical_base)
+        .map_err(|err| format!("创建全局技能目录失败: {err} ({})", canonical_base.display()))?;
+
+    let requested_skill_names = normalize_user_values(&request.skill_names);
+    let mut logs = Vec::new();
+    if should_treat_skill_names_as_sources(&requested_skill_names) {
+        logs.push("source-mode: use skill names as source identifiers".to_string());
+        logs.push(format!("sources: {}", requested_skill_names.join(", ")));
+        logs.push(format!("source(input): {}", request.source.trim()));
+        logs.push(format!(
+            "agents: {}",
+            target_agents
+                .iter()
+                .map(|agent| agent.id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+
+        for source_identifier in &requested_skill_names {
+            let (source_root, _source_guard) = prepare_source_root(source_identifier)?;
+            let discovered_skills = discover_source_skills(&source_root)?;
+            if discovered_skills.is_empty() {
+                return Err(format!(
+                    "来源中未发现可安装的技能（缺少 SKILL.md）：{}（来自 {}）",
+                    source_root.display(),
+                    source_identifier
+                ));
+            }
+
+            logs.push(format!(
+                "resolved source {} -> {}",
+                source_identifier,
+                source_root.display()
+            ));
+            logs.push(format!(
+                "skills({source_identifier}): {}",
+                discovered_skills
+                    .iter()
+                    .map(|skill| skill.install_name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+
+            for skill in &discovered_skills {
+                let skill_logs = install_one_skill(skill, &canonical_base, &target_agents)?;
+                logs.extend(skill_logs);
+            }
+        }
+
+        return Ok(GlobalSkillInstallResult {
+            command: "internal install_global_skill".to_string(),
+            stdout: logs.join("\n"),
+            stderr: String::new(),
+        });
+    }
+
     let source_input = request.source.trim();
     if source_input.is_empty() {
         return Err("安装来源不能为空。请填写仓库地址或本地路径。".to_string());
     }
 
-    let home_dir = resolve_home_dir()?;
     let (source_root, _source_guard) = prepare_source_root(source_input)?;
     let discovered_skills = discover_source_skills(&source_root)?;
     if discovered_skills.is_empty() {
@@ -152,14 +212,6 @@ pub fn install_global_skill(
     }
 
     let selected_skills = select_skills(&discovered_skills, &request.skill_names)?;
-    let agent_scopes = build_agent_scopes(&home_dir);
-    let target_agents = resolve_target_agents(&agent_scopes, &request.agent_ids)?;
-
-    let canonical_base = home_dir.join(".agents").join("skills");
-    fs::create_dir_all(&canonical_base)
-        .map_err(|err| format!("创建全局技能目录失败: {err} ({})", canonical_base.display()))?;
-
-    let mut logs = Vec::new();
     logs.push(format!("source: {}", source_root.display()));
     logs.push(format!(
         "skills: {}",
@@ -185,6 +237,40 @@ pub fn install_global_skill(
 
     Ok(GlobalSkillInstallResult {
         command: "internal install_global_skill".to_string(),
+        stdout: logs.join("\n"),
+        stderr: String::new(),
+    })
+}
+
+pub fn uninstall_global_skill(
+    request: GlobalSkillUninstallRequest,
+) -> Result<GlobalSkillInstallResult, String> {
+    let home_dir = resolve_home_dir()?;
+    let agent_scopes = build_agent_scopes(&home_dir);
+    let request_agent_ids = vec![request.agent_id.clone()];
+    let mut target_agents = resolve_target_agents(&agent_scopes, &request_agent_ids)?;
+    let target_agent = target_agents
+        .pop()
+        .ok_or_else(|| format!("不支持的 Agent 标识: {}", request.agent_id))?;
+
+    let remove_targets = resolve_skill_remove_targets(&target_agent.path, &request);
+    let mut logs = vec![
+        format!("agent: {} ({})", target_agent.id, target_agent.path.display()),
+        format!("skill: {}", request.skill_name),
+    ];
+
+    if remove_targets.is_empty() {
+        logs.push("removed: 0 (未找到匹配目录)".to_string());
+    } else {
+        for target in &remove_targets {
+            remove_existing_path(target)?;
+            logs.push(format!("removed {}", target.display()));
+        }
+        logs.push(format!("removed: {}", remove_targets.len()));
+    }
+
+    Ok(GlobalSkillInstallResult {
+        command: "internal uninstall_global_skill".to_string(),
         stdout: logs.join("\n"),
         stderr: String::new(),
     })
@@ -482,7 +568,8 @@ fn collect_single_skill(
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_else(|| "skill".to_string());
-    let install_name = sanitize_skill_folder_name(&dir_name);
+    let install_name_hint = resolve_install_name_hint(&dir_name, &parsed.name);
+    let install_name = sanitize_skill_folder_name(&install_name_hint);
     if install_name.is_empty() {
         return Err(format!("技能目录名称无效：{}", skill_dir.display()));
     }
@@ -530,6 +617,39 @@ fn sanitize_skill_folder_name(name: &str) -> String {
     }
 
     compact.trim_matches('-').to_string()
+}
+
+fn should_treat_skill_names_as_sources(requested_names: &[String]) -> bool {
+    !requested_names.is_empty()
+        && !requested_names.iter().any(|value| value == "*")
+        && requested_names
+            .iter()
+            .all(|value| is_source_like_value(value))
+}
+
+fn is_source_like_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let local_path = PathBuf::from(trimmed);
+    if local_path.exists() {
+        return true;
+    }
+
+    parse_remote_source(trimmed).is_ok()
+}
+
+fn resolve_install_name_hint(dir_name: &str, parsed_name: &str) -> String {
+    if is_generated_temp_source_dir(dir_name) && !parsed_name.trim().is_empty() {
+        return parsed_name.to_string();
+    }
+    dir_name.to_string()
+}
+
+fn is_generated_temp_source_dir(dir_name: &str) -> bool {
+    dir_name.starts_with("devhaven-skill-source-")
 }
 
 fn select_skills(
@@ -653,6 +773,79 @@ fn install_one_skill(
     }
 
     Ok(logs)
+}
+
+fn resolve_skill_remove_targets(
+    agent_skill_base: &Path,
+    request: &GlobalSkillUninstallRequest,
+) -> Vec<PathBuf> {
+    let mut targets = BTreeSet::<PathBuf>::new();
+    let mut candidate_names = BTreeSet::<String>::new();
+
+    if let Some(name) = extract_skill_dir_name(&request.canonical_path) {
+        candidate_names.insert(name);
+    }
+
+    for path in &request.paths {
+        if let Some(name) = extract_skill_dir_name(path) {
+            candidate_names.insert(name);
+        }
+    }
+
+    let fallback_name = sanitize_skill_folder_name(&request.skill_name);
+    if !fallback_name.is_empty() {
+        candidate_names.insert(fallback_name);
+    }
+
+    for name in candidate_names {
+        let candidate = agent_skill_base.join(name);
+        if fs::symlink_metadata(&candidate).is_ok() {
+            targets.insert(candidate);
+        }
+    }
+
+    if !targets.is_empty() {
+        return targets.into_iter().collect();
+    }
+
+    if request.skill_name.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let target_name = normalize_lookup_value(&request.skill_name);
+    let entries = match fs::read_dir(agent_skill_base) {
+        Ok(value) => value,
+        Err(_) => return Vec::new(),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !is_directory(&path) {
+            continue;
+        }
+
+        let skill_md = path.join("SKILL.md");
+        if !skill_md.is_file() {
+            continue;
+        }
+
+        let parsed_name = parse_skill_frontmatter(&skill_md)
+            .map(|value| value.name)
+            .unwrap_or_default();
+        if !parsed_name.is_empty() && normalize_lookup_value(&parsed_name) == target_name {
+            targets.insert(path);
+        }
+    }
+
+    targets.into_iter().collect()
+}
+
+fn extract_skill_dir_name(path: &str) -> Option<String> {
+    let file_name = Path::new(path).file_name()?.to_string_lossy().to_string();
+    if file_name.trim().is_empty() {
+        return None;
+    }
+    Some(file_name)
 }
 
 fn create_symlink_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -842,5 +1035,39 @@ fn resolve_git_executable() -> String {
     #[cfg(not(target_os = "macos"))]
     {
         "git".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        is_generated_temp_source_dir, resolve_install_name_hint,
+        should_treat_skill_names_as_sources,
+    };
+
+    #[test]
+    fn should_detect_source_like_skill_names() {
+        assert!(should_treat_skill_names_as_sources(&[
+            "vercel-labs/agent-browser".to_string()
+        ]));
+        assert!(!should_treat_skill_names_as_sources(&[
+            "agent-browser".to_string()
+        ]));
+        assert!(!should_treat_skill_names_as_sources(&["*".to_string()]));
+    }
+
+    #[test]
+    fn should_use_frontmatter_name_for_generated_temp_source_dir() {
+        assert!(is_generated_temp_source_dir(
+            "devhaven-skill-source-b3346c7f-cc3d-47bd-b6aa-0b7fd9fa49c6"
+        ));
+        assert_eq!(
+            resolve_install_name_hint("devhaven-skill-source-123", "agent-browser"),
+            "agent-browser"
+        );
+        assert_eq!(
+            resolve_install_name_hint("composition-patterns", "composition-patterns"),
+            "composition-patterns"
+        );
     }
 }

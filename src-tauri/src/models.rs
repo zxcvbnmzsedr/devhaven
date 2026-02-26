@@ -181,6 +181,16 @@ pub struct GlobalSkillInstallResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlobalSkillUninstallRequest {
+    pub skill_name: String,
+    pub canonical_path: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    pub agent_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagData {
     pub name: String,
     pub color: ColorData,

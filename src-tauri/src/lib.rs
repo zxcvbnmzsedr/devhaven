@@ -27,11 +27,11 @@ use crate::models::{
     AppStateFile, BranchListItem, CodexMonitorSnapshot, FsListResponse, FsReadResponse,
     FsWriteResponse, GitDailyResult, GitDiffContents, GitIdentity, GitRepoStatus,
     GitWorktreeAddResult, GitWorktreeListItem, GlobalSkillInstallRequest, GlobalSkillInstallResult,
-    GlobalSkillsSnapshot, HeatmapCacheFile, InteractionLockPayload, MarkdownFileEntry, Project,
-    ProjectNotesPreview, TerminalCodexPaneOverlay, TerminalWorkspace, TerminalWorkspaceSummary,
-    WorktreeInitCancelResult, WorktreeInitCreateBlockingResult, WorktreeInitJobStatus,
-    WorktreeInitRetryRequest, WorktreeInitStartRequest, WorktreeInitStartResult,
-    WorktreeInitStatusQuery, WorktreeInitStep,
+    GlobalSkillUninstallRequest, GlobalSkillsSnapshot, HeatmapCacheFile, InteractionLockPayload,
+    MarkdownFileEntry, Project, ProjectNotesPreview, TerminalCodexPaneOverlay, TerminalWorkspace,
+    TerminalWorkspaceSummary, WorktreeInitCancelResult, WorktreeInitCreateBlockingResult,
+    WorktreeInitJobStatus, WorktreeInitRetryRequest, WorktreeInitStartRequest,
+    WorktreeInitStartResult, WorktreeInitStatusQuery, WorktreeInitStep,
 };
 use crate::system::EditorOpenParams;
 use crate::terminal::{
@@ -81,6 +81,23 @@ fn install_global_skill(
             agent_count
         );
         skills::install_global_skill(request)
+    })
+}
+
+#[tauri::command]
+/// 从指定 Agent 卸载全局 Skill。
+fn uninstall_global_skill(
+    request: GlobalSkillUninstallRequest,
+) -> Result<GlobalSkillInstallResult, String> {
+    let agent_id = request.agent_id.clone();
+    let skill_name = request.skill_name.clone();
+    log_command_result("uninstall_global_skill", move || {
+        log::info!(
+            "uninstall_global_skill skill={} agent={}",
+            skill_name,
+            agent_id
+        );
+        skills::uninstall_global_skill(request)
     })
 }
 
@@ -760,6 +777,7 @@ pub fn run() {
             load_projects,
             list_global_skills,
             install_global_skill,
+            uninstall_global_skill,
             save_projects,
             discover_projects,
             build_projects,

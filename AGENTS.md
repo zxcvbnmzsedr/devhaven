@@ -143,8 +143,9 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 
 ### L. 全局 Skills 管理（独立页面）
 - 入口/UI：`src/components/MainContent.tsx`（标题栏独立按钮）→ `src/components/GlobalSkillsModal.tsx`
-- 展示：`src/components/GlobalSkillsModal.tsx` 采用「Skill × Agent」矩阵表格，左侧 Skill 列 sticky 固定，右侧按 Agent 标记启用状态
+- 展示：`src/components/GlobalSkillsModal.tsx` 采用「Skill × Agent」矩阵表格，左侧 Skill 列 sticky 固定，右侧按 Agent 标记启用状态；矩阵单元可点击直接切换「安装/卸载」
 - 安装：`src/components/GlobalSkillsModal.tsx`（来源/skill 名/agent 选择）→ `src/services/skills.ts`（`installGlobalSkill`）→ `src-tauri/src/lib.rs`（`install_global_skill`）→ `src-tauri/src/skills.rs`（参考开源 skills 的发现/安装流程，在应用内完成 clone + 安装，不依赖外部 skills CLI）
+- 卸载：`src/components/GlobalSkillsModal.tsx`（矩阵单元点击）→ `src/services/skills.ts`（`uninstallGlobalSkill`）→ `src-tauri/src/lib.rs`（`uninstall_global_skill`）→ `src-tauri/src/skills.rs`（按 Agent 目录定点删除该 skill）
 - 扫描：`src/services/skills.ts`（`listGlobalSkills`）→ `src-tauri/src/lib.rs`（`list_global_skills`）→ `src-tauri/src/skills.rs`（固定扫描 `~/.agents/skills` 与常见 Agent 全局目录并聚合，不暴露扫描范围配置）
 
 ## 3) 回写（维护）AGENTS.md 的逻辑

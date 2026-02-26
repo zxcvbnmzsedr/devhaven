@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   GlobalSkillInstallRequest,
   GlobalSkillInstallResult,
+  GlobalSkillUninstallRequest,
   GlobalSkillsSnapshot,
 } from "../models/types";
 
@@ -16,4 +17,11 @@ export async function installGlobalSkill(
   request: GlobalSkillInstallRequest,
 ): Promise<GlobalSkillInstallResult> {
   return invoke<GlobalSkillInstallResult>("install_global_skill", { request });
+}
+
+/** 从指定 Agent 卸载全局 Skill。 */
+export async function uninstallGlobalSkill(
+  request: GlobalSkillUninstallRequest,
+): Promise<GlobalSkillInstallResult> {
+  return invoke<GlobalSkillInstallResult>("uninstall_global_skill", { request });
 }

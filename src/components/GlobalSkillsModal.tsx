@@ -6,7 +6,7 @@ import type {
   GlobalSkillSummary,
   GlobalSkillsSnapshot,
 } from "../models/types";
-import { installGlobalSkill, listGlobalSkills } from "../services/skills";
+import { installGlobalSkill, listGlobalSkills, uninstallGlobalSkill } from "../services/skills";
 import { copyToClipboard, openInFinder } from "../services/system";
 import { IconX } from "./Icons";
 
@@ -30,6 +30,7 @@ export default function GlobalSkillsModal({ onClose }: GlobalSkillsModalProps) {
   const [globalSkillsError, setGlobalSkillsError] = useState<string | null>(null);
   const [globalSkillsQuery, setGlobalSkillsQuery] = useState("");
   const [globalSkillsActionMessage, setGlobalSkillsActionMessage] = useState<string | null>(null);
+  const [matrixActionKey, setMatrixActionKey] = useState<string | null>(null);
 
   const [installSource, setInstallSource] = useState(DEFAULT_SKILL_SOURCE);
   const [installSkillNames, setInstallSkillNames] = useState("");
@@ -150,6 +151,41 @@ export default function GlobalSkillsModal({ onClose }: GlobalSkillsModalProps) {
     }
   }, [handleRefreshGlobalSkills, installSkillNames, installSource, selectedAgentIds]);
 
+  const handleToggleSkillAgent = useCallback(
+    async (skill: GlobalSkillSummary, agent: GlobalSkillAgent, enabled: boolean) => {
+      const actionKey = `${skill.name}::${agent.id}`;
+      setMatrixActionKey(actionKey);
+      setGlobalSkillsActionMessage(null);
+      setInstallResult(null);
+
+      try {
+        if (enabled) {
+          await uninstallGlobalSkill({
+            skillName: skill.name,
+            canonicalPath: skill.canonicalPath,
+            paths: skill.paths,
+            agentId: agent.id,
+          });
+          setGlobalSkillsActionMessage(`已从 ${agent.label} 卸载：${skill.name}`);
+        } else {
+          await installGlobalSkill({
+            source: skill.canonicalPath,
+            skillNames: [],
+            agentIds: [agent.id],
+          });
+          setGlobalSkillsActionMessage(`已为 ${agent.label} 安装：${skill.name}`);
+        }
+        await handleRefreshGlobalSkills();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "切换技能启用状态失败";
+        setGlobalSkillsActionMessage(message);
+      } finally {
+        setMatrixActionKey(null);
+      }
+    },
+    [handleRefreshGlobalSkills],
+  );
+
   useEffect(() => {
     void handleRefreshGlobalSkills();
   }, [handleRefreshGlobalSkills]);
@@ -159,8 +195,7 @@ export default function GlobalSkillsModal({ onClose }: GlobalSkillsModalProps) {
       <div className="modal-panel min-w-[760px] w-[min(1280px,96vw)] max-h-[90vh] overflow-y-auto">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-[16px] font-semibold">Skills（全局）</div>
-            <div className="text-fs-caption text-secondary-text">按“技能 x Agent”矩阵查看启用状态，并直接执行安装。</div>
+            <div className="text-[16px] font-semibold">Skills</div>
           </div>
           <button className="icon-btn" onClick={onClose} aria-label="关闭">
             <IconX size={14} />
@@ -170,9 +205,6 @@ export default function GlobalSkillsModal({ onClose }: GlobalSkillsModalProps) {
         <section className="flex flex-col gap-3 rounded-xl border border-border bg-card-bg p-3">
           <div>
             <div className="text-[13px] font-semibold">安装 Skill</div>
-            <div className="text-fs-caption text-secondary-text">
-              安装逻辑参考开源 skills 项目，在应用内执行（不依赖外部 skills CLI）。
-            </div>
           </div>
 
           <div className="grid gap-2 md:grid-cols-2">
@@ -293,8 +325,12 @@ ${installResult.stderr}` : ""}`}
             <SkillMatrixTable
               agents={agentColumns}
               skills={filteredGlobalSkills}
+              actionCellKey={matrixActionKey}
+              installLoading={installLoading}
+              globalSkillsLoading={globalSkillsLoading}
               onCopySkillPath={handleCopySkillPath}
               onOpenSkillPath={handleOpenSkillPath}
+              onToggleSkillAgent={handleToggleSkillAgent}
             />
           )}
         </section>
@@ -306,8 +342,12 @@ ${installResult.stderr}` : ""}`}
 type SkillMatrixTableProps = {
   agents: GlobalSkillAgent[];
   skills: GlobalSkillSummary[];
+  actionCellKey: string | null;
+  installLoading: boolean;
+  globalSkillsLoading: boolean;
   onCopySkillPath: (path: string, name: string) => Promise<void>;
   onOpenSkillPath: (path: string, name: string) => Promise<void>;
+  onToggleSkillAgent: (skill: GlobalSkillSummary, agent: GlobalSkillAgent, enabled: boolean) => Promise<void>;
 };
 
 type TruncatedTextWithTooltipProps = {
@@ -339,7 +379,16 @@ function TruncatedTextWithTooltip({
   );
 }
 
-function SkillMatrixTable({ agents, skills, onCopySkillPath, onOpenSkillPath }: SkillMatrixTableProps) {
+function SkillMatrixTable({
+  agents,
+  skills,
+  actionCellKey,
+  installLoading,
+  globalSkillsLoading,
+  onCopySkillPath,
+  onOpenSkillPath,
+  onToggleSkillAgent,
+}: SkillMatrixTableProps) {
   const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
 
   const handleShowTooltip = useCallback((value: string, x: number, y: number) => {
@@ -438,20 +487,25 @@ function SkillMatrixTable({ agents, skills, onCopySkillPath, onOpenSkillPath }: 
                   </td>
                   {agents.map((agent) => {
                     const enabled = enabledAgentIds.has(agent.id);
+                    const cellKey = `${skill.name}::${agent.id}`;
+                    const cellActionLoading = actionCellKey === cellKey;
                     return (
                       <td
                         key={`global-skill-cell-${skill.name}-${agent.id}`}
                         className="border-b border-border px-2 py-2 text-center"
                       >
-                        <span
-                          className={`inline-flex min-w-[44px] items-center justify-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                        <button
+                          className={`inline-flex min-w-[60px] items-center justify-center rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors duration-150 ${
                             enabled
-                              ? "bg-[rgba(34,197,94,0.18)] text-[rgb(22,163,74)]"
-                              : "bg-button-bg text-secondary-text"
+                              ? "border-[rgba(34,197,94,0.45)] bg-[rgba(34,197,94,0.18)] text-[rgb(22,163,74)] hover:bg-[rgba(34,197,94,0.28)]"
+                              : "border-border bg-button-bg text-secondary-text hover:bg-button-hover"
                           }`}
+                          title={enabled ? "点击卸载" : "点击安装"}
+                          onClick={() => void onToggleSkillAgent(skill, agent, enabled)}
+                          disabled={cellActionLoading || installLoading || globalSkillsLoading}
                         >
-                          {enabled ? "启用" : "-"}
-                        </span>
+                          {cellActionLoading ? "处理中..." : enabled ? "启用" : "-"}
+                        </button>
                       </td>
                     );
                   })}

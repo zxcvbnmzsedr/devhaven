@@ -79,6 +79,13 @@ export type GlobalSkillInstallRequest = {
   agentIds: string[];
 };
 
+export type GlobalSkillUninstallRequest = {
+  skillName: string;
+  canonicalPath: string;
+  paths: string[];
+  agentId: string;
+};
+
 export type GlobalSkillInstallResult = {
   command: string;
   stdout: string;
