@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { useEffect, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
 import type { Project, ProjectWorktree } from "../../models/types";
 import type { GitWorktreeListItem } from "../../services/gitWorktree";
 import { useSystemColorScheme } from "../../hooks/useSystemColorScheme";
@@ -16,6 +17,7 @@ import TerminalWorkspaceView from "./TerminalWorkspaceView";
 export type TerminalWorkspaceWindowProps = {
   openProjects: Project[];
   activeProjectId: string | null;
+  quickCommandDispatch: TerminalQuickCommandDispatch | null;
   onSelectProject: (projectId: string) => void;
   onCloseProject: (projectId: string) => void;
   onCreateWorktree: (projectId: string) => void;
@@ -115,6 +117,7 @@ function resolveActiveProject(
 export default function TerminalWorkspaceWindow({
   openProjects,
   activeProjectId,
+  quickCommandDispatch,
   onSelectProject,
   onCloseProject,
   onCreateWorktree,
@@ -389,6 +392,7 @@ export default function TerminalWorkspaceWindow({
                 projectPath={project.path}
                 projectName={project.name}
                 isActive={isVisible && isActive}
+                quickCommandDispatch={quickCommandDispatch}
                 windowLabel={windowLabel}
                 xtermTheme={terminalThemePreset.xterm}
                 codexRunningCount={codexProjectStatusById[project.id]?.runningCount ?? 0}

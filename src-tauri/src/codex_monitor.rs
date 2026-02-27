@@ -4,9 +4,9 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
+    Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver},
-    Mutex, OnceLock,
 };
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -121,9 +121,11 @@ pub fn ensure_monitoring_started(app: &AppHandle) -> Result<(), String> {
     });
 
     let poll_app = app.clone();
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(PROCESS_POLL_INTERVAL_MS));
-        emit_monitoring(&poll_app);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(PROCESS_POLL_INTERVAL_MS));
+            emit_monitoring(&poll_app);
+        }
     });
 
     Ok(())

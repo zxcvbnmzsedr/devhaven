@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tauri::{AppHandle, Manager};
 
 use crate::models::{

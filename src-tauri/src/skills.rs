@@ -255,7 +255,11 @@ pub fn uninstall_global_skill(
 
     let remove_targets = resolve_skill_remove_targets(&target_agent.path, &request);
     let mut logs = vec![
-        format!("agent: {} ({})", target_agent.id, target_agent.path.display()),
+        format!(
+            "agent: {} ({})",
+            target_agent.id,
+            target_agent.path.display()
+        ),
         format!("skill: {}", request.skill_name),
     ];
 

@@ -20,6 +20,7 @@ import type { DateFilter, GitFilter } from "./models/filters";
 import { DATE_FILTER_OPTIONS, GIT_FILTER_OPTIONS } from "./models/filters";
 import type { HeatmapData } from "./models/heatmap";
 import { HEATMAP_CONFIG } from "./models/heatmap";
+import type { TerminalQuickCommandDispatch } from "./models/quickCommands";
 import type { TerminalWorkspaceSummary } from "./models/terminal";
 import type { CodexAgentEvent, CodexMonitorSession, CodexSessionView } from "./models/codex";
 import type { ColorData, Project, ProjectListViewMode, ProjectWorktree, TagData } from "./models/types";
@@ -41,12 +42,6 @@ import {
   listenWorktreeInitProgress,
   type WorktreeInitProgressPayload,
 } from "./services/worktreeInit";
-import {
-  createQuickCommandRequestId,
-  enqueueTerminalQuickCommandAction,
-  emitTerminalQuickCommandRun,
-  emitTerminalQuickCommandStop,
-} from "./services/terminalQuickCommands";
 
 const TerminalWorkspaceWindow = lazy(() => import("./components/terminal/TerminalWorkspaceWindow"));
 const MAIN_WINDOW_LABEL = "main";
@@ -319,6 +314,8 @@ function AppLayout() {
   const [commandPaletteActiveIndex, setCommandPaletteActiveIndex] = useState(0);
   const [terminalOpenProjects, setTerminalOpenProjects] = useState<Project[]>([]);
   const [terminalActiveProjectId, setTerminalActiveProjectId] = useState<string | null>(null);
+  const [terminalQuickCommandDispatch, setTerminalQuickCommandDispatch] =
+    useState<TerminalQuickCommandDispatch | null>(null);
   const [terminalGitWorktreesByProjectId, setTerminalGitWorktreesByProjectId] = useState<
     Record<string, GitWorktreeListItem[]>
   >({});
@@ -404,6 +401,7 @@ function AppLayout() {
   const lastTerminalVisibleRef = useRef(showTerminalWorkspace);
   const terminalOpenProjectsRef = useRef<Project[]>(terminalOpenProjects);
   const terminalActiveProjectIdRef = useRef<string | null>(terminalActiveProjectId);
+  const terminalQuickCommandDispatchSeqRef = useRef(0);
   const terminalGitWorktreesByProjectIdRef = useRef<Record<string, GitWorktreeListItem[]>>(terminalGitWorktreesByProjectId);
   const terminalRestoreCheckedRef = useRef(false);
   const worktreeAutoSyncedProjectIdsRef = useRef<Set<string>>(new Set());
@@ -988,6 +986,15 @@ function AppLayout() {
     [projects],
   );
 
+  const dispatchTerminalQuickCommand = useCallback(
+    (action: Omit<TerminalQuickCommandDispatch, "seq">) => {
+      const seq = terminalQuickCommandDispatchSeqRef.current + 1;
+      terminalQuickCommandDispatchSeqRef.current = seq;
+      setTerminalQuickCommandDispatch({ ...action, seq });
+    },
+    [],
+  );
+
   const handleRunProjectScript = useCallback(
     async (projectId: string, scriptId: string) => {
       const project = projectMap.get(projectId);
@@ -1001,26 +1008,15 @@ function AppLayout() {
         return;
       }
 
-      const payload = {
-        requestId: createQuickCommandRequestId(),
+      openTerminalWorkspace(project);
+      dispatchTerminalQuickCommand({
+        type: "run",
         projectId: project.id,
         projectPath: project.path,
         scriptId,
-      };
-
-      const alreadyOpen = terminalOpenProjectsRef.current.some((item) => item.id === project.id);
-      if (!alreadyOpen) {
-        enqueueTerminalQuickCommandAction({ type: "run", payload });
-      }
-
-      openTerminalWorkspace(project);
-      window.setTimeout(() => {
-        void emitTerminalQuickCommandRun(MAIN_WINDOW_LABEL, payload).catch((error) => {
-          console.error("发送快捷命令运行事件失败。", error);
-        });
-      }, 0);
+      });
     },
-    [projectMap, openTerminalWorkspace, showToast],
+    [dispatchTerminalQuickCommand, projectMap, openTerminalWorkspace, showToast],
   );
 
   const handleStopProjectScript = useCallback(
@@ -1036,26 +1032,15 @@ function AppLayout() {
         return;
       }
 
-      const payload = {
-        requestId: createQuickCommandRequestId(),
+      openTerminalWorkspace(project);
+      dispatchTerminalQuickCommand({
+        type: "stop",
         projectId: project.id,
         projectPath: project.path,
         scriptId,
-      };
-
-      const alreadyOpen = terminalOpenProjectsRef.current.some((item) => item.id === project.id);
-      if (!alreadyOpen) {
-        enqueueTerminalQuickCommandAction({ type: "stop", payload });
-      }
-
-      openTerminalWorkspace(project);
-      window.setTimeout(() => {
-        void emitTerminalQuickCommandStop(MAIN_WINDOW_LABEL, payload).catch((error) => {
-          console.error("发送快捷命令停止事件失败。", error);
-        });
-      }, 0);
+      });
     },
-    [projectMap, openTerminalWorkspace, showToast],
+    [dispatchTerminalQuickCommand, projectMap, openTerminalWorkspace, showToast],
   );
 
   const handleOpenTerminal = useCallback(
@@ -2318,6 +2303,7 @@ function AppLayout() {
             <TerminalWorkspaceWindow
               openProjects={terminalOpenProjects}
               activeProjectId={terminalActiveProjectId}
+              quickCommandDispatch={terminalQuickCommandDispatch}
               onSelectProject={setTerminalActiveProjectId}
               onCloseProject={handleCloseTerminalProject}
               onCreateWorktree={(projectId) => void handleRequestCreateWorktree(projectId)}

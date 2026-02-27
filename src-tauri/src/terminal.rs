@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Serialize;
 use serde_json::Value;
 use sysinfo::{Pid, System};
@@ -731,6 +731,7 @@ pub fn terminal_create_session(
     let session_id_for_output = session_id.clone();
     let window_label_for_output = window_label.clone();
     let pty_id_for_output = pty_id.clone();
+    let session_for_output = session.clone();
 
     thread::spawn(move || {
         let mut reader = reader;
@@ -772,12 +773,17 @@ pub fn terminal_create_session(
             }
         }
 
+        let exit_code = match session_for_output.child.lock() {
+            Ok(mut child) => child.wait().ok().map(|status| status.exit_code() as i32),
+            Err(_) => None,
+        };
+
         let _ = app_handle.emit_to(
             &window_label_for_output,
             TERMINAL_EXIT_EVENT,
             TerminalExitPayload {
                 session_id: session_id_for_output.clone(),
-                code: None,
+                code: exit_code,
             },
         );
         if let Ok(mut sessions) = sessions_map.lock() {

@@ -6,12 +6,19 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
 import type { ITheme } from "xterm";
 
+import type { QuickCommandJob, QuickCommandState, TerminalQuickCommandDispatch } from "../../models/quickCommands";
 import type { RightSidebarState, SplitDirection, TerminalRightSidebarTab, TerminalTab, TerminalWorkspace } from "../../models/terminal";
 import type { ProjectScript } from "../../models/types";
 import { useDevHavenContext } from "../../state/DevHavenContext";
+import {
+  finishQuickCommand,
+  getQuickCommandSnapshot,
+  listenQuickCommandEvent,
+  startQuickCommand,
+  stopQuickCommand as stopQuickCommandJob,
+} from "../../services/quickCommands";
 import {
   getTerminalCodexPaneOverlay,
   killTerminal,
@@ -21,14 +28,6 @@ import {
 } from "../../services/terminal";
 import { saveTerminalWorkspace, loadTerminalWorkspace } from "../../services/terminalWorkspace";
 import { gitIsRepo } from "../../services/gitManagement";
-import {
-  TERMINAL_QUICK_COMMAND_RUN_EVENT,
-  TERMINAL_QUICK_COMMAND_STOP_EVENT,
-  takeTerminalQuickCommandActionsForProject,
-  type TerminalQuickCommandAction,
-  type TerminalQuickCommandRunPayload,
-  type TerminalQuickCommandStopPayload,
-} from "../../services/terminalQuickCommands";
 import {
   collectSessionIds,
   createDefaultWorkspace,
@@ -53,6 +52,7 @@ export type TerminalWorkspaceViewProps = {
   projectPath: string;
   projectName?: string | null;
   isActive: boolean;
+  quickCommandDispatch?: TerminalQuickCommandDispatch | null;
   windowLabel: string;
   xtermTheme: ITheme;
   codexRunningCount?: number;
@@ -60,16 +60,15 @@ export type TerminalWorkspaceViewProps = {
 };
 
 type ScriptRuntime = {
+  jobId: string;
   tabId: string;
   sessionId: string;
   ptyId: string | null;
 };
 
 const TERMINAL_TITLE_PATTERN = /^终端\s*(\d+)$/;
-const QUICK_COMMAND_OUTPUT_BUFFER_LIMIT = 4096;
 const CODEX_STARTUP_OUTPUT_BUFFER_LIMIT = 4096;
-const QUICK_COMMAND_EXIT_MARKER_REGEX =
-  /\u001b\]633;DevHaven;qc-exit;([^;]+);(-?\d+)\u0007/;
+const QUICK_COMMAND_FORCE_KILL_TIMEOUT_MS = 1500;
 const ANSI_CSI_REGEX = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const ANSI_OSC_REGEX = /\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g;
 const CODEX_MODEL_LINE_REGEX = /model:\s*([^\s|]+)\s+([^\s|]+)\s+\/model\b/i;
@@ -84,12 +83,16 @@ const DEFAULT_RIGHT_SIDEBAR: RightSidebarState = {
 const MIN_RIGHT_SIDEBAR_WIDTH = 360;
 const MAX_RIGHT_SIDEBAR_WIDTH = 960;
 const CODEX_PANE_OVERLAY_REFRESH_INTERVAL_MS = 2500;
+const QUICK_COMMAND_RECONCILE_INTERVAL_MS = 10000;
 
 type CodexStartupHint = {
   model: string | null;
   effort: string | null;
   updatedAt: number;
 };
+
+type ScriptLocalPhase = "starting" | "stoppingSoft" | "stoppingHard";
+type ScriptExecutionState = "idle" | "starting" | "running" | "stoppingSoft" | "stoppingHard";
 
 function stripAnsiSequences(input: string) {
   return input.replace(ANSI_OSC_REGEX, "").replace(ANSI_CSI_REGEX, "");
@@ -139,25 +142,48 @@ function shellQuote(value: string) {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
-function wrapQuickCommandForShell(
-  command: string,
-  token: string,
-  environment?: Record<string, string | undefined>,
-) {
-  const normalized = command.replace(/\r\n|\n|\r/g, "; ").trim();
-  const safeToken = token.replace(/[^a-zA-Z0-9-]/g, "");
-  if (!normalized || !safeToken) {
+function normalizePathForCompare(path: string) {
+  const trimmed = path.trim();
+  if (!trimmed) {
     return "";
   }
+  return trimmed.replace(/\\/g, "/").replace(/\/+$/, "");
+}
 
-  // Run the command in a sub-shell so Ctrl+C (SIGINT) still emits our qc-exit marker via trap.
-  // This keeps the outer interactive shell alive, and avoids relying on buffered follow-up lines.
-  const runnerScript =
-    'printf "\\033]633;DevHaven;qc-start;%s\\007" "$DEVHAVEN_QC_TOKEN"; ' +
-    'dh_qc_emit_exit() { printf "\\033]633;DevHaven;qc-exit;%s;%s\\007" "$DEVHAVEN_QC_TOKEN" "$1"; }; ' +
-    'trap "dh_qc_emit_exit 130; exit 130" INT; ' +
-    'eval "$DEVHAVEN_QC_CMD"; ' +
-    'code=$?; dh_qc_emit_exit "$code"; exit "$code"';
+function isTerminalQuickCommandState(state: QuickCommandState | string) {
+  return state === "exited" || state === "failed" || state === "cancelled";
+}
+
+function isActiveQuickCommandState(state: QuickCommandState | string) {
+  return !isTerminalQuickCommandState(state);
+}
+
+function toScriptExecutionStateFromQuickState(state: QuickCommandState | string): ScriptExecutionState {
+  if (state === "stoppingHard") {
+    return "stoppingHard";
+  }
+  if (state === "stoppingSoft") {
+    return "stoppingSoft";
+  }
+  if (state === "running") {
+    return "running";
+  }
+  if (state === "starting" || state === "queued") {
+    return "starting";
+  }
+  return "idle";
+}
+
+function wrapQuickCommandForShell(command: string, environment?: Record<string, string | undefined>) {
+  const normalized = command
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .join("; ")
+    .trim();
+  if (!normalized) {
+    return "";
+  }
 
   const envAssignments: string[] = [];
   for (const [rawKey, rawValue] of Object.entries(environment ?? {})) {
@@ -172,12 +198,8 @@ function wrapQuickCommandForShell(
   }
   const envPrefix = envAssignments.length > 0 ? `${envAssignments.join(" ")} ` : "";
 
-  return (
-    envPrefix +
-    `DEVHAVEN_QC_TOKEN=${shellQuote(safeToken)} ` +
-    `DEVHAVEN_QC_CMD=${shellQuote(normalized)} ` +
-    `sh -lc ${shellQuote(runnerScript)}`
-  );
+  // 用一次性 shell 执行命令并主动退出，统一依赖 terminal-exit 回收运行态。
+  return envPrefix + `sh -lc ${shellQuote(normalized)}; exit $?`;
 }
 
 function getNextTerminalTitle(tabs: TerminalTab[]): string {
@@ -204,6 +226,7 @@ export default function TerminalWorkspaceView({
   projectPath,
   projectName,
   isActive,
+  quickCommandDispatch,
   windowLabel,
   xtermTheme,
   codexRunningCount = 0,
@@ -231,14 +254,20 @@ export default function TerminalWorkspaceView({
 
   const [scriptRuntimeById, setScriptRuntimeById] = useState<Record<string, ScriptRuntime>>({});
   const scriptRuntimeByIdRef = useRef<Record<string, ScriptRuntime>>({});
+  const [quickCommandJobByScriptId, setQuickCommandJobByScriptId] = useState<Record<string, QuickCommandJob>>({});
+  const quickCommandJobByScriptIdRef = useRef<Record<string, QuickCommandJob>>({});
+  const [scriptLocalPhaseById, setScriptLocalPhaseById] = useState<Record<string, ScriptLocalPhase>>({});
+  const scriptLocalPhaseByIdRef = useRef<Record<string, ScriptLocalPhase>>({});
 
   const sessionPtyIdRef = useRef(new Map<string, string>());
   const scriptIdBySessionIdRef = useRef(new Map<string, string>());
   const pendingStartBySessionIdRef = useRef(new Map<string, string>());
-  const quickCommandOutputBufferBySessionIdRef = useRef(new Map<string, string>());
+  const pendingStopAfterStartByScriptIdRef = useRef(new Set<string>());
+  const finalizedQuickCommandJobIdsRef = useRef(new Set<string>());
   const codexStartupOutputBufferBySessionIdRef = useRef(new Map<string, string>());
-  const pendingExternalActionsRef = useRef<TerminalQuickCommandAction[]>([]);
-  const handledRequestIdsRef = useRef(new Set<string>());
+  const handledDispatchSeqRef = useRef(0);
+  const stopKillTimerByScriptIdRef = useRef(new Map<string, number>());
+  const pendingQuickCommandDispatchRef = useRef<TerminalQuickCommandDispatch | null>(null);
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -268,12 +297,24 @@ export default function TerminalWorkspaceView({
     scriptRuntimeByIdRef.current = scriptRuntimeById;
   }, [scriptRuntimeById]);
 
+  useLayoutEffect(() => {
+    quickCommandJobByScriptIdRef.current = quickCommandJobByScriptId;
+  }, [quickCommandJobByScriptId]);
+
+  useLayoutEffect(() => {
+    scriptLocalPhaseByIdRef.current = scriptLocalPhaseById;
+  }, [scriptLocalPhaseById]);
+
   useEffect(() => {
     return () => {
       if (panelMessageTimerRef.current !== null) {
         window.clearTimeout(panelMessageTimerRef.current);
         panelMessageTimerRef.current = null;
       }
+      for (const timer of stopKillTimerByScriptIdRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      stopKillTimerByScriptIdRef.current.clear();
     };
   }, []);
 
@@ -313,13 +354,20 @@ export default function TerminalWorkspaceView({
       panelMessageTimerRef.current = null;
     }
     setScriptRuntimeById({});
+    setQuickCommandJobByScriptId({});
+    setScriptLocalPhaseById({});
     scriptIdBySessionIdRef.current.clear();
     sessionPtyIdRef.current.clear();
     pendingStartBySessionIdRef.current.clear();
-    quickCommandOutputBufferBySessionIdRef.current.clear();
+    pendingStopAfterStartByScriptIdRef.current.clear();
+    finalizedQuickCommandJobIdsRef.current.clear();
     codexStartupOutputBufferBySessionIdRef.current.clear();
-    pendingExternalActionsRef.current = [];
-    handledRequestIdsRef.current.clear();
+    handledDispatchSeqRef.current = 0;
+    pendingQuickCommandDispatchRef.current = null;
+    for (const timer of stopKillTimerByScriptIdRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    stopKillTimerByScriptIdRef.current.clear();
     setPreviewFilePath(null);
     setPreviewDirty(false);
     setCodexPaneOverlayBySessionId({});
@@ -419,10 +467,118 @@ export default function TerminalWorkspaceView({
     }, 2500);
   }, []);
 
+  const clearScriptLocalPhase = useCallback((scriptIds: string[]) => {
+    if (scriptIds.length === 0) {
+      return;
+    }
+    setScriptLocalPhaseById((prev) => {
+      let next: typeof prev | null = null;
+      for (const scriptId of scriptIds) {
+        if (!(scriptId in prev)) {
+          continue;
+        }
+        if (!next) {
+          next = { ...prev };
+        }
+        delete next[scriptId];
+      }
+      return next ?? prev;
+    });
+  }, []);
+
+  const finishQuickCommandOnce = useCallback(
+    async ({ jobId, exitCode, error }: { jobId: string; exitCode?: number | null; error?: string | null }) => {
+      const normalizedJobId = jobId.trim();
+      if (!normalizedJobId) {
+        return;
+      }
+      if (finalizedQuickCommandJobIdsRef.current.has(normalizedJobId)) {
+        return;
+      }
+      finalizedQuickCommandJobIdsRef.current.add(normalizedJobId);
+      if (finalizedQuickCommandJobIdsRef.current.size > 2048) {
+        const iterator = finalizedQuickCommandJobIdsRef.current.values();
+        const first = iterator.next();
+        if (!first.done) {
+          finalizedQuickCommandJobIdsRef.current.delete(first.value);
+        }
+      }
+
+      try {
+        await finishQuickCommand({
+          jobId: normalizedJobId,
+          exitCode,
+          error,
+        });
+      } catch (requestError) {
+        finalizedQuickCommandJobIdsRef.current.delete(normalizedJobId);
+        throw requestError;
+      }
+    },
+    [],
+  );
+
+  const finalizeRuntimeBySessionIds = useCallback(
+    (sessionIds: string[], exitCode: number, errorMessage: string) => {
+      if (sessionIds.length === 0) {
+        return;
+      }
+      for (const sessionId of sessionIds) {
+        const scriptId = scriptIdBySessionIdRef.current.get(sessionId) ?? null;
+        if (!scriptId) {
+          continue;
+        }
+        const runtime = scriptRuntimeByIdRef.current[scriptId] ?? null;
+        if (!runtime || runtime.sessionId !== sessionId) {
+          continue;
+        }
+        void finishQuickCommandOnce({
+          jobId: runtime.jobId,
+          exitCode,
+          error: errorMessage,
+        }).catch((requestError) => {
+          console.error("回写快捷命令结束状态失败。", requestError);
+        });
+      }
+    },
+    [finishQuickCommandOnce],
+  );
+
+  const applyQuickCommandSnapshot = useCallback(
+    (jobs: QuickCommandJob[]) => {
+      const currentProjectPath = normalizePathForCompare(workspaceRef.current?.projectPath || projectPath);
+      const next: Record<string, QuickCommandJob> = {};
+      for (const job of jobs) {
+        if (!job?.scriptId) {
+          continue;
+        }
+        if (job.windowLabel && job.windowLabel !== windowLabel) {
+          continue;
+        }
+        if (projectId && job.projectId && job.projectId !== projectId) {
+          continue;
+        }
+        if (normalizePathForCompare(job.projectPath) !== currentProjectPath) {
+          continue;
+        }
+        if (!isActiveQuickCommandState(job.state)) {
+          continue;
+        }
+        const existing = next[job.scriptId];
+        if (!existing || job.updatedAt > existing.updatedAt) {
+          next[job.scriptId] = job;
+        }
+      }
+      setQuickCommandJobByScriptId(next);
+    },
+    [projectId, projectPath, windowLabel],
+  );
+
   const cleanupRuntimeBySessionIds = useCallback((sessionIds: string[]) => {
     if (sessionIds.length === 0) {
       return;
     }
+    const removedScriptIds: string[] = [];
     const removeSet = new Set(sessionIds);
     setScriptRuntimeById((prev) => {
       let next: typeof prev | null = null;
@@ -439,12 +595,23 @@ export default function TerminalWorkspaceView({
     });
 
     sessionIds.forEach((sessionId) => {
+      const scriptId = scriptIdBySessionIdRef.current.get(sessionId) ?? null;
+      if (scriptId) {
+        removedScriptIds.push(scriptId);
+        pendingStopAfterStartByScriptIdRef.current.delete(scriptId);
+        const timer = stopKillTimerByScriptIdRef.current.get(scriptId);
+        if (typeof timer === "number") {
+          window.clearTimeout(timer);
+          stopKillTimerByScriptIdRef.current.delete(scriptId);
+        }
+      }
       sessionPtyIdRef.current.delete(sessionId);
       scriptIdBySessionIdRef.current.delete(sessionId);
       pendingStartBySessionIdRef.current.delete(sessionId);
-      quickCommandOutputBufferBySessionIdRef.current.delete(sessionId);
       codexStartupOutputBufferBySessionIdRef.current.delete(sessionId);
     });
+
+    clearScriptLocalPhase(removedScriptIds);
 
     setCodexStartupHintBySessionId((prev) => {
       let next: Record<string, CodexStartupHint> | null = null;
@@ -473,7 +640,14 @@ export default function TerminalWorkspaceView({
       }
       return next ?? prev;
     });
-  }, []);
+  }, [clearScriptLocalPhase]);
+
+  useEffect(() => {
+    return () => {
+      const runtimeSessionIds = Object.values(scriptRuntimeByIdRef.current).map((runtime) => runtime.sessionId);
+      finalizeRuntimeBySessionIds(runtimeSessionIds, 130, "终端会话已关闭");
+    };
+  }, [finalizeRuntimeBySessionIds, projectId, projectPath]);
 
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -510,27 +684,6 @@ export default function TerminalWorkspaceView({
             });
           }
 
-          const scriptId = scriptIdBySessionIdRef.current.get(sessionId);
-          if (!scriptId) {
-            return;
-          }
-
-          const bufferMap = quickCommandOutputBufferBySessionIdRef.current;
-          const prev = bufferMap.get(sessionId) ?? "";
-          const next = `${prev}${payload.data}`.slice(-QUICK_COMMAND_OUTPUT_BUFFER_LIMIT);
-          bufferMap.set(sessionId, next);
-
-          const match = QUICK_COMMAND_EXIT_MARKER_REGEX.exec(next);
-          if (!match) {
-            return;
-          }
-          const token = match[1];
-          const code = match[2];
-          if (token !== sessionId) {
-            return;
-          }
-          cleanupRuntimeBySessionIds([sessionId]);
-          showPanelMessage(code === "0" ? "命令已完成" : `命令已结束（退出码 ${code}）`);
         });
       } catch (error) {
         console.error("监听终端输出事件失败。", error);
@@ -542,7 +695,55 @@ export default function TerminalWorkspaceView({
     return () => {
       unlisten?.();
     };
-  }, [cleanupRuntimeBySessionIds, showPanelMessage]);
+  }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+
+    const refreshSnapshot = async () => {
+      try {
+        const snapshot = await getQuickCommandSnapshot();
+        if (cancelled) {
+          return;
+        }
+        applyQuickCommandSnapshot(snapshot.jobs ?? []);
+      } catch (error) {
+        if (!cancelled) {
+          console.error("拉取快捷命令快照失败。", error);
+        }
+      }
+    };
+
+    const registerListener = async () => {
+      try {
+        unlisten = await listenQuickCommandEvent((event) => {
+          if (cancelled) {
+            return;
+          }
+          const jobs = event.payload?.snapshot?.jobs ?? [];
+          applyQuickCommandSnapshot(jobs);
+        });
+      } catch (error) {
+        if (!cancelled) {
+          console.error("监听快捷命令事件失败。", error);
+        }
+      }
+    };
+
+    void refreshSnapshot();
+    void registerListener();
+
+    const timer = window.setInterval(() => {
+      void refreshSnapshot();
+    }, QUICK_COMMAND_RECONCILE_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      unlisten?.();
+    };
+  }, [applyQuickCommandSnapshot]);
 
   useEffect(() => {
     if (!workspace) {
@@ -619,6 +820,7 @@ export default function TerminalWorkspaceView({
       const current = workspaceRef.current;
       const closedTab = current?.tabs.find((tab) => tab.id === tabId) ?? null;
       const removedSessions = closedTab ? collectSessionIds(closedTab.root) : [];
+      finalizeRuntimeBySessionIds(removedSessions, 130, "终端标签页已关闭");
       cleanupRuntimeBySessionIds(removedSessions);
 
       updateWorkspace((current) => {
@@ -642,7 +844,7 @@ export default function TerminalWorkspaceView({
         };
       });
     },
-    [cleanupRuntimeBySessionIds, updateWorkspace],
+    [cleanupRuntimeBySessionIds, finalizeRuntimeBySessionIds, updateWorkspace],
   );
 
   const handleSelectTabRelative = useCallback(
@@ -702,7 +904,32 @@ export default function TerminalWorkspaceView({
   );
 
   const handleSessionExit = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, code?: number | null) => {
+      const scriptId = scriptIdBySessionIdRef.current.get(sessionId) ?? null;
+      const runtime = scriptId ? scriptRuntimeByIdRef.current[scriptId] ?? null : null;
+      if (scriptId && runtime && runtime.sessionId === sessionId) {
+        const resolvedCode = typeof code === "number" ? code : 130;
+        const errorMessage = resolvedCode === 0 ? null : `命令结束（退出码 ${resolvedCode}）`;
+        void finishQuickCommandOnce({
+          jobId: runtime.jobId,
+          exitCode: resolvedCode,
+          error: errorMessage,
+        }).catch((error) => {
+          console.error("回写快捷命令结束状态失败。", error);
+        });
+        clearScriptLocalPhase([scriptId]);
+        setQuickCommandJobByScriptId((prev) => {
+          const existing = prev[scriptId];
+          if (!existing || existing.jobId !== runtime.jobId) {
+            return prev;
+          }
+          const next = { ...prev };
+          delete next[scriptId];
+          return next;
+        });
+        showPanelMessage(resolvedCode === 0 ? "命令已完成" : `命令已结束（退出码 ${resolvedCode}）`);
+      }
+
       const current = workspaceRef.current;
       if (!current) {
         cleanupRuntimeBySessionIds([sessionId]);
@@ -764,7 +991,7 @@ export default function TerminalWorkspaceView({
         };
       });
     },
-    [cleanupRuntimeBySessionIds, updateWorkspace],
+    [cleanupRuntimeBySessionIds, clearScriptLocalPhase, finishQuickCommandOnce, showPanelMessage, updateWorkspace],
   );
 
   const setQuickCommandsPanelOpen = useCallback(
@@ -1100,30 +1327,46 @@ export default function TerminalWorkspaceView({
     return findPanePath(tab.root, runtime.sessionId) !== null;
   }, []);
 
-  const handlePtyReady = useCallback((sessionId: string, ptyId: string) => {
-    sessionPtyIdRef.current.set(sessionId, ptyId);
+  const handlePtyReady = useCallback(
+    (sessionId: string, ptyId: string) => {
+      sessionPtyIdRef.current.set(sessionId, ptyId);
 
-    const scriptId = scriptIdBySessionIdRef.current.get(sessionId);
-    if (scriptId) {
-      setScriptRuntimeById((prev) => {
-        const runtime = prev[scriptId];
-        if (!runtime || runtime.sessionId !== sessionId || runtime.ptyId === ptyId) {
-          return prev;
+      const scriptId = scriptIdBySessionIdRef.current.get(sessionId);
+      if (scriptId) {
+        setScriptRuntimeById((prev) => {
+          const runtime = prev[scriptId];
+          if (!runtime || runtime.sessionId !== sessionId || runtime.ptyId === ptyId) {
+            return prev;
+          }
+          return { ...prev, [scriptId]: { ...runtime, ptyId } };
+        });
+      }
+
+      const command = pendingStartBySessionIdRef.current.get(sessionId);
+      if (!command) {
+        return;
+      }
+      pendingStartBySessionIdRef.current.delete(sessionId);
+      const payload = command.endsWith("\r") ? command : `${command}\r`;
+      void writeTerminal(ptyId, payload).catch((error) => {
+        console.error("快捷命令下发失败。", error);
+        const ownedScriptId = scriptIdBySessionIdRef.current.get(sessionId) ?? null;
+        const runtime = ownedScriptId ? scriptRuntimeByIdRef.current[ownedScriptId] ?? null : null;
+        if (runtime && runtime.sessionId === sessionId) {
+          void finishQuickCommandOnce({
+            jobId: runtime.jobId,
+            exitCode: 1,
+            error: "命令下发失败",
+          }).catch((finishError) => {
+            console.error("回写快捷命令失败状态失败。", finishError);
+          });
         }
-        return { ...prev, [scriptId]: { ...runtime, ptyId } };
+        showPanelMessage("快捷命令下发失败");
+        handleSessionExit(sessionId, 1);
       });
-    }
-
-    const command = pendingStartBySessionIdRef.current.get(sessionId);
-    if (!command) {
-      return;
-    }
-    pendingStartBySessionIdRef.current.delete(sessionId);
-    const payload = command.endsWith("\r") ? command : `${command}\r`;
-    void writeTerminal(ptyId, payload).catch((error) => {
-      console.error("快捷命令下发失败。", error);
-    });
-  }, []);
+    },
+    [finishQuickCommandOnce, handleSessionExit, showPanelMessage],
+  );
 
   const runQuickCommand = useCallback(
     (script: ProjectScript) => {
@@ -1142,8 +1385,19 @@ export default function TerminalWorkspaceView({
         return;
       }
 
+      const localPhase = scriptLocalPhaseByIdRef.current[script.id] ?? null;
+      if (localPhase === "starting") {
+        showPanelMessage("命令正在启动中");
+        return;
+      }
+      if (localPhase === "stoppingSoft" || localPhase === "stoppingHard") {
+        showPanelMessage("命令正在停止中");
+        return;
+      }
+
       const existing = scriptRuntimeByIdRef.current[script.id] ?? null;
       if (existing && isScriptRuntimeValid(existing)) {
+        pendingStopAfterStartByScriptIdRef.current.delete(script.id);
         showPanelMessage("命令已在运行，已切换到对应终端");
         updateWorkspace((ws) => {
           const nextTabs = ws.tabs.map((tab) => {
@@ -1157,94 +1411,223 @@ export default function TerminalWorkspaceView({
         return;
       }
 
+      const existingJob = quickCommandJobByScriptIdRef.current[script.id] ?? null;
+      if (existingJob && isActiveQuickCommandState(existingJob.state)) {
+        const executionState = toScriptExecutionStateFromQuickState(existingJob.state);
+        if (executionState === "starting") {
+          showPanelMessage("命令正在启动中");
+        } else if (executionState === "stoppingSoft" || executionState === "stoppingHard") {
+          showPanelMessage("命令正在停止中");
+        } else {
+          showPanelMessage("命令已在运行");
+        }
+        return;
+      }
+
       if (existing) {
         cleanupRuntimeBySessionIds([existing.sessionId]);
       }
 
-      const sessionId = createId();
-      const tabId = createId();
-      scriptIdBySessionIdRef.current.set(sessionId, script.id);
-      pendingStartBySessionIdRef.current.set(
-        sessionId,
-        wrapQuickCommandForShell(rendered.command.trim(), sessionId, {
-          DEVHAVEN_SHARED_SCRIPTS: appState.settings.sharedScriptsRoot,
-          DEVHAVEN_PROJECT_PATH: current.projectPath || projectPath,
-        }),
-      );
-
-      setScriptRuntimeById((prev) => ({
-        ...prev,
-        [script.id]: { tabId, sessionId, ptyId: null },
-      }));
-
-      updateWorkspace((ws) => {
-        const title = script.name.trim() ? script.name.trim() : `命令 ${ws.tabs.length + 1}`;
-        return {
-          ...ws,
-          activeTabId: tabId,
-          tabs: [
-            ...ws.tabs,
-            { id: tabId, title, root: { type: "pane", sessionId }, activeSessionId: sessionId },
-          ],
-          sessions: {
-            ...ws.sessions,
-            [sessionId]: { id: sessionId, cwd: ws.projectPath, savedState: null },
-          },
-        };
+      const shellCommand = wrapQuickCommandForShell(rendered.command.trim(), {
+        DEVHAVEN_SHARED_SCRIPTS: appState.settings.sharedScriptsRoot,
+        DEVHAVEN_PROJECT_PATH: current.projectPath || projectPath,
       });
+      if (!shellCommand) {
+        showPanelMessage("命令为空，无法执行");
+        return;
+      }
+
+      setScriptLocalPhaseById((prev) => ({ ...prev, [script.id]: "starting" }));
+      pendingStopAfterStartByScriptIdRef.current.delete(script.id);
+
+      void (async () => {
+        let startedJob: QuickCommandJob;
+        try {
+          startedJob = await startQuickCommand({
+            projectId: projectId || current.projectId || current.projectPath,
+            projectPath: current.projectPath || projectPath,
+            scriptId: script.id,
+            command: rendered.command.trim(),
+            windowLabel,
+          });
+          setQuickCommandJobByScriptId((prev) => {
+            const existingJob = prev[script.id];
+            if (existingJob && existingJob.updatedAt > startedJob.updatedAt) {
+              return prev;
+            }
+            return { ...prev, [script.id]: startedJob };
+          });
+        } catch (error) {
+          console.error("启动快捷命令任务失败。", error);
+          clearScriptLocalPhase([script.id]);
+          showPanelMessage("启动快捷命令失败");
+          return;
+        }
+
+        const sessionId = createId();
+        const tabId = createId();
+        scriptIdBySessionIdRef.current.set(sessionId, script.id);
+        pendingStartBySessionIdRef.current.set(sessionId, shellCommand);
+
+        setScriptRuntimeById((prev) => ({
+          ...prev,
+          [script.id]: { jobId: startedJob.jobId, tabId, sessionId, ptyId: null },
+        }));
+        clearScriptLocalPhase([script.id]);
+
+        updateWorkspace((ws) => {
+          const title = script.name.trim() ? script.name.trim() : `命令 ${ws.tabs.length + 1}`;
+          return {
+            ...ws,
+            activeTabId: tabId,
+            tabs: [
+              ...ws.tabs,
+              { id: tabId, title, root: { type: "pane", sessionId }, activeSessionId: sessionId },
+            ],
+            sessions: {
+              ...ws.sessions,
+              [sessionId]: { id: sessionId, cwd: ws.projectPath, savedState: null },
+            },
+          };
+        });
+      })();
     },
     [
       appState.settings.sharedScriptsRoot,
+      clearScriptLocalPhase,
       cleanupRuntimeBySessionIds,
       isScriptRuntimeValid,
+      projectId,
       projectPath,
       showPanelMessage,
       updateWorkspace,
+      windowLabel,
     ],
   );
 
   const stopQuickCommand = useCallback(
     (scriptId: string) => {
       const runtime = scriptRuntimeByIdRef.current[scriptId] ?? null;
-      if (!runtime || !isScriptRuntimeValid(runtime)) {
+      const quickJob = quickCommandJobByScriptIdRef.current[scriptId] ?? null;
+      const localPhase = scriptLocalPhaseByIdRef.current[scriptId] ?? null;
+      const isStartingPhase =
+        localPhase === "starting" || (quickJob ? toScriptExecutionStateFromQuickState(quickJob.state) === "starting" : false);
+      const resolvedRuntime = runtime && isScriptRuntimeValid(runtime) ? runtime : null;
+
+      if (!resolvedRuntime) {
         if (runtime) {
           cleanupRuntimeBySessionIds([runtime.sessionId]);
+        }
+        if (isStartingPhase) {
+          pendingStopAfterStartByScriptIdRef.current.add(scriptId);
+          setScriptLocalPhaseById((prev) => ({ ...prev, [scriptId]: "stoppingSoft" }));
+          if (quickJob) {
+            void stopQuickCommandJob({ jobId: quickJob.jobId, force: false }).catch((error) => {
+              console.error("更新快捷命令停止状态失败。", error);
+            });
+          }
+          showPanelMessage("命令启动中，启动后将自动停止");
+          return;
+        }
+        if (quickJob && isActiveQuickCommandState(quickJob.state)) {
+          setScriptLocalPhaseById((prev) => ({ ...prev, [scriptId]: "stoppingSoft" }));
+          void stopQuickCommandJob({ jobId: quickJob.jobId, force: false }).catch((error) => {
+            console.error("更新快捷命令停止状态失败。", error);
+          });
+          showPanelMessage("已请求停止命令，等待会话回收");
+          return;
         }
         showPanelMessage("该命令未在运行");
         return;
       }
 
-      const ptyId = runtime.ptyId ?? sessionPtyIdRef.current.get(runtime.sessionId) ?? null;
-      handleSessionExit(runtime.sessionId);
-      if (ptyId) {
-        void killTerminal(ptyId).catch((error) => {
-          console.error("停止快捷命令失败。", error);
-        });
+      const ptyId = resolvedRuntime.ptyId ?? sessionPtyIdRef.current.get(resolvedRuntime.sessionId) ?? null;
+      const timer = stopKillTimerByScriptIdRef.current.get(scriptId);
+      if (typeof timer === "number") {
+        window.clearTimeout(timer);
+        stopKillTimerByScriptIdRef.current.delete(scriptId);
       }
+
+      setScriptLocalPhaseById((prev) => ({ ...prev, [scriptId]: "stoppingSoft" }));
+      void stopQuickCommandJob({ jobId: resolvedRuntime.jobId, force: false }).catch((error) => {
+        console.error("更新快捷命令停止状态失败。", error);
+      });
+
+      showPanelMessage("正在停止命令...");
+
+      if (!ptyId) {
+        handleSessionExit(resolvedRuntime.sessionId, 130);
+        return;
+      }
+
+      void writeTerminal(ptyId, "\u0003").catch((error) => {
+        console.error("发送中断信号失败。", error);
+      });
+
+      const killTimer = window.setTimeout(() => {
+        const latest = scriptRuntimeByIdRef.current[scriptId] ?? null;
+        if (!latest || latest.jobId !== resolvedRuntime.jobId) {
+          return;
+        }
+
+        const latestPty = latest.ptyId ?? sessionPtyIdRef.current.get(latest.sessionId) ?? null;
+        if (latestPty) {
+          void killTerminal(latestPty).catch((error) => {
+            console.error("强制停止快捷命令失败。", error);
+          });
+        }
+
+        setScriptLocalPhaseById((prev) => ({ ...prev, [scriptId]: "stoppingHard" }));
+        void stopQuickCommandJob({ jobId: resolvedRuntime.jobId, force: true }).catch((error) => {
+          console.error("更新快捷命令强制停止状态失败。", error);
+        });
+
+        handleSessionExit(latest.sessionId, 130);
+      }, QUICK_COMMAND_FORCE_KILL_TIMEOUT_MS);
+      stopKillTimerByScriptIdRef.current.set(scriptId, killTimer);
     },
     [cleanupRuntimeBySessionIds, handleSessionExit, isScriptRuntimeValid, showPanelMessage],
   );
 
-  const handleQuickCommandAction = useCallback(
-    (action: TerminalQuickCommandAction) => {
-      const requestId = action.payload.requestId;
-      const handled = handledRequestIdsRef.current;
-      if (handled.has(requestId)) {
+  useEffect(() => {
+    if (pendingStopAfterStartByScriptIdRef.current.size === 0) {
+      return;
+    }
+    const pendingScriptIds = Array.from(pendingStopAfterStartByScriptIdRef.current.values());
+    for (const scriptId of pendingScriptIds) {
+      const runtime = scriptRuntimeById[scriptId] ?? null;
+      if (!runtime || !isScriptRuntimeValid(runtime)) {
+        continue;
+      }
+      pendingStopAfterStartByScriptIdRef.current.delete(scriptId);
+      stopQuickCommand(scriptId);
+    }
+  }, [isScriptRuntimeValid, scriptRuntimeById, stopQuickCommand]);
+
+  const handleQuickCommandDispatch = useCallback(
+    (dispatch: TerminalQuickCommandDispatch | null | undefined) => {
+      if (!dispatch) {
         return;
       }
-      handled.add(requestId);
-      if (handled.size > 200) {
-        handled.clear();
-        handled.add(requestId);
+      if (dispatch.seq <= handledDispatchSeqRef.current) {
+        return;
+      }
+      if (dispatch.projectPath !== projectPath) {
+        return;
+      }
+      if (projectId && dispatch.projectId !== projectId) {
+        return;
       }
 
       if (!workspaceRef.current) {
-        pendingExternalActionsRef.current.push(action);
+        pendingQuickCommandDispatchRef.current = dispatch;
         return;
       }
 
-      if (action.type === "run") {
-        const script = scripts.find((item) => item.id === action.payload.scriptId) ?? null;
+      handledDispatchSeqRef.current = dispatch.seq;
+
+      if (dispatch.type === "run") {
+        const script = scripts.find((item) => item.id === dispatch.scriptId) ?? null;
         if (!script) {
           showPanelMessage("命令不存在或已被删除");
           return;
@@ -1253,72 +1636,26 @@ export default function TerminalWorkspaceView({
         return;
       }
 
-      stopQuickCommand(action.payload.scriptId);
+      stopQuickCommand(dispatch.scriptId);
     },
-    [runQuickCommand, scripts, showPanelMessage, stopQuickCommand],
+    [projectId, projectPath, runQuickCommand, scripts, showPanelMessage, stopQuickCommand],
   );
 
   useEffect(() => {
-    if (!projectPath) {
-      return;
-    }
-    const pending = takeTerminalQuickCommandActionsForProject(projectPath);
-    if (pending.length === 0) {
-      return;
-    }
-    pending.forEach(handleQuickCommandAction);
-  }, [handleQuickCommandAction, projectPath]);
-
-  useEffect(() => {
-    let unlistenRun: (() => void) | null = null;
-    let unlistenStop: (() => void) | null = null;
-
-    const registerListener = async () => {
-      try {
-        unlistenRun = await listen<TerminalQuickCommandRunPayload>(TERMINAL_QUICK_COMMAND_RUN_EVENT, (event) => {
-          const payload = event.payload;
-          if (payload.projectPath !== projectPath) {
-            return;
-          }
-          if (projectId && payload.projectId !== projectId) {
-            return;
-          }
-          handleQuickCommandAction({ type: "run", payload });
-        });
-        unlistenStop = await listen<TerminalQuickCommandStopPayload>(TERMINAL_QUICK_COMMAND_STOP_EVENT, (event) => {
-          const payload = event.payload;
-          if (payload.projectPath !== projectPath) {
-            return;
-          }
-          if (projectId && payload.projectId !== projectId) {
-            return;
-          }
-          handleQuickCommandAction({ type: "stop", payload });
-        });
-      } catch (error) {
-        console.error("监听快捷命令事件失败。", error);
-      }
-    };
-
-    void registerListener();
-
-    return () => {
-      unlistenRun?.();
-      unlistenStop?.();
-    };
-  }, [handleQuickCommandAction, projectId, projectPath]);
+    handleQuickCommandDispatch(quickCommandDispatch);
+  }, [handleQuickCommandDispatch, quickCommandDispatch]);
 
   useEffect(() => {
     if (!workspace) {
       return;
     }
-    const pending = pendingExternalActionsRef.current;
-    if (pending.length === 0) {
+    const pending = pendingQuickCommandDispatchRef.current;
+    if (!pending) {
       return;
     }
-    pendingExternalActionsRef.current = [];
-    pending.forEach(handleQuickCommandAction);
-  }, [handleQuickCommandAction, workspace]);
+    pendingQuickCommandDispatchRef.current = null;
+    handleQuickCommandDispatch(pending);
+  }, [handleQuickCommandDispatch, workspace]);
 
   useEffect(() => {
     if (!workspace || !isActive) {
@@ -1504,7 +1841,27 @@ export default function TerminalWorkspaceView({
                 <div className="flex flex-col gap-1">
                   {scripts.map((script) => {
                     const runtime = scriptRuntimeById[script.id] ?? null;
-                    const isRunning = runtime ? isScriptRuntimeValid(runtime) : false;
+                    const runtimeValid = runtime ? isScriptRuntimeValid(runtime) : false;
+                    const quickJob = quickCommandJobByScriptId[script.id] ?? null;
+                    const localPhase = scriptLocalPhaseById[script.id] ?? null;
+                    const executionState: ScriptExecutionState = quickJob
+                      ? toScriptExecutionStateFromQuickState(quickJob.state)
+                      : localPhase ?? (runtimeValid ? "running" : "idle");
+                    const isRunning = executionState === "running";
+                    const isStarting = executionState === "starting";
+                    const isStoppingSoft = executionState === "stoppingSoft";
+                    const isStoppingHard = executionState === "stoppingHard";
+                    const canStop = isRunning || isStarting || isStoppingSoft || isStoppingHard;
+                    const disableRun = isStarting || isStoppingSoft || isStoppingHard;
+                    const statusText = isStoppingHard
+                      ? "强制停止中"
+                      : isStoppingSoft
+                        ? "停止中"
+                        : isStarting
+                          ? "启动中"
+                          : isRunning
+                            ? "运行中"
+                            : null;
                     return (
                       <div
                         key={script.id}
@@ -1520,29 +1877,32 @@ export default function TerminalWorkspaceView({
                           </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-1.5">
-                          {isRunning ? (
+                          {statusText ? (
                             <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-[var(--terminal-muted-fg)]">
                               <span
-                                className="h-2 w-2 rounded-full bg-[var(--terminal-accent)]"
+                                className={`h-2 w-2 rounded-full ${
+                                  isStoppingHard ? "bg-[rgba(239,68,68,0.9)]" : "bg-[var(--terminal-accent)]"
+                                }`}
                                 aria-hidden="true"
                               />
-                              <span className="whitespace-nowrap">运行中</span>
+                              <span className="whitespace-nowrap">{statusText}</span>
                             </span>
                           ) : null}
                           <button
                             className="inline-flex h-7 items-center justify-center rounded-md border border-[var(--terminal-divider)] bg-[var(--terminal-hover-bg)] px-2 text-[11px] font-semibold text-[var(--terminal-muted-fg)] transition-colors duration-150 hover:text-[var(--terminal-fg)]"
                             type="button"
+                            disabled={disableRun}
                             onClick={() => runQuickCommand(script)}
                           >
-                            运行
+                            {isStarting ? "启动中" : "运行"}
                           </button>
                           <button
                             className="inline-flex h-7 items-center justify-center rounded-md border border-[var(--terminal-divider)] bg-transparent px-2 text-[11px] font-semibold text-[var(--terminal-muted-fg)] transition-colors duration-150 hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] disabled:cursor-not-allowed disabled:opacity-50"
                             type="button"
-                            disabled={!isRunning}
+                            disabled={!canStop}
                             onClick={() => stopQuickCommand(script.id)}
                           >
-                            停止
+                            {isStoppingSoft || isStoppingHard ? "停止中" : "停止"}
                           </button>
                         </div>
                       </div>

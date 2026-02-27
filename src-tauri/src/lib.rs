@@ -7,6 +7,7 @@ mod markdown;
 mod models;
 mod notes;
 mod project_loader;
+mod quick_command_manager;
 mod shared_scripts;
 mod skills;
 mod storage;
@@ -34,6 +35,10 @@ use crate::models::{
     TerminalWorkspaceSummary, WorktreeInitCancelResult, WorktreeInitCreateBlockingResult,
     WorktreeInitJobStatus, WorktreeInitRetryRequest, WorktreeInitStartRequest,
     WorktreeInitStartResult, WorktreeInitStatusQuery, WorktreeInitStep,
+};
+use crate::quick_command_manager::{
+    QuickCommandManager, quick_command_finish, quick_command_list, quick_command_snapshot,
+    quick_command_start, quick_command_stop,
 };
 use crate::system::EditorOpenParams;
 use crate::terminal::{
@@ -783,6 +788,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(TerminalState::default())
+        .manage(QuickCommandManager::default())
         .manage(worktree_init::WorktreeInitState::default())
         .manage(interaction_lock::InteractionLockState::default())
         .on_window_event(|window, event| {
@@ -868,6 +874,11 @@ pub fn run() {
             list_terminal_workspace_summaries,
             get_codex_monitor_snapshot,
             get_terminal_codex_pane_overlay,
+            quick_command_start,
+            quick_command_stop,
+            quick_command_finish,
+            quick_command_list,
+            quick_command_snapshot,
             terminal_create_session,
             terminal_write,
             terminal_resize,
