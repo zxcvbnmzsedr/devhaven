@@ -5,7 +5,7 @@ import { swiftDateToJsDate } from "../models/types";
 import { openInFinder } from "../services/system";
 import { formatPathWithTilde } from "../utils/pathDisplay";
 import DropdownMenu from "./DropdownMenu";
-import { IconCalendar, IconCode, IconCopy, IconFolder, IconRefresh, IconStar, IconTrash, IconX } from "./Icons";
+import { IconCalendar, IconMoreHorizontal, IconStar, IconX } from "./Icons";
 
 export type ProjectCardProps = {
   project: Project;
@@ -54,13 +54,47 @@ function ProjectCard({
   const scripts = project.scripts ?? [];
   const scriptMenuItems = scripts.length
     ? scripts.map((script) => ({
-        key: script.id,
+        key: `script-${script.id}`,
         label: `运行：${script.name}`,
         onClick: () => {
           void onRunProjectScript(project.id, script.id);
         },
       }))
-    : [{ key: "empty", label: "暂无快捷命令", disabled: true }];
+    : [{ key: "script-empty", label: "暂无快捷命令", disabled: true }];
+  const moreMenuItems = [
+    {
+      key: "open",
+      label: "在 Finder 中显示",
+      onClick: () => {
+        void openInFinder(project.path);
+      },
+    },
+    {
+      key: "copy",
+      label: "复制路径",
+      onClick: () => {
+        void onCopyPath(project.path);
+      },
+    },
+    {
+      key: "refresh",
+      label: "刷新项目",
+      onClick: () => {
+        void onRefreshProject(project.path);
+      },
+    },
+    { key: "divider-script", divider: true },
+    ...scriptMenuItems,
+    { key: "divider-danger", divider: true },
+    {
+      key: "trash",
+      label: "移入回收站",
+      destructive: true,
+      onClick: () => {
+        void onMoveToRecycleBin(project);
+      },
+    },
+  ];
 
   const handleDragStart = (event: React.DragEvent<HTMLDivElement>) => {
     const ids = selectedProjectIds.has(project.id)
@@ -83,12 +117,11 @@ function ProjectCard({
       draggable
       onDragStart={handleDragStart}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="truncate text-fs-title font-semibold text-text" title={project.name}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 line-clamp-2 break-words text-fs-title leading-5 font-semibold text-text" title={project.name}>
           {project.name}
         </div>
         <div className="ml-auto inline-flex items-center gap-1.5">
-          <DropdownMenu label={<IconCode size={16} />} ariaLabel="运行快捷命令" items={scriptMenuItems} />
           <button
             className={`icon-btn ${isFavorite ? "text-amber-500" : "text-titlebar-icon"}`}
             aria-label={isFavorite ? "取消收藏" : "收藏项目"}
@@ -97,38 +130,7 @@ function ProjectCard({
           >
             <IconStar size={16} fill={isFavorite ? "currentColor" : "none"} />
           </button>
-          <button
-            className="icon-btn text-titlebar-icon"
-            aria-label="在 Finder 中显示"
-            title="在 Finder 中显示"
-            onClick={(event) => handleActionClick(event, () => void openInFinder(project.path))}
-          >
-            <IconFolder size={16} />
-          </button>
-          <button
-            className="icon-btn text-titlebar-icon"
-            aria-label="复制路径"
-            title="复制路径"
-            onClick={(event) => handleActionClick(event, () => void onCopyPath(project.path))}
-          >
-            <IconCopy size={16} />
-          </button>
-          <button
-            className="icon-btn text-titlebar-icon"
-            aria-label="刷新项目"
-            title="刷新项目"
-            onClick={(event) => handleActionClick(event, () => void onRefreshProject(project.path))}
-          >
-            <IconRefresh size={16} />
-          </button>
-          <button
-            className="icon-btn text-titlebar-icon"
-            aria-label="移入回收站"
-            title="移入回收站"
-            onClick={(event) => handleActionClick(event, () => void onMoveToRecycleBin(project))}
-          >
-            <IconTrash size={16} />
-          </button>
+          <DropdownMenu label={<IconMoreHorizontal size={16} />} ariaLabel="更多操作" items={moreMenuItems} />
         </div>
       </div>
       <div className="truncate text-fs-caption text-secondary-text" title={project.path}>

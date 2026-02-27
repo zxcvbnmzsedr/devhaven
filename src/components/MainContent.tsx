@@ -295,11 +295,11 @@ export default function MainContent({
           </div>
         ) : viewMode === "list" ? (
           <div className="flex flex-col gap-3 p-4">
-            <div className="grid grid-cols-[minmax(220px,2.2fr)_170px_minmax(180px,2fr)_116px] items-center gap-3 px-3 text-fs-caption font-semibold text-secondary-text">
+            <div className="grid grid-cols-[minmax(220px,2.2fr)_170px_minmax(180px,2fr)_180px] items-center gap-3 px-3 text-fs-caption font-semibold text-secondary-text">
               <div>项目</div>
               <div>更新时间</div>
               <div>最近提交 / 备注</div>
-              <div className="text-right">操作</div>
+              <div className="text-left">操作</div>
             </div>
             <div className="overflow-hidden rounded-xl border border-card-border bg-card-bg">
               {filteredProjects.map((project) => (

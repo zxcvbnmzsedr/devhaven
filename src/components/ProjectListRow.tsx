@@ -79,7 +79,7 @@ function ProjectListRow({
 
   return (
     <div
-      className={`group grid cursor-pointer grid-cols-[minmax(220px,2.2fr)_170px_minmax(180px,2fr)_116px] items-center gap-3 border-b border-divider px-3 py-2.5 text-[13px] transition-colors duration-150 last:border-b-0 ${
+      className={`group grid cursor-pointer grid-cols-[minmax(220px,2.2fr)_170px_minmax(180px,2fr)_180px] items-center gap-3 border-b border-divider px-3 py-2.5 text-[13px] transition-colors duration-150 last:border-b-0 ${
         isSelected ? "bg-card-selected-bg" : "hover:bg-card-hover"
       }`}
       onClick={onSelect}
@@ -108,7 +108,7 @@ function ProjectListRow({
           备注：{notePreview}
         </div>
       </div>
-      <div className="ml-auto inline-flex items-center justify-end gap-1">
+      <div className="inline-flex items-center gap-1">
         <DropdownMenu label={<IconCode size={16} />} ariaLabel="运行快捷命令" items={scriptMenuItems} />
         <button
           className={`icon-btn ${isFavorite ? "text-amber-500" : "text-titlebar-icon"}`}

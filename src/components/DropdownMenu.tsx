@@ -3,10 +3,11 @@ import type { ReactNode } from "react";
 
 export type DropdownItem = {
   key?: string;
-  label: string;
+  label?: string;
   onClick?: () => void;
   disabled?: boolean;
   destructive?: boolean;
+  divider?: boolean;
 };
 
 type DropdownMenuProps = {
@@ -63,25 +64,36 @@ export default function DropdownMenu({ label, items, align = "right", ariaLabel 
             align === "left" ? "left-0" : "right-0"
           }`}
         >
-          {items.map((item) => (
-            <button
-              key={item.key ?? item.label}
-              className={`rounded-md px-2.5 py-2 text-left text-text hover:bg-[rgba(255,255,255,0.06)] disabled:opacity-50 disabled:cursor-not-allowed ${
-                item.destructive ? "text-error" : ""
-              }`}
-              onClick={(event) => {
-                event.stopPropagation();
-                if (item.disabled) {
-                  return;
-                }
-                item.onClick?.();
-                setOpen(false);
-              }}
-              disabled={item.disabled}
-            >
-              {item.label}
-            </button>
-          ))}
+          {items.map((item, index) => {
+            if (item.divider) {
+              return (
+                <div
+                  key={item.key ?? `divider-${index}`}
+                  className="my-1 h-px bg-divider"
+                  role="separator"
+                />
+              );
+            }
+            return (
+              <button
+                key={item.key ?? item.label ?? `item-${index}`}
+                className={`rounded-md px-2.5 py-2 text-left text-text hover:bg-[rgba(255,255,255,0.06)] disabled:cursor-not-allowed disabled:opacity-50 ${
+                  item.destructive ? "text-error" : ""
+                }`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (item.disabled) {
+                    return;
+                  }
+                  item.onClick?.();
+                  setOpen(false);
+                }}
+                disabled={item.disabled}
+              >
+                {item.label}
+              </button>
+            );
+          })}
         </div>
       ) : null}
     </div>
