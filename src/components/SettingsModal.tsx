@@ -39,7 +39,7 @@ type SettingsCategory = {
 const SETTINGS_CATEGORIES: SettingsCategory[] = [
   { id: "general", label: "常规", description: "应用更新与版本信息。" },
   { id: "terminal", label: "终端", description: "终端渲染与主题显示设置。" },
-  { id: "scripts", label: "脚本", description: "" },
+  { id: "scripts", label: "脚本", description: "管理通用脚本清单、参数与脚本文件。" },
   { id: "workflow", label: "协作", description: "Git 身份与提交配置。" },
 ];
 

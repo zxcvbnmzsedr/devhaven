@@ -59,8 +59,8 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 - 详情面板容器：`src/components/DetailPanel.tsx`
 - 项目卡片：`src/components/ProjectCard.tsx`（通常在主列表中触发打开详情）
 - 项目快捷命令（配置/编辑/删除/运行/停止）：`src/components/DetailPanel.tsx`（入口）→ `src/App.tsx`（打开终端并派发事件）→ `src/services/terminalQuickCommands.ts` → `src/components/terminal/TerminalWorkspaceView.tsx`（执行）；持久化在 `projects.json`（字段：`Project.scripts`，模型：`src/models/types.ts`）
-- 通用脚本中心（跨项目复用 + 参数化）：默认目录 `~/.devhaven/scripts`（设置页不再提供动态路径配置）→ 读取共享脚本 `src/services/sharedScripts.ts` ↔ `src-tauri/src/shared_scripts.rs`（Command：`list_shared_scripts`，优先 `manifest.json`，回退目录扫描；目录首次为空时自动注入 Jenkins 部署内置脚本 `jenkins-depoly`）→ 详情面板为快捷命令填充模板与参数快照（`src/components/DetailPanel.tsx`，`ProjectScript.paramSchema/templateParams`）→ 执行前在终端渲染模板参数（`src/components/terminal/TerminalWorkspaceView.tsx`、`src/utils/scriptTemplate.ts`）
-- 通用脚本可视化编辑：设置页“脚本”分类内嵌 `src/components/SharedScriptsManagerModal.tsx`，可编辑清单字段（id/路径/命令模板/参数）并直接编辑脚本文件内容；支持“一键恢复 Jenkins 内置预设（仅补齐缺失项）”；前端 `src/services/sharedScripts.ts` ↔ 后端 `src-tauri/src/shared_scripts.rs`（Commands：`save_shared_scripts_manifest`、`restore_shared_script_presets`、`read_shared_script_file`、`write_shared_script_file`）
+- 通用脚本中心（跨项目复用 + 参数化）：默认目录 `~/.devhaven/scripts`（设置页不再提供动态路径配置）→ 读取共享脚本 `src/services/sharedScripts.ts` ↔ `src-tauri/src/shared_scripts.rs`（Command：`list_shared_scripts`，优先 `manifest.json`，回退目录扫描；目录首次为空时自动注入内置脚本：Jenkins 部署 `jenkins-depoly`、远程日志查看 `remote_log_viewer.sh`）→ 详情面板为快捷命令填充模板与参数快照（`src/components/DetailPanel.tsx`，`ProjectScript.paramSchema/templateParams`）→ 执行前在终端渲染模板参数（`src/components/terminal/TerminalWorkspaceView.tsx`、`src/utils/scriptTemplate.ts`）
+- 通用脚本可视化编辑：设置页“脚本”分类内嵌 `src/components/SharedScriptsManagerModal.tsx`，可编辑清单字段（id/路径/命令模板/参数）并直接编辑脚本文件内容；支持“一键恢复内置预设（仅补齐缺失项）”；前端 `src/services/sharedScripts.ts` ↔ 后端 `src-tauri/src/shared_scripts.rs`（Commands：`save_shared_scripts_manifest`、`restore_shared_script_presets`、`read_shared_script_file`、`write_shared_script_file`）
 - Git 分支列表：
   - 前端：`src/services/git.ts`
   - 后端：`src-tauri/src/git_ops.rs`（`list_branches`）

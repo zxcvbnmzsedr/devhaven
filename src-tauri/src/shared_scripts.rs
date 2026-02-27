@@ -13,7 +13,7 @@ use crate::models::{
 const DEFAULT_SHARED_SCRIPTS_ROOT: &str = "~/.devhaven/scripts";
 const MANIFEST_FILE_NAME: &str = "manifest.json";
 const DEFAULT_COMMAND_TEMPLATE: &str = "bash \"${scriptPath}\"";
-const BUILTIN_PRESET_VERSION: &str = "2026.02.2";
+const BUILTIN_PRESET_VERSION: &str = "2026.02.3";
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -357,52 +357,53 @@ fn apply_builtin_presets(root: &Path) -> Result<SharedScriptPresetRestoreResult,
 }
 
 fn builtin_shared_script_presets() -> Vec<SharedScriptPreset> {
-    vec![SharedScriptPreset {
-        manifest_entry: SharedScriptsManifestEntry {
-            id: "jenkins".to_string(),
-            name: "Jenkins 部署".to_string(),
-            path: "jenkins-depoly".to_string(),
-            command_template: Some(
-                r#"export JENKINS_PASSWORD="${password}"
+    vec![
+        SharedScriptPreset {
+            manifest_entry: SharedScriptsManifestEntry {
+                id: "jenkins".to_string(),
+                name: "Jenkins 部署".to_string(),
+                path: "jenkins-depoly".to_string(),
+                command_template: Some(
+                    r#"export JENKINS_PASSWORD="${password}"
 python3 "${scriptPath}" --jenkins-url "${host}" --username "${username}" --job "${job}""#
-                    .to_string(),
-            ),
-            params: vec![
-                ScriptParamField {
-                    key: "host".to_string(),
-                    label: "Jenkins 地址".to_string(),
-                    r#type: ScriptParamFieldType::Text,
-                    required: true,
-                    default_value: None,
-                    description: Some("例如：https://jenkins.example.com".to_string()),
-                },
-                ScriptParamField {
-                    key: "username".to_string(),
-                    label: "用户名".to_string(),
-                    r#type: ScriptParamFieldType::Text,
-                    required: true,
-                    default_value: None,
-                    description: None,
-                },
-                ScriptParamField {
-                    key: "password".to_string(),
-                    label: "密码".to_string(),
-                    r#type: ScriptParamFieldType::Secret,
-                    required: true,
-                    default_value: None,
-                    description: None,
-                },
-                ScriptParamField {
-                    key: "job".to_string(),
-                    label: "任务".to_string(),
-                    r#type: ScriptParamFieldType::Text,
-                    required: true,
-                    default_value: None,
-                    description: Some("Jenkins job 名称".to_string()),
-                },
-            ],
-        },
-        file_content: r#"#!/usr/bin/env python3
+                        .to_string(),
+                ),
+                params: vec![
+                    ScriptParamField {
+                        key: "host".to_string(),
+                        label: "Jenkins 地址".to_string(),
+                        r#type: ScriptParamFieldType::Text,
+                        required: true,
+                        default_value: None,
+                        description: Some("例如：https://jenkins.example.com".to_string()),
+                    },
+                    ScriptParamField {
+                        key: "username".to_string(),
+                        label: "用户名".to_string(),
+                        r#type: ScriptParamFieldType::Text,
+                        required: true,
+                        default_value: None,
+                        description: None,
+                    },
+                    ScriptParamField {
+                        key: "password".to_string(),
+                        label: "密码".to_string(),
+                        r#type: ScriptParamFieldType::Secret,
+                        required: true,
+                        default_value: None,
+                        description: None,
+                    },
+                    ScriptParamField {
+                        key: "job".to_string(),
+                        label: "任务".to_string(),
+                        r#type: ScriptParamFieldType::Text,
+                        required: true,
+                        default_value: None,
+                        description: Some("Jenkins job 名称".to_string()),
+                    },
+                ],
+            },
+            file_content: r#"#!/usr/bin/env python3
 """Jenkins 部署脚本占位模板。"""
 
 import argparse
@@ -428,7 +429,265 @@ def main() -> int:
 if __name__ == "__main__":
     sys.exit(main())
 "#,
-    }]
+        },
+        SharedScriptPreset {
+            manifest_entry: SharedScriptsManifestEntry {
+                id: "remote-log-viewer".to_string(),
+                name: "远程日志查看".to_string(),
+                path: "remote_log_viewer.sh".to_string(),
+                command_template: Some(
+                    r#"server=${server}
+logPath=${logPath}
+user=${user}
+port=${port}
+identityFile=${identityFile}
+lines=${lines}
+follow=${follow}
+strictHostKeyChecking=${strictHostKeyChecking}
+allowPasswordPrompt=${allowPasswordPrompt}
+
+args=()
+if [ -n "$user" ]; then args+=(--user "$user"); fi
+if [ -n "$port" ]; then args+=(--port "$port"); fi
+if [ -n "$identityFile" ]; then args+=(--identity-file "$identityFile"); fi
+if [ -n "$lines" ]; then args+=(--lines "$lines"); fi
+if [ "$follow" = "1" ]; then args+=(--follow); fi
+if [ -n "$strictHostKeyChecking" ]; then args+=(--strict-host-key-checking "$strictHostKeyChecking"); fi
+if [ "$allowPasswordPrompt" = "1" ]; then args+=(--allow-password-prompt); fi
+
+exec bash "${scriptPath}" "${args[@]}" "$server" "$logPath""#
+                        .to_string(),
+                ),
+                params: vec![
+                    ScriptParamField {
+                        key: "server".to_string(),
+                        label: "服务器".to_string(),
+                        r#type: ScriptParamFieldType::Text,
+                        required: true,
+                        default_value: None,
+                        description: Some("例如：10.0.0.12 或 user@10.0.0.12".to_string()),
+                    },
+                    ScriptParamField {
+                        key: "logPath".to_string(),
+                        label: "日志路径".to_string(),
+                        r#type: ScriptParamFieldType::Text,
+                        required: true,
+                        default_value: None,
+                        description: Some("例如：/var/log/nginx/error.log".to_string()),
+                    },
+                    ScriptParamField {
+                        key: "user".to_string(),
+                        label: "SSH 用户".to_string(),
+                        r#type: ScriptParamFieldType::Text,
+                        required: false,
+                        default_value: None,
+                        description: Some("当 server 已包含 user@host 时可留空".to_string()),
+                    },
+                    ScriptParamField {
+                        key: "port".to_string(),
+                        label: "SSH 端口".to_string(),
+                        r#type: ScriptParamFieldType::Number,
+                        required: false,
+                        default_value: Some("22".to_string()),
+                        description: None,
+                    },
+                    ScriptParamField {
+                        key: "identityFile".to_string(),
+                        label: "私钥文件".to_string(),
+                        r#type: ScriptParamFieldType::Text,
+                        required: false,
+                        default_value: None,
+                        description: Some("例如：~/.ssh/id_rsa".to_string()),
+                    },
+                    ScriptParamField {
+                        key: "lines".to_string(),
+                        label: "输出行数".to_string(),
+                        r#type: ScriptParamFieldType::Number,
+                        required: false,
+                        default_value: Some("200".to_string()),
+                        description: None,
+                    },
+                    ScriptParamField {
+                        key: "follow".to_string(),
+                        label: "持续跟踪".to_string(),
+                        r#type: ScriptParamFieldType::Number,
+                        required: false,
+                        default_value: Some("0".to_string()),
+                        description: Some("填 1 开启（追加 --follow）".to_string()),
+                    },
+                    ScriptParamField {
+                        key: "strictHostKeyChecking".to_string(),
+                        label: "StrictHostKeyChecking".to_string(),
+                        r#type: ScriptParamFieldType::Text,
+                        required: false,
+                        default_value: Some("accept-new".to_string()),
+                        description: Some("可选值：yes/no/accept-new".to_string()),
+                    },
+                    ScriptParamField {
+                        key: "allowPasswordPrompt".to_string(),
+                        label: "允许密码交互".to_string(),
+                        r#type: ScriptParamFieldType::Number,
+                        required: false,
+                        default_value: Some("0".to_string()),
+                        description: Some("填 1 开启（关闭 BatchMode）".to_string()),
+                    },
+                ],
+            },
+            file_content: r#"#!/usr/bin/env bash
+set -euo pipefail
+
+# 查看用法
+usage() {
+  cat <<'EOF'
+用法:
+  remote_log_viewer.sh [选项] <server> <log_path>
+
+说明:
+  通过 SSH 查看远程日志，默认输出最后 200 行。
+
+参数:
+  <server>              服务器地址，例如: 10.0.0.12 或 user@10.0.0.12
+  <log_path>            远程日志路径，例如: /var/log/nginx/error.log
+
+选项:
+  -u, --user USER       SSH 用户名（当 server 已包含 user@host 时忽略）
+  -p, --port PORT       SSH 端口（默认: 22）
+  -i, --identity-file   SSH 私钥文件路径
+  -n, --lines LINES     tail 输出行数（默认: 200）
+  -f, --follow          持续跟踪日志（tail -F）
+      --strict-host-key-checking MODE
+                        SSH StrictHostKeyChecking: yes|no|accept-new（默认: accept-new）
+      --allow-password-prompt
+                        允许交互式密码输入（默认关闭，启用 BatchMode）
+  -h, --help            显示帮助
+
+示例:
+  ./remote_log_viewer.sh 10.0.0.12 /var/log/syslog
+  ./remote_log_viewer.sh -u root -i ~/.ssh/id_rsa -f -n 300 10.0.0.12 /var/log/app.log
+EOF
+}
+
+user=""
+port=22
+identity_file=""
+lines=200
+follow=0
+strict_host_key_checking="accept-new"
+allow_password_prompt=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u|--user)
+      user="${2:-}"
+      shift 2
+      ;;
+    -p|--port)
+      port="${2:-}"
+      shift 2
+      ;;
+    -i|--identity-file)
+      identity_file="${2:-}"
+      shift 2
+      ;;
+    -n|--lines)
+      lines="${2:-}"
+      shift 2
+      ;;
+    -f|--follow)
+      follow=1
+      shift
+      ;;
+    --strict-host-key-checking)
+      strict_host_key_checking="${2:-}"
+      shift 2
+      ;;
+    --allow-password-prompt)
+      allow_password_prompt=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      echo "错误: 未知参数 $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ $# -ne 2 ]]; then
+  echo "错误: 需要传入 server 和 log_path 两个参数。" >&2
+  usage >&2
+  exit 2
+fi
+
+server="$1"
+log_path="$2"
+
+if ! [[ "$lines" =~ ^[1-9][0-9]*$ ]]; then
+  echo "错误: --lines 必须是大于 0 的整数。" >&2
+  exit 2
+fi
+
+if ! [[ "$port" =~ ^[1-9][0-9]*$ ]]; then
+  echo "错误: --port 必须是大于 0 的整数。" >&2
+  exit 2
+fi
+
+case "$strict_host_key_checking" in
+  yes|no|accept-new) ;;
+  *)
+    echo "错误: --strict-host-key-checking 仅支持 yes|no|accept-new。" >&2
+    exit 2
+    ;;
+esac
+
+if ! command -v ssh >/dev/null 2>&1; then
+  echo "错误: 未找到 ssh 命令。" >&2
+  exit 127
+fi
+
+target="$server"
+if [[ "$server" != *"@"* && -n "$user" ]]; then
+  target="${user}@${server}"
+fi
+
+printf -v safe_log_path '%q' "$log_path"
+tail_flag=""
+if [[ "$follow" -eq 1 ]]; then
+  tail_flag="-F"
+fi
+remote_cmd="tail -n ${lines} ${tail_flag} -- ${safe_log_path}"
+
+ssh_cmd=(
+  ssh
+  -o "StrictHostKeyChecking=${strict_host_key_checking}"
+  -p "$port"
+)
+
+if [[ "$allow_password_prompt" -eq 0 ]]; then
+  ssh_cmd+=(-o "BatchMode=yes")
+fi
+
+if [[ -n "$identity_file" ]]; then
+  ssh_cmd+=(-i "$identity_file")
+fi
+
+ssh_cmd+=("$target" "$remote_cmd")
+
+exec "${ssh_cmd[@]}"
+"#,
+        },
+    ]
 }
 
 fn write_manifest_from_scripts(
