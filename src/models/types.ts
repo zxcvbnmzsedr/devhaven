@@ -22,7 +22,6 @@ export type ProjectScript = {
   id: string;
   name: string;
   start: string;
-  stop?: string | null;
   paramSchema?: ScriptParamField[];
   templateParams?: Record<string, string>;
 };

@@ -264,8 +264,6 @@ pub struct ProjectScript {
     pub name: String,
     pub start: String,
     #[serde(default)]
-    pub stop: Option<String>,
-    #[serde(default)]
     pub param_schema: Vec<ScriptParamField>,
     #[serde(default)]
     pub template_params: HashMap<String, String>,

@@ -31,7 +31,6 @@ export type DetailPanelProps = {
     script: {
       name: string;
       start: string;
-      stop?: string | null;
       paramSchema?: ProjectScript["paramSchema"];
       templateParams?: ProjectScript["templateParams"];
     },
@@ -54,7 +53,6 @@ type ScriptDialogState = {
   scriptId: string | null;
   name: string;
   start: string;
-  stop: string;
   error: string;
   selectedSharedScriptId: string;
   paramSchema: ScriptParamField[];
@@ -619,7 +617,6 @@ export default function DetailPanel({
                       scriptId: null,
                       name: "",
                       start: "",
-                      stop: "",
                       paramSchema: [],
                       templateParams: {},
                     }),
@@ -663,7 +660,6 @@ export default function DetailPanel({
                                 scriptId: script.id,
                                 name: script.name,
                                 start: script.start,
-                                stop: script.stop ?? "",
                                 paramSchema: script.paramSchema,
                                 templateParams: script.templateParams,
                               }),
@@ -814,17 +810,6 @@ export default function DetailPanel({
                 placeholder="例如：pnpm dev"
               />
             </label>
-            <label className="flex flex-col gap-1.5 text-[13px] text-secondary-text">
-              <span>停止命令（可选）</span>
-              <input
-                className="rounded-md border border-border bg-card-bg px-2 py-2 text-text"
-                value={scriptDialog.stop}
-                onChange={(event) =>
-                  setScriptDialog((prev) => (prev ? { ...prev, stop: event.target.value, error: "" } : prev))
-                }
-                placeholder="例如：pnpm stop"
-              />
-            </label>
             {scriptDialog.paramSchema.length > 0 ? (
               <section className="flex flex-col gap-2 rounded-md border border-border bg-secondary-background p-2.5">
                 <div className="text-[13px] font-semibold text-text">参数配置</div>
@@ -877,7 +862,6 @@ export default function DetailPanel({
                   }
                   const name = scriptDialog.name.trim();
                   const start = scriptDialog.start.trim();
-                  const stop = scriptDialog.stop.trim();
                   if (!name) {
                     setScriptDialog((prev) => (prev ? { ...prev, error: "名称不能为空" } : prev));
                     return;
@@ -896,7 +880,6 @@ export default function DetailPanel({
                     id: "validation-only",
                     name,
                     start,
-                    stop: stop ? stop : null,
                     paramSchema,
                     templateParams,
                   });
@@ -907,7 +890,6 @@ export default function DetailPanel({
                   const scriptPayload = {
                     name,
                     start,
-                    stop: stop ? stop : null,
                     paramSchema: paramSchema.length > 0 ? paramSchema : undefined,
                     templateParams: paramSchema.length > 0 ? templateParams : undefined,
                   };
@@ -942,7 +924,6 @@ function createScriptDialogState(input: {
   scriptId: string | null;
   name: string;
   start: string;
-  stop: string;
   paramSchema?: ScriptParamField[] | null;
   templateParams?: Record<string, string> | null;
 }): ScriptDialogState {
@@ -954,7 +935,6 @@ function createScriptDialogState(input: {
     scriptId: input.scriptId,
     name: input.name ?? "",
     start,
-    stop: input.stop ?? "",
     error: "",
     selectedSharedScriptId: "",
     paramSchema,

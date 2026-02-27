@@ -68,7 +68,6 @@ export type DevHavenActions = {
     script: {
       name: string;
       start: string;
-      stop?: string | null;
       paramSchema?: ProjectScript["paramSchema"];
       templateParams?: ProjectScript["templateParams"];
     },
@@ -284,14 +283,12 @@ export function useDevHaven(): DevHavenStore {
       script: {
         name: string;
         start: string;
-        stop?: string | null;
         paramSchema?: ProjectScript["paramSchema"];
         templateParams?: ProjectScript["templateParams"];
       },
     ) => {
       const name = script.name.trim();
       const start = script.start.trim();
-      const stop = (script.stop ?? "").trim();
       if (!projectId || !name || !start) {
         return;
       }
@@ -300,7 +297,6 @@ export function useDevHaven(): DevHavenStore {
         id: createScriptId(),
         name,
         start,
-        stop: stop ? stop : null,
         paramSchema: script.paramSchema,
         templateParams: script.templateParams,
       });
@@ -320,7 +316,6 @@ export function useDevHaven(): DevHavenStore {
     async (projectId: string, script: ProjectScript) => {
       const name = script.name.trim();
       const start = script.start.trim();
-      const stop = (script.stop ?? "").trim();
       if (!projectId || !script.id || !name || !start) {
         return;
       }
@@ -329,7 +324,6 @@ export function useDevHaven(): DevHavenStore {
         ...script,
         name,
         start,
-        stop: stop ? stop : null,
       });
 
       const nextProjects = projects.map((project) => {
@@ -860,7 +854,9 @@ function normalizeProjectScript(script: ProjectScript): ProjectScript {
   const paramSchema = mergeScriptParamSchema(script.start ?? "", script.paramSchema, script.templateParams);
   const templateParams = buildTemplateParams(paramSchema, script.templateParams);
   return {
-    ...script,
+    id: script.id,
+    name: script.name,
+    start: script.start,
     paramSchema,
     templateParams,
   };
