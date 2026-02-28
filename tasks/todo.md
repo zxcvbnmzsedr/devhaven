@@ -66,3 +66,119 @@
 - 快捷命令逻辑已从视图组件解耦到独立 Hook，主组件不再直接维护运行态同步细节。
 - 浮层拖拽和外部派发链路单独封装，避免在主组件中混杂异步事件与 UI 代码。
 - 构建验证通过（`tsc && vite build`），现有终端分屏/标签页/侧栏链路保持可用。
+
+---
+
+# 性能优化冲刺（第一批）任务清单
+
+- [x] 优化 `project_loader` Git 元数据读取：单项目 3 次 git 调用降到 2 次
+- [x] 优化 `terminal` 会话锁粒度：避免在全局会话锁内执行阻塞写入/resize
+- [x] 优化 `MainContent` 列表渲染：减少行内闭包与大对象透传导致的全量重渲染
+- [x] 优化 `codex_monitor`：降低轮询/子进程检测开销，收敛锁内重 I/O
+- [x] 增加 release 流水线基础质量门禁（至少前端构建 + Rust 测试）
+- [x] 集成验证：执行构建与关键检查，记录结果
+
+## Review
+- 本轮通过多 agent 并行执行完成 5 条高收益优化，保持了现有对外接口与核心行为不变。
+- Rust 侧关键收益：终端全局锁竞争降低、Codex 监控轮询与 `lsof` 子进程开销下降、项目扫描 Git 元数据读取次数减少。
+- 前端关键收益：主列表去除行内闭包与 `Set` 透传，降低 `memo` 失效导致的无效重渲染；标签颜色重复计算被消除。
+- 工程门禁补齐：release workflow 在发版前新增前端构建与 Rust check 失败快返。
+- 验证结果：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml codex_monitor -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml project_loader -- --nocapture` 全部通过。
+
+---
+
+# 性能优化冲刺（第二批）任务清单
+
+- [x] 备注预览增量缓存：仅请求缺失路径，减少列表筛选时的重复 I/O 与闪烁
+- [x] 备注预览后端并行化：批量读取 `PROJECT_NOTES.md` 时提升吞吐
+- [x] `parseGitDaily` 增加有界缓存：降低热力图/筛选重复解析开销
+- [x] 标签颜色查找降复杂度：从每次线性查找改为映射查找
+- [x] 集成验证：执行前端构建与 Rust 检查/测试
+
+## Review
+- 备注预览链路改为“前端缺失增量请求 + 后端并行读取”，在频繁筛选/排序时显著减少重复磁盘读取与 UI 闪烁。
+- `parseGitDaily` 新增有界 LRU 风格缓存（超限淘汰最旧项），减少同一字符串在热力图与筛选路径上的重复解析成本。
+- 标签颜色查询从线性查找切换为 `Map` 查询，降低高标签密度场景下的渲染额外开销。
+- 本轮保持对外接口与交互语义不变，属于低风险性能优化。
+- 验证通过：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml codex_monitor -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml project_loader -- --nocapture`。
+
+---
+
+# 性能优化冲刺（第三批）任务清单
+
+- [x] 主列表渐进渲染：列表模式按批次加载，降低初次渲染峰值
+- [x] 备注预览按可见批次请求：减少非可见项目的预读开销
+- [x] `collect_git_daily` 并行化：提升多项目统计吞吐
+- [x] `useCodexMonitor` 轮询自适应：降低事件通道稳定时的无效轮询
+- [x] 集成验证：执行前端构建与 Rust 检查/测试
+
+## Review
+- 主列表改为“首批渲染 + 滚动追加”的渐进加载策略，降低大项目集合场景下首屏渲染峰值与卡顿风险。
+- 备注预览请求范围收敛为“已渲染批次”，避免对长尾不可见项目提前发起无效 I/O。
+- `collect_git_daily` 改为并行遍历路径，在多仓库统计场景下提升整体吞吐，同时保持输出结构与顺序兼容。
+- `useCodexMonitor` 从固定间隔轮询切换为事件活跃度驱动的自适应轮询，降低实时事件稳定时的无效 snapshot 拉取。
+- 验证通过：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml codex_monitor -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml project_loader -- --nocapture`。
+
+---
+
+# 性能优化冲刺（第四批）任务清单
+
+- [x] 终端事件订阅收敛：输出/退出事件改为全局单订阅分发，避免每个 Pane 各自监听
+- [x] 备注预览读取优化：仅读取首个非空行，避免为预览全量读取大文件
+- [x] 热力图/筛选链路降耗：减少重复签名计算与重复 `parseGitDaily` 开销
+- [x] 集成验证：执行前端构建与 Rust 检查/测试
+
+## Review
+- 终端事件监听改为“全局一次订阅 + 本地 handler 分发”，减少 Pane 数量增长时的重复订阅与内存压力。
+- 备注预览后端改为流式首行读取，避免读取超大 `PROJECT_NOTES.md` 全量内容，仅保留列表展示所需信息。
+- 热力图与筛选链路移除了重复签名/解析热点，减少 `parseGitDaily` 在多 hook 间重复触发。
+- 验证通过：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml codex_monitor -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml project_loader -- --nocapture`。
+
+---
+
+# 性能优化冲刺（第五批）任务清单
+
+- [x] `MainContent` 移除大字符串 key 依赖：改为 ID 顺序对比 + ref，减少 `join("\n")` 构造与重复 effect
+- [x] `useProjectFilter` 筛选链路单次遍历：减少中间数组分配与重复字符串处理
+- [x] `TerminalPane` 尺寸同步去重：resize 合帧 + 签名去重，降低重复 IPC
+- [x] `git_daily` fast path：identity 为空时只输出日期，减少 `git log` 输出与解析开销
+- [x] `codex_monitor` entry 分类合并：一次文本归一化同时判断 error/needs_attention
+- [x] 集成验证：执行前端构建 + Rust check + 关键测试
+
+## Review
+- 前端层面：列表与筛选链路进一步减少了重复分配和无效计算；终端 Pane 高频 resize 的 IPC 风暴得到抑制。
+- 后端层面：`git_daily` 在“不过滤身份”场景显著减少解析负担，`codex_monitor` 降低了 JSON 事件文本重复小写/匹配成本。
+- 风险控制：全部改动保持对外命令与交互语义不变，属于低风险性能改造。
+- 验证通过：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml codex_monitor -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml project_loader -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml git_daily::tests -- --nocapture`。
+
+---
+
+# 性能优化冲刺（第六批）任务清单
+
+- [x] `project_loader` 增加 HEAD 缓存：HEAD 未变化时复用 `GitInfo`，减少重复 `rev-list/log`
+- [x] `terminal_create_session` 输出微批量：8ms 窗口聚合 `terminal-output`，降低事件风暴
+- [x] 输出链路可靠性：reader 结束后先 flush 缓存，再发送 `terminal-exit`
+- [x] 回归测试补齐：`project_loader` 新增 HEAD 变化/仓库失效场景
+- [x] 集成验证：执行前端构建 + Rust check + 关键测试
+
+## Review
+- `project_loader` 现在采用“路径 + HEAD key”缓存策略；HEAD 未变化时跳过重命令，仅保留一次 `rev-parse` 判定，扫描吞吐更稳。
+- `terminal` 输出链路改为微批量聚合发送，在高频输出时可显著减少事件数量，同时保持输出顺序不变。
+- 退出语义保持一致：批量缓存会在退出前强制 flush，避免尾部输出丢失。
+- 验证通过：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml codex_monitor -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml project_loader -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml git_daily::tests -- --nocapture`。
+
+---
+
+# 性能优化冲刺（第七批）任务清单
+
+- [x] `project_loader` 缓存裁剪策略：仅在超阈值时触发，优先保留本轮 `paths` 命中项
+- [x] `project_loader` 缓存治理测试：覆盖“优先路径保留”和“全优先场景硬上限”两种情况
+- [x] `terminal` 批量阈值优化：8ms 窗口基础上增加 32KB 强制 flush，控制高吞吐单批大小
+- [x] 关键语义保持：`terminal` 输出顺序与“flush 后 exit”语义不变
+- [x] 集成验证：执行前端构建 + Rust check + 关键测试
+
+## Review
+- `project_loader` 现在具备内存缓存治理能力：缓存超上限才裁剪，且优先保留本轮扫描路径，降低长期运行的缓存膨胀风险。
+- `terminal` 在高吞吐场景下新增“按字节阈值强制发送”，降低单批输出过大的延迟抖动。
+- 本轮未改动任何 command 对外签名与事件 payload 结构，属于低风险性能调优。
+- 验证通过：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml codex_monitor -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml project_loader -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml git_daily::tests -- --nocapture`。

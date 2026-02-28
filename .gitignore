@@ -32,3 +32,9 @@ dist-ssr
 openspec/changes/add-ghostty-terminal-core/
 public/wasm/
 src/terminal/
+
+# Serena local cache
+.serena/
+
+# Rust target (root level)
+/target/

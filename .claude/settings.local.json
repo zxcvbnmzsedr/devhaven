@@ -37,7 +37,20 @@
       "Bash(npm run tauri:*)",
       "Bash(chmod:*)",
       "mcp__serena__get_current_config",
-      "Bash(openspec spec list:*)"
+      "Bash(openspec spec list:*)",
+      "Bash(wc:*)",
+      "Bash(du:*)",
+      "mcp__serena__list_memories",
+      "Bash(find:*)",
+      "mcp__serena__activate_project",
+      "Bash(sort -k2)",
+      "mcp__serena__search_for_pattern",
+      "mcp__serena__check_onboarding_performed",
+      "mcp__serena__initial_instructions",
+      "mcp__serena__onboarding",
+      "Bash(ls:*)",
+      "Bash(npx tsc:*)",
+      "Bash(do git:*)"
     ]
   }
 }
