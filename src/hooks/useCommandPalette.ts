@@ -32,6 +32,10 @@ export type UseCommandPaletteReturn = {
   openCommandPalette: () => void;
 };
 
+const EMPTY_COMMAND_PALETTE_ACTIONS: CommandPaletteAction[] = [];
+const EMPTY_COMMAND_PALETTE_ITEMS: CommandPaletteItem[] = [];
+const EMPTY_COMMAND_PALETTE_ACTION_MAP = new Map<string, CommandPaletteAction>();
+
 /** 统一封装命令面板状态、快捷键监听与动作集合。 */
 export function useCommandPalette({
   showTerminalWorkspace,
@@ -104,6 +108,10 @@ export function useCommandPalette({
   }, [closeCommandPalette, isCommandPaletteOpen, showTerminalWorkspace]);
 
   const commandPaletteActions = useMemo<CommandPaletteAction[]>(() => {
+    if (!isCommandPaletteOpen) {
+      return EMPTY_COMMAND_PALETTE_ACTIONS;
+    }
+
     const actions: CommandPaletteAction[] = [];
     const appendAction = (
       id: string,
@@ -219,6 +227,7 @@ export function useCommandPalette({
     focusProject,
     handleOpenTerminal,
     handleRunProjectScript,
+    isCommandPaletteOpen,
     setDateFilter,
     setGitFilter,
     setHeatmapFilteredProjectIds,
@@ -229,28 +238,37 @@ export function useCommandPalette({
   ]);
 
   const filteredCommandPaletteActions = useMemo(() => {
+    if (!isCommandPaletteOpen) {
+      return EMPTY_COMMAND_PALETTE_ACTIONS;
+    }
     const normalizedQuery = commandPaletteQuery.trim().toLowerCase();
     if (!normalizedQuery) {
       return commandPaletteActions.slice(0, 200);
     }
     return commandPaletteActions.filter((action) => action.searchText.includes(normalizedQuery)).slice(0, 200);
-  }, [commandPaletteActions, commandPaletteQuery]);
+  }, [commandPaletteActions, commandPaletteQuery, isCommandPaletteOpen]);
 
   const commandPaletteItems = useMemo<CommandPaletteItem[]>(
-    () =>
-      filteredCommandPaletteActions.map((action) => ({
+    () => {
+      if (!isCommandPaletteOpen) {
+        return EMPTY_COMMAND_PALETTE_ITEMS;
+      }
+      return filteredCommandPaletteActions.map((action) => ({
         id: action.id,
         title: action.title,
         subtitle: action.subtitle,
         group: action.group,
-      })),
-    [filteredCommandPaletteActions],
+      }));
+    },
+    [filteredCommandPaletteActions, isCommandPaletteOpen],
   );
 
-  const commandPaletteActionById = useMemo(
-    () => new Map(filteredCommandPaletteActions.map((action) => [action.id, action])),
-    [filteredCommandPaletteActions],
-  );
+  const commandPaletteActionById = useMemo(() => {
+    if (!isCommandPaletteOpen) {
+      return EMPTY_COMMAND_PALETTE_ACTION_MAP;
+    }
+    return new Map(filteredCommandPaletteActions.map((action) => [action.id, action]));
+  }, [filteredCommandPaletteActions, isCommandPaletteOpen]);
 
   useEffect(() => {
     if (!isCommandPaletteOpen) {

@@ -104,6 +104,7 @@ function AppLayout() {
     handleRunProjectScript: terminal.handleRunProjectScript,
   });
   const projectListViewMode: ProjectListViewMode = appState.settings.projectListViewMode ?? "card";
+  const availableTags = useMemo(() => appState.tags.map((tag) => tag.name), [appState.tags]);
 
   const appActions = useAppActions({
     appState, isLoading, visibleProjects: viewState.visibleProjects, projectMap, projectListViewMode,
@@ -263,7 +264,7 @@ function AppLayout() {
           onOpenDashboard={handleOpenDashboard}
           onOpenSettings={handleOpenSettings}
           onOpenGlobalSkills={handleOpenGlobalSkills}
-          availableTags={appState.tags.map((tag) => tag.name)}
+          availableTags={availableTags}
           selectedProjects={selection.selectedProjects}
           onSelectProject={selection.handleSelectProject}
           onClearSelectedProjects={selection.handleClearSelectedProjects}

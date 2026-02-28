@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useRef,
@@ -79,7 +80,44 @@ function getNextTerminalTitle(tabs: TerminalWorkspace["tabs"]) {
   return `终端 ${next}`;
 }
 
-export default function TerminalWorkspaceView({
+function areTerminalWorkspaceViewPropsEqual(
+  prevProps: TerminalWorkspaceViewProps,
+  nextProps: TerminalWorkspaceViewProps,
+) {
+  if (prevProps.projectId !== nextProps.projectId) {
+    return false;
+  }
+  if (prevProps.projectPath !== nextProps.projectPath) {
+    return false;
+  }
+  if (prevProps.projectName !== nextProps.projectName) {
+    return false;
+  }
+  if (prevProps.isActive !== nextProps.isActive) {
+    return false;
+  }
+  if (prevProps.windowLabel !== nextProps.windowLabel) {
+    return false;
+  }
+  if (prevProps.xtermTheme !== nextProps.xtermTheme) {
+    return false;
+  }
+  if (prevProps.codexRunningCount !== nextProps.codexRunningCount) {
+    return false;
+  }
+  if (prevProps.scripts !== nextProps.scripts) {
+    return false;
+  }
+
+  const nextDispatch = nextProps.quickCommandDispatch ?? null;
+  if (!nextDispatch) {
+    return true;
+  }
+  const prevDispatch = prevProps.quickCommandDispatch ?? null;
+  return Boolean(prevDispatch && prevDispatch.seq === nextDispatch.seq);
+}
+
+function TerminalWorkspaceView({
   projectId,
   projectPath,
   projectName,
@@ -862,3 +900,5 @@ export default function TerminalWorkspaceView({
     </div>
   );
 }
+
+export default memo(TerminalWorkspaceView, areTerminalWorkspaceViewPropsEqual);

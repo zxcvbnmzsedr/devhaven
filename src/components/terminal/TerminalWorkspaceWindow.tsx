@@ -3,7 +3,7 @@ import { useEffect, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
-import type { Project, ProjectWorktree } from "../../models/types";
+import type { Project, ProjectScript, ProjectWorktree } from "../../models/types";
 import type { GitWorktreeListItem } from "../../services/gitWorktree";
 import { useSystemColorScheme } from "../../hooks/useSystemColorScheme";
 import { useDevHavenContext } from "../../state/DevHavenContext";
@@ -40,6 +40,8 @@ type WorktreeRenderItem = {
   initStep?: ProjectWorktree["initStep"];
   initError?: string | null;
 };
+
+const EMPTY_PROJECT_SCRIPTS: ProjectScript[] = [];
 
 function normalizeWorktreePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -380,6 +382,12 @@ export default function TerminalWorkspaceWindow({
       <main className="relative min-w-0 flex-1">
         {openProjects.map((project) => {
           const isActive = (activeProject?.id ?? "") === project.id;
+          const projectQuickCommandDispatch =
+            quickCommandDispatch &&
+            quickCommandDispatch.projectPath === project.path &&
+            quickCommandDispatch.projectId === project.id
+              ? quickCommandDispatch
+              : null;
           return (
             <div
               key={project.id}
@@ -392,11 +400,11 @@ export default function TerminalWorkspaceWindow({
                 projectPath={project.path}
                 projectName={project.name}
                 isActive={isVisible && isActive}
-                quickCommandDispatch={quickCommandDispatch}
+                quickCommandDispatch={projectQuickCommandDispatch}
                 windowLabel={windowLabel}
                 xtermTheme={terminalThemePreset.xterm}
                 codexRunningCount={codexProjectStatusById[project.id]?.runningCount ?? 0}
-                scripts={project.scripts ?? []}
+                scripts={project.scripts ?? EMPTY_PROJECT_SCRIPTS}
               />
             </div>
           );

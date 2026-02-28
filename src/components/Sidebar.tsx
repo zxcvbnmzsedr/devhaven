@@ -81,13 +81,25 @@ function Sidebar({
   onOpenCodexSession,
 }: SidebarProps) {
   const directoryCounts = useMemo(() => {
+    const directories = appState.directories;
     const counts = new Map<string, number>();
-    for (const directory of appState.directories) {
-      counts.set(
-        directory,
-        projects.filter((project) => project.path.startsWith(directory)).length,
-      );
+    if (directories.length === 0) {
+      return counts;
     }
+
+    const directoryCountByIndex = new Array<number>(directories.length).fill(0);
+    for (const project of projects) {
+      for (let index = 0; index < directories.length; index += 1) {
+        if (project.path.startsWith(directories[index])) {
+          directoryCountByIndex[index] += 1;
+        }
+      }
+    }
+
+    for (let index = 0; index < directories.length; index += 1) {
+      counts.set(directories[index], directoryCountByIndex[index]);
+    }
+
     return counts;
   }, [appState.directories, projects]);
 

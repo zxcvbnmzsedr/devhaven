@@ -1,5 +1,8 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -9,6 +12,12 @@ use crate::models::{
     AppStateFile, HeatmapCacheFile, Project, TerminalWorkspace, TerminalWorkspaceSummary,
     TerminalWorkspacesFile,
 };
+
+// 终端工作区的 read-modify-write 需要串行化，避免并发覆盖。
+fn terminal_workspace_rmw_mutex() -> &'static Mutex<()> {
+    static TERMINAL_WORKSPACE_RMW_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    TERMINAL_WORKSPACE_RMW_MUTEX.get_or_init(|| Mutex::new(()))
+}
 
 // 获取应用数据目录。
 fn app_support_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -30,17 +39,62 @@ fn read_json<T: DeserializeOwned>(path: &PathBuf) -> Result<T, String> {
     serde_json::from_slice(&data).map_err(|err| format!("解析 JSON 失败: {err}"))
 }
 
+// 原子写入文件：先写临时文件，再 rename 覆盖目标文件。
+fn write_file_atomic(path: &PathBuf, data: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("目标文件缺少父目录: {}", path.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("目标文件缺少文件名: {}", path.display()))?
+        .to_string_lossy()
+        .to_string();
+    let pid = std::process::id();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+
+    for attempt in 0..8 {
+        let temp_path = parent.join(format!(".{file_name}.tmp-{pid}-{timestamp}-{attempt}"));
+        let mut file = match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("创建临时文件失败: {err}")),
+        };
+
+        if let Err(err) = file.write_all(data).and_then(|_| file.sync_all()) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!("写入临时文件失败: {err}"));
+        }
+
+        drop(file);
+        fs::rename(&temp_path, path).map_err(|err| {
+            let _ = fs::remove_file(&temp_path);
+            format!("原子替换目标文件失败: {err}")
+        })?;
+
+        return Ok(());
+    }
+
+    Err("创建临时文件失败: 临时文件名冲突".to_string())
+}
+
 // 以易读格式写入 JSON。
 fn write_json_pretty<T: Serialize>(path: &PathBuf, value: &T) -> Result<(), String> {
     let data =
         serde_json::to_vec_pretty(value).map_err(|err| format!("序列化 JSON 失败: {err}"))?;
-    fs::write(path, data).map_err(|err| format!("写入文件失败: {err}"))
+    write_file_atomic(path, &data)
 }
 
 // 以紧凑格式写入 JSON。
 fn write_json_compact<T: Serialize + ?Sized>(path: &PathBuf, value: &T) -> Result<(), String> {
     let data = serde_json::to_vec(value).map_err(|err| format!("序列化 JSON 失败: {err}"))?;
-    fs::write(path, data).map_err(|err| format!("写入文件失败: {err}"))
+    write_file_atomic(path, &data)
 }
 
 /// 读取应用状态文件。
@@ -137,6 +191,9 @@ pub fn save_terminal_workspace(
     project_path: &str,
     workspace: TerminalWorkspace,
 ) -> Result<(), String> {
+    let _guard = terminal_workspace_rmw_mutex()
+        .lock()
+        .map_err(|_| "终端工作区写入锁已损坏".to_string())?;
     let mut workspaces = load_terminal_workspaces(app)?;
     workspaces
         .workspaces
@@ -146,6 +203,9 @@ pub fn save_terminal_workspace(
 
 /// 删除指定项目终端工作空间。
 pub fn delete_terminal_workspace(app: &AppHandle, project_path: &str) -> Result<(), String> {
+    let _guard = terminal_workspace_rmw_mutex()
+        .lock()
+        .map_err(|_| "终端工作区写入锁已损坏".to_string())?;
     let mut workspaces = load_terminal_workspaces(app)?;
     if workspaces.workspaces.remove(project_path).is_some() {
         save_terminal_workspaces(app, &workspaces)?;

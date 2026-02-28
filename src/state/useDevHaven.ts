@@ -107,7 +107,12 @@ export function useDevHaven(): DevHavenStore {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const appStateRef = useRef<AppStateFile>(appState);
   const projectsRef = useRef<Project[]>(projects);
+
+  useEffect(() => {
+    appStateRef.current = appState;
+  }, [appState]);
 
   useEffect(() => {
     projectsRef.current = projects;
@@ -119,17 +124,33 @@ export function useDevHaven(): DevHavenStore {
     setError(err instanceof Error ? err.message : String(err));
   }, []);
 
-  const commitAppState = useCallback(async (nextState: AppStateFile) => {
-    setAppState(nextState);
-    await saveAppState(nextState);
-  }, []);
+  const commitAppState = useCallback(
+    async (updater: AppStateFile | ((currentState: AppStateFile) => AppStateFile)) => {
+      const currentState = appStateRef.current;
+      const nextState =
+        typeof updater === "function"
+          ? (updater as (state: AppStateFile) => AppStateFile)(currentState)
+          : updater;
+      if (nextState === currentState) {
+        return currentState;
+      }
+      appStateRef.current = nextState;
+      setAppState(nextState);
+      await saveAppState(nextState);
+      return nextState;
+    },
+    [],
+  );
 
   const commitProjects = useCallback(async (nextProjects: Project[]) => {
+    projectsRef.current = nextProjects;
     setProjects(nextProjects);
     await saveProjects(nextProjects);
   }, []);
 
   const commitAppStateAndProjects = useCallback(async (nextState: AppStateFile, nextProjects: Project[]) => {
+    appStateRef.current = nextState;
+    projectsRef.current = nextProjects;
     setAppState(nextState);
     setProjects(nextProjects);
     await Promise.all([saveAppState(nextState), saveProjects(nextProjects)]);
@@ -177,8 +198,10 @@ export function useDevHaven(): DevHavenStore {
       const [state, cachedProjects] = await Promise.all([loadAppState(), loadProjects()]);
       const resolvedState = normalizeAppState(state ?? emptyState);
       const resolvedProjects = (cachedProjects ?? []).map(normalizeProject);
+      appStateRef.current = resolvedState;
       setAppState(resolvedState);
       if (resolvedState.directories.length === 0) {
+        projectsRef.current = resolvedProjects;
         setProjects(resolvedProjects);
         await syncTagsFromProjects(resolvedState, resolvedProjects);
         return;
@@ -186,6 +209,7 @@ export function useDevHaven(): DevHavenStore {
       const paths = await discoverProjects(resolvedState.directories);
       const updatedProjects = await buildProjects(paths, resolvedProjects);
       const normalizedProjects = updatedProjects.map(normalizeProject);
+      projectsRef.current = normalizedProjects;
       setProjects(normalizedProjects);
       await saveProjects(normalizedProjects);
       await syncTagsFromProjects(resolvedState, normalizedProjects);
@@ -204,15 +228,17 @@ export function useDevHaven(): DevHavenStore {
         return;
       }
       try {
-        const updatedProjects = await buildProjects(uniquePaths, projects);
-        const nextProjects = mergeProjectsByPath(projects, updatedProjects);
+        const currentProjects = projectsRef.current;
+        const currentState = appStateRef.current;
+        const updatedProjects = await buildProjects(uniquePaths, currentProjects);
+        const nextProjects = mergeProjectsByPath(currentProjects, updatedProjects);
         await commitProjects(nextProjects);
-        await syncTagsFromProjects(appState, nextProjects);
+        await syncTagsFromProjects(currentState, nextProjects);
       } catch (err) {
         handleError(err);
       }
     },
-    [appState, commitProjects, handleError, projects, syncTagsFromProjects],
+    [commitProjects, handleError, syncTagsFromProjects],
   );
 
   /** 重新扫描指定项目路径并更新缓存。 */
@@ -222,26 +248,30 @@ export function useDevHaven(): DevHavenStore {
         return;
       }
       try {
-        const updatedProjects = await buildProjects([path], projects);
-        const nextProjects = mergeProjectsByPath(projects, updatedProjects);
+        const currentProjects = projectsRef.current;
+        const currentState = appStateRef.current;
+        const updatedProjects = await buildProjects([path], currentProjects);
+        const nextProjects = mergeProjectsByPath(currentProjects, updatedProjects);
         await commitProjects(nextProjects);
-        await syncTagsFromProjects(appState, nextProjects);
+        await syncTagsFromProjects(currentState, nextProjects);
       } catch (err) {
         handleError(err);
       }
     },
-    [appState, commitProjects, handleError, projects, syncTagsFromProjects],
+    [commitProjects, handleError, syncTagsFromProjects],
   );
 
   /** 更新项目的 Git 每日提交统计（支持指定路径）。 */
   const updateGitDaily = useCallback(
     async (paths?: string[]) => {
-      const hiddenPaths = new Set(appState.recycleBin);
+      const currentState = appStateRef.current;
+      const currentProjects = projectsRef.current;
+      const hiddenPaths = new Set(currentState.recycleBin);
       let targetPaths: string[] = [];
       if (paths && paths.length > 0) {
         targetPaths = paths.filter((path) => !hiddenPaths.has(path));
       } else {
-        targetPaths = projects
+        targetPaths = currentProjects
           .filter((project) => project.git_commits > 0 && !hiddenPaths.has(project.path))
           .map((project) => project.path);
       }
@@ -249,12 +279,12 @@ export function useDevHaven(): DevHavenStore {
         return;
       }
       try {
-        const results = await collectGitDaily(targetPaths, appState.settings.gitIdentities);
+        const results = await collectGitDaily(targetPaths, currentState.settings.gitIdentities);
         if (results.length === 0) {
           return;
         }
         const byPath = new Map(results.map((result) => [result.path, result]));
-        const nextProjects = projects.map((project) => {
+        const nextProjects = currentProjects.map((project) => {
           const match = byPath.get(project.path);
           if (!match || match.error) {
             return project;
@@ -266,7 +296,7 @@ export function useDevHaven(): DevHavenStore {
         handleError(err);
       }
     },
-    [appState.recycleBin, appState.settings.gitIdentities, commitProjects, handleError, projects],
+    [commitProjects, handleError],
   );
 
   const createScriptId = () => {
@@ -468,21 +498,23 @@ export function useDevHaven(): DevHavenStore {
       if (!normalizedPath) {
         return;
       }
-      const nextDirectories = Array.from(new Set([...appState.directories, normalizedPath]));
-      const nextState = { ...appState, directories: nextDirectories };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => {
+        const nextDirectories = Array.from(new Set([...currentState.directories, normalizedPath]));
+        return { ...currentState, directories: nextDirectories };
+      });
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 移除工作目录并持久化。 */
   const removeDirectory = useCallback(
     async (path: string) => {
-      const nextDirectories = appState.directories.filter((item) => item !== path);
-      const nextState = { ...appState, directories: nextDirectories };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => ({
+        ...currentState,
+        directories: currentState.directories.filter((item) => item !== path),
+      }));
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 将项目路径移入回收站并持久化。 */
@@ -492,11 +524,12 @@ export function useDevHaven(): DevHavenStore {
       if (normalizedPaths.length === 0) {
         return;
       }
-      const nextRecycleBin = Array.from(new Set([...appState.recycleBin, ...normalizedPaths]));
-      const nextState = { ...appState, recycleBin: nextRecycleBin };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => ({
+        ...currentState,
+        recycleBin: Array.from(new Set([...currentState.recycleBin, ...normalizedPaths])),
+      }));
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 将项目路径移入回收站并持久化。 */
@@ -513,11 +546,12 @@ export function useDevHaven(): DevHavenStore {
       if (!path) {
         return;
       }
-      const nextRecycleBin = appState.recycleBin.filter((item) => item !== path);
-      const nextState = { ...appState, recycleBin: nextRecycleBin };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => ({
+        ...currentState,
+        recycleBin: currentState.recycleBin.filter((item) => item !== path),
+      }));
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 切换项目收藏状态并持久化。 */
@@ -528,36 +562,36 @@ export function useDevHaven(): DevHavenStore {
         return;
       }
 
-      const favorites = new Set(appState.favoriteProjectPaths ?? []);
-      if (favorites.has(normalizedPath)) {
-        favorites.delete(normalizedPath);
-      } else {
-        favorites.add(normalizedPath);
-      }
-
-      const nextState = { ...appState, favoriteProjectPaths: Array.from(favorites) };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => {
+        const favorites = new Set(currentState.favoriteProjectPaths ?? []);
+        if (favorites.has(normalizedPath)) {
+          favorites.delete(normalizedPath);
+        } else {
+          favorites.add(normalizedPath);
+        }
+        return { ...currentState, favoriteProjectPaths: Array.from(favorites) };
+      });
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
-
 
   /** 批量更新标签配置并持久化。 */
   const updateTags = useCallback(
     async (tags: TagData[]) => {
-      const nextState = { ...appState, tags };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => ({ ...currentState, tags }));
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 更新应用设置并持久化。 */
   const updateSettings = useCallback(
     async (settings: AppStateFile["settings"]) => {
-      const nextState = { ...appState, settings: normalizeSettings(settings) };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => ({
+        ...currentState,
+        settings: normalizeSettings(settings),
+      }));
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 新建标签并自动分配颜色。 */
@@ -567,23 +601,24 @@ export function useDevHaven(): DevHavenStore {
       if (!normalized) {
         return;
       }
-      if (appState.tags.some((tag) => tag.name === normalized)) {
-        return;
-      }
-      const nextState = {
-        ...appState,
-        tags: [
-          ...appState.tags,
-          {
-            name: normalized,
-            color: hexToColorData(colorHex ?? pickColorForTag(normalized)),
-            hidden: false,
-          },
-        ],
-      };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => {
+        if (currentState.tags.some((tag) => tag.name === normalized)) {
+          return currentState;
+        }
+        return {
+          ...currentState,
+          tags: [
+            ...currentState.tags,
+            {
+              name: normalized,
+              color: hexToColorData(colorHex ?? pickColorForTag(normalized)),
+              hidden: false,
+            },
+          ],
+        };
+      });
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 重命名标签，同时更新项目上的标签引用。 */
@@ -593,61 +628,67 @@ export function useDevHaven(): DevHavenStore {
       if (!normalized || from === normalized) {
         return;
       }
-      if (appState.tags.some((tag) => tag.name === normalized)) {
+      const currentState = appStateRef.current;
+      if (currentState.tags.some((tag) => tag.name === normalized)) {
         return;
       }
 
-      const nextTags = appState.tags.map((tag) =>
+      const currentProjects = projectsRef.current;
+      const nextTags = currentState.tags.map((tag) =>
         tag.name === from ? { ...tag, name: normalized } : tag,
       );
-      const nextProjects = projects.map((project) =>
+      const nextProjects = currentProjects.map((project) =>
         project.tags.includes(from)
           ? { ...project, tags: project.tags.map((tag) => (tag === from ? normalized : tag)) }
           : project,
       );
 
-      const nextState = { ...appState, tags: nextTags };
+      const nextState = { ...currentState, tags: nextTags };
       await commitAppStateAndProjects(nextState, nextProjects);
     },
-    [appState, commitAppStateAndProjects, projects],
+    [commitAppStateAndProjects],
   );
 
   /** 删除标签并同步移除项目引用。 */
   const removeTag = useCallback(
     async (name: string) => {
-      const nextTags = appState.tags.filter((tag) => tag.name !== name);
-      const nextProjects = projects.map((project) => ({
+      const currentState = appStateRef.current;
+      const currentProjects = projectsRef.current;
+      const nextTags = currentState.tags.filter((tag) => tag.name !== name);
+      const nextProjects = currentProjects.map((project) => ({
         ...project,
         tags: project.tags.filter((tag) => tag !== name),
       }));
-      const nextState = { ...appState, tags: nextTags };
+      const nextState = { ...currentState, tags: nextTags };
       await commitAppStateAndProjects(nextState, nextProjects);
     },
-    [appState, commitAppStateAndProjects, projects],
+    [commitAppStateAndProjects],
   );
 
   /** 切换标签的隐藏状态。 */
   const toggleTagHidden = useCallback(
     async (name: string) => {
-      const nextTags = appState.tags.map((tag) =>
-        tag.name === name ? { ...tag, hidden: !tag.hidden } : tag,
-      );
-      const nextState = { ...appState, tags: nextTags };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => ({
+        ...currentState,
+        tags: currentState.tags.map((tag) =>
+          tag.name === name ? { ...tag, hidden: !tag.hidden } : tag,
+        ),
+      }));
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 更新标签颜色配置。 */
   const setTagColor = useCallback(
     async (name: string, colorHex: string) => {
-      const nextTags = appState.tags.map((tag) =>
-        tag.name === name ? { ...tag, color: hexToColorData(colorHex) } : tag,
-      );
-      const nextState = { ...appState, tags: nextTags };
-      await commitAppState(nextState);
+      await commitAppState((currentState) => ({
+        ...currentState,
+        tags: currentState.tags.map((tag) =>
+          tag.name === name ? { ...tag, color: hexToColorData(colorHex) } : tag,
+        ),
+      }));
     },
-    [appState, commitAppState],
+    [commitAppState],
   );
 
   /** 为指定项目添加标签并同步全局标签。 */
@@ -658,15 +699,17 @@ export function useDevHaven(): DevHavenStore {
       if (!normalizedTag || idSet.size === 0) {
         return;
       }
-      const nextProjects = projects.map((project) =>
+      const currentProjects = projectsRef.current;
+      const currentState = appStateRef.current;
+      const nextProjects = currentProjects.map((project) =>
         idSet.has(project.id) && !project.tags.includes(normalizedTag)
           ? { ...project, tags: [...project.tags, normalizedTag] }
           : project,
       );
       await commitProjects(nextProjects);
-      await syncTagsFromProjects(appState, nextProjects);
+      await syncTagsFromProjects(currentState, nextProjects);
     },
-    [appState, commitProjects, projects, syncTagsFromProjects],
+    [commitProjects, syncTagsFromProjects],
   );
 
   /** 为指定项目添加标签并同步全局标签。 */
@@ -680,12 +723,13 @@ export function useDevHaven(): DevHavenStore {
   /** 从指定项目移除标签。 */
   const removeTagFromProject = useCallback(
     async (projectId: string, tag: string) => {
-      const nextProjects = projects.map((project) =>
+      const currentProjects = projectsRef.current;
+      const nextProjects = currentProjects.map((project) =>
         project.id === projectId ? { ...project, tags: project.tags.filter((item) => item !== tag) } : project,
       );
       await commitProjects(nextProjects);
     },
-    [commitProjects, projects],
+    [commitProjects],
   );
 
   useEffect(() => {
