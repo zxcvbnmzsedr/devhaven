@@ -13,6 +13,7 @@ import WorktreeCreateDialog from "./components/terminal/WorktreeCreateDialog";
 import { useCodexMonitor } from "./hooks/useCodexMonitor";
 import { useCodexIntegration } from "./hooks/useCodexIntegration";
 import { useCommandPalette } from "./hooks/useCommandPalette";
+import { useDisableInputCorrections } from "./hooks/useDisableInputCorrections";
 import { useProjectFilter } from "./hooks/useProjectFilter";
 import { useProjectSelection } from "./hooks/useProjectSelection";
 import { useTerminalWorkspace } from "./hooks/useTerminalWorkspace";
@@ -114,6 +115,7 @@ function AppLayout() {
     moveProjectToRecycleBin, moveProjectsToRecycleBin, restoreProjectFromRecycleBin, refreshProject,
     addTagToProjects, addTag, renameTag, setTagColor, updateGitDaily, updateSettings, showToast,
   });
+  useDisableInputCorrections();
 
   useEffect(() => {
     if (!import.meta.env.PROD || typeof window === "undefined") {

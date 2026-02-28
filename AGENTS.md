@@ -36,7 +36,7 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 - 主列表渲染（卡片/列表模式切换）：`src/components/MainContent.tsx`、`src/components/ProjectCard.tsx`、`src/components/ProjectListRow.tsx`
 - 主列表快捷命令入口（卡片/列表直接运行 `Project.scripts`）：`src/components/ProjectCard.tsx`、`src/components/ProjectListRow.tsx`、`src/App.tsx`
 - 主列表多选批量操作（批量复制路径/刷新/打标/移入回收站）：`src/components/MainContent.tsx`、`src/App.tsx`、`src/state/useDevHaven.ts`
-- App 顶层编排已拆分（主文件仅做组合与渲染）：`src/App.tsx` + `src/hooks/useAppViewState.ts` + `src/hooks/useAppActions.ts` + `src/hooks/useProjectSelection.ts` + `src/hooks/useProjectFilter.ts` + `src/hooks/useTerminalWorkspace.ts` + `src/hooks/useWorktreeManager.ts` + `src/hooks/useCodexIntegration.ts` + `src/hooks/useCommandPalette.ts`
+- App 顶层编排已拆分（主文件仅做组合与渲染）：`src/App.tsx` + `src/hooks/useAppViewState.ts` + `src/hooks/useAppActions.ts` + `src/hooks/useProjectSelection.ts` + `src/hooks/useProjectFilter.ts` + `src/hooks/useTerminalWorkspace.ts` + `src/hooks/useWorktreeManager.ts` + `src/hooks/useCodexIntegration.ts` + `src/hooks/useCommandPalette.ts` + `src/hooks/useDisableInputCorrections.ts`（全局关闭输入自动纠错/首字母自动大写）
 - 核心状态与动作（刷新/扫描/合并/持久化）：`src/state/useDevHaven.ts`、`src/state/DevHavenContext.tsx`
 - 调用 Tauri 命令：`src/services/appStorage.ts`（`discoverProjects/buildProjects/load/save`）
 - 扫描与构建项目元数据（是否 Git 仓库、提交数、最后提交时间）：`src-tauri/src/project_loader.rs`
