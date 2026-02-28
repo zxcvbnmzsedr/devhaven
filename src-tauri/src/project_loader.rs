@@ -3,35 +3,38 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use rayon::prelude::*;
+
 use crate::models::Project;
 use crate::time_utils::{now_swift, system_time_to_swift, system_time_to_unix_seconds};
 
-/// 根据目录列表扫描可用项目路径。
+/// 递归扫描最大深度，防止栈溢出。
+const MAX_SCAN_DEPTH: usize = 6;
+
+/// 根据目录列表扫描可用项目路径（并行扫描多个工作目录）。
 pub fn discover_projects(directories: &[String]) -> Vec<String> {
-    let mut all_paths = Vec::new();
-    for directory in directories {
-        let mut found = scan_directory_with_git(directory);
-        all_paths.append(&mut found);
-    }
+    let mut all_paths: Vec<String> = directories
+        .par_iter()
+        .flat_map(|directory| scan_directory_with_git(directory))
+        .collect();
     all_paths.sort();
     all_paths.dedup();
     all_paths
 }
 
-/// 构建项目列表，复用已有数据并更新元信息。
+/// 构建项目列表，复用已有数据并更新元信息（并行加载 Git 信息）。
 pub fn build_projects(paths: &[String], existing: &[Project]) -> Vec<Project> {
-    let mut existing_by_path: HashMap<&str, &Project> = HashMap::new();
-    for project in existing {
-        existing_by_path.insert(project.path.as_str(), project);
-    }
-
-    paths
+    let existing_by_path: HashMap<&str, &Project> = existing
         .iter()
+        .map(|project| (project.path.as_str(), project))
+        .collect();
+    paths
+        .par_iter()
         .filter_map(|path| create_project(path, &existing_by_path))
         .collect()
 }
 
-// 扫描指定目录：收录根目录（若为 Git 仓库）、其直接子目录，以及更深层的 Git 仓库。
+// 扫描指定目录：收录根目录（若为 Git 仓库）、其直接子目录，以及并行深度扫描更深层的 Git 仓库。
 fn scan_directory_with_git(path: &str) -> Vec<String> {
     let mut results = Vec::new();
     let root = Path::new(path);
@@ -50,64 +53,76 @@ fn scan_directory_with_git(path: &str) -> Vec<String> {
         Err(_) => return results,
     };
 
-    for entry in entries.flatten() {
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(_) => continue,
-        };
-        if file_type.is_symlink() || !file_type.is_dir() {
-            continue;
-        }
+    let child_dirs: Vec<_> = entries
+        .flatten()
+        .filter(|entry| {
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => return false,
+            };
+            if file_type.is_symlink() || !file_type.is_dir() {
+                return false;
+            }
+            !should_skip_direct_dir(&entry.file_name())
+        })
+        .collect();
 
+    for entry in &child_dirs {
         let entry_path = entry.path();
-        let name = entry.file_name();
-        if should_skip_direct_dir(&name) {
-            continue;
-        }
-
         if let Some(as_str) = entry_path.to_str() {
             if !is_git_worktree(&entry_path) {
                 results.push(as_str.to_string());
             }
         }
-
-        collect_git_repos(&entry_path, &mut results);
     }
 
+    // 并行深度扫描嵌套 Git 仓库
+    let nested: Vec<String> = child_dirs
+        .par_iter()
+        .flat_map(|entry| collect_git_repos(&entry.path(), 1))
+        .collect();
+
+    results.extend(nested);
     results
 }
 
-fn collect_git_repos(path: &Path, results: &mut Vec<String>) {
+fn collect_git_repos(path: &Path, depth: usize) -> Vec<String> {
+    if depth >= MAX_SCAN_DEPTH {
+        return Vec::new();
+    }
+
     if is_git_repo(path) {
         if !is_git_worktree(path) {
             if let Some(as_str) = path.to_str() {
-                results.push(as_str.to_string());
+                return vec![as_str.to_string()];
             }
         }
-        return;
+        return Vec::new();
     }
 
     let entries = match fs::read_dir(path) {
         Ok(entries) => entries,
-        Err(_) => return,
+        Err(_) => return Vec::new(),
     };
 
-    for entry in entries.flatten() {
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(_) => continue,
-        };
-        if file_type.is_symlink() || !file_type.is_dir() {
-            continue;
-        }
+    let dirs: Vec<_> = entries
+        .flatten()
+        .filter(|entry| {
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => return false,
+            };
+            if file_type.is_symlink() || !file_type.is_dir() {
+                return false;
+            }
+            !should_skip_recursive_dir(&entry.file_name())
+        })
+        .map(|entry| entry.path())
+        .collect();
 
-        let name = entry.file_name();
-        if should_skip_recursive_dir(&name) {
-            continue;
-        }
-
-        collect_git_repos(&entry.path(), results);
-    }
+    dirs.par_iter()
+        .flat_map(|dir| collect_git_repos(dir, depth + 1))
+        .collect()
 }
 
 fn should_skip_direct_dir(name: &std::ffi::OsStr) -> bool {

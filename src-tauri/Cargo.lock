@@ -12,6 +12,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "portable-pty",
+ "rayon",
  "serde",
  "serde_json",
  "sysinfo",
