@@ -48,3 +48,21 @@
 - 终端、worktree、命令面板、Codex 监控与筛选逻辑全部迁入独立 hooks，降低跨域耦合。
 - 补充 `useAppActions` / `useAppViewState` 统一承接批量操作与顶层视图状态，减少 App 内业务噪声。
 - 构建已通过（`tsc && vite build`），未改动 Tauri 命令与存储结构，功能链路保持不变。
+
+---
+
+# TerminalWorkspaceView 拆分任务清单
+
+- [x] 提取 `useQuickCommandRuntime`：收敛快捷命令运行/停止/快照/事件/终态回写逻辑
+- [x] 提取 `useQuickCommandDispatch`：处理外部 run/stop 派发与 pending 队列
+- [x] 提取 `useQuickCommandPanel`：管理快捷命令浮层初始化与拖拽定位
+- [x] 提取 `QuickCommandsPanel` 组件：承接浮层 UI 渲染
+- [x] 提取 `TerminalWorkspaceHeader` 组件：承接头部栏 UI
+- [x] 重构 `TerminalWorkspaceView`：改为 Hook + 子组件组合编排
+- [x] 更新 `AGENTS.md` 终端工作区定位说明
+- [x] 验证构建：`npm run build`
+
+## Review
+- 快捷命令逻辑已从视图组件解耦到独立 Hook，主组件不再直接维护运行态同步细节。
+- 浮层拖拽和外部派发链路单独封装，避免在主组件中混杂异步事件与 UI 代码。
+- 构建验证通过（`tsc && vite build`），现有终端分屏/标签页/侧栏链路保持可用。
