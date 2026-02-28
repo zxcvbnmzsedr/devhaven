@@ -11,9 +11,9 @@ export type ProjectListRowProps = {
   project: Project;
   isSelected: boolean;
   isFavorite: boolean;
-  selectedProjectIds: Set<string>;
+  resolveDragProjectIds: (projectId: string) => string[];
   notePreview: string;
-  onSelect: (event: React.MouseEvent<HTMLDivElement>) => void;
+  onSelectProject: (project: Project, event: React.MouseEvent<HTMLDivElement>) => void;
   onOpenTerminal: (project: Project) => void;
   onRunProjectScript: (projectId: string, scriptId: string) => Promise<void>;
   onRefreshProject: (path: string) => void;
@@ -41,9 +41,9 @@ function ProjectListRow({
   project,
   isSelected,
   isFavorite,
-  selectedProjectIds,
+  resolveDragProjectIds,
   notePreview,
-  onSelect,
+  onSelectProject,
   onOpenTerminal,
   onRunProjectScript,
   onRefreshProject,
@@ -70,13 +70,17 @@ function ProjectListRow({
 
   const handleDragStart = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
-      const ids = selectedProjectIds.has(project.id)
-        ? Array.from(selectedProjectIds)
-        : [project.id];
+      const ids = resolveDragProjectIds(project.id);
       event.dataTransfer.setData("application/x-project-ids", JSON.stringify(ids));
       event.dataTransfer.effectAllowed = "copy";
     },
-    [selectedProjectIds, project.id],
+    [project.id, resolveDragProjectIds],
+  );
+  const handleSelect = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      onSelectProject(project, event);
+    },
+    [onSelectProject, project],
   );
 
   const handleActionClick = useCallback((event: React.MouseEvent, action: () => void) => {
@@ -89,7 +93,7 @@ function ProjectListRow({
       className={`group grid cursor-pointer grid-cols-[minmax(220px,2.2fr)_170px_minmax(180px,2fr)_180px] items-center gap-3 border-b border-divider px-3 py-2.5 text-[13px] transition-colors duration-150 last:border-b-0 ${
         isSelected ? "bg-card-selected-bg" : "hover:bg-card-hover"
       }`}
-      onClick={onSelect}
+      onClick={handleSelect}
       onDoubleClick={() => onOpenTerminal(project)}
       draggable
       onDragStart={handleDragStart}

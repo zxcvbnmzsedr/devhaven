@@ -8,7 +8,11 @@ import {
   getCodexMonitorSnapshot,
 } from "../services/codex";
 
-const REFRESH_INTERVAL_MS = 5000;
+const POLL_INTERVAL_IDLE_MS = 5000;
+const POLL_INTERVAL_WARM_MS = 15000;
+const POLL_INTERVAL_STABLE_MS = 30000;
+const EVENT_STABLE_WINDOW_MS = 20000;
+const EVENT_WARM_WINDOW_MS = 60000;
 const MAX_EVENTS = 80;
 
 export type CodexMonitorStore = {
@@ -33,6 +37,47 @@ export function useCodexMonitor(): CodexMonitorStore {
     let canceled = false;
     let stopSnapshotListen: (() => void) | null = null;
     let stopEventListen: (() => void) | null = null;
+    let pollTimer: number | null = null;
+    let lastRealtimeAt = 0;
+
+    const clearPollTimer = () => {
+      if (pollTimer == null) {
+        return;
+      }
+      window.clearTimeout(pollTimer);
+      pollTimer = null;
+    };
+
+    const getNextPollDelay = () => {
+      if (lastRealtimeAt <= 0) {
+        return POLL_INTERVAL_IDLE_MS;
+      }
+      const elapsed = Date.now() - lastRealtimeAt;
+      if (elapsed <= EVENT_STABLE_WINDOW_MS) {
+        return POLL_INTERVAL_STABLE_MS;
+      }
+      if (elapsed <= EVENT_WARM_WINDOW_MS) {
+        return POLL_INTERVAL_WARM_MS;
+      }
+      return POLL_INTERVAL_IDLE_MS;
+    };
+
+    const scheduleNextPoll = () => {
+      if (canceled) {
+        return;
+      }
+      clearPollTimer();
+      pollTimer = window.setTimeout(() => {
+        void load().finally(() => {
+          scheduleNextPoll();
+        });
+      }, getNextPollDelay());
+    };
+
+    const markRealtimeAlive = () => {
+      lastRealtimeAt = Date.now();
+      scheduleNextPoll();
+    };
 
     const applySnapshot = (next: CodexMonitorSnapshot) => {
       if (canceled) {
@@ -59,12 +104,13 @@ export function useCodexMonitor(): CodexMonitorStore {
     };
 
     void load();
-    const timer = window.setInterval(() => void load(), REFRESH_INTERVAL_MS);
+    scheduleNextPoll();
 
     void listen<CodexMonitorSnapshot>(CODEX_MONITOR_SNAPSHOT_EVENT, (event) => {
       if (!event.payload || canceled) {
         return;
       }
+      markRealtimeAlive();
       applySnapshot(event.payload);
     })
       .then((unlisten) => {
@@ -85,6 +131,7 @@ export function useCodexMonitor(): CodexMonitorStore {
       if (canceled || !event.payload) {
         return;
       }
+      markRealtimeAlive();
       setAgentEvents((prev) => {
         const next = [event.payload, ...prev];
         if (next.length > MAX_EVENTS) {
@@ -109,7 +156,7 @@ export function useCodexMonitor(): CodexMonitorStore {
 
     return () => {
       canceled = true;
-      window.clearInterval(timer);
+      clearPollTimer();
       stopSnapshotListen?.();
       stopEventListen?.();
     };

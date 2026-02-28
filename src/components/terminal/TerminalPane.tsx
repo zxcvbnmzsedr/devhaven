@@ -408,6 +408,8 @@ export default function TerminalPane({
   const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const webLinksAddonRef = useRef<WebLinksAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
+  const resizeFrameRef = useRef<number | null>(null);
+  const lastResizeSignatureRef = useRef<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const ptyIdRef = useRef<string | null>(null);
   const restoredRef = useRef(false);
@@ -606,12 +608,34 @@ export default function TerminalPane({
         console.warn("终端尺寸自适配失败，稍后将重试。", error);
       }
     };
+    const flushPtyResize = () => {
+      const ptyId = ptyIdRef.current;
+      if (!ptyId) {
+        return;
+      }
+      const resizeSignature = `${ptyId}:${term.cols}x${term.rows}`;
+      if (lastResizeSignatureRef.current === resizeSignature) {
+        return;
+      }
+      lastResizeSignatureRef.current = resizeSignature;
+      void resizeTerminal(ptyId, term.cols, term.rows).catch(() => undefined);
+    };
+    const schedulePtyResize = () => {
+      if (resizeFrameRef.current !== null) {
+        return;
+      }
+      // 合并到同一帧并按尺寸去重，避免重复 resize IPC。
+      resizeFrameRef.current = window.requestAnimationFrame(() => {
+        resizeFrameRef.current = null;
+        if (disposed) {
+          return;
+        }
+        flushPtyResize();
+      });
+    };
     const syncPtySize = () => {
       safeFit();
-      const ptyId = ptyIdRef.current;
-      if (ptyId) {
-        void resizeTerminal(ptyId, term.cols, term.rows).catch(() => undefined);
-      }
+      schedulePtyResize();
     };
 
     term.open(container);
@@ -775,6 +799,11 @@ export default function TerminalPane({
       renderOnce.dispose();
       disposable.dispose();
       resizeObserver.disconnect();
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+      lastResizeSignatureRef.current = null;
       unlistenOutput?.();
       unlistenExit?.();
       releasePtySession(registryKey);

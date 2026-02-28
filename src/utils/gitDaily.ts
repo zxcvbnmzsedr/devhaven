@@ -1,5 +1,23 @@
 export type GitDailyMap = Record<string, number>;
 
+const GIT_DAILY_PARSE_CACHE_LIMIT = 200;
+const gitDailyParseCache = new Map<string, GitDailyMap>();
+
+function cloneGitDailyMap(data: GitDailyMap): GitDailyMap {
+  return { ...data };
+}
+
+function cacheGitDailyParseResult(key: string, value: GitDailyMap): void {
+  gitDailyParseCache.set(key, value);
+  if (gitDailyParseCache.size <= GIT_DAILY_PARSE_CACHE_LIMIT) {
+    return;
+  }
+  const oldestKey = gitDailyParseCache.keys().next().value;
+  if (oldestKey !== undefined) {
+    gitDailyParseCache.delete(oldestKey);
+  }
+}
+
 export function parseGitDaily(gitDaily?: string | null): GitDailyMap {
   if (!gitDaily) {
     return {};
@@ -7,6 +25,12 @@ export function parseGitDaily(gitDaily?: string | null): GitDailyMap {
   const trimmed = gitDaily.trim();
   if (!trimmed) {
     return {};
+  }
+  const cached = gitDailyParseCache.get(trimmed);
+  if (cached) {
+    gitDailyParseCache.delete(trimmed);
+    gitDailyParseCache.set(trimmed, cached);
+    return cloneGitDailyMap(cached);
   }
   const result: GitDailyMap = {};
   const entries = trimmed.split(",");
@@ -21,7 +45,8 @@ export function parseGitDaily(gitDaily?: string | null): GitDailyMap {
     }
     result[date] = count;
   }
-  return result;
+  cacheGitDailyParseResult(trimmed, result);
+  return cloneGitDailyMap(result);
 }
 
 export function formatGitDaily(data: GitDailyMap): string {

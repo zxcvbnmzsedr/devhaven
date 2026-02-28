@@ -32,9 +32,10 @@ export function useHeatmapData(projects: Project[], gitIdentities: GitIdentity[]
       setError(null);
       try {
         const stored = await loadHeatmapCache().catch(() => EMPTY_HEATMAP_CACHE);
-        const shouldRebuild = shouldRefreshCache(stored, projects, gitIdentities, force);
+        const gitDailySignature = buildGitDailySignature(projects, gitIdentities);
+        const shouldRebuild = shouldRefreshCache(stored, projects, gitDailySignature, force);
         if (shouldRebuild) {
-          const rebuilt = buildHeatmapCache(projects, gitIdentities);
+          const rebuilt = buildHeatmapCache(projects, gitDailySignature);
           setCache(rebuilt);
           await saveHeatmapCache(rebuilt);
         } else {
@@ -85,7 +86,7 @@ export function useHeatmapData(projects: Project[], gitIdentities: GitIdentity[]
 function shouldRefreshCache(
   cache: HeatmapCacheFile,
   projects: Project[],
-  gitIdentities: GitIdentity[],
+  gitDailySignature: string,
   force?: boolean,
 ) {
   if (force) {
@@ -101,14 +102,13 @@ function shouldRefreshCache(
   if (cache.projectCount !== projects.length) {
     return true;
   }
-  const signature = buildGitDailySignature(projects, gitIdentities);
-  if (cache.gitDailySignature !== signature) {
+  if (cache.gitDailySignature !== gitDailySignature) {
     return true;
   }
   return Date.now() - lastUpdated > REFRESH_INTERVAL_MS;
 }
 
-function buildHeatmapCache(projects: Project[], gitIdentities: GitIdentity[]): HeatmapCacheFile {
+function buildHeatmapCache(projects: Project[], gitDailySignature: string): HeatmapCacheFile {
   const dailyActivity: Record<string, HeatmapCacheEntry> = {};
 
   for (const project of projects) {
@@ -137,7 +137,7 @@ function buildHeatmapCache(projects: Project[], gitIdentities: GitIdentity[]): H
     lastUpdated: new Date().toISOString(),
     dailyActivity,
     projectCount: projects.length,
-    gitDailySignature: buildGitDailySignature(projects, gitIdentities),
+    gitDailySignature,
   };
 }
 

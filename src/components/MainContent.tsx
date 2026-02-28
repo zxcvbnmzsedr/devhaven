@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Project, ProjectListViewMode } from "../models/types";
 import type { DateFilter, GitFilter } from "../models/filters";
@@ -18,6 +18,10 @@ import {
   IconSidebarRight,
   IconSquares,
 } from "./Icons";
+
+const LIST_INITIAL_BATCH_SIZE = 60;
+const LIST_BATCH_SIZE = 60;
+const LIST_LOAD_MORE_THRESHOLD = 240;
 
 export type MainContentProps = {
   projects: Project[];
@@ -100,11 +104,21 @@ function MainContent({
   searchInputRef,
 }: MainContentProps) {
   const [notePreviewByPath, setNotePreviewByPath] = useState<Record<string, string>>({});
-  const [isNotesPreviewLoading, setIsNotesPreviewLoading] = useState(false);
-  const previewRequestIdRef = useRef(0);
+  const [renderedListCount, setRenderedListCount] = useState(LIST_INITIAL_BATCH_SIZE);
+  const pendingNotePreviewPathsRef = useRef<Set<string>>(new Set());
+  const notePreviewByPathRef = useRef<Record<string, string>>(notePreviewByPath);
+  const filteredProjectIdsRef = useRef<string[]>([]);
+  const previousViewModeRef = useRef<ProjectListViewMode>(viewMode);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const selectedProjectIds = useMemo(() => Array.from(selectedProjects), [selectedProjects]);
   const selectedProjectIdsRef = useRef(selectedProjectIds);
   selectedProjectIdsRef.current = selectedProjectIds;
+  const selectedProjectsRef = useRef(selectedProjects);
+  selectedProjectsRef.current = selectedProjects;
+  const resolveDragProjectIds = useCallback((projectId: string) => {
+    const nextSelectedProjects = selectedProjectsRef.current;
+    return nextSelectedProjects.has(projectId) ? Array.from(nextSelectedProjects) : [projectId];
+  }, []);
   const bulkTagMenuItems = useMemo(
     () =>
       availableTags.length
@@ -118,53 +132,131 @@ function MainContent({
         : [{ key: "bulk-tag-empty", label: "暂无可用标签", disabled: true }],
     [availableTags, onBulkAssignTagToProjects],
   );
-  const listProjectPaths = useMemo(() => filteredProjects.map((project) => project.path), [filteredProjects]);
-  const listProjectPathsKey = useMemo(() => listProjectPaths.join("\n"), [listProjectPaths]);
+  const renderedListProjects = useMemo(
+    () => filteredProjects.slice(0, renderedListCount),
+    [filteredProjects, renderedListCount],
+  );
+  const hasMoreListProjects = renderedListCount < filteredProjects.length;
+  const loadMoreListProjects = useCallback(() => {
+    setRenderedListCount((current) => {
+      if (current >= filteredProjects.length) {
+        return current;
+      }
+      return Math.min(current + LIST_BATCH_SIZE, filteredProjects.length);
+    });
+  }, [filteredProjects.length]);
+  const listProjectPaths = useMemo(
+    () => (viewMode === "list" ? renderedListProjects.map((project) => project.path) : []),
+    [renderedListProjects, viewMode],
+  );
+  const isNotesPreviewLoading = useMemo(
+    () =>
+      viewMode === "list" &&
+      listProjectPaths.some((path) => notePreviewByPath[path] === undefined),
+    [listProjectPaths, notePreviewByPath, viewMode],
+  );
+  const handleContentScroll = useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      if (viewMode !== "list" || !hasMoreListProjects) {
+        return;
+      }
+      const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+      if (scrollHeight - scrollTop - clientHeight <= LIST_LOAD_MORE_THRESHOLD) {
+        loadMoreListProjects();
+      }
+    },
+    [hasMoreListProjects, loadMoreListProjects, viewMode],
+  );
+
+  useEffect(() => {
+    notePreviewByPathRef.current = notePreviewByPath;
+  }, [notePreviewByPath]);
+
+  useEffect(() => {
+    const wasListMode = previousViewModeRef.current === "list";
+    previousViewModeRef.current = viewMode;
+    if (viewMode !== "list") {
+      return;
+    }
+    const nextProjectIds = filteredProjects.map((project) => project.id);
+    const previousProjectIds = filteredProjectIdsRef.current;
+    const projectIdsChanged =
+      nextProjectIds.length !== previousProjectIds.length ||
+      nextProjectIds.some((projectId, index) => projectId !== previousProjectIds[index]);
+    if (!projectIdsChanged && wasListMode) {
+      return;
+    }
+    // 仅在列表首次进入或项目 ID 真实变化时重置批次，避免无效重算。
+    filteredProjectIdsRef.current = nextProjectIds;
+    setRenderedListCount(Math.min(filteredProjects.length, LIST_INITIAL_BATCH_SIZE));
+  }, [filteredProjects, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "list" || !hasMoreListProjects) {
+      return;
+    }
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    if (container.scrollHeight - container.clientHeight <= LIST_LOAD_MORE_THRESHOLD) {
+      loadMoreListProjects();
+    }
+  }, [hasMoreListProjects, loadMoreListProjects, renderedListCount, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "list") {
       return;
     }
     if (listProjectPaths.length === 0) {
-      setNotePreviewByPath({});
-      setIsNotesPreviewLoading(false);
       return;
     }
 
-    const requestId = previewRequestIdRef.current + 1;
-    previewRequestIdRef.current = requestId;
-    setIsNotesPreviewLoading(true);
+    const missingPaths = listProjectPaths.filter(
+      (path) =>
+        notePreviewByPathRef.current[path] === undefined && !pendingNotePreviewPathsRef.current.has(path),
+    );
+    if (missingPaths.length === 0) {
+      return;
+    }
 
-    void readProjectNotesPreviews(listProjectPaths)
+    for (const path of missingPaths) {
+      pendingNotePreviewPathsRef.current.add(path);
+    }
+
+    void readProjectNotesPreviews(missingPaths)
       .then((entries) => {
-        if (previewRequestIdRef.current !== requestId) {
-          return;
-        }
-        const previews = Object.fromEntries(
-          listProjectPaths.map((path) => [path, "—"]),
-        ) as Record<string, string>;
-
+        const previews = Object.create(null) as Record<string, string>;
         for (const entry of entries) {
           const value = (entry.notesPreview ?? "").trim();
           previews[entry.path] = value || "—";
         }
 
-        setNotePreviewByPath(previews);
+        setNotePreviewByPath((previous) => {
+          const next = { ...previous };
+          for (const path of missingPaths) {
+            next[path] = previews[path] ?? "—";
+          }
+          return next;
+        });
       })
       .catch(() => {
-        if (previewRequestIdRef.current !== requestId) {
-          return;
-        }
-        setNotePreviewByPath(
-          Object.fromEntries(listProjectPaths.map((path) => [path, "—"])) as Record<string, string>,
-        );
+        setNotePreviewByPath((previous) => {
+          const next = { ...previous };
+          for (const path of missingPaths) {
+            if (next[path] === undefined) {
+              next[path] = "—";
+            }
+          }
+          return next;
+        });
       })
       .finally(() => {
-        if (previewRequestIdRef.current === requestId) {
-          setIsNotesPreviewLoading(false);
+        for (const path of missingPaths) {
+          pendingNotePreviewPathsRef.current.delete(path);
         }
       });
-  }, [listProjectPaths, listProjectPathsKey, viewMode]);
+  }, [listProjectPaths, viewMode]);
 
   return (
     <section className="flex min-h-0 min-w-0 flex-col bg-background">
@@ -268,7 +360,7 @@ function MainContent({
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto" ref={scrollContainerRef} onScroll={handleContentScroll}>
         {isLoading ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-secondary-text">
             正在加载项目数据...
@@ -304,15 +396,15 @@ function MainContent({
               <div className="text-left">操作</div>
             </div>
             <div className="overflow-hidden rounded-xl border border-card-border bg-card-bg">
-              {filteredProjects.map((project) => (
+              {renderedListProjects.map((project) => (
                 <ProjectListRow
                   key={project.id}
                   project={project}
                   isSelected={selectedProjects.has(project.id)}
                   isFavorite={favoriteProjectPaths.has(project.path)}
-                  selectedProjectIds={selectedProjects}
+                  resolveDragProjectIds={resolveDragProjectIds}
                   notePreview={notePreviewByPath[project.path] ?? (isNotesPreviewLoading ? "加载中..." : "—")}
-                  onSelect={(event) => onSelectProject(project, event)}
+                  onSelectProject={onSelectProject}
                   onOpenTerminal={onOpenTerminal}
                   onRunProjectScript={onRunProjectScript}
                   onRefreshProject={onRefreshProject}
@@ -331,8 +423,8 @@ function MainContent({
                 project={project}
                 isSelected={selectedProjects.has(project.id)}
                 isFavorite={favoriteProjectPaths.has(project.path)}
-                selectedProjectIds={selectedProjects}
-                onSelect={(event) => onSelectProject(project, event)}
+                resolveDragProjectIds={resolveDragProjectIds}
+                onSelectProject={onSelectProject}
                 onOpenTerminal={onOpenTerminal}
                 onRunProjectScript={onRunProjectScript}
                 onTagClick={onTagSelected}

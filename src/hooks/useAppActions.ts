@@ -306,15 +306,23 @@ export function useAppActions({
     [addTag, renameTag, setTagColor, setTagDialogState, tagDialogState],
   );
 
+  const tagsByName = useMemo(() => {
+    const map = new Map<string, TagData>();
+    appState.tags.forEach((tag) => {
+      map.set(tag.name, tag);
+    });
+    return map;
+  }, [appState.tags]);
+
   const getTagColor = useCallback(
     (tagName: string) => {
-      const tag = appState.tags.find((item) => item.name === tagName);
+      const tag = tagsByName.get(tagName);
       if (tag) {
         return colorDataToHex(tag.color, pickColorForTag(tagName));
       }
       return pickColorForTag(tagName);
     },
-    [appState.tags],
+    [tagsByName],
   );
 
   const getTagHex = useCallback((color?: ColorData) => {

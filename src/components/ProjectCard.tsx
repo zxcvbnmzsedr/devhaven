@@ -11,8 +11,8 @@ export type ProjectCardProps = {
   project: Project;
   isSelected: boolean;
   isFavorite: boolean;
-  selectedProjectIds: Set<string>;
-  onSelect: (event: React.MouseEvent<HTMLDivElement>) => void;
+  resolveDragProjectIds: (projectId: string) => string[];
+  onSelectProject: (project: Project, event: React.MouseEvent<HTMLDivElement>) => void;
   onOpenTerminal: (project: Project) => void;
   onRunProjectScript: (projectId: string, scriptId: string) => Promise<void>;
   onTagClick: (tag: string) => void;
@@ -38,8 +38,8 @@ function ProjectCard({
   project,
   isSelected,
   isFavorite,
-  selectedProjectIds,
-  onSelect,
+  resolveDragProjectIds,
+  onSelectProject,
   onOpenTerminal,
   onRunProjectScript,
   onTagClick,
@@ -105,13 +105,17 @@ function ProjectCard({
 
   const handleDragStart = useCallback(
     (event: React.DragEvent<HTMLDivElement>) => {
-      const ids = selectedProjectIds.has(project.id)
-        ? Array.from(selectedProjectIds)
-        : [project.id];
+      const ids = resolveDragProjectIds(project.id);
       event.dataTransfer.setData("application/x-project-ids", JSON.stringify(ids));
       event.dataTransfer.effectAllowed = "copy";
     },
-    [selectedProjectIds, project.id],
+    [project.id, resolveDragProjectIds],
+  );
+  const handleSelect = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      onSelectProject(project, event);
+    },
+    [onSelectProject, project],
   );
 
   const handleActionClick = useCallback((event: React.MouseEvent, action: () => void) => {
@@ -122,7 +126,7 @@ function ProjectCard({
   return (
     <div
       className={`card ${isSelected ? "card-selected" : "hover:bg-card-hover"}`}
-      onClick={onSelect}
+      onClick={handleSelect}
       onDoubleClick={() => onOpenTerminal(project)}
       draggable
       onDragStart={handleDragStart}
@@ -160,30 +164,33 @@ function ProjectCard({
         )}
       </div>
       <div className="project-card-tags flex flex-nowrap gap-1.5 overflow-x-auto pb-0.5">
-        {project.tags.map((tag) => (
-          <span
-            key={tag}
-            className="tag-pill"
-            style={{ background: `${getTagColor(tag)}33`, color: getTagColor(tag) }}
-          >
-            <span onClick={(event) => {
-              event.stopPropagation();
-              onTagClick(tag);
-            }}>
-              {tag}
-            </span>
-            <button
-              className="ml-1.5 inline-flex items-center justify-center text-[12px] opacity-60 hover:opacity-100"
-              onClick={(event) => {
-                event.stopPropagation();
-                onRemoveTag(project.id, tag);
-              }}
-              aria-label={`移除标签 ${tag}`}
+        {project.tags.map((tag) => {
+          const tagColor = getTagColor(tag);
+          return (
+            <span
+              key={tag}
+              className="tag-pill"
+              style={{ background: `${tagColor}33`, color: tagColor }}
             >
-              <IconX size={12} />
-            </button>
-          </span>
-        ))}
+              <span onClick={(event) => {
+                event.stopPropagation();
+                onTagClick(tag);
+              }}>
+                {tag}
+              </span>
+              <button
+                className="ml-1.5 inline-flex items-center justify-center text-[12px] opacity-60 hover:opacity-100"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRemoveTag(project.id, tag);
+                }}
+                aria-label={`移除标签 ${tag}`}
+              >
+                <IconX size={12} />
+              </button>
+            </span>
+          );
+        })}
       </div>
     </div>
   );
