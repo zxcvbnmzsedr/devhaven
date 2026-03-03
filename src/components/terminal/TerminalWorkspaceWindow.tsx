@@ -25,6 +25,17 @@ export type TerminalWorkspaceWindowProps = {
   onDeleteWorktree: (projectId: string, worktreePath: string) => void;
   onRetryWorktree: (projectId: string, worktreePath: string) => void;
   onRefreshWorktrees: (projectId: string) => void;
+  onAddProjectScript: (
+    projectId: string,
+    script: {
+      name: string;
+      start: string;
+      paramSchema?: ProjectScript["paramSchema"];
+      templateParams?: ProjectScript["templateParams"];
+    },
+  ) => Promise<void>;
+  onUpdateProjectScript: (projectId: string, script: ProjectScript) => Promise<void>;
+  onRemoveProjectScript: (projectId: string, scriptId: string) => Promise<void>;
   onExit?: () => void;
   windowLabel: string;
   isVisible: boolean;
@@ -127,6 +138,9 @@ export default function TerminalWorkspaceWindow({
   onDeleteWorktree,
   onRetryWorktree,
   onRefreshWorktrees,
+  onAddProjectScript,
+  onUpdateProjectScript,
+  onRemoveProjectScript,
   onExit,
   windowLabel,
   isVisible,
@@ -405,6 +419,9 @@ export default function TerminalWorkspaceWindow({
                 xtermTheme={terminalThemePreset.xterm}
                 codexRunningCount={codexProjectStatusById[project.id]?.runningCount ?? 0}
                 scripts={project.scripts ?? EMPTY_PROJECT_SCRIPTS}
+                onAddProjectScript={onAddProjectScript}
+                onUpdateProjectScript={onUpdateProjectScript}
+                onRemoveProjectScript={onRemoveProjectScript}
               />
             </div>
           );

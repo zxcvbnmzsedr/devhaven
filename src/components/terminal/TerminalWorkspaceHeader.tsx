@@ -1,7 +1,9 @@
+import { useEffect, useRef, useState } from "react";
+
 import type { ScriptExecutionState } from "../../hooks/useQuickCommandRuntime";
 import type { TerminalRightSidebarTab, TerminalTab } from "../../models/terminal";
 import type { ProjectScript } from "../../models/types";
-import { IconFolder, IconGitBranch } from "../Icons";
+import { IconFolder, IconGitBranch, IconMoreHorizontal } from "../Icons";
 import TerminalTabs from "./TerminalTabs";
 
 type TerminalWorkspaceHeaderProps = {
@@ -16,9 +18,12 @@ type TerminalWorkspaceHeaderProps = {
   quickCommandMessage: string | null;
   runDisabled: boolean;
   stopDisabled: boolean;
+  scriptActionsDisabled: boolean;
   tabs: TerminalTab[];
   activeTabId: string;
   onSelectScript: (scriptId: string) => void;
+  onEditScript: () => void;
+  onDeleteScript: () => void;
   onRunScript: () => void;
   onStopScript: () => void;
   onToggleRightSidebar: () => void;
@@ -39,9 +44,12 @@ export default function TerminalWorkspaceHeader({
   quickCommandMessage,
   runDisabled,
   stopDisabled,
+  scriptActionsDisabled,
   tabs,
   activeTabId,
   onSelectScript,
+  onEditScript,
+  onDeleteScript,
   onRunScript,
   onStopScript,
   onToggleRightSidebar,
@@ -49,6 +57,39 @@ export default function TerminalWorkspaceHeader({
   onNewTab,
   onCloseTab,
 }: TerminalWorkspaceHeaderProps) {
+  const [scriptActionsOpen, setScriptActionsOpen] = useState(false);
+  const scriptActionsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!scriptActionsOpen) {
+      return;
+    }
+    const handleMouseDown = (event: MouseEvent) => {
+      if (scriptActionsRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setScriptActionsOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setScriptActionsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [scriptActionsOpen]);
+
+  useEffect(() => {
+    if (!scriptActionsDisabled) {
+      return;
+    }
+    setScriptActionsOpen(false);
+  }, [scriptActionsDisabled]);
+
   const statusText =
     selectedScriptState === "stoppingHard"
       ? "强制停止中"
@@ -106,6 +147,41 @@ export default function TerminalWorkspaceHeader({
               </option>
             ))}
           </select>
+        </div>
+        <div className="relative" ref={scriptActionsRef}>
+          <button
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-[var(--terminal-divider)] bg-transparent text-[var(--terminal-muted-fg)] transition-colors duration-150 hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] disabled:cursor-not-allowed disabled:opacity-50"
+            type="button"
+            title={scriptActionsDisabled ? "暂无可操作配置" : "配置操作"}
+            onClick={() => setScriptActionsOpen((prev) => !prev)}
+            disabled={scriptActionsDisabled}
+          >
+            <IconMoreHorizontal size={14} />
+          </button>
+          {scriptActionsOpen ? (
+            <div className="absolute right-0 top-full z-20 mt-1.5 min-w-[160px] rounded-md border border-[var(--terminal-divider)] bg-[var(--terminal-panel-bg)] p-1 shadow-[0_8px_24px_rgba(0,0,0,0.28)]">
+              <button
+                type="button"
+                className="flex w-full items-center rounded-md px-2 py-1.5 text-left text-[12px] text-[var(--terminal-fg)] transition-colors hover:bg-[var(--terminal-hover-bg)]"
+                onClick={() => {
+                  setScriptActionsOpen(false);
+                  onEditScript();
+                }}
+              >
+                编辑配置...
+              </button>
+              <button
+                type="button"
+                className="mt-1 flex w-full items-center rounded-md px-2 py-1.5 text-left text-[12px] text-[rgba(239,68,68,0.95)] transition-colors hover:bg-[rgba(239,68,68,0.15)]"
+                onClick={() => {
+                  setScriptActionsOpen(false);
+                  onDeleteScript();
+                }}
+              >
+                删除当前配置
+              </button>
+            </div>
+          ) : null}
         </div>
         {quickCommandMessage ? (
           <span

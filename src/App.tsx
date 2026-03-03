@@ -387,6 +387,9 @@ function AppLayout() {
               onDeleteWorktree={handleTerminalDeleteWorktree}
               onRetryWorktree={handleTerminalRetryWorktree}
               onRefreshWorktrees={handleTerminalRefreshWorktrees}
+              onAddProjectScript={addProjectScript}
+              onUpdateProjectScript={updateProjectScript}
+              onRemoveProjectScript={removeProjectScript}
               onExit={handleTerminalExit}
               windowLabel={MAIN_WINDOW_LABEL}
               isVisible={terminal.showTerminalWorkspace}
