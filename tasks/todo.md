@@ -279,3 +279,17 @@
 - Web API 采用“命令分发 + 事件总线”模式，优先保证兼容性与最小迁移面，避免前端重写业务逻辑。
 - 事件链路已打通（terminal/quick command/worktree/codex/interaction），浏览器可实时消费后端状态变化。
 - 在“局域网访问 + 无鉴权”前提下，新增了路径范围校验作为最低限度防护，但多客户端事件隔离仍有后续优化空间。
+
+---
+
+# 2.8.0 发版任务清单
+
+- [x] 升级应用版本到 `2.8.0`（`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json`）
+- [x] 补充 `v2.8.0` release 说明文档（`docs/releases/v2.8.0.md`）
+- [x] 执行发版前验证并记录结果
+- [x] 提交发版变更、创建 `v2.8.0` tag 并 push
+
+## Review
+- 版本号已在前端与 Tauri/Rust 侧统一升级到 `2.8.0`，确保构建产物与发布标签一致。
+- 发版前验证通过：`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml --locked`。
+- 发布文档已新增 `docs/releases/v2.8.0.md`，可直接作为 GitHub Release 文案基础。
