@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
-import { confirm } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
+import { listenEvent } from "../platform/eventClient";
 
 import type { WorktreeCreateSubmitPayload, WorktreeCreateSubmitResult } from "../components/terminal/WorktreeCreateDialog";
 import type { Project, ProjectWorktree } from "../models/types";
@@ -25,6 +24,7 @@ import {
   resolveErrorMessage,
   resolveNameFromPath,
 } from "../utils/worktreeHelpers";
+import { confirmRuntime } from "../platform/runtime";
 
 type UseWorktreeManagerParams = {
   projects: Project[];
@@ -314,7 +314,7 @@ export function useWorktreeManager({
     let unlisten: (() => void) | null = null;
     const register = async () => {
       try {
-        unlisten = await listen<InteractionLockState>("interaction-lock", (event) => {
+        unlisten = await listenEvent<InteractionLockState>("interaction-lock", (event) => {
           if (!event.payload.locked) {
             recoverOnLockReleaseRef.current();
           }
@@ -539,7 +539,7 @@ export function useWorktreeManager({
       };
 
       const confirmRemoveRecordOnly = async () => {
-        const removeOnly = await confirm("是否仅从 DevHaven 列表中移除该 worktree 记录？（不会执行 Git 删除）", {
+        const removeOnly = await confirmRuntime("是否仅从 DevHaven 列表中移除该 worktree 记录？（不会执行 Git 删除）", {
           title: "移除 worktree 记录",
           kind: "warning",
           okLabel: "移除记录",
@@ -555,7 +555,7 @@ export function useWorktreeManager({
         return;
       }
 
-      const confirmed = await confirm(
+      const confirmed = await confirmRuntime(
         `确定要删除该 worktree 吗？\n\n分支：${worktree.branch}\n路径：${worktree.path}\n\n将执行 git worktree remove 并删除该目录${shouldDeleteManagedBranch ? "，并删除对应本地分支" : ""}。`,
         {
           title: "删除 worktree",
@@ -583,7 +583,7 @@ export function useWorktreeManager({
         });
       } catch (error) {
         const message = resolveErrorMessage(error);
-        const forceConfirmed = await confirm(`删除失败：${message || "未知错误"}\n\n是否尝试"强制删除"？（可能丢失未提交修改）`, {
+        const forceConfirmed = await confirmRuntime(`删除失败：${message || "未知错误"}\n\n是否尝试"强制删除"？（可能丢失未提交修改）`, {
           title: "删除 worktree",
           kind: "warning",
           okLabel: "强制删除",

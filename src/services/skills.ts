@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "../platform/commandClient";
 
 import type {
   GlobalSkillInstallRequest,
@@ -9,19 +9,19 @@ import type {
 
 /** 读取全局 Skills 列表（聚合 ~/.agents 与各 Agent 全局目录）。 */
 export async function listGlobalSkills(): Promise<GlobalSkillsSnapshot> {
-  return invoke<GlobalSkillsSnapshot>("list_global_skills");
+  return invokeCommand<GlobalSkillsSnapshot>("list_global_skills");
 }
 
 /** 安装全局 Skill（由后端内置安装流程执行）。 */
 export async function installGlobalSkill(
   request: GlobalSkillInstallRequest,
 ): Promise<GlobalSkillInstallResult> {
-  return invoke<GlobalSkillInstallResult>("install_global_skill", { request });
+  return invokeCommand<GlobalSkillInstallResult>("install_global_skill", { request });
 }
 
 /** 从指定 Agent 卸载全局 Skill。 */
 export async function uninstallGlobalSkill(
   request: GlobalSkillUninstallRequest,
 ): Promise<GlobalSkillInstallResult> {
-  return invoke<GlobalSkillInstallResult>("uninstall_global_skill", { request });
+  return invokeCommand<GlobalSkillInstallResult>("uninstall_global_skill", { request });
 }

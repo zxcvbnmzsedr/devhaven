@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
+use crate::web_event_bus;
+
 pub const QUICK_COMMAND_EVENT: &str = "quick-command-event";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -200,9 +202,10 @@ pub fn quick_command_snapshot(state: State<QuickCommandManager>) -> QuickCommand
 
 /// 向前端广播 quick command 事件。
 pub fn emit_quick_command_event(app_handle: &AppHandle, event: QuickCommandEvent) {
-    if let Err(error) = app_handle.emit(QUICK_COMMAND_EVENT, event) {
+    if let Err(error) = app_handle.emit(QUICK_COMMAND_EVENT, event.clone()) {
         log::warn!("发送 quick-command-event 失败: {}", error);
     }
+    web_event_bus::publish(QUICK_COMMAND_EVENT, &event);
 }
 
 impl QuickCommandManager {

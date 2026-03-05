@@ -157,8 +157,8 @@ fn should_skip_recursive_dir(name: &std::ffi::OsStr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
+        CachedGitInfo, GIT_INFO_CACHE_MAX_SIZE, GIT_INFO_CACHE_PRUNE_TARGET_SIZE, GitInfo,
         build_projects, load_git_info, prune_git_info_cache_entries, scan_directory_with_git,
-        CachedGitInfo, GitInfo, GIT_INFO_CACHE_MAX_SIZE, GIT_INFO_CACHE_PRUNE_TARGET_SIZE,
     };
     use crate::time_utils::unix_to_swift;
     use std::collections::HashMap;

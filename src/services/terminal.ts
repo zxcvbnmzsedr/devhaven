@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type Event as TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
+import { invokeCommand } from "../platform/commandClient";
+import { listenEvent } from "../platform/eventClient";
 
 export type TerminalCreateRequest = {
   projectPath: string;
@@ -26,6 +26,7 @@ export type TerminalExitPayload = {
 };
 
 type TerminalEventHandler<TPayload> = (event: { payload: TPayload }) => void;
+type UnlistenFn = () => void;
 
 function createSharedTerminalEventListener<TPayload>(eventName: string) {
   let nextHandlerId = 0;
@@ -47,7 +48,7 @@ function createSharedTerminalEventListener<TPayload>(eventName: string) {
     unlistenBase();
   };
 
-  const dispatch = (event: TauriEvent<TPayload>) => {
+  const dispatch = (event: { payload: TPayload }) => {
     for (const handler of handlers.values()) {
       try {
         handler(event);
@@ -63,7 +64,7 @@ function createSharedTerminalEventListener<TPayload>(eventName: string) {
     }
 
     if (!baseSubscriptionPromise) {
-      baseSubscriptionPromise = listen<TPayload>(eventName, dispatch)
+      baseSubscriptionPromise = listenEvent<TPayload>(eventName, dispatch)
         .then((unlisten) => {
           baseUnlisten = unlisten;
           baseSubscriptionPromise = null;
@@ -114,19 +115,19 @@ const registerTerminalExitHandler = createSharedTerminalEventListener<TerminalEx
 );
 
 export async function createTerminalSession(request: TerminalCreateRequest): Promise<TerminalCreateResult> {
-  return invoke<TerminalCreateResult>("terminal_create_session", request);
+  return invokeCommand<TerminalCreateResult>("terminal_create_session", request);
 }
 
 export async function writeTerminal(ptyId: string, data: string): Promise<void> {
-  await invoke("terminal_write", { ptyId, data });
+  await invokeCommand("terminal_write", { ptyId, data });
 }
 
 export async function resizeTerminal(ptyId: string, cols: number, rows: number): Promise<void> {
-  await invoke("terminal_resize", { ptyId, cols, rows });
+  await invokeCommand("terminal_resize", { ptyId, cols, rows });
 }
 
 export async function killTerminal(ptyId: string): Promise<void> {
-  await invoke("terminal_kill", { ptyId });
+  await invokeCommand("terminal_kill", { ptyId });
 }
 
 export async function listenTerminalOutput(

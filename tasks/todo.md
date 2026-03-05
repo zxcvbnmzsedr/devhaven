@@ -259,3 +259,23 @@
 - 版本号已在前端、Tauri 配置与 Rust manifest/lock 四处同步到 `2.7.2`，保证本地构建与 CI/release 版本一致。
 - 发版前验证通过：`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml --locked`。
 - release 流水线执行成功（ubuntu/macos/windows 三平台均成功），并已同步补齐 `v2.7.2` 发布说明。
+
+---
+
+# Web 化改造（浏览器可用）任务清单
+
+- [x] 新增前端运行时桥接层：`src/platform/runtime.ts`、`src/platform/commandClient.ts`、`src/platform/eventClient.ts`
+- [x] 前端 services 改造为统一命令/事件通道（Tauri invoke/listen 与 Web HTTP/WS 自动切换）
+- [x] 新增 Rust Web 服务：`src-tauri/src/web_server.rs`（`/api/health`、`/api/cmd/:command`、`/api/ws`）
+- [x] 新增 Web 事件总线：`src-tauri/src/web_event_bus.rs`，并镜像 quick-command/terminal/worktree/interaction/codex 事件
+- [x] 浏览器兼容兜底：目录选择、confirm、openUrl/openPath、版本/home 读取、terminal window 行为降级
+- [x] 新增 `resolve_home_dir` command，修复 Web 模式 `~` 路径展开
+- [x] 增加 Web API 路径范围校验（受管目录 + 已加载项目/worktree + `~/.devhaven`）
+- [x] 文档回写：更新 `AGENTS.md` 的双端架构与 Web 功能地图
+- [x] 构建与回归验证：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml codex_monitor -- --nocapture`、`cargo test --manifest-path src-tauri/Cargo.toml project_loader -- --nocapture`
+
+## Review
+- 本次完成“同仓双端并行”：桌面端能力不回退，浏览器端通过统一桥接层直接复用现有 command 语义。
+- Web API 采用“命令分发 + 事件总线”模式，优先保证兼容性与最小迁移面，避免前端重写业务逻辑。
+- 事件链路已打通（terminal/quick command/worktree/codex/interaction），浏览器可实时消费后端状态变化。
+- 在“局域网访问 + 无鉴权”前提下，新增了路径范围校验作为最低限度防护，但多客户端事件隔离仍有后续优化空间。

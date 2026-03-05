@@ -1,9 +1,11 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { getVersion } from "@tauri-apps/api/app";
-import { homeDir } from "@tauri-apps/api/path";
-import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type { AppSettings, GitIdentity } from "../models/types";
+import {
+  getAppVersionRuntime,
+  getHomeDirRuntime,
+  openUrlRuntime,
+} from "../platform/runtime";
 import { openInFinder } from "../services/system";
 import { checkForUpdates } from "../services/update";
 import {
@@ -23,6 +25,7 @@ type UpdateState =
   | { status: "error"; message: string; currentVersion?: string };
 
 const DEFAULT_SHARED_SCRIPTS_ROOT = "~/.devhaven/scripts";
+const DEFAULT_VITE_DEV_PORT = 1420;
 const BUTTON_FOCUS_RING_CLASS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2";
 const INPUT_CLASS =
@@ -37,7 +40,7 @@ type SettingsCategory = {
 };
 
 const SETTINGS_CATEGORIES: SettingsCategory[] = [
-  { id: "general", label: "常规", description: "应用更新与版本信息。" },
+  { id: "general", label: "常规", description: "应用更新、版本与浏览器访问配置。" },
   { id: "terminal", label: "终端", description: "终端渲染与主题显示设置。" },
   { id: "scripts", label: "脚本", description: "管理通用脚本清单、参数与脚本文件。" },
   { id: "workflow", label: "协作", description: "Git 身份与提交配置。" },
@@ -58,6 +61,19 @@ function canonicalizeTerminalThemeSetting(setting: string | null | undefined): s
     return `light:${light},dark:${dark}`;
   }
   return getTerminalThemePresetByName(parsed.name).name;
+}
+
+function normalizeViteDevPort(port: number | string | null | undefined): number {
+  const candidate =
+    typeof port === "number"
+      ? port
+      : typeof port === "string"
+        ? Number.parseInt(port.trim(), 10)
+        : Number.NaN;
+  if (!Number.isInteger(candidate) || candidate < 1 || candidate > 65535) {
+    return DEFAULT_VITE_DEV_PORT;
+  }
+  return candidate;
 }
 
 export type SettingsModalProps = {
@@ -84,6 +100,7 @@ export default function SettingsModal({
   const [terminalDarkTheme, setTerminalDarkTheme] = useState("iTerm2 Solarized Dark");
   const [versionLabel, setVersionLabel] = useState("");
   const [updateState, setUpdateState] = useState<UpdateState>({ status: "idle" });
+  const [viteDevPortInput, setViteDevPortInput] = useState(() => String(settings.viteDevPort));
   const [isSaving, setIsSaving] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [activeCategoryId, setActiveCategoryId] = useState<SettingsCategoryId>("general");
@@ -107,6 +124,7 @@ export default function SettingsModal({
     () => settings.sharedScriptsRoot?.trim() || DEFAULT_SHARED_SCRIPTS_ROOT,
     [settings.sharedScriptsRoot],
   );
+  const normalizedViteDevPort = useMemo(() => normalizeViteDevPort(viteDevPortInput), [viteDevPortInput]);
   const nextSettings = useMemo<AppSettings>(
     () => ({
       ...settings,
@@ -114,6 +132,7 @@ export default function SettingsModal({
       terminalTheme: terminalThemeSetting,
       gitIdentities: normalizedGitIdentities,
       sharedScriptsRoot,
+      viteDevPort: normalizedViteDevPort,
     }),
     [
       normalizedGitIdentities,
@@ -121,6 +140,7 @@ export default function SettingsModal({
       terminalThemeSetting,
       terminalUseWebglRenderer,
       sharedScriptsRoot,
+      normalizedViteDevPort,
     ],
   );
   const isDirty = useMemo(() => {
@@ -131,7 +151,8 @@ export default function SettingsModal({
       canonicalizeTerminalThemeSetting(nextSettings.terminalTheme) ===
         canonicalizeTerminalThemeSetting(settings.terminalTheme) &&
       nextSettings.sharedScriptsRoot ===
-        (settings.sharedScriptsRoot?.trim() || DEFAULT_SHARED_SCRIPTS_ROOT)
+        (settings.sharedScriptsRoot?.trim() || DEFAULT_SHARED_SCRIPTS_ROOT) &&
+      nextSettings.viteDevPort === normalizeViteDevPort(settings.viteDevPort)
     );
   }, [nextSettings, settings]);
 
@@ -147,10 +168,12 @@ export default function SettingsModal({
       setTerminalFollowSystem(false);
       setTerminalSingleTheme(getTerminalThemePresetByName(parsedTerminalTheme.name).name);
     }
+    setViteDevPortInput(String(settings.viteDevPort));
   }, [
     settings.gitIdentities,
     settings.terminalUseWebglRenderer,
     settings.terminalTheme,
+    settings.viteDevPort,
   ]);
 
   const handleAddGitIdentity = () => {
@@ -179,7 +202,7 @@ export default function SettingsModal({
 
   useEffect(() => {
     let active = true;
-    getVersion()
+    getAppVersionRuntime()
       .then((version) => {
         if (active) {
           setVersionLabel(version);
@@ -245,7 +268,7 @@ export default function SettingsModal({
       return;
     }
     try {
-      await openUrl(updateState.url);
+      await openUrlRuntime(updateState.url);
     } catch (error) {
       console.error("打开发布页面失败。", error);
     }
@@ -292,6 +315,28 @@ export default function SettingsModal({
               ) : null}
             </div>
             <UpdateStatusLine state={updateState} />
+          </SettingsSectionCard>
+
+          <SettingsSectionCard
+            title="浏览器访问端口"
+            description="用于浏览器访问 DevHaven 的端口（开发态重启 dev 生效，打包后重启应用生效）。"
+          >
+            <label className="flex flex-col gap-1.5 text-[13px] text-secondary-text md:max-w-[220px]">
+              <span>端口</span>
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                className={INPUT_CLASS}
+                value={viteDevPortInput}
+                placeholder={String(DEFAULT_VITE_DEV_PORT)}
+                onChange={(event) => setViteDevPortInput(event.target.value)}
+                onBlur={() => setViteDevPortInput(String(normalizedViteDevPort))}
+              />
+            </label>
+            <div className="text-fs-caption text-secondary-text">
+              保存后会提示重启；开发态重启 dev，打包后重启应用即可生效。
+            </div>
           </SettingsSectionCard>
         </div>
       );
@@ -614,7 +659,7 @@ function SettingsSectionCard({ title, description, children }: SettingsSectionCa
 
 type SettingsToggleRowProps = {
   title: string;
-  description: string;
+  description?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 };
@@ -624,7 +669,7 @@ function SettingsToggleRow({ title, description, checked, onChange }: SettingsTo
     <div className="flex items-start justify-between gap-3 rounded-lg border border-border bg-card-bg px-3 py-2.5">
       <div className="min-w-0">
         <div className="text-[13px] font-medium text-text">{title}</div>
-        <div className="mt-1 text-fs-caption text-secondary-text">{description}</div>
+        {description ? <div className="mt-1 text-fs-caption text-secondary-text">{description}</div> : null}
       </div>
       <button
         type="button"
@@ -650,11 +695,11 @@ function SettingsToggleRow({ title, description, checked, onChange }: SettingsTo
 }
 
 async function resolveHomePath(path: string): Promise<string> {
+  const homePath = (await getHomeDirRuntime()).replace(/[\\/]+$/, "");
   if (path === "~") {
-    return (await homeDir()).replace(/[\\/]+$/, "");
+    return homePath;
   }
   if (path.startsWith("~/") || path.startsWith("~\\")) {
-    const homePath = (await homeDir()).replace(/[\\/]+$/, "");
     return `${homePath}/${path.slice(2)}`;
   }
   return path;

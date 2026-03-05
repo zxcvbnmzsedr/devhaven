@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "../platform/commandClient";
 
 export type InteractionLockState = {
   locked: boolean;
@@ -6,6 +6,6 @@ export type InteractionLockState = {
 };
 
 export async function getInteractionLockState(): Promise<InteractionLockState> {
-  return invoke<InteractionLockState>("get_interaction_lock_state");
+  return invokeCommand<InteractionLockState>("get_interaction_lock_state");
 }
 

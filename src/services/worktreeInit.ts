@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invokeCommand } from "../platform/commandClient";
+import { listenEvent } from "../platform/eventClient";
 
 export const WORKTREE_INIT_CLIENT_LOCK_EVENT = "worktree-init-client-lock";
 
@@ -103,7 +103,7 @@ export type WorktreeInitJobStatus = {
 export async function worktreeInitStart(
   request: WorktreeInitStartRequest,
 ): Promise<WorktreeInitStartResult> {
-  return invoke<WorktreeInitStartResult>("worktree_init_start", { request });
+  return invokeCommand<WorktreeInitStartResult>("worktree_init_start", { request });
 }
 
 export async function worktreeInitCreate(
@@ -126,7 +126,7 @@ export async function worktreeInitCreate(
   }
 
   try {
-    return await invoke<WorktreeInitStartResult>("worktree_init_create", { request });
+    return await invokeCommand<WorktreeInitStartResult>("worktree_init_create", { request });
   } catch (error) {
     if (typeof window !== "undefined") {
       window.dispatchEvent(
@@ -166,7 +166,7 @@ export async function worktreeInitCreateBlocking(
   }
 
   try {
-    return await invoke<WorktreeInitCreateBlockingResult>("worktree_init_create_blocking", { request });
+    return await invokeCommand<WorktreeInitCreateBlockingResult>("worktree_init_create_blocking", { request });
   } finally {
     if (typeof window !== "undefined") {
       window.dispatchEvent(
@@ -184,11 +184,11 @@ export async function worktreeInitCreateBlocking(
 }
 
 export async function worktreeInitCancel(jobId: string): Promise<WorktreeInitCancelResult> {
-  return invoke<WorktreeInitCancelResult>("worktree_init_cancel", { jobId });
+  return invokeCommand<WorktreeInitCancelResult>("worktree_init_cancel", { jobId });
 }
 
 export async function worktreeInitRetry(jobId: string): Promise<WorktreeInitStartResult> {
-  return invoke<WorktreeInitStartResult>("worktree_init_retry", {
+  return invokeCommand<WorktreeInitStartResult>("worktree_init_retry", {
     request: { jobId },
   });
 }
@@ -197,7 +197,7 @@ export async function worktreeInitStatus(query?: {
   projectId?: string;
   projectPath?: string;
 }): Promise<WorktreeInitJobStatus[]> {
-  return invoke<WorktreeInitJobStatus[]>("worktree_init_status", {
+  return invokeCommand<WorktreeInitJobStatus[]>("worktree_init_status", {
     query: query ?? null,
   });
 }
@@ -205,5 +205,5 @@ export async function worktreeInitStatus(query?: {
 export async function listenWorktreeInitProgress(
   handler: (event: { payload: WorktreeInitProgressPayload }) => void,
 ) {
-  return listen<WorktreeInitProgressPayload>("worktree-init-progress", handler);
+  return listenEvent<WorktreeInitProgressPayload>("worktree-init-progress", handler);
 }

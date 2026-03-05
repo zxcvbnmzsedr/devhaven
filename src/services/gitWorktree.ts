@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "../platform/commandClient";
 
 export type GitWorktreeAddPayload = {
   path: string;
@@ -39,15 +39,15 @@ export async function gitWorktreeAdd(payload: GitWorktreeAddPayload): Promise<Gi
   if (targetPath) {
     params.targetPath = targetPath;
   }
-  return invoke<GitWorktreeAddResult>("git_worktree_add", params);
+  return invokeCommand<GitWorktreeAddResult>("git_worktree_add", params);
 }
 
 export async function gitWorktreeList(path: string): Promise<GitWorktreeListItem[]> {
-  return invoke<GitWorktreeListItem[]>("git_worktree_list", { path });
+  return invokeCommand<GitWorktreeListItem[]>("git_worktree_list", { path });
 }
 
 export async function gitWorktreeRemove(payload: GitWorktreeRemovePayload): Promise<void> {
-  await invoke("git_worktree_remove", {
+  await invokeCommand("git_worktree_remove", {
     path: payload.path,
     worktreePath: payload.worktreePath,
     force: payload.force ?? false,
@@ -55,7 +55,7 @@ export async function gitWorktreeRemove(payload: GitWorktreeRemovePayload): Prom
 }
 
 export async function gitDeleteBranch(payload: GitDeleteBranchPayload): Promise<void> {
-  await invoke("git_delete_branch", {
+  await invokeCommand("git_delete_branch", {
     path: payload.path,
     branch: payload.branch,
     force: payload.force ?? false,

@@ -11,6 +11,8 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
+use crate::web_event_bus;
+
 const TERMINAL_OUTPUT_EVENT: &str = "terminal-output";
 const TERMINAL_EXIT_EVENT: &str = "terminal-exit";
 const TERMINAL_OUTPUT_BATCH_MS: u64 = 8;
@@ -95,6 +97,8 @@ pub struct TerminalCreateResult {
 struct TerminalOutputPayload {
     session_id: String,
     data: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_label: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -102,6 +106,8 @@ struct TerminalOutputPayload {
 struct TerminalExitPayload {
     session_id: String,
     code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_label: Option<String>,
 }
 
 fn emit_terminal_output(
@@ -114,14 +120,14 @@ fn emit_terminal_output(
         return;
     }
 
-    let _ = app_handle.emit_to(
-        window_label,
-        TERMINAL_OUTPUT_EVENT,
-        TerminalOutputPayload {
-            session_id: session_id.to_string(),
-            data: std::mem::take(data),
-        },
-    );
+    let payload = TerminalOutputPayload {
+        session_id: session_id.to_string(),
+        data: std::mem::take(data),
+        window_label: Some(window_label.to_string()),
+    };
+
+    let _ = app_handle.emit_to(window_label, TERMINAL_OUTPUT_EVENT, payload.clone());
+    web_event_bus::publish(TERMINAL_OUTPUT_EVENT, &payload);
 }
 
 fn default_shell() -> String {
@@ -413,8 +419,7 @@ pub fn terminal_create_session(
                     let should_flush_by_time = batch_started_at
                         .map(|started| started.elapsed() >= batch_window)
                         .unwrap_or(false);
-                    let should_flush_by_size =
-                        batch_data.len() >= TERMINAL_OUTPUT_BATCH_MAX_BYTES;
+                    let should_flush_by_size = batch_data.len() >= TERMINAL_OUTPUT_BATCH_MAX_BYTES;
 
                     // 高吞吐下除了 8ms 窗口，还按字节阈值强制 flush，避免单批过大。
                     if should_flush_by_time || should_flush_by_size {
@@ -455,14 +460,17 @@ pub fn terminal_create_session(
             Err(_) => None,
         };
 
+        let payload = TerminalExitPayload {
+            session_id: session_id_for_output.clone(),
+            code: exit_code,
+            window_label: Some(window_label_for_output.clone()),
+        };
         let _ = app_handle.emit_to(
             &window_label_for_output,
             TERMINAL_EXIT_EVENT,
-            TerminalExitPayload {
-                session_id: session_id_for_output.clone(),
-                code: exit_code,
-            },
+            payload.clone(),
         );
+        web_event_bus::publish(TERMINAL_EXIT_EVENT, &payload);
         if let Ok(mut sessions) = sessions_map.lock() {
             sessions.remove(&pty_id_for_output);
         }

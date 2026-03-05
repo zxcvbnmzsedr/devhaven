@@ -2,9 +2,10 @@ import type { CommandPaletteItem } from "../components/CommandPalette";
 import type { CodexMonitorSession, CodexSessionView } from "../models/codex";
 import type { Project, ProjectWorktree } from "../models/types";
 import { jsDateToSwiftDate } from "../models/types";
+import { resolveRuntimeWindowLabel } from "../platform/runtime";
 import type { GitWorktreeListItem } from "../services/gitWorktree";
 
-export const MAIN_WINDOW_LABEL = "main";
+export const MAIN_WINDOW_LABEL = resolveRuntimeWindowLabel();
 
 export type CommandPaletteAction = CommandPaletteItem & {
   searchText: string;

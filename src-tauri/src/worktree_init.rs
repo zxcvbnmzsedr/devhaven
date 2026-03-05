@@ -12,6 +12,7 @@ use crate::models::{
     WorktreeInitRetryRequest, WorktreeInitStartRequest, WorktreeInitStartResult,
     WorktreeInitStatusQuery, WorktreeInitStep,
 };
+use crate::web_event_bus;
 use crate::worktree_setup;
 
 pub const WORKTREE_INIT_PROGRESS_EVENT: &str = "worktree-init-progress";
@@ -190,9 +191,10 @@ impl WorktreeInitState {
                     error: None,
                 }
             };
-            if let Err(error) = app.emit(WORKTREE_INIT_PROGRESS_EVENT, payload) {
+            if let Err(error) = app.emit(WORKTREE_INIT_PROGRESS_EVENT, payload.clone()) {
                 log::warn!("发送 worktree-init-progress 失败: {}", error);
             }
+            web_event_bus::publish(WORKTREE_INIT_PROGRESS_EVENT, &payload);
         } else {
             self.finish_cancelled(app, job_id, "已取消（已从队列移除）".to_string());
         }
@@ -513,9 +515,10 @@ impl WorktreeInitState {
             }
         };
 
-        if let Err(error) = app.emit(WORKTREE_INIT_PROGRESS_EVENT, payload) {
+        if let Err(error) = app.emit(WORKTREE_INIT_PROGRESS_EVENT, payload.clone()) {
             log::warn!("发送 worktree-init-progress 失败: {}", error);
         }
+        web_event_bus::publish(WORKTREE_INIT_PROGRESS_EVENT, &payload);
     }
 
     fn finalize_job(&self, app: &AppHandle, job_id: &str) {

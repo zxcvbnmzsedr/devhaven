@@ -1,10 +1,10 @@
 import { memo, useMemo } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
 
 import type { HeatmapData } from "../models/heatmap";
 import type { CodexSessionView } from "../models/codex";
 import { HEATMAP_CONFIG } from "../models/heatmap";
 import type { AppStateFile, Project, TagData } from "../models/types";
+import { pickDirectoriesRuntime } from "../platform/runtime";
 import { colorDataToHex } from "../utils/colors";
 import { formatPathWithTilde } from "../utils/pathDisplay";
 import CodexSessionSection from "./CodexSessionSection";
@@ -126,20 +126,18 @@ function Sidebar({
   }, [appState.tags, tagCounts]);
 
   const handlePickDirectory = async (multiple: boolean, directProject: boolean) => {
-    const selected = await open({
-      directory: true,
-      multiple,
-      title: directProject ? "请选择要添加的项目文件夹" : "请选择要添加的工作目录",
-    });
-    if (!selected) {
+    const paths = await pickDirectoriesRuntime();
+    if (!paths || paths.length === 0) {
       return;
     }
-    const paths = Array.isArray(selected) ? selected : [selected];
+
+    const resolvedPaths = multiple ? paths : [paths[0]];
     if (directProject) {
-      await onAddProjects(paths);
+      await onAddProjects(resolvedPaths);
       return;
     }
-    for (const path of paths) {
+
+    for (const path of resolvedPaths) {
       await onAddDirectory(path);
     }
     await onRefresh();

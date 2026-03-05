@@ -349,13 +349,17 @@ export function useAppActions({
   const handleSaveSettings = useCallback(
     async (settings: AppStateFile["settings"]) => {
       try {
+        const previousViteDevPort = appState.settings.viteDevPort;
         await updateSettings(settings);
+        if (settings.viteDevPort !== previousViteDevPort) {
+          showToast("浏览器访问端口已更新，重启应用后生效（开发态请重启 dev）。");
+        }
       } catch (error) {
         console.error("保存设置失败。", error);
         showToast("保存失败，请稍后重试", "error");
       }
     },
-    [showToast, updateSettings],
+    [appState.settings.viteDevPort, showToast, updateSettings],
   );
 
   const handleChangeProjectListViewMode = useCallback(

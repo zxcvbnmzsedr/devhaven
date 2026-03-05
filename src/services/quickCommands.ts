@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { invokeCommand } from "../platform/commandClient";
+import { listenEvent } from "../platform/eventClient";
 
 import type {
   FinishQuickCommandRequest,
@@ -19,7 +19,7 @@ export const QUICK_COMMAND_SNAPSHOT_COMMAND = "quick_command_snapshot";
 export const QUICK_COMMAND_EVENT = "quick-command-event";
 
 export async function startQuickCommand(request: StartQuickCommandRequest): Promise<QuickCommandJob> {
-  return invoke<QuickCommandJob>(QUICK_COMMAND_START_COMMAND, {
+  return invokeCommand<QuickCommandJob>(QUICK_COMMAND_START_COMMAND, {
     projectId: request.projectId,
     projectPath: request.projectPath,
     scriptId: request.scriptId,
@@ -29,14 +29,14 @@ export async function startQuickCommand(request: StartQuickCommandRequest): Prom
 }
 
 export async function stopQuickCommand(request: StopQuickCommandRequest): Promise<QuickCommandJob> {
-  return invoke<QuickCommandJob>(QUICK_COMMAND_STOP_COMMAND, {
+  return invokeCommand<QuickCommandJob>(QUICK_COMMAND_STOP_COMMAND, {
     jobId: request.jobId,
     force: request.force,
   });
 }
 
 export async function finishQuickCommand(request: FinishQuickCommandRequest): Promise<QuickCommandJob> {
-  return invoke<QuickCommandJob>(QUICK_COMMAND_FINISH_COMMAND, {
+  return invokeCommand<QuickCommandJob>(QUICK_COMMAND_FINISH_COMMAND, {
     jobId: request.jobId,
     exitCode: request.exitCode,
     error: request.error,
@@ -44,15 +44,15 @@ export async function finishQuickCommand(request: FinishQuickCommandRequest): Pr
 }
 
 export async function listQuickCommands(request?: ListQuickCommandsRequest): Promise<QuickCommandJob[]> {
-  return invoke<QuickCommandJob[]>(QUICK_COMMAND_LIST_COMMAND, {
+  return invokeCommand<QuickCommandJob[]>(QUICK_COMMAND_LIST_COMMAND, {
     projectPath: request?.projectPath,
   });
 }
 
 export async function getQuickCommandSnapshot(): Promise<QuickCommandSnapshot> {
-  return invoke<QuickCommandSnapshot>(QUICK_COMMAND_SNAPSHOT_COMMAND);
+  return invokeCommand<QuickCommandSnapshot>(QUICK_COMMAND_SNAPSHOT_COMMAND);
 }
 
 export async function listenQuickCommandEvent(handler: (event: { payload: QuickCommandEvent }) => void) {
-  return listen<QuickCommandEvent>(QUICK_COMMAND_EVENT, handler);
+  return listenEvent<QuickCommandEvent>(QUICK_COMMAND_EVENT, handler);
 }

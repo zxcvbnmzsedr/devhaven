@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "../platform/commandClient";
 
 import type {
   SharedScriptEntry,
@@ -9,7 +9,7 @@ import type {
 /** 列出全局共享脚本（优先读取 manifest，否则回退目录扫描）。 */
 export async function listSharedScripts(root?: string): Promise<SharedScriptEntry[]> {
   const normalizedRoot = root?.trim();
-  return invoke<SharedScriptEntry[]>("list_shared_scripts", {
+  return invokeCommand<SharedScriptEntry[]>("list_shared_scripts", {
     root: normalizedRoot ? normalizedRoot : null,
   });
 }
@@ -20,7 +20,7 @@ export async function saveSharedScriptsManifest(
   root?: string,
 ): Promise<void> {
   const normalizedRoot = root?.trim();
-  await invoke("save_shared_scripts_manifest", {
+  await invokeCommand("save_shared_scripts_manifest", {
     scripts,
     root: normalizedRoot ? normalizedRoot : null,
   });
@@ -31,7 +31,7 @@ export async function restoreSharedScriptPresets(
   root?: string,
 ): Promise<SharedScriptPresetRestoreResult> {
   const normalizedRoot = root?.trim();
-  return invoke<SharedScriptPresetRestoreResult>("restore_shared_script_presets", {
+  return invokeCommand<SharedScriptPresetRestoreResult>("restore_shared_script_presets", {
     root: normalizedRoot ? normalizedRoot : null,
   });
 }
@@ -39,7 +39,7 @@ export async function restoreSharedScriptPresets(
 /** 读取共享脚本文件内容。 */
 export async function readSharedScriptFile(relativePath: string, root?: string): Promise<string> {
   const normalizedRoot = root?.trim();
-  return invoke<string>("read_shared_script_file", {
+  return invokeCommand<string>("read_shared_script_file", {
     relativePath,
     root: normalizedRoot ? normalizedRoot : null,
   });
@@ -52,7 +52,7 @@ export async function writeSharedScriptFile(
   root?: string,
 ): Promise<void> {
   const normalizedRoot = root?.trim();
-  await invoke("write_shared_script_file", {
+  await invokeCommand("write_shared_script_file", {
     relativePath,
     content,
     root: normalizedRoot ? normalizedRoot : null,

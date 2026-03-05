@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenEvent } from "../platform/eventClient";
 
 import type { CodexAgentEvent, CodexMonitorSession, CodexMonitorSnapshot } from "../models/codex";
 import {
@@ -106,7 +106,7 @@ export function useCodexMonitor(): CodexMonitorStore {
     void load();
     scheduleNextPoll();
 
-    void listen<CodexMonitorSnapshot>(CODEX_MONITOR_SNAPSHOT_EVENT, (event) => {
+    void listenEvent<CodexMonitorSnapshot>(CODEX_MONITOR_SNAPSHOT_EVENT, (event) => {
       if (!event.payload || canceled) {
         return;
       }
@@ -127,7 +127,7 @@ export function useCodexMonitor(): CodexMonitorStore {
         setError(err instanceof Error ? err.message : String(err));
       });
 
-    void listen<CodexAgentEvent>(CODEX_MONITOR_AGENT_EVENT, (event) => {
+    void listenEvent<CodexAgentEvent>(CODEX_MONITOR_AGENT_EVENT, (event) => {
       if (canceled || !event.payload) {
         return;
       }

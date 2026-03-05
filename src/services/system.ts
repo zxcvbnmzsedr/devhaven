@@ -1,8 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "../platform/commandClient";
 
 /** 在系统文件管理器中定位路径。 */
 export async function openInFinder(path: string) {
-  await invoke("open_in_finder", { path });
+  await invokeCommand("open_in_finder", { path });
 }
 
 /** 将内容写入系统剪贴板。 */
@@ -15,7 +15,7 @@ export async function copyToClipboard(content: string) {
       console.warn("浏览器剪贴板写入失败，尝试使用系统命令。", error);
     }
   }
-  await invoke("copy_to_clipboard", { content });
+  await invokeCommand("copy_to_clipboard", { content });
 }
 
 /** 发送系统通知。 */

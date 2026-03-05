@@ -1,11 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "../platform/commandClient";
 
 import type { HeatmapCacheFile } from "../models/heatmap";
 
 export async function loadHeatmapCache(): Promise<HeatmapCacheFile> {
-  return invoke<HeatmapCacheFile>("load_heatmap_cache");
+  return invokeCommand<HeatmapCacheFile>("load_heatmap_cache");
 }
 
 export async function saveHeatmapCache(cache: HeatmapCacheFile): Promise<void> {
-  await invoke("save_heatmap_cache", { cache });
+  await invokeCommand("save_heatmap_cache", { cache });
 }

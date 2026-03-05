@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { Terminal, type ILink, type ILinkProvider, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { SearchAddon } from "xterm-addon-search";
@@ -17,6 +16,7 @@ import {
   resizeTerminal,
   writeTerminal,
 } from "../../services/terminal";
+import { openPathRuntime, openUrlRuntime } from "../../platform/runtime";
 
 type PtyRegistryEntry = {
   ptyId: string | null;
@@ -475,7 +475,7 @@ export default function TerminalPane({
       // 需要用 parser hook 过滤光标形态控制序列（Ghostty: shell-integration-features = no-cursor）。
       allowProposedApi: true,
       fontFamily:
-        "\"Hack\", \"Hack Nerd Font\", \"Noto Sans SC\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+        "\"Hack Nerd Font\", \"Hack\", \"Noto Sans SC\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
       fontSize: 12,
       cursorStyle: "block",
       cursorBlink: true,
@@ -567,7 +567,7 @@ export default function TerminalPane({
       }
       event.preventDefault();
       event.stopPropagation();
-      void openUrl(safeUrl).catch((error) => {
+      void openUrlRuntime(safeUrl).catch((error) => {
         console.warn("打开链接失败。", error);
       });
     });
@@ -582,7 +582,7 @@ export default function TerminalPane({
         void openInFinder(resolvedPath)
           .catch((error) => {
             console.warn("在 Finder 中打开本地路径失败，回退到系统默认打开。", error);
-            return openPath(resolvedPath);
+            return openPathRuntime(resolvedPath);
           })
           .catch((error) => {
             console.warn("打开本地路径失败。", error);

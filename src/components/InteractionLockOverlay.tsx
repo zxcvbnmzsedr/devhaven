@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { listenEvent } from "../platform/eventClient";
 
 import { getInteractionLockState, type InteractionLockState } from "../services/interactionLock";
 import {
@@ -137,7 +137,7 @@ export default function InteractionLockOverlay() {
     let unlisten: (() => void) | null = null;
     const register = async () => {
       try {
-        unlisten = await listen<InteractionLockState>(INTERACTION_LOCK_EVENT, (event) => {
+        unlisten = await listenEvent<InteractionLockState>(INTERACTION_LOCK_EVENT, (event) => {
           const next = event.payload;
           setLockState(next);
           setInteractionLocked(Boolean(next.locked));

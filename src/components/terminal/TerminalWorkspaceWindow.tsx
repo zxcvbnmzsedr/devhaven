@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
 import type { Project, ProjectScript, ProjectWorktree } from "../../models/types";
+import { isTauriRuntime } from "../../platform/runtime";
 import type { GitWorktreeListItem } from "../../services/gitWorktree";
 import { useSystemColorScheme } from "../../hooks/useSystemColorScheme";
 import { useDevHavenContext } from "../../state/DevHavenContext";
@@ -176,19 +176,28 @@ export default function TerminalWorkspaceWindow({
   }, [openProjects]);
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    const setWindowTitle = async (title: string) => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().setTitle(title);
+      } catch {
+        // ignore
+      }
+    };
+
     // 仅在终端可见时更新窗口标题；隐藏时恢复默认标题，避免主界面停留在“xx - 终端”。
     if (!isVisible) {
-      getCurrentWindow()
-        .setTitle("DevHaven")
-        .catch(() => undefined);
+      void setWindowTitle("DevHaven");
       return;
     }
     if (!activeProject) {
       return;
     }
-    getCurrentWindow()
-      .setTitle(`${activeProject.name} - 终端`)
-      .catch(() => undefined);
+    void setWindowTitle(`${activeProject.name} - 终端`);
   }, [activeProject, isVisible]);
 
   if (openProjects.length === 0) {

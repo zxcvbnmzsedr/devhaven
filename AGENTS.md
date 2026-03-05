@@ -1,6 +1,6 @@
 # 项目概览（DevHaven）
 
-DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交互（React + Vite + UnoCSS），后端负责本地能力（Rust + Tauri Commands：文件扫描、Git 读取、存储、PTY 终端等）。
+DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 运行时（浏览器 + 本机 Rust HTTP/WS 服务）**：前端负责 UI/交互（React + Vite + UnoCSS），后端负责本地能力（Rust + Tauri Commands / Web API：文件扫描、Git 读取、存储、PTY 终端等）。
 
 ## 1) 开发语言 + 框架
 
@@ -14,12 +14,18 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 ### 桌面/后端（Tauri）
 - 语言：Rust
 - 框架：Tauri v2（见 `src-tauri/`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`）
-- 前后端通信：前端 `@tauri-apps/api/core` 的 `invoke`（`src/services/*`） ↔ 后端 `#[tauri::command]`（集中在 `src-tauri/src/lib.rs`）
+- 前后端通信：前端统一命令层 `src/platform/commandClient.ts`（Tauri 下走 `invoke`）↔ 后端 `#[tauri::command]`（集中在 `src-tauri/src/lib.rs`）
 - 插件：dialog/opener/clipboard/log（在 `src-tauri/src/lib.rs` 初始化）
+
+### Web 后端（Browser Runtime Bridge）
+- 语言：Rust
+- 框架：Axum（见 `src-tauri/src/web_server.rs`、`src-tauri/Cargo.toml`）
+- 通信：前端 `src/platform/commandClient.ts`（Web 下 `POST /api/cmd/:command`）+ `src/platform/eventClient.ts`（`GET /api/ws`）
+- 事件总线：`src-tauri/src/web_event_bus.rs`（统一事件封装 `{event,payload,ts}`）
 
 ### 本地数据落盘位置（便于排查）
 - 应用数据目录：`~/.devhaven/`（实现：`src-tauri/src/storage.rs`）
-  - `app_state.json`：应用状态（目录、标签、回收站、收藏项目、设置等）
+  - `app_state.json`：应用状态（目录、直接添加项目路径 `directProjectPaths`、标签、回收站、收藏项目、设置等）
   - `projects.json`：项目缓存列表
   - `heatmap_cache.json`：热力图缓存
   - `terminal_workspaces.json`：终端工作区/布局缓存
@@ -38,7 +44,8 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 - 主列表多选批量操作（批量复制路径/刷新/打标/移入回收站）：`src/components/MainContent.tsx`、`src/App.tsx`、`src/state/useDevHaven.ts`
 - App 顶层编排已拆分（主文件仅做组合与渲染）：`src/App.tsx` + `src/hooks/useAppViewState.ts` + `src/hooks/useAppActions.ts` + `src/hooks/useProjectSelection.ts` + `src/hooks/useProjectFilter.ts` + `src/hooks/useTerminalWorkspace.ts` + `src/hooks/useWorktreeManager.ts` + `src/hooks/useCodexIntegration.ts` + `src/hooks/useCommandPalette.ts` + `src/hooks/useDisableInputCorrections.ts`（全局关闭输入自动纠错/首字母自动大写）
 - 核心状态与动作（刷新/扫描/合并/持久化）：`src/state/useDevHaven.ts`、`src/state/DevHavenContext.tsx`
-- 调用 Tauri 命令：`src/services/appStorage.ts`（`discoverProjects/buildProjects/load/save`）
+- “直接添加为项目”持久化：`src/components/Sidebar.tsx`（入口）→ `src/state/useDevHaven.ts`（`addProjects` 写入 `appState.directProjectPaths`，`refresh` 合并 `directories + directProjectPaths`）↔ `src-tauri/src/models.rs`（`AppStateFile.direct_project_paths`）/`src-tauri/src/web_server.rs`（Web 模式路径校验与 allow roots）
+- 调用后端命令：`src/services/appStorage.ts`（`discoverProjects/buildProjects/load/save`）→ `src/platform/commandClient.ts`（Tauri `invoke` / Web HTTP）
 - 扫描与构建项目元数据（是否 Git 仓库、提交数、最后提交时间）：`src-tauri/src/project_loader.rs`
 - Command 注册处：`src-tauri/src/lib.rs`（`discover_projects`、`build_projects`、`load_projects`、`save_projects`）
 - 列表模式备注预览（批量读取 `PROJECT_NOTES.md` 首行）：`src/services/notes.ts`（`readProjectNotesPreviews`） ↔ `src-tauri/src/notes.rs`（`read_notes_previews`） ↔ `src-tauri/src/lib.rs`（`read_project_notes_previews`）
@@ -137,11 +144,14 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 ### J. 更新检查
 - GitHub Releases latest 检查：`src/services/update.ts`
 
-### K. 设置（更新/终端渲染/脚本管理/Git 身份）
+### K. 设置（更新/浏览器访问端口/终端渲染/脚本管理/Git 身份）
 - UI：`src/components/SettingsModal.tsx`
-- 设置分类：`常规`（版本/更新）、`终端`（渲染/主题）、`脚本`（通用脚本管理）、`协作`（Git 身份）
+- 设置分类：`常规`（版本/更新/浏览器访问端口）、`终端`（渲染/主题）、`脚本`（通用脚本管理）、`协作`（Git 身份）
 - 设置模型：`src/models/types.ts`（`AppSettings`）
 - 保存入口：`src/App.tsx`（打开/关闭设置弹窗 + 保存设置）与 `src/state/useDevHaven.ts`（`updateSettings` 持久化到 `app_state.json`）
+- 浏览器访问端口配置（`AppSettings.viteDevPort`，默认 `1420`，保存后 toast 提示“重启应用后生效（开发态请重启 dev）”）：`src/components/SettingsModal.tsx`、`src/hooks/useAppActions.ts`、`src/state/useDevHaven.ts`、`src/models/types.ts`、`vite.config.ts`
+- `pnpm tauri dev` 启动对齐：通过 `scripts/tauri-cli-wrapper.mjs` 在启动前同步 `src-tauri/tauri.conf.json` 的 `build.devUrl` 到当前 `viteDevPort`，避免 tauri 固定等待旧端口
+- Web 服务绑定配置：开发态默认 `0.0.0.0:3210`，打包态默认跟随 `AppSettings.viteDevPort`；可通过环境变量 `DEVHAVEN_WEB_ENABLED/DEVHAVEN_WEB_HOST/DEVHAVEN_WEB_PORT` 覆盖：`src-tauri/src/web_server.rs`、`vite.config.ts`、`src-tauri/src/lib.rs`
 - 设置保存与视图模式切换回调：`src/hooks/useAppActions.ts`
 - 通用脚本目录：`AppSettings.sharedScriptsRoot`（默认 `~/.devhaven/scripts`，设置页固定使用默认目录；共享脚本列表由 `list_shared_scripts` 提供）
 - 通用脚本可视化管理入口：`src/components/SettingsModal.tsx` → `src/components/SharedScriptsManagerModal.tsx`（清单与脚本文件编辑 + “恢复内置预设”）
@@ -154,6 +164,15 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 - 安装：`src/components/GlobalSkillsModal.tsx`（来源/skill 名/agent 选择）→ `src/services/skills.ts`（`installGlobalSkill`）→ `src-tauri/src/lib.rs`（`install_global_skill`）→ `src-tauri/src/skills.rs`（参考开源 skills 的发现/安装流程，在应用内完成 clone + 安装，不依赖外部 skills CLI）
 - 卸载：`src/components/GlobalSkillsModal.tsx`（矩阵单元点击）→ `src/services/skills.ts`（`uninstallGlobalSkill`）→ `src-tauri/src/lib.rs`（`uninstall_global_skill`）→ `src-tauri/src/skills.rs`（按 Agent 目录定点删除该 skill）
 - 扫描：`src/services/skills.ts`（`listGlobalSkills`）→ `src-tauri/src/lib.rs`（`list_global_skills`）→ `src-tauri/src/skills.rs`（固定扫描 `~/.agents/skills` 与常见 Agent 全局目录并聚合，不暴露扫描范围配置）
+
+### M. Web 运行时桥接（HTTP/WS + 浏览器兜底）
+- 运行时探测与能力兜底：`src/platform/runtime.ts`（`isTauriRuntime`、目录选择/confirm/openUrl/homeDir/version 的浏览器 fallback）
+- 命令桥接：`src/platform/commandClient.ts`（统一 `invokeCommand`；Web 下调用 `POST /api/cmd/{command}`）
+- 事件桥接：`src/platform/eventClient.ts`（统一 `listenEvent`；Web 下连接 `/api/ws`）
+- Rust Web 服务入口：`src-tauri/src/web_server.rs`（`/api/health`、`/api/cmd/{command}`、`/api/ws` + 前端静态资源路由 `/`、`/{*path}`）
+- 开发态单端口体感：`vite.config.ts` 配置 `/api` 代理到 Web API（优先 `DEVHAVEN_WEB_API_TARGET`，默认 `http://127.0.0.1:3210`），并从 `~/.devhaven/app_state.json` 读取 `settings.viteDevPort` 作为 Vite 端口（可由 `DEVHAVEN_VITE_PORT` 覆盖，需重启 Vite 生效）；`src/platform/runtime.ts` 在 `import.meta.env.DEV` 下走 `window.location.origin`
+- 事件镜像：`src-tauri/src/web_event_bus.rs` + `src-tauri/src/{terminal.rs,quick_command_manager.rs,worktree_init.rs,interaction_lock.rs,codex_monitor.rs}`
+- 新增 command：`resolve_home_dir`（`src-tauri/src/lib.rs`），供 Web 模式路径展开使用
 
 ## 3) 回写（维护）AGENTS.md 的逻辑
 
@@ -176,5 +195,5 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用：前端负责 UI/交
 
 ### 快速定位约定（让回写更一致）
 - 前端入口通常从 `src/App.tsx`（全局状态/弹窗/窗口联动）和 `src/components/*`（具体 UI）开始找。
-- “调用后端”的入口优先在 `src/services/*` 搜 `invoke(` 或事件名，再去 `src-tauri/src/lib.rs` 找同名 command。
+- “调用后端”的入口优先在 `src/services/*` 搜 `invokeCommand` / `listenEvent`，再去 `src/platform/*` 判断是 Tauri 还是 Web 链路，最后到 `src-tauri/src/lib.rs` / `src-tauri/src/web_server.rs` 对齐 command。
 - “数据怎么落盘/缓存”优先看 `src-tauri/src/storage.rs`，前端只负责触发（`src/services/appStorage.ts`、`src/services/heatmap.ts`、`src/services/terminalWorkspace.ts` 等）。

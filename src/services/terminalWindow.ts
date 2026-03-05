@@ -1,6 +1,5 @@
-import { emitTo } from "@tauri-apps/api/event";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { Project } from "../models/types";
+import { isTauriRuntime } from "../platform/runtime";
 
 export const TERMINAL_WINDOW_LABEL = "terminal";
 export const TERMINAL_OPEN_PROJECT_EVENT = "terminal-open-project";
@@ -22,6 +21,26 @@ function buildTerminalUrl(project?: Project) {
 }
 
 export async function openTerminalWorkspaceWindow(project: Project): Promise<void> {
+  if (!isTauriRuntime()) {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent<TerminalOpenProjectPayload>(TERMINAL_OPEN_PROJECT_EVENT, {
+          detail: {
+            projectId: project.id,
+            projectPath: project.path,
+            projectName: project.name,
+          },
+        }),
+      );
+    }
+    return;
+  }
+
+  const [{ emitTo }, { WebviewWindow }] = await Promise.all([
+    import("@tauri-apps/api/event"),
+    import("@tauri-apps/api/webviewWindow"),
+  ]);
+
   const existing = await WebviewWindow.getByLabel(TERMINAL_WINDOW_LABEL);
   if (existing) {
     await existing.show().catch(() => undefined);
@@ -33,7 +52,7 @@ export async function openTerminalWorkspaceWindow(project: Project): Promise<voi
     }).catch(() => undefined);
     return;
   }
-  const window = new WebviewWindow(TERMINAL_WINDOW_LABEL, {
+  const terminalWindow = new WebviewWindow(TERMINAL_WINDOW_LABEL, {
     url: buildTerminalUrl(project),
     title: "终端",
     width: 1000,
@@ -43,11 +62,11 @@ export async function openTerminalWorkspaceWindow(project: Project): Promise<voi
     resizable: true,
     center: true,
   });
-  window.once("tauri://created", async () => {
-    await window.show().catch(() => undefined);
-    await window.setFocus().catch(() => undefined);
+  terminalWindow.once("tauri://created", async () => {
+    await terminalWindow.show().catch(() => undefined);
+    await terminalWindow.setFocus().catch(() => undefined);
   });
-  window.once("tauri://error", (event) => {
+  terminalWindow.once("tauri://error", (event) => {
     console.error("终端窗口创建失败。", event);
   });
 }

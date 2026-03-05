@@ -21,6 +21,7 @@ use crate::models::{
     CodexAgentEvent, CodexAgentEventType, CodexMonitorSession, CodexMonitorSnapshot,
     CodexMonitorState,
 };
+use crate::web_event_bus;
 
 const CODEX_SESSIONS_DIR: &str = ".codex/sessions";
 const MAX_TAIL_LINES: usize = 2000;
@@ -221,13 +222,15 @@ fn should_refresh_for_event(event: &notify::Event) -> bool {
 fn emit_monitoring(app: &AppHandle) {
     match refresh_monitoring(app, true) {
         Ok((snapshot, events)) => {
-            if let Err(error) = app.emit(CODEX_MONITOR_SNAPSHOT_EVENT, snapshot) {
+            if let Err(error) = app.emit(CODEX_MONITOR_SNAPSHOT_EVENT, snapshot.clone()) {
                 log::warn!("推送 Codex 监控快照失败: {}", error);
             }
+            web_event_bus::publish(CODEX_MONITOR_SNAPSHOT_EVENT, &snapshot);
             for event in events {
-                if let Err(error) = app.emit(CODEX_MONITOR_AGENT_EVENT, event) {
+                if let Err(error) = app.emit(CODEX_MONITOR_AGENT_EVENT, event.clone()) {
                     log::warn!("推送 Codex 监控事件失败: {}", error);
                 }
+                web_event_bus::publish(CODEX_MONITOR_AGENT_EVENT, &event);
             }
         }
         Err(error) => {

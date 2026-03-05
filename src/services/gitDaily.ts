@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeCommand } from "../platform/commandClient";
 
 import type { GitIdentity } from "../models/types";
 
@@ -16,5 +16,5 @@ export async function collectGitDaily(
   if (paths.length === 0) {
     return [];
   }
-  return invoke<GitDailyResult[]>("collect_git_daily", { paths, identities });
+  return invokeCommand<GitDailyResult[]>("collect_git_daily", { paths, identities });
 }

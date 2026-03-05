@@ -6,6 +6,7 @@ use std::sync::{
 use tauri::{AppHandle, Emitter};
 
 use crate::models::InteractionLockPayload;
+use crate::web_event_bus;
 
 pub const INTERACTION_LOCK_EVENT: &str = "interaction-lock";
 
@@ -45,9 +46,10 @@ impl InteractionLockState {
                 locked: true,
                 reason,
             };
-            if let Err(error) = app.emit(INTERACTION_LOCK_EVENT, payload) {
+            if let Err(error) = app.emit(INTERACTION_LOCK_EVENT, payload.clone()) {
                 log::warn!("发送 interaction-lock 失败: {}", error);
             }
+            web_event_bus::publish(INTERACTION_LOCK_EVENT, &payload);
         }
 
         InteractionLockGuard {
@@ -75,9 +77,10 @@ impl InteractionLockState {
             locked: false,
             reason: None,
         };
-        if let Err(error) = app.emit(INTERACTION_LOCK_EVENT, payload) {
+        if let Err(error) = app.emit(INTERACTION_LOCK_EVENT, payload.clone()) {
             log::warn!("发送 interaction-lock 失败: {}", error);
         }
+        web_event_bus::publish(INTERACTION_LOCK_EVENT, &payload);
     }
 }
 

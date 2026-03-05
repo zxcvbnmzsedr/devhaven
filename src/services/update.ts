@@ -1,4 +1,4 @@
-import { getVersion } from "@tauri-apps/api/app";
+import { getAppVersionRuntime } from "../platform/runtime";
 
 const RELEASES_URL = "https://api.github.com/repos/zxcvbnmzsedr/devhaven/releases/latest";
 
@@ -15,7 +15,7 @@ export type UpdateCheckResult =
 
 /** 检查是否有新版本发布。 */
 export async function checkForUpdates(): Promise<UpdateCheckResult> {
-  const currentVersion = await getVersion();
+  const currentVersion = await getAppVersionRuntime();
   try {
     const response = await fetch(RELEASES_URL, {
       headers: {

@@ -14,6 +14,8 @@ mod storage;
 mod system;
 mod terminal;
 mod time_utils;
+mod web_event_bus;
+mod web_server;
 mod worktree_init;
 mod worktree_setup;
 
@@ -511,6 +513,15 @@ fn open_in_editor(params: EditorOpenParams) -> Result<(), String> {
 }
 
 #[tauri::command]
+/// 解析当前用户 Home 目录（用于 Web 端路径展开）。
+fn resolve_home_dir(app: AppHandle) -> Result<String, String> {
+    app.path()
+        .home_dir()
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|error| format!("解析用户目录失败: {error}"))
+}
+
+#[tauri::command]
 /// 列出全局共享脚本（优先读取 manifest，否则回退目录扫描）。
 fn list_shared_scripts(
     app: AppHandle,
@@ -758,6 +769,16 @@ fn get_codex_monitor_snapshot(app: AppHandle) -> Result<CodexMonitorSnapshot, St
     })
 }
 
+#[tauri::command]
+fn apply_web_server_config(
+    app: AppHandle,
+    runtime: State<web_server::WebServerRuntime>,
+) -> Result<(), String> {
+    log_command_result("apply_web_server_config", || {
+        web_server::apply_config(app, runtime.inner().clone())
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// 启动 Tauri 应用。
 pub fn run() {
@@ -778,6 +799,7 @@ pub fn run() {
         .manage(QuickCommandManager::default())
         .manage(worktree_init::WorktreeInitState::default())
         .manage(interaction_lock::InteractionLockState::default())
+        .manage(web_server::WebServerRuntime::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let locked = window
@@ -802,6 +824,11 @@ pub fn run() {
             if let Err(error) = codex_monitor::ensure_monitoring_started(&app_handle) {
                 log::warn!("启动 Codex 监控失败: {}", error);
             }
+            let web_runtime = app_handle
+                .state::<web_server::WebServerRuntime>()
+                .inner()
+                .clone();
+            web_server::ensure_started(app_handle.clone(), web_runtime);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -836,6 +863,7 @@ pub fn run() {
             worktree_init_status,
             open_in_finder,
             open_in_editor,
+            resolve_home_dir,
             list_shared_scripts,
             save_shared_scripts_manifest,
             restore_shared_script_presets,
@@ -860,6 +888,7 @@ pub fn run() {
             delete_terminal_workspace,
             list_terminal_workspace_summaries,
             get_codex_monitor_snapshot,
+            apply_web_server_config,
             quick_command_start,
             quick_command_stop,
             quick_command_finish,
