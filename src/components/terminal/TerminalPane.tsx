@@ -475,7 +475,7 @@ export default function TerminalPane({
       // 需要用 parser hook 过滤光标形态控制序列（Ghostty: shell-integration-features = no-cursor）。
       allowProposedApi: true,
       fontFamily:
-        "\"Hack\", \"Hack Nerd Font\", \"Noto Sans SC\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
+        "\"Hack Nerd Font\", \"Hack\", \"Noto Sans SC\", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", \"Courier New\", monospace",
       fontSize: 12,
       cursorStyle: "block",
       cursorBlink: true,
