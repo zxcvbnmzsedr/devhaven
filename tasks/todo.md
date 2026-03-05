@@ -302,9 +302,9 @@
 - [x] 修复 wrapper 调用方式：改为 `node @tauri-apps/cli/tauri.js`（失败时回退 `pnpm.cmd/pnpm exec tauri`）
 - [x] 增加 wrapper 错误输出，失败时打印底层 spawn 错误信息
 - [x] 本地验证：`pnpm tauri build --help`、`pnpm build`
-- [ ] GitHub release workflow 复跑并确认 Windows job 通过
+- [x] GitHub release workflow 复跑并确认 Windows job 通过（run `22699867074`）
 
 ## Review
 - 首次修复尝试直接执行 `tauri.cmd`，在 Windows runner 命中 `spawnSync ... EINVAL`；已据此调整为 Node 直接启动 CLI JS 入口，规避 `.cmd` 子进程兼容差异。
 - 当前 wrapper 不再依赖递归 `pnpm` 且补齐失败日志，后续 CI 再失败时可直接定位到具体子进程错误。
-- 待完成：复跑 release workflow，确认 windows-latest 的 `Tauri build and release` 成功。
+- 复跑 `release` workflow（`22699867074`）后，ubuntu/macos/windows 三平台均已通过，Windows `Tauri build and release` 恢复正常。
