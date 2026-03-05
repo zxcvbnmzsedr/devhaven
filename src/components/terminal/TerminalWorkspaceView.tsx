@@ -1507,7 +1507,7 @@ function TerminalWorkspaceView({
     if (!activeRunTab) return;
     const script = scripts.find((s) => s.id === activeRunTab.scriptId);
     if (!script) return;
-    runQuickCommand(script);
+    runQuickCommand(script, { reuseTabId: activeRunTab.id });
   };
 
   const stopActiveTab = () => {

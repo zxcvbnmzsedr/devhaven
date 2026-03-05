@@ -12,7 +12,7 @@ import {
 } from "../services/quickCommands";
 import { killTerminal, writeTerminal } from "../services/terminal";
 import { renderScriptTemplateCommand } from "../utils/scriptTemplate";
-import { createId } from "../utils/terminalLayout";
+import { collectSessionIds, createId } from "../utils/terminalLayout";
 
 const QUICK_COMMAND_FORCE_KILL_TIMEOUT_MS = 1500;
 const QUICK_COMMAND_RECONCILE_INTERVAL_MS = 10000;
@@ -45,13 +45,17 @@ export type UseQuickCommandRuntimeReturn = {
   scriptLocalPhaseById: Record<string, ScriptLocalPhase>;
   panelMessage: string | null;
   showPanelMessage: (message: string) => void;
-  runQuickCommand: (script: ProjectScript) => void;
+  runQuickCommand: (script: ProjectScript, options?: RunQuickCommandOptions) => void;
   stopScript: (scriptId: string) => void;
   isScriptRuntimeValid: (runtime: ScriptRuntime) => boolean;
   handlePtyReady: (sessionId: string, ptyId: string) => void;
   handleSessionExit: (sessionId: string, code?: number | null) => void;
   cleanupRuntimeBySessionIds: (sessionIds: string[]) => void;
   finalizeRuntimeBySessionIds: (sessionIds: string[], exitCode: number, errorMessage: string) => void;
+};
+
+export type RunQuickCommandOptions = {
+  reuseTabId?: string | null;
 };
 
 function shellQuote(value: string) {
@@ -123,11 +127,38 @@ function getRunPanelState(workspace: TerminalWorkspace) {
   return workspace.ui?.runPanel ?? { open: false, height: DEFAULT_RUN_PANEL_HEIGHT, activeTabId: null, tabs: [] };
 }
 
+function resolveReusableRunTab(
+  workspace: TerminalWorkspace,
+  scriptId: string,
+  preferredTabId?: string | null,
+) {
+  const runPanel = getRunPanelState(workspace);
+  if (preferredTabId) {
+    const preferred = runPanel.tabs.find((tab) => tab.id === preferredTabId && tab.scriptId === scriptId);
+    if (preferred) {
+      return preferred;
+    }
+  }
+  const active =
+    runPanel.activeTabId && runPanel.tabs.some((tab) => tab.id === runPanel.activeTabId)
+      ? runPanel.tabs.find((tab) => tab.id === runPanel.activeTabId) ?? null
+      : null;
+  if (active?.scriptId === scriptId) {
+    return active;
+  }
+  for (let i = runPanel.tabs.length - 1; i >= 0; i -= 1) {
+    if (runPanel.tabs[i].scriptId === scriptId) {
+      return runPanel.tabs[i];
+    }
+  }
+  return null;
+}
+
 export function useQuickCommandRuntime({
   projectId,
   projectPath,
   windowLabel,
-  scripts: _scripts,
+  scripts,
   sharedScriptsRoot,
   workspace,
   updateWorkspace,
@@ -148,8 +179,11 @@ export function useQuickCommandRuntime({
   const scriptIdBySessionIdRef = useRef(new Map<string, string>());
   const pendingStartBySessionIdRef = useRef(new Map<string, string>());
   const pendingStopAfterStartByScriptIdRef = useRef(new Set<string>());
+  const pendingRestartByScriptIdRef = useRef(new Map<string, { reuseTabId: string | null }>());
   const finalizedQuickCommandJobIdsRef = useRef(new Set<string>());
   const stopKillTimerByScriptIdRef = useRef(new Map<string, number>());
+  const stopScriptRef = useRef<(scriptId: string) => void>(() => {});
+  const scriptsRef = useRef<ProjectScript[]>(scripts);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -166,6 +200,19 @@ export function useQuickCommandRuntime({
   useLayoutEffect(() => {
     scriptLocalPhaseByIdRef.current = scriptLocalPhaseById;
   }, [scriptLocalPhaseById]);
+
+  useEffect(() => {
+    scriptsRef.current = scripts;
+    if (pendingRestartByScriptIdRef.current.size === 0) {
+      return;
+    }
+    const validScriptIds = new Set(scripts.map((script) => script.id));
+    for (const scriptId of Array.from(pendingRestartByScriptIdRef.current.keys())) {
+      if (!validScriptIds.has(scriptId)) {
+        pendingRestartByScriptIdRef.current.delete(scriptId);
+      }
+    }
+  }, [scripts]);
 
   const clearAllStopKillTimers = useCallback(() => {
     for (const timer of stopKillTimerByScriptIdRef.current.values()) {
@@ -200,6 +247,7 @@ export function useQuickCommandRuntime({
     sessionPtyIdRef.current.clear();
     pendingStartBySessionIdRef.current.clear();
     pendingStopAfterStartByScriptIdRef.current.clear();
+    pendingRestartByScriptIdRef.current.clear();
     finalizedQuickCommandJobIdsRef.current.clear();
     clearAllStopKillTimers();
   }, [clearAllStopKillTimers, projectId, projectPath]);
@@ -510,7 +558,7 @@ export function useQuickCommandRuntime({
   );
 
   const runQuickCommand = useCallback(
-    (script: ProjectScript) => {
+    (script: ProjectScript, options?: RunQuickCommandOptions) => {
       if (!script.start.trim()) {
         showPanelMessage("启动命令为空");
         return;
@@ -525,6 +573,9 @@ export function useQuickCommandRuntime({
         showPanelMessage("终端工作区尚未就绪");
         return;
       }
+      const requestedReuseTabId = options?.reuseTabId ?? null;
+      const resolveReuseTabId = () =>
+        resolveReusableRunTab(current, script.id, requestedReuseTabId)?.id ?? requestedReuseTabId;
 
       const localPhase = scriptLocalPhaseByIdRef.current[script.id] ?? null;
       if (localPhase === "starting") {
@@ -532,40 +583,33 @@ export function useQuickCommandRuntime({
         return;
       }
       if (localPhase === "stoppingSoft" || localPhase === "stoppingHard") {
-        showPanelMessage("命令正在停止中");
+        pendingRestartByScriptIdRef.current.set(script.id, { reuseTabId: resolveReuseTabId() });
+        showPanelMessage("命令停止后将自动重新运行");
         return;
       }
 
       const existing = scriptRuntimeByIdRef.current[script.id] ?? null;
       if (existing && isScriptRuntimeValid(existing)) {
         pendingStopAfterStartByScriptIdRef.current.delete(script.id);
-        showPanelMessage("命令已在运行，已切换到对应运行标签");
-        updateWorkspace((ws) => {
-          const currentRunPanel = getRunPanelState(ws);
-          return {
-            ...ws,
-            ui: {
-              ...(ws.ui ?? {}),
-              runPanel: {
-                ...currentRunPanel,
-                open: true,
-                activeTabId: existing.tabId,
-              },
-            },
-          };
+        pendingRestartByScriptIdRef.current.set(script.id, {
+          reuseTabId: requestedReuseTabId ?? existing.tabId,
         });
+        stopScriptRef.current(script.id);
+        showPanelMessage("正在重新运行命令...");
         return;
       }
 
       const existingJob = quickCommandJobByScriptIdRef.current[script.id] ?? null;
       if (existingJob && isActiveQuickCommandState(existingJob.state)) {
         const executionState = toScriptExecutionStateFromQuickState(existingJob.state);
+        pendingRestartByScriptIdRef.current.set(script.id, { reuseTabId: resolveReuseTabId() });
+        stopScriptRef.current(script.id);
         if (executionState === "starting") {
-          showPanelMessage("命令正在启动中");
+          showPanelMessage("命令启动中，启动后将自动重新运行");
         } else if (executionState === "stoppingSoft" || executionState === "stoppingHard") {
-          showPanelMessage("命令正在停止中");
+          showPanelMessage("命令停止后将自动重新运行");
         } else {
-          showPanelMessage("命令已在运行");
+          showPanelMessage("正在重新运行命令...");
         }
         return;
       }
@@ -583,8 +627,10 @@ export function useQuickCommandRuntime({
         return;
       }
 
+      const reusableRunTab = resolveReusableRunTab(current, script.id, requestedReuseTabId);
       setScriptLocalPhaseById((prev) => ({ ...prev, [script.id]: "starting" }));
       pendingStopAfterStartByScriptIdRef.current.delete(script.id);
+      pendingRestartByScriptIdRef.current.delete(script.id);
 
       void (async () => {
         let startedJob: QuickCommandJob;
@@ -611,7 +657,8 @@ export function useQuickCommandRuntime({
         }
 
         const sessionId = createId();
-        const tabId = createId();
+        const tabId = reusableRunTab?.id ?? createId();
+        const replacedSessionId = reusableRunTab?.sessionId ?? null;
         scriptIdBySessionIdRef.current.set(sessionId, script.id);
         pendingStartBySessionIdRef.current.set(sessionId, shellCommand);
 
@@ -623,31 +670,44 @@ export function useQuickCommandRuntime({
 
         updateWorkspace((ws) => {
           const currentRunPanel = getRunPanelState(ws);
+          const resolvedReusableRunTab = resolveReusableRunTab(ws, script.id, tabId);
           const title = script.name.trim() ? script.name.trim() : `运行 ${currentRunPanel.tabs.length + 1}`;
+          const nextRunTab = {
+            id: resolvedReusableRunTab?.id ?? tabId,
+            title,
+            sessionId,
+            scriptId: script.id,
+            createdAt: Date.now(),
+            endedAt: null,
+            exitCode: null,
+          };
+          const nextTabs = resolvedReusableRunTab
+            ? currentRunPanel.tabs.map((tab) => (tab.id === resolvedReusableRunTab.id ? nextRunTab : tab))
+            : [...currentRunPanel.tabs, nextRunTab];
+          const nextSessions = {
+            ...ws.sessions,
+            [sessionId]: { id: sessionId, cwd: ws.projectPath, savedState: null },
+          };
+          const previousSessionId = resolvedReusableRunTab?.sessionId ?? replacedSessionId;
+          if (previousSessionId && previousSessionId !== sessionId) {
+            const sessionStillUsedByRunTabs = nextTabs.some((tab) => tab.sessionId === previousSessionId);
+            const sessionStillUsedByTerminalTabs = ws.tabs.some((tab) =>
+              collectSessionIds(tab.root).includes(previousSessionId),
+            );
+            if (!sessionStillUsedByRunTabs && !sessionStillUsedByTerminalTabs) {
+              delete nextSessions[previousSessionId];
+            }
+          }
           return {
             ...ws,
-            sessions: {
-              ...ws.sessions,
-              [sessionId]: { id: sessionId, cwd: ws.projectPath, savedState: null },
-            },
+            sessions: nextSessions,
             ui: {
               ...(ws.ui ?? {}),
               runPanel: {
                 ...currentRunPanel,
                 open: true,
-                activeTabId: tabId,
-                tabs: [
-                  ...currentRunPanel.tabs,
-                  {
-                    id: tabId,
-                    title,
-                    sessionId,
-                    scriptId: script.id,
-                    createdAt: Date.now(),
-                    endedAt: null,
-                    exitCode: null,
-                  },
-                ],
+                activeTabId: nextRunTab.id,
+                tabs: nextTabs,
               },
             },
           };
@@ -752,6 +812,45 @@ export function useQuickCommandRuntime({
     },
     [cleanupRuntimeBySessionIds, handleSessionExit, isScriptRuntimeValid, onRequestSessionClose, showPanelMessage],
   );
+  stopScriptRef.current = stopScript;
+
+  useEffect(() => {
+    if (pendingRestartByScriptIdRef.current.size === 0) {
+      return;
+    }
+    const pendingEntries = Array.from(pendingRestartByScriptIdRef.current.entries());
+    for (const [scriptId, request] of pendingEntries) {
+      const runtime = scriptRuntimeById[scriptId] ?? null;
+      const runtimeRunning = Boolean(runtime && isScriptRuntimeValid(runtime));
+      if (runtimeRunning) {
+        continue;
+      }
+      const quickJob = quickCommandJobByScriptId[scriptId] ?? null;
+      if (quickJob && isActiveQuickCommandState(quickJob.state)) {
+        continue;
+      }
+      const localPhase = scriptLocalPhaseById[scriptId] ?? null;
+      if (localPhase === "starting" || localPhase === "stoppingSoft" || localPhase === "stoppingHard") {
+        if (!quickJob && !runtimeRunning) {
+          clearScriptLocalPhase([scriptId]);
+        }
+        continue;
+      }
+      pendingRestartByScriptIdRef.current.delete(scriptId);
+      const script = scriptsRef.current.find((item) => item.id === scriptId) ?? null;
+      if (!script) {
+        continue;
+      }
+      runQuickCommand(script, { reuseTabId: request.reuseTabId });
+    }
+  }, [
+    clearScriptLocalPhase,
+    isScriptRuntimeValid,
+    quickCommandJobByScriptId,
+    runQuickCommand,
+    scriptLocalPhaseById,
+    scriptRuntimeById,
+  ]);
 
   useEffect(() => {
     if (pendingStopAfterStartByScriptIdRef.current.size === 0) {

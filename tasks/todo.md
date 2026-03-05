@@ -308,3 +308,19 @@
 - 首次修复尝试直接执行 `tauri.cmd`，在 Windows runner 命中 `spawnSync ... EINVAL`；已据此调整为 Node 直接启动 CLI JS 入口，规避 `.cmd` 子进程兼容差异。
 - 当前 wrapper 不再依赖递归 `pnpm` 且补齐失败日志，后续 CI 再失败时可直接定位到具体子进程错误。
 - 复跑 `release` workflow（`22699867074`）后，ubuntu/macos/windows 三平台均已通过，Windows `Tauri build and release` 恢复正常。
+
+---
+
+# 终端运行面板「重新运行/复用标签页」修复任务清单
+
+- [x] 定位根因：确认 rerun 按钮与 runQuickCommand 在运行态下的行为偏差
+- [x] 修复运行中重启：点击重新运行改为“停止后自动重启”而非无动作
+- [x] 修复标签复用：停止后再次运行复用既有 Run Panel 标签而非新增
+- [x] 验证：执行前端构建（`npm run build`）并记录结果
+
+## Review
+- `runQuickCommand` 在检测到同脚本仍运行时，不再只切换标签，而是进入“停止 -> 自动重启”流程，修复“重新运行无效”。
+- 新增 pending restart 队列，确保停止完成后自动拉起，并兼容 stopping 阶段再次点击运行的场景。
+- 启动新会话时优先复用同脚本既有 run tab（支持指定 `reuseTabId`），避免停止后运行不断新增底部标签。
+- 复用 run tab 时会回收被替换会话的孤儿 session，避免 `workspace.sessions` 残留无引用数据。
+- 验证通过：`npm run build`。
