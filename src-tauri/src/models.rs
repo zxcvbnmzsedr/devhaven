@@ -10,6 +10,8 @@ pub struct AppStateFile {
     pub version: i32,
     pub tags: Vec<TagData>,
     pub directories: Vec<String>,
+    #[serde(default, rename = "directProjectPaths")]
+    pub direct_project_paths: Vec<String>,
     #[serde(default, rename = "recycleBin")]
     pub recycle_bin: Vec<String>,
     #[serde(default, rename = "favoriteProjectPaths")]
@@ -53,6 +55,7 @@ impl Default for AppStateFile {
             version: 4,
             tags: Vec::new(),
             directories: Vec::new(),
+            direct_project_paths: Vec::new(),
             recycle_bin: Vec::new(),
             favorite_project_paths: Vec::new(),
             settings: AppSettings::default(),

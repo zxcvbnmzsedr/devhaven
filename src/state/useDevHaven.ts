@@ -23,6 +23,7 @@ const emptyState: AppStateFile = {
   version: 4,
   tags: [],
   directories: [],
+  directProjectPaths: [],
   recycleBin: [],
   favoriteProjectPaths: [],
   settings: {
@@ -48,10 +49,12 @@ const emptyState: AppStateFile = {
 
 function normalizeAppState(state: AppStateFile): AppStateFile {
   const directories = normalizePathList(state.directories);
+  const directProjectPaths = normalizePathList(state.directProjectPaths);
   const settings = normalizeSettings(state.settings);
   return {
     ...state,
     directories,
+    directProjectPaths,
     recycleBin: normalizePathList(state.recycleBin),
     favoriteProjectPaths: normalizePathList(state.favoriteProjectPaths),
     settings,
@@ -207,13 +210,17 @@ export function useDevHaven(): DevHavenStore {
       const resolvedProjects = (cachedProjects ?? []).map(normalizeProject);
       appStateRef.current = resolvedState;
       setAppState(resolvedState);
-      if (resolvedState.directories.length === 0) {
+      if (resolvedState.directories.length === 0 && resolvedState.directProjectPaths.length === 0) {
         projectsRef.current = resolvedProjects;
         setProjects(resolvedProjects);
         await syncTagsFromProjects(resolvedState, resolvedProjects);
         return;
       }
-      const paths = await discoverProjects(resolvedState.directories);
+      const discoveredPaths =
+        resolvedState.directories.length > 0
+          ? await discoverProjects(resolvedState.directories)
+          : [];
+      const paths = Array.from(new Set([...discoveredPaths, ...resolvedState.directProjectPaths]));
       const updatedProjects = await buildProjects(paths, resolvedProjects);
       const normalizedProjects = updatedProjects.map(normalizeProject);
       projectsRef.current = normalizedProjects;
@@ -239,13 +246,17 @@ export function useDevHaven(): DevHavenStore {
         const currentState = appStateRef.current;
         const updatedProjects = await buildProjects(uniquePaths, currentProjects);
         const nextProjects = mergeProjectsByPath(currentProjects, updatedProjects);
-        await commitProjects(nextProjects);
-        await syncTagsFromProjects(currentState, nextProjects);
+        const nextState = {
+          ...currentState,
+          directProjectPaths: Array.from(new Set([...currentState.directProjectPaths, ...uniquePaths])),
+        };
+        await commitAppStateAndProjects(nextState, nextProjects);
+        await syncTagsFromProjects(nextState, nextProjects);
       } catch (err) {
         handleError(err);
       }
     },
-    [commitProjects, handleError, syncTagsFromProjects],
+    [commitAppStateAndProjects, handleError, syncTagsFromProjects],
   );
 
   /** 重新扫描指定项目路径并更新缓存。 */

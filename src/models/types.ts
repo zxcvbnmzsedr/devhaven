@@ -148,6 +148,7 @@ export type AppStateFile = {
   version: number;
   tags: TagData[];
   directories: string[];
+  directProjectPaths: string[];
   recycleBin: string[];
   favoriteProjectPaths: string[];
   settings: AppSettings;

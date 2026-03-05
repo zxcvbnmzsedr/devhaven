@@ -463,6 +463,9 @@ fn dispatch_command(app: &AppHandle, command: &str, payload: Value) -> Result<Va
             for directory in &state.directories {
                 guard.ensure_under_home_path(directory, "state.directories[]")?;
             }
+            for project_path in &state.direct_project_paths {
+                guard.ensure_under_home_path(project_path, "state.directProjectPaths[]")?;
+            }
             to_json(crate::save_app_state(app.clone(), state))
         }
         "load_projects" => to_json(crate::load_projects(app.clone())),
@@ -964,6 +967,11 @@ impl PathGuard {
         let mut roots = BTreeSet::new();
         for directory in app_state.directories {
             if let Some(path) = normalize_absolute_path(&directory, &home_dir) {
+                roots.insert(canonical_or_normalized(path));
+            }
+        }
+        for project_path in app_state.direct_project_paths {
+            if let Some(path) = normalize_absolute_path(&project_path, &home_dir) {
                 roots.insert(canonical_or_normalized(path));
             }
         }

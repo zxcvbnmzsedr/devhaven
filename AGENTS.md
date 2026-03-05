@@ -25,7 +25,7 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 
 ### 本地数据落盘位置（便于排查）
 - 应用数据目录：`~/.devhaven/`（实现：`src-tauri/src/storage.rs`）
-  - `app_state.json`：应用状态（目录、标签、回收站、收藏项目、设置等）
+  - `app_state.json`：应用状态（目录、直接添加项目路径 `directProjectPaths`、标签、回收站、收藏项目、设置等）
   - `projects.json`：项目缓存列表
   - `heatmap_cache.json`：热力图缓存
   - `terminal_workspaces.json`：终端工作区/布局缓存
@@ -44,6 +44,7 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - 主列表多选批量操作（批量复制路径/刷新/打标/移入回收站）：`src/components/MainContent.tsx`、`src/App.tsx`、`src/state/useDevHaven.ts`
 - App 顶层编排已拆分（主文件仅做组合与渲染）：`src/App.tsx` + `src/hooks/useAppViewState.ts` + `src/hooks/useAppActions.ts` + `src/hooks/useProjectSelection.ts` + `src/hooks/useProjectFilter.ts` + `src/hooks/useTerminalWorkspace.ts` + `src/hooks/useWorktreeManager.ts` + `src/hooks/useCodexIntegration.ts` + `src/hooks/useCommandPalette.ts` + `src/hooks/useDisableInputCorrections.ts`（全局关闭输入自动纠错/首字母自动大写）
 - 核心状态与动作（刷新/扫描/合并/持久化）：`src/state/useDevHaven.ts`、`src/state/DevHavenContext.tsx`
+- “直接添加为项目”持久化：`src/components/Sidebar.tsx`（入口）→ `src/state/useDevHaven.ts`（`addProjects` 写入 `appState.directProjectPaths`，`refresh` 合并 `directories + directProjectPaths`）↔ `src-tauri/src/models.rs`（`AppStateFile.direct_project_paths`）/`src-tauri/src/web_server.rs`（Web 模式路径校验与 allow roots）
 - 调用后端命令：`src/services/appStorage.ts`（`discoverProjects/buildProjects/load/save`）→ `src/platform/commandClient.ts`（Tauri `invoke` / Web HTTP）
 - 扫描与构建项目元数据（是否 Git 仓库、提交数、最后提交时间）：`src-tauri/src/project_loader.rs`
 - Command 注册处：`src-tauri/src/lib.rs`（`discover_projects`、`build_projects`、`load_projects`、`save_projects`）
