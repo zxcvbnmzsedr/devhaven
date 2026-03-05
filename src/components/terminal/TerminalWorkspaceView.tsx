@@ -18,9 +18,14 @@ import type {
 } from "../../models/terminal";
 import type { ProjectScript, ScriptParamField, SharedScriptEntry } from "../../models/types";
 import { useDevHavenContext } from "../../state/DevHavenContext";
+import { resolveRuntimeClientId } from "../../platform/runtime";
 import { gitIsRepo } from "../../services/gitManagement";
 import { listSharedScripts } from "../../services/sharedScripts";
-import { loadTerminalWorkspace, saveTerminalWorkspace } from "../../services/terminalWorkspace";
+import {
+  listenTerminalWorkspaceSync,
+  loadTerminalWorkspace,
+  saveTerminalWorkspace,
+} from "../../services/terminalWorkspace";
 import {
   applySharedScriptCommandTemplate,
   buildTemplateParams,
@@ -214,6 +219,9 @@ function TerminalWorkspaceView({
   const [sharedScripts, setSharedScripts] = useState<SharedScriptEntry[]>([]);
   const [sharedScriptsLoading, setSharedScriptsLoading] = useState(false);
   const [sharedScriptsError, setSharedScriptsError] = useState<string | null>(null);
+  const runtimeClientIdRef = useRef(resolveRuntimeClientId());
+  const runtimeClientId = runtimeClientIdRef.current;
+  const skipAutoSaveFingerprintRef = useRef<string | null>(null);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -275,6 +283,68 @@ function TerminalWorkspaceView({
   }, [projectId, projectPath]);
 
   useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    const register = async () => {
+      try {
+        unlisten = await listenTerminalWorkspaceSync((event) => {
+          if (cancelled) {
+            return;
+          }
+          const payload = event.payload;
+          if (!payload || payload.projectPath !== projectPath) {
+            return;
+          }
+          if (payload.sourceClientId && payload.sourceClientId === runtimeClientId) {
+            return;
+          }
+
+          setWorkspace((current) => {
+            const currentUpdatedAt = current?.updatedAt ?? 0;
+            const incomingUpdatedAt = Number(payload.updatedAt ?? 0);
+            if (incomingUpdatedAt > 0 && incomingUpdatedAt <= currentUpdatedAt) {
+              return current;
+            }
+
+            if (payload.deleted) {
+              const fallback = createDefaultWorkspace(projectPath, projectId, workspaceDefaultsRef.current);
+              const next = {
+                ...fallback,
+                updatedAt: incomingUpdatedAt || fallback.updatedAt,
+              };
+              skipAutoSaveFingerprintRef.current = JSON.stringify(next);
+              return next;
+            }
+
+            if (!payload.workspace) {
+              return current;
+            }
+            const next = normalizeWorkspace(
+              payload.workspace,
+              projectPath,
+              projectId,
+              workspaceDefaultsRef.current,
+            );
+            skipAutoSaveFingerprintRef.current = JSON.stringify(next);
+            return next;
+          });
+        });
+      } catch (syncError) {
+        if (!cancelled) {
+          console.error("监听终端工作区同步事件失败。", syncError);
+        }
+      }
+    };
+
+    void register();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [projectId, projectPath, runtimeClientId]);
+
+  useEffect(() => {
     setRunConfigurationsDialog(null);
   }, [projectId]);
 
@@ -323,6 +393,16 @@ function TerminalWorkspaceView({
     if (!current) {
       return;
     }
+    const currentFingerprint = JSON.stringify(current);
+    if (
+      skipAutoSaveFingerprintRef.current &&
+      skipAutoSaveFingerprintRef.current === currentFingerprint
+    ) {
+      skipAutoSaveFingerprintRef.current = null;
+      return;
+    }
+    skipAutoSaveFingerprintRef.current = null;
+
     const sessions = { ...current.sessions };
     Object.entries(sessions).forEach(([sessionId, snapshot]) => {
       const provider = snapshotProviders.current.get(sessionId);
@@ -336,11 +416,11 @@ function TerminalWorkspaceView({
       updatedAt: Date.now(),
     };
     try {
-      await saveTerminalWorkspace(current.projectPath, payload);
+      await saveTerminalWorkspace(current.projectPath, payload, runtimeClientId);
     } catch (saveError) {
       console.error("保存终端工作空间失败。", saveError);
     }
-  }, []);
+  }, [runtimeClientId]);
 
   useEffect(() => {
     if (!workspace) {
@@ -1582,6 +1662,7 @@ function TerminalWorkspaceView({
                       cwd={workspace.sessions[sessionId]?.cwd ?? workspace.projectPath}
                       savedState={workspace.sessions[sessionId]?.savedState ?? null}
                       windowLabel={windowLabel}
+                      clientId={runtimeClientId}
                       useWebgl={appState.settings.terminalUseWebglRenderer && tab.id === workspace.activeTabId}
                       theme={xtermTheme}
                       isActive={tab.id === workspace.activeTabId && isPaneActive}
@@ -1642,6 +1723,7 @@ function TerminalWorkspaceView({
             sessions={workspace.sessions}
             projectPath={projectPath}
             windowLabel={windowLabel}
+            clientId={runtimeClientId}
             xtermTheme={xtermTheme}
             terminalUseWebglRenderer={appState.settings.terminalUseWebglRenderer}
             scriptRuntimeById={scriptRuntimeById}

@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, Query, State, WebSocketUpgrade, ws::Message, ws::WebSocket};
-use axum::http::header::{self, HeaderValue};
 use axum::http::StatusCode;
+use axum::http::header::{self, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -809,16 +809,25 @@ fn dispatch_command(app: &AppHandle, command: &str, payload: Value) -> Result<Va
             let project_path = required::<String>(&payload, &["projectPath", "project_path"])?;
             guard.ensure_allowed_path(&project_path, "projectPath")?;
             let workspace = required::<crate::models::TerminalWorkspace>(&payload, &["workspace"])?;
+            let source_client_id =
+                optional::<String>(&payload, &["sourceClientId", "source_client_id"])?;
             to_json(crate::save_terminal_workspace(
                 app.clone(),
                 project_path,
                 workspace,
+                source_client_id,
             ))
         }
         "delete_terminal_workspace" => {
             let project_path = required::<String>(&payload, &["projectPath", "project_path"])?;
             guard.ensure_allowed_path(&project_path, "projectPath")?;
-            to_json(crate::delete_terminal_workspace(app.clone(), project_path))
+            let source_client_id =
+                optional::<String>(&payload, &["sourceClientId", "source_client_id"])?;
+            to_json(crate::delete_terminal_workspace(
+                app.clone(),
+                project_path,
+                source_client_id,
+            ))
         }
         "list_terminal_workspace_summaries" => {
             to_json(crate::list_terminal_workspace_summaries(app.clone()))
@@ -892,6 +901,7 @@ fn dispatch_command(app: &AppHandle, command: &str, payload: Value) -> Result<Va
             let rows = required::<u16>(&payload, &["rows"])?;
             let window_label = required::<String>(&payload, &["windowLabel", "window_label"])?;
             let session_id = optional::<String>(&payload, &["sessionId", "session_id"])?;
+            let client_id = optional::<String>(&payload, &["clientId", "client_id"])?;
             to_json(crate::terminal::terminal_create_session(
                 app.clone(),
                 state,
@@ -900,6 +910,7 @@ fn dispatch_command(app: &AppHandle, command: &str, payload: Value) -> Result<Va
                 rows,
                 window_label,
                 session_id,
+                client_id,
             ))
         }
         "terminal_write" => {
@@ -918,7 +929,11 @@ fn dispatch_command(app: &AppHandle, command: &str, payload: Value) -> Result<Va
         "terminal_kill" => {
             let state = app.state::<TerminalState>();
             let pty_id = required::<String>(&payload, &["ptyId", "pty_id"])?;
-            to_json(crate::terminal::terminal_kill(state, pty_id))
+            let client_id = optional::<String>(&payload, &["clientId", "client_id"])?;
+            let force = optional::<bool>(&payload, &["force"])?;
+            to_json(crate::terminal::terminal_kill(
+                state, pty_id, client_id, force,
+            ))
         }
         _ => Err(format!("未知命令: {}", command)),
     }
@@ -928,30 +943,14 @@ fn should_send_event_to_ws_client(
     event: &web_event_bus::WebEventEnvelope,
     expected_window_label: Option<&str>,
 ) -> bool {
-    let Some(expected_label) = expected_window_label else {
-        return false;
-    };
-
-    if event.event != "terminal-output" && event.event != "terminal-exit" {
-        if event.event != "quick-command-event" {
-            return true;
-        }
-
-        return event
-            .payload
-            .get("job")
-            .and_then(|job| job.get("windowLabel"))
-            .and_then(Value::as_str)
-            .map(|actual| actual == expected_label)
-            .unwrap_or(false);
+    if event.event == "terminal-output"
+        || event.event == "terminal-exit"
+        || event.event == "quick-command-event"
+    {
+        return true;
     }
 
-    event
-        .payload
-        .get("windowLabel")
-        .and_then(Value::as_str)
-        .map(|actual| actual == expected_label)
-        .unwrap_or(false)
+    expected_window_label.is_some()
 }
 
 impl PathGuard {

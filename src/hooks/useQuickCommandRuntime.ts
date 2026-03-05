@@ -348,9 +348,6 @@ export function useQuickCommandRuntime({
         if (!job?.scriptId) {
           continue;
         }
-        if (job.windowLabel && job.windowLabel !== windowLabel) {
-          continue;
-        }
         if (projectId && job.projectId && job.projectId !== projectId) {
           continue;
         }
@@ -367,7 +364,7 @@ export function useQuickCommandRuntime({
       }
       setQuickCommandJobByScriptId(next);
     },
-    [projectId, projectPath, windowLabel],
+    [projectId, projectPath],
   );
 
   const cleanupRuntimeBySessionIds = useCallback(
@@ -795,7 +792,7 @@ export function useQuickCommandRuntime({
 
         const latestPty = latest.ptyId ?? sessionPtyIdRef.current.get(latest.sessionId) ?? null;
         if (latestPty) {
-          void killTerminal(latestPty).catch((error) => {
+          void killTerminal(latestPty, { force: true }).catch((error) => {
             console.error("强制停止快捷命令失败。", error);
           });
         }

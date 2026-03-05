@@ -56,6 +56,34 @@ export function resolveRuntimeWindowLabel(): string {
   }
 }
 
+export function resolveRuntimeClientId(): string {
+  if (typeof window === "undefined") {
+    return "main-client";
+  }
+  if (isTauriRuntime()) {
+    return `tauri:${resolveRuntimeWindowLabel()}`;
+  }
+
+  const query = new URLSearchParams(window.location.search);
+  const fromQuery = query.get("clientId")?.trim();
+  if (fromQuery) {
+    return fromQuery;
+  }
+
+  const storageKey = "devhaven:web:client-id";
+  try {
+    const existing = window.sessionStorage.getItem(storageKey)?.trim();
+    if (existing) {
+      return existing;
+    }
+    const generated = `web-client-${Math.random().toString(36).slice(2, 10)}`;
+    window.sessionStorage.setItem(storageKey, generated);
+    return generated;
+  } catch {
+    return `web-client-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
 export async function getAppVersionRuntime(): Promise<string> {
   if (!isTauriRuntime()) {
     const fromEnv = import.meta.env.VITE_APP_VERSION as string | undefined;

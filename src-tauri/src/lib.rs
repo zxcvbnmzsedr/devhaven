@@ -19,10 +19,13 @@ mod web_server;
 mod worktree_init;
 mod worktree_setup;
 
+use serde::Serialize;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::State;
 use tauri_plugin_log::{Target, TargetKind};
@@ -48,6 +51,47 @@ use crate::terminal::{
 };
 
 const INTERACTION_LOCK_REASON_WORKTREE_CREATE: &str = "worktree-create";
+const TERMINAL_WORKSPACE_SYNC_EVENT: &str = "terminal-workspace-sync";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalWorkspaceSyncPayload {
+    project_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<TerminalWorkspace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_client_id: Option<String>,
+    deleted: bool,
+    updated_at: i64,
+}
+
+fn now_unix_millis() -> i64 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_millis() as i64,
+        Err(_) => 0,
+    }
+}
+
+fn emit_terminal_workspace_sync_event(
+    app: &AppHandle,
+    project_path: String,
+    workspace: Option<TerminalWorkspace>,
+    source_client_id: Option<String>,
+    deleted: bool,
+) {
+    let payload = TerminalWorkspaceSyncPayload {
+        project_path,
+        workspace,
+        source_client_id,
+        deleted,
+        updated_at: now_unix_millis(),
+    };
+
+    if let Err(error) = app.emit(TERMINAL_WORKSPACE_SYNC_EVENT, payload.clone()) {
+        log::warn!("发送 terminal-workspace-sync 失败: {}", error);
+    }
+    web_event_bus::publish(TERMINAL_WORKSPACE_SYNC_EVENT, &payload);
+}
 
 #[tauri::command]
 /// 读取应用状态。
@@ -735,18 +779,39 @@ fn save_terminal_workspace(
     app: AppHandle,
     project_path: String,
     workspace: TerminalWorkspace,
+    source_client_id: Option<String>,
 ) -> Result<(), String> {
     log_command_result("save_terminal_workspace", || {
         log::info!("save_terminal_workspace path={}", project_path);
-        storage::save_terminal_workspace(&app, &project_path, workspace)
+        storage::save_terminal_workspace(&app, &project_path, workspace.clone())?;
+        emit_terminal_workspace_sync_event(
+            &app,
+            project_path.clone(),
+            Some(workspace),
+            source_client_id,
+            false,
+        );
+        Ok(())
     })
 }
 
 #[tauri::command]
-fn delete_terminal_workspace(app: AppHandle, project_path: String) -> Result<(), String> {
+fn delete_terminal_workspace(
+    app: AppHandle,
+    project_path: String,
+    source_client_id: Option<String>,
+) -> Result<(), String> {
     log_command_result("delete_terminal_workspace", || {
         log::info!("delete_terminal_workspace path={}", project_path);
-        storage::delete_terminal_workspace(&app, &project_path)
+        storage::delete_terminal_workspace(&app, &project_path)?;
+        emit_terminal_workspace_sync_event(
+            &app,
+            project_path.clone(),
+            None,
+            source_client_id,
+            true,
+        );
+        Ok(())
     })
 }
 

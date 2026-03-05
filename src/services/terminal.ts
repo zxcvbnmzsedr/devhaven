@@ -7,12 +7,14 @@ export type TerminalCreateRequest = {
   rows: number;
   windowLabel: string;
   sessionId?: string;
+  clientId?: string;
 };
 
 export type TerminalCreateResult = {
   ptyId: string;
   sessionId: string;
   shell: string;
+  replayData?: string | null;
 };
 
 export type TerminalOutputPayload = {
@@ -126,8 +128,15 @@ export async function resizeTerminal(ptyId: string, cols: number, rows: number):
   await invokeCommand("terminal_resize", { ptyId, cols, rows });
 }
 
-export async function killTerminal(ptyId: string): Promise<void> {
-  await invokeCommand("terminal_kill", { ptyId });
+export async function killTerminal(
+  ptyId: string,
+  options?: { clientId?: string; force?: boolean },
+): Promise<void> {
+  await invokeCommand("terminal_kill", {
+    ptyId,
+    clientId: options?.clientId,
+    force: options?.force,
+  });
 }
 
 export async function listenTerminalOutput(

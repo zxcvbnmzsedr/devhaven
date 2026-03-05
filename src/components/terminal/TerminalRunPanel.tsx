@@ -19,6 +19,7 @@ type TerminalRunPanelProps = {
   sessions: Record<string, TerminalSessionSnapshot>;
   projectPath: string;
   windowLabel: string;
+  clientId: string;
   xtermTheme: ITheme;
   terminalUseWebglRenderer: boolean;
   scriptRuntimeById: Record<string, ScriptRuntime>;
@@ -105,6 +106,7 @@ export default function TerminalRunPanel({
   sessions,
   projectPath,
   windowLabel,
+  clientId,
   xtermTheme,
   terminalUseWebglRenderer,
   scriptRuntimeById,
@@ -234,6 +236,7 @@ export default function TerminalRunPanel({
                   cwd={session.cwd ?? projectPath}
                   savedState={session.savedState ?? null}
                   windowLabel={windowLabel}
+                  clientId={clientId}
                   useWebgl={terminalUseWebglRenderer && isActive}
                   theme={xtermTheme}
                   isActive={isActive}

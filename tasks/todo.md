@@ -324,3 +324,24 @@
 - 启动新会话时优先复用同脚本既有 run tab（支持指定 `reuseTabId`），避免停止后运行不断新增底部标签。
 - 复用 run tab 时会回收被替换会话的孤儿 session，避免 `workspace.sessions` 残留无引用数据。
 - 验证通过：`npm run build`。
+
+---
+
+# 终端缓冲丢失与偶发白屏修复任务清单
+
+- [x] 排查缓冲丢失链路（会话重连回放 + 事件监听建立窗口）
+- [x] 优化重连恢复顺序：先建立事件监听，再创建/附着 PTY，并合并回放与实时输出
+- [x] 提升终端历史容量：前端 scrollback 与后端输出缓存同步扩容
+- [x] 增加 WebGL 上下文丢失自动降级，降低终端区域白屏概率
+- [x] 验证：`npm run build` 与 `cargo check --manifest-path src-tauri/Cargo.toml`
+
+## Review
+- 根因一：会话重连时先取 replay 再监听输出，存在短窗口丢输出；现已改为“先监听再附着”，并对 replay/live 进行拼接去重。
+- 根因二：终端历史容量偏小（scrollback 1000 + 后端缓存 2MB），长输出场景容易看起来“缓存丢失”；现已扩容。
+- 根因三：WebGL 渲染上下文偶发丢失后未及时回退，可能触发终端区域白屏；现已自动降级到默认渲染器。
+
+### 补丁 2（Codex TUI 白屏场景）
+- [x] 工作区快照改为包含 alt buffer，避免全屏 TUI 仅恢复普通缓冲导致“空屏”
+- [x] WebGL 上下文丢失后本实例永久降级，避免来回切 Tab 反复启用触发白屏
+- [x] 激活 Pane 时强制 refresh 一次，修复偶发重绘缺失
+- [x] 验证：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`

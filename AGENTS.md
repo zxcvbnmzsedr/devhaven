@@ -122,13 +122,15 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - 终端高级能力（仅当前 Pane 搜索 + 修饰键点击链接）：`src/components/terminal/TerminalPane.tsx`（Search/WebLinks addons，mac `⌘F`、Win/Linux `Ctrl+Shift+F` 打开搜索，`Enter/Shift+Enter/Esc` 导航/关闭；链接需 `Cmd/Ctrl+点击`，支持 `http/https/mailto` 与本地路径 `/Users/...`、`Users/...`、`~/...`）→ URL 用 `@tauri-apps/plugin-opener` 的 `openUrl`，本地路径优先走 `src/services/system.ts` 的 `openInFinder`（失败回退 `openPath`）↔ `src-tauri/capabilities/terminal.json`（`opener:default` 权限）
 - 会话/PTY 通信：
   - macOS shell 启动链路：`src-tauri/src/terminal.rs` 中 `terminal_create_session` 使用 login shell 风格启动（`/usr/bin/login -flp <user> /bin/bash --noprofile --norc -c "exec -l <shell>"`），以对齐 Ghostty 并加载用户 login 环境（例如 `~/.zprofile` 的 PATH）。
+  - 跨端会话复用：后端按 `sessionId` 复用已有 PTY；前端附带 `clientId` 进行附着，`terminal_kill` 在默认模式下按客户端引用释放，仅最后一个附着客户端离开时才真正结束 PTY（`force=true` 可强制结束）。
+  - 终端输出/退出事件改为全窗口广播（不再绑定单一 `windowLabel`）；前端统一按 `sessionId` 消费事件实现桌面端与 Web 端实时同步。后端维护 PTY 输出缓存并在附着已有会话时通过 `terminal_create_session.replayData` 回放，降低跨端附着时滚动缓存丢失。
   - 前端：`src/services/terminal.ts`（`terminal-*` 事件监听）
   - 后端：`src-tauri/src/terminal.rs`
   - Command：`src-tauri/src/lib.rs`（`terminal_create_session/terminal_write/terminal_resize/terminal_kill`）
 - 工作区持久化：
-  - 前端：`src/services/terminalWorkspace.ts`（`load/save/delete/listTerminalWorkspaceSummaries`）
+  - 前端：`src/services/terminalWorkspace.ts`（`load/save/delete/listTerminalWorkspaceSummaries` + `listenTerminalWorkspaceSync`），保存时透传 `sourceClientId` 防止跨端回环覆盖。
   - 后端：`src-tauri/src/storage.rs`（`terminal_workspaces.json`）
-  - Command：`src-tauri/src/lib.rs`（`load_terminal_workspace/save_terminal_workspace/delete_terminal_workspace/list_terminal_workspace_summaries`）
+  - Command：`src-tauri/src/lib.rs`（`load_terminal_workspace/save_terminal_workspace/delete_terminal_workspace/list_terminal_workspace_summaries`）；保存/删除后会广播 `terminal-workspace-sync` 事件。
 
 ### H. 悬浮监控窗（Monitor，已移除）
 - 该功能已下线，不再创建 `cli-monitor` 子窗口，也不再提供 `set_window_fullscreen_auxiliary` 相关能力。
@@ -166,11 +168,12 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - 扫描：`src/services/skills.ts`（`listGlobalSkills`）→ `src-tauri/src/lib.rs`（`list_global_skills`）→ `src-tauri/src/skills.rs`（固定扫描 `~/.agents/skills` 与常见 Agent 全局目录并聚合，不暴露扫描范围配置）
 
 ### M. Web 运行时桥接（HTTP/WS + 浏览器兜底）
-- 运行时探测与能力兜底：`src/platform/runtime.ts`（`isTauriRuntime`、目录选择/confirm/openUrl/homeDir/version 的浏览器 fallback）
+- 运行时探测与能力兜底：`src/platform/runtime.ts`（`isTauriRuntime`、`resolveRuntimeWindowLabel`、`resolveRuntimeClientId`、目录选择/confirm/openUrl/homeDir/version 的浏览器 fallback）
 - 命令桥接：`src/platform/commandClient.ts`（统一 `invokeCommand`；Web 下调用 `POST /api/cmd/{command}`）
 - 事件桥接：`src/platform/eventClient.ts`（统一 `listenEvent`；Web 下连接 `/api/ws`）
 - Rust Web 服务入口：`src-tauri/src/web_server.rs`（`/api/health`、`/api/cmd/{command}`、`/api/ws` + 前端静态资源路由 `/`、`/{*path}`）
 - 开发态单端口体感：`vite.config.ts` 配置 `/api` 代理到 Web API（优先 `DEVHAVEN_WEB_API_TARGET`，默认 `http://127.0.0.1:3210`），并从 `~/.devhaven/app_state.json` 读取 `settings.viteDevPort` 作为 Vite 端口（可由 `DEVHAVEN_VITE_PORT` 覆盖，需重启 Vite 生效）；`src/platform/runtime.ts` 在 `import.meta.env.DEV` 下走 `window.location.origin`
+- WebSocket 事件分发：`terminal-output` / `terminal-exit` / `quick-command-event` 已改为跨 `windowLabel` 广播，跨端状态由前端按 `sessionId/projectPath` 自行过滤。
 - 事件镜像：`src-tauri/src/web_event_bus.rs` + `src-tauri/src/{terminal.rs,quick_command_manager.rs,worktree_init.rs,interaction_lock.rs,codex_monitor.rs}`
 - 新增 command：`resolve_home_dir`（`src-tauri/src/lib.rs`），供 Web 模式路径展开使用
 

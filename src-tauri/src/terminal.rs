@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -17,6 +17,7 @@ const TERMINAL_OUTPUT_EVENT: &str = "terminal-output";
 const TERMINAL_EXIT_EVENT: &str = "terminal-exit";
 const TERMINAL_OUTPUT_BATCH_MS: u64 = 8;
 const TERMINAL_OUTPUT_BATCH_MAX_BYTES: usize = 32 * 1024;
+const TERMINAL_OUTPUT_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 /// 将 PTY 的字节流按 UTF-8 逐步解码。
 ///
@@ -64,18 +65,13 @@ fn drain_utf8_stream(pending: &mut Vec<u8>) -> String {
     out
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TerminalState {
     pub sessions: Arc<Mutex<HashMap<String, Arc<PtySession>>>>,
-    pub session_meta_by_key: Arc<Mutex<HashMap<String, TerminalSessionMeta>>>,
-    pub pty_to_session_key: Arc<Mutex<HashMap<String, String>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct TerminalSessionMeta {
-    pub window_label: String,
-    pub session_id: String,
-    pub pty_id: String,
+    pub session_to_pty: Arc<Mutex<HashMap<String, String>>>,
+    pub pty_to_session: Arc<Mutex<HashMap<String, String>>>,
+    pub pty_clients: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    pub output_cache_by_pty: Arc<Mutex<HashMap<String, String>>>,
 }
 
 pub struct PtySession {
@@ -90,6 +86,8 @@ pub struct TerminalCreateResult {
     pub pty_id: String,
     pub session_id: String,
     pub shell: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_data: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -97,8 +95,6 @@ pub struct TerminalCreateResult {
 struct TerminalOutputPayload {
     session_id: String,
     data: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    window_label: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -106,16 +102,9 @@ struct TerminalOutputPayload {
 struct TerminalExitPayload {
     session_id: String,
     code: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    window_label: Option<String>,
 }
 
-fn emit_terminal_output(
-    app_handle: &AppHandle,
-    window_label: &str,
-    session_id: &str,
-    data: &mut String,
-) {
+fn emit_terminal_output(app_handle: &AppHandle, session_id: &str, data: &mut String) {
     if data.is_empty() {
         return;
     }
@@ -123,10 +112,9 @@ fn emit_terminal_output(
     let payload = TerminalOutputPayload {
         session_id: session_id.to_string(),
         data: std::mem::take(data),
-        window_label: Some(window_label.to_string()),
     };
 
-    let _ = app_handle.emit_to(window_label, TERMINAL_OUTPUT_EVENT, payload.clone());
+    let _ = app_handle.emit(TERMINAL_OUTPUT_EVENT, payload.clone());
     web_event_bus::publish(TERMINAL_OUTPUT_EVENT, &payload);
 }
 
@@ -229,60 +217,177 @@ fn ensure_terminal_env(cmd: &mut CommandBuilder) {
     }
 }
 
-fn build_terminal_session_key(window_label: &str, session_id: &str) -> String {
-    format!("{}::{}", window_label, session_id)
+fn normalize_client_id(client_id: Option<String>, window_label: &str) -> String {
+    client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("window:{window_label}"))
 }
 
-fn register_terminal_session_meta(
+fn trim_terminal_output_cache(cache: &mut String) {
+    if cache.len() <= TERMINAL_OUTPUT_CACHE_MAX_BYTES {
+        return;
+    }
+
+    let target_start = cache.len().saturating_sub(TERMINAL_OUTPUT_CACHE_MAX_BYTES);
+    let mut start = target_start;
+    while start < cache.len() && !cache.is_char_boundary(start) {
+        start += 1;
+    }
+    cache.drain(..start);
+}
+
+fn append_terminal_output_cache(state: &TerminalState, pty_id: &str, chunk: &str) {
+    if chunk.is_empty() {
+        return;
+    }
+
+    let Ok(mut cache_by_pty) = state.output_cache_by_pty.lock() else {
+        return;
+    };
+    let cache = cache_by_pty
+        .entry(pty_id.to_string())
+        .or_insert_with(String::new);
+    cache.push_str(chunk);
+    trim_terminal_output_cache(cache);
+}
+
+fn register_terminal_session_index(
     state: &TerminalState,
-    meta: TerminalSessionMeta,
+    session_id: &str,
+    pty_id: &str,
 ) -> Result<(), String> {
-    let key = build_terminal_session_key(&meta.window_label, &meta.session_id);
     let old_pty = {
-        let mut session_meta_by_key = state
-            .session_meta_by_key
+        let mut session_to_pty = state
+            .session_to_pty
             .lock()
-            .map_err(|_| "终端会话元信息锁定失败".to_string())?;
-        session_meta_by_key
-            .insert(key.clone(), meta.clone())
-            .map(|old| old.pty_id)
+            .map_err(|_| "终端会话索引锁定失败".to_string())?;
+        session_to_pty.insert(session_id.to_string(), pty_id.to_string())
     };
 
-    let mut pty_to_session_key = state
-        .pty_to_session_key
+    let mut pty_to_session = state
+        .pty_to_session
         .lock()
         .map_err(|_| "终端会话索引锁定失败".to_string())?;
     if let Some(old_pty) = old_pty {
-        pty_to_session_key.remove(&old_pty);
+        pty_to_session.remove(&old_pty);
     }
-    pty_to_session_key.insert(meta.pty_id.clone(), key);
+    pty_to_session.insert(pty_id.to_string(), session_id.to_string());
     Ok(())
 }
 
-fn remove_terminal_session_meta_by_pty(
-    session_meta_by_key: &Arc<Mutex<HashMap<String, TerminalSessionMeta>>>,
-    pty_to_session_key: &Arc<Mutex<HashMap<String, String>>>,
+fn attach_terminal_client(
+    state: &TerminalState,
     pty_id: &str,
-) {
-    let key = {
-        let Ok(mut pty_index) = pty_to_session_key.lock() else {
+    client_id: &str,
+) -> Result<(), String> {
+    let mut clients = state
+        .pty_clients
+        .lock()
+        .map_err(|_| "终端会话客户端索引锁定失败".to_string())?;
+    clients
+        .entry(pty_id.to_string())
+        .or_insert_with(HashSet::new)
+        .insert(client_id.to_string());
+    Ok(())
+}
+
+fn detach_terminal_client(
+    state: &TerminalState,
+    pty_id: &str,
+    client_id: Option<&str>,
+    force: bool,
+) -> Result<bool, String> {
+    if force {
+        if let Ok(mut clients) = state.pty_clients.lock() {
+            clients.remove(pty_id);
+        }
+        return Ok(true);
+    }
+
+    let Some(client_id) = client_id else {
+        return Ok(true);
+    };
+
+    let mut clients = state
+        .pty_clients
+        .lock()
+        .map_err(|_| "终端会话客户端索引锁定失败".to_string())?;
+    let Some(owners) = clients.get_mut(pty_id) else {
+        return Ok(true);
+    };
+    owners.remove(client_id);
+    if !owners.is_empty() {
+        return Ok(false);
+    }
+    clients.remove(pty_id);
+    Ok(true)
+}
+
+fn find_existing_pty_by_session(
+    state: &TerminalState,
+    session_id: &str,
+) -> Result<Option<String>, String> {
+    let maybe_pty = state
+        .session_to_pty
+        .lock()
+        .map_err(|_| "终端会话索引锁定失败".to_string())?
+        .get(session_id)
+        .cloned();
+
+    let Some(pty_id) = maybe_pty else {
+        return Ok(None);
+    };
+
+    let is_alive = state
+        .sessions
+        .lock()
+        .map_err(|_| "终端会话锁定失败".to_string())?
+        .contains_key(&pty_id);
+    if is_alive {
+        return Ok(Some(pty_id));
+    }
+
+    // 清理异常退出后遗留的索引，再按新会话重建。
+    if let Ok(mut session_to_pty) = state.session_to_pty.lock() {
+        session_to_pty.remove(session_id);
+    }
+    if let Ok(mut pty_to_session) = state.pty_to_session.lock() {
+        pty_to_session.remove(&pty_id);
+    }
+    if let Ok(mut clients) = state.pty_clients.lock() {
+        clients.remove(&pty_id);
+    }
+    Ok(None)
+}
+
+fn remove_terminal_session_index_by_pty(state: &TerminalState, pty_id: &str) {
+    let session_id = {
+        let Ok(mut pty_to_session) = state.pty_to_session.lock() else {
             return;
         };
-        pty_index.remove(pty_id)
+        pty_to_session.remove(pty_id)
     };
 
-    let Some(key) = key else {
-        return;
-    };
-
-    if let Ok(mut session_meta) = session_meta_by_key.lock() {
-        let should_remove = session_meta
-            .get(&key)
-            .map(|current| current.pty_id == pty_id)
-            .unwrap_or(false);
-        if should_remove {
-            session_meta.remove(&key);
+    if let Some(session_id) = session_id {
+        if let Ok(mut session_to_pty) = state.session_to_pty.lock() {
+            let should_remove = session_to_pty
+                .get(&session_id)
+                .map(|current| current == pty_id)
+                .unwrap_or(false);
+            if should_remove {
+                session_to_pty.remove(&session_id);
+            }
         }
+    }
+
+    if let Ok(mut clients) = state.pty_clients.lock() {
+        clients.remove(pty_id);
+    }
+    if let Ok(mut cache_by_pty) = state.output_cache_by_pty.lock() {
+        cache_by_pty.remove(pty_id);
     }
 }
 
@@ -295,8 +400,28 @@ pub fn terminal_create_session(
     rows: u16,
     window_label: String,
     session_id: Option<String>,
+    client_id: Option<String>,
 ) -> Result<TerminalCreateResult, String> {
     let shell = default_shell();
+    let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let client_id = normalize_client_id(client_id, &window_label);
+
+    if let Some(existing_pty) = find_existing_pty_by_session(&state, &session_id)? {
+        attach_terminal_client(&state, &existing_pty, &client_id)?;
+        let replay_data = state
+            .output_cache_by_pty
+            .lock()
+            .ok()
+            .and_then(|cache_by_pty| cache_by_pty.get(&existing_pty).cloned())
+            .filter(|value| !value.is_empty());
+        return Ok(TerminalCreateResult {
+            pty_id: existing_pty,
+            session_id,
+            shell,
+            replay_data,
+        });
+    }
+
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -325,7 +450,6 @@ pub fn terminal_create_session(
         .take_writer()
         .map_err(|err| format!("打开终端写入失败: {err}"))?;
 
-    let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let pty_id = Uuid::new_v4().to_string();
 
     let session = Arc::new(PtySession {
@@ -342,14 +466,10 @@ pub fn terminal_create_session(
         sessions.insert(pty_id.clone(), session.clone());
     }
 
-    if let Err(error) = register_terminal_session_meta(
-        &state,
-        TerminalSessionMeta {
-            window_label: window_label.clone(),
-            session_id: session_id.clone(),
-            pty_id: pty_id.clone(),
-        },
-    ) {
+    if let Err(error) = register_terminal_session_index(&state, &session_id, &pty_id)
+        .and_then(|_| attach_terminal_client(&state, &pty_id, &client_id))
+    {
+        remove_terminal_session_index_by_pty(&state, &pty_id);
         if let Ok(mut sessions) = state.sessions.lock() {
             sessions.remove(&pty_id);
         }
@@ -360,12 +480,14 @@ pub fn terminal_create_session(
         return Err(error);
     }
 
+    if let Ok(mut cache_by_pty) = state.output_cache_by_pty.lock() {
+        cache_by_pty.insert(pty_id.clone(), String::new());
+    }
+
     let app_handle = app.clone();
     let sessions_map = state.sessions.clone();
-    let session_meta_by_key = state.session_meta_by_key.clone();
-    let pty_to_session_key = state.pty_to_session_key.clone();
+    let terminal_state_for_cleanup = state.inner().clone();
     let session_id_for_output = session_id.clone();
-    let window_label_for_output = window_label.clone();
     let pty_id_for_output = pty_id.clone();
     let session_for_output = session.clone();
 
@@ -423,32 +545,32 @@ pub fn terminal_create_session(
 
                     // 高吞吐下除了 8ms 窗口，还按字节阈值强制 flush，避免单批过大。
                     if should_flush_by_time || should_flush_by_size {
-                        emit_terminal_output(
-                            &app_handle,
-                            &window_label_for_output,
-                            &session_id_for_output,
-                            &mut batch_data,
+                        append_terminal_output_cache(
+                            &terminal_state_for_cleanup,
+                            &pty_id_for_output,
+                            &batch_data,
                         );
+                        emit_terminal_output(&app_handle, &session_id_for_output, &mut batch_data);
                         batch_started_at = None;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    emit_terminal_output(
-                        &app_handle,
-                        &window_label_for_output,
-                        &session_id_for_output,
-                        &mut batch_data,
+                    append_terminal_output_cache(
+                        &terminal_state_for_cleanup,
+                        &pty_id_for_output,
+                        &batch_data,
                     );
+                    emit_terminal_output(&app_handle, &session_id_for_output, &mut batch_data);
                     batch_started_at = None;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     // reader 结束后，先刷完缓存，再进入 exit 事件，保证输出完整有序。
-                    emit_terminal_output(
-                        &app_handle,
-                        &window_label_for_output,
-                        &session_id_for_output,
-                        &mut batch_data,
+                    append_terminal_output_cache(
+                        &terminal_state_for_cleanup,
+                        &pty_id_for_output,
+                        &batch_data,
                     );
+                    emit_terminal_output(&app_handle, &session_id_for_output, &mut batch_data);
                     break;
                 }
             }
@@ -463,28 +585,20 @@ pub fn terminal_create_session(
         let payload = TerminalExitPayload {
             session_id: session_id_for_output.clone(),
             code: exit_code,
-            window_label: Some(window_label_for_output.clone()),
         };
-        let _ = app_handle.emit_to(
-            &window_label_for_output,
-            TERMINAL_EXIT_EVENT,
-            payload.clone(),
-        );
+        let _ = app_handle.emit(TERMINAL_EXIT_EVENT, payload.clone());
         web_event_bus::publish(TERMINAL_EXIT_EVENT, &payload);
         if let Ok(mut sessions) = sessions_map.lock() {
             sessions.remove(&pty_id_for_output);
         }
-        remove_terminal_session_meta_by_pty(
-            &session_meta_by_key,
-            &pty_to_session_key,
-            &pty_id_for_output,
-        );
+        remove_terminal_session_index_by_pty(&terminal_state_for_cleanup, &pty_id_for_output);
     });
 
     Ok(TerminalCreateResult {
         pty_id,
         session_id,
         shell,
+        replay_data: None,
     })
 }
 
@@ -550,7 +664,25 @@ pub fn terminal_resize(
 }
 
 #[tauri::command]
-pub fn terminal_kill(state: State<TerminalState>, pty_id: String) -> Result<(), String> {
+pub fn terminal_kill(
+    state: State<TerminalState>,
+    pty_id: String,
+    client_id: Option<String>,
+    force: Option<bool>,
+) -> Result<(), String> {
+    let should_terminate = detach_terminal_client(
+        &state,
+        &pty_id,
+        client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        force.unwrap_or(false),
+    )?;
+    if !should_terminate {
+        return Ok(());
+    }
+
     let session = {
         let mut sessions = state
             .sessions
@@ -567,10 +699,6 @@ pub fn terminal_kill(state: State<TerminalState>, pty_id: String) -> Result<(), 
         let _ = child.kill();
         let _ = child.wait();
     }
-    remove_terminal_session_meta_by_pty(
-        &state.session_meta_by_key,
-        &state.pty_to_session_key,
-        &pty_id,
-    );
+    remove_terminal_session_index_by_pty(&state, &pty_id);
     Ok(())
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Terminal, type ILink, type ILinkProvider, type ITheme } from "xterm";
+import { Terminal, type IDisposable, type ILink, type ILinkProvider, type ITheme } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { SearchAddon } from "xterm-addon-search";
 import { WebglAddon } from "xterm-addon-webgl";
@@ -23,11 +23,14 @@ type PtyRegistryEntry = {
   cachedState: string | null;
   refs: number;
   killTimer: number | null;
-  creating: Promise<string> | null;
+  creating: Promise<PtyReadyResult> | null;
 };
 
 const PTY_REGISTRY = new Map<string, PtyRegistryEntry>();
 const PTY_KILL_GRACE_MS = 1000;
+const TERMINAL_SCROLLBACK_LINES = 5000;
+const CONNECT_OUTPUT_BUFFER_MAX_CHARS = 512 * 1024;
+const REPLAY_OVERLAP_SCAN_MAX_CHARS = 64 * 1024;
 const SEARCH_OPTIONS = {
   caseSensitive: false,
   regex: false,
@@ -41,6 +44,11 @@ const LOCAL_PATH_MATCH_WINDOW_MAX_CHARS = 2048;
 type LocalPathToken = {
   displayPath: string;
   openPath: string;
+};
+
+type PtyReadyResult = {
+  ptyId: string;
+  replayData: string | null;
 };
 
 function isMacOS() {
@@ -270,6 +278,24 @@ function buildPtyRegistryKey(windowLabel: string, sessionId: string) {
   return `${windowLabel}::${sessionId}`;
 }
 
+function mergeReplayWithBufferedOutput(replayData: string, bufferedOutput: string): string {
+  if (!replayData) {
+    return bufferedOutput;
+  }
+  if (!bufferedOutput) {
+    return replayData;
+  }
+
+  const maxOverlap = Math.min(REPLAY_OVERLAP_SCAN_MAX_CHARS, replayData.length, bufferedOutput.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (replayData.endsWith(bufferedOutput.slice(0, overlap))) {
+      return replayData + bufferedOutput.slice(overlap);
+    }
+  }
+
+  return replayData + bufferedOutput;
+}
+
 function getOrCreateRegistryEntry(key: string): PtyRegistryEntry {
   const existing = PTY_REGISTRY.get(key);
   if (existing) {
@@ -289,7 +315,7 @@ function retainPtySession(key: string) {
   }
 }
 
-function releasePtySession(key: string) {
+function releasePtySession(key: string, clientId: string) {
   const entry = PTY_REGISTRY.get(key);
   if (!entry) {
     return;
@@ -317,7 +343,8 @@ function releasePtySession(key: string) {
       let ptyId = current.ptyId;
       if (!ptyId && current.creating) {
         try {
-          ptyId = await current.creating;
+          const created = await current.creating;
+          ptyId = created.ptyId;
         } catch {
           // ignore
         }
@@ -330,7 +357,7 @@ function releasePtySession(key: string) {
 
       if (ptyId) {
         try {
-          await killTerminal(ptyId);
+          await killTerminal(ptyId, { clientId });
         } catch {
           // ignore
         }
@@ -342,11 +369,11 @@ function releasePtySession(key: string) {
 
 async function ensurePtyId(
   key: string,
-  request: { cwd: string; cols: number; rows: number; windowLabel: string; sessionId: string },
-): Promise<string> {
+  request: { cwd: string; cols: number; rows: number; windowLabel: string; sessionId: string; clientId: string },
+): Promise<PtyReadyResult> {
   const entry = getOrCreateRegistryEntry(key);
   if (entry.ptyId) {
-    return entry.ptyId;
+    return { ptyId: entry.ptyId, replayData: null };
   }
   if (entry.creating) {
     return entry.creating;
@@ -359,9 +386,13 @@ async function ensurePtyId(
       rows: request.rows,
       windowLabel: request.windowLabel,
       sessionId: request.sessionId,
+      clientId: request.clientId,
     });
     entry.ptyId = result.ptyId;
-    return result.ptyId;
+    return {
+      ptyId: result.ptyId,
+      replayData: result.replayData ?? null,
+    };
   })();
 
   try {
@@ -379,6 +410,7 @@ export type TerminalPaneProps = {
   cwd: string;
   savedState?: string | null;
   windowLabel: string;
+  clientId: string;
   useWebgl: boolean;
   theme: ITheme;
   isActive: boolean;
@@ -393,6 +425,7 @@ export default function TerminalPane({
   cwd,
   savedState,
   windowLabel,
+  clientId,
   useWebgl,
   theme,
   isActive,
@@ -408,17 +441,38 @@ export default function TerminalPane({
   const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const webLinksAddonRef = useRef<WebLinksAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
+  const webglContextLossListenerRef = useRef<IDisposable | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const lastResizeSignatureRef = useRef<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const ptyIdRef = useRef<string | null>(null);
   const restoredRef = useRef(false);
+  const initialSavedStateRef = useRef<string | null>(savedState ?? null);
   const themeRef = useRef<ITheme>(theme);
   const searchOpenRef = useRef(false);
   const isMacRef = useRef(isMacOS());
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState("");
+  const [webglPermanentlyDisabled, setWebglPermanentlyDisabled] = useState(false);
   themeRef.current = theme;
+
+  const disposeWebglAddon = useCallback(() => {
+    try {
+      webglContextLossListenerRef.current?.dispose();
+    } catch {
+      // ignore
+    } finally {
+      webglContextLossListenerRef.current = null;
+    }
+
+    try {
+      webglAddonRef.current?.dispose();
+    } catch (error) {
+      console.warn("释放 WebGL 终端渲染器失败。", error);
+    } finally {
+      webglAddonRef.current = null;
+    }
+  }, []);
 
   const closeSearch = useCallback(() => {
     searchAddonRef.current?.clearDecorations();
@@ -479,7 +533,7 @@ export default function TerminalPane({
       fontSize: 12,
       cursorStyle: "block",
       cursorBlink: true,
-      scrollback: 1000,
+      scrollback: TERMINAL_SCROLLBACK_LINES,
       theme: themeRef.current,
     });
     // 参考 Tabby：在 macOS 上拦截 Cmd 系快捷键，避免：
@@ -613,12 +667,15 @@ export default function TerminalPane({
       if (!ptyId) {
         return;
       }
-      const resizeSignature = `${ptyId}:${term.cols}x${term.rows}`;
+      // 避免布局抖动/隐藏容器阶段把 PTY 缩成 0x0，导致全屏 TUI（如 codex）渲染异常。
+      const nextCols = Math.max(2, term.cols);
+      const nextRows = Math.max(2, term.rows);
+      const resizeSignature = `${ptyId}:${nextCols}x${nextRows}`;
       if (lastResizeSignatureRef.current === resizeSignature) {
         return;
       }
       lastResizeSignatureRef.current = resizeSignature;
-      void resizeTerminal(ptyId, term.cols, term.rows).catch(() => undefined);
+      void resizeTerminal(ptyId, nextCols, nextRows).catch(() => undefined);
     };
     const schedulePtyResize = () => {
       if (resizeFrameRef.current !== null) {
@@ -657,11 +714,11 @@ export default function TerminalPane({
         syncPtySize();
       });
     }
-    const stateToRestore = registryEntry.cachedState ?? savedState;
-    if (stateToRestore && !restoredRef.current) {
+    const cachedState = registryEntry.cachedState;
+    if (cachedState && !restoredRef.current) {
       restoredRef.current = true;
       registryEntry.cachedState = null;
-      term.write(stateToRestore);
+      term.write(cachedState);
     }
     termRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -688,26 +745,17 @@ export default function TerminalPane({
 
     const connect = async () => {
       let ptyId: string | null = null;
-      try {
-        ptyId = await ensurePtyId(registryKey, {
-          cwd,
-          cols: term.cols,
-          rows: term.rows,
-          windowLabel,
-          sessionId,
-        });
-      } catch (error) {
-        console.error("创建终端会话失败。", error);
-        term.write("\r\n[创建终端会话失败]\r\n");
-        return;
-      }
+      let replayData: string | null = null;
+      let hydrated = false;
+      let bufferedOutput = "";
 
-      if (disposed) {
-        return;
-      }
-
-      ptyIdRef.current = ptyId;
-      syncPtySize();
+      const flushBufferedOutput = () => {
+        if (!bufferedOutput) {
+          return;
+        }
+        term.write(bufferedOutput);
+        bufferedOutput = "";
+      };
 
       try {
         const outputUnlisten = await listenTerminalOutput((event) => {
@@ -717,7 +765,20 @@ export default function TerminalPane({
           if (disposed) {
             return;
           }
-          term.write(event.payload.data);
+          const chunk = event.payload.data;
+          if (!chunk) {
+            return;
+          }
+
+          if (!hydrated) {
+            bufferedOutput += chunk;
+            if (bufferedOutput.length > CONNECT_OUTPUT_BUFFER_MAX_CHARS) {
+              bufferedOutput = bufferedOutput.slice(-CONNECT_OUTPUT_BUFFER_MAX_CHARS);
+            }
+            return;
+          }
+
+          term.write(chunk);
         });
         if (disposed) {
           outputUnlisten();
@@ -727,13 +788,6 @@ export default function TerminalPane({
       } catch (error) {
         console.error("订阅终端输出事件失败。", error);
         term.write("\r\n[订阅终端输出事件失败：请检查 Tauri capabilities 是否允许 terminal-* 窗口使用 core:event.listen]\r\n");
-        // 无法监听输出时，这个会话基本不可用，避免在后台残留。
-        const entry = PTY_REGISTRY.get(registryKey);
-        const currentPty = entry?.ptyId ?? null;
-        PTY_REGISTRY.delete(registryKey);
-        if (currentPty) {
-          void killTerminal(currentPty);
-        }
         return;
       }
 
@@ -758,6 +812,47 @@ export default function TerminalPane({
         term.write("\r\n[订阅终端退出事件失败：请检查 Tauri capabilities 是否允许 terminal-* 窗口使用 core:event.listen]\r\n");
       }
 
+      try {
+        const ready = await ensurePtyId(registryKey, {
+          cwd,
+          cols: term.cols,
+          rows: term.rows,
+          windowLabel,
+          sessionId,
+          clientId,
+        });
+        ptyId = ready.ptyId;
+        replayData = ready.replayData;
+      } catch (error) {
+        unlistenOutput?.();
+        unlistenOutput = null;
+        unlistenExit?.();
+        unlistenExit = null;
+        console.error("创建终端会话失败。", error);
+        term.write("\r\n[创建终端会话失败]\r\n");
+        return;
+      }
+
+      if (disposed) {
+        return;
+      }
+
+      ptyIdRef.current = ptyId;
+      syncPtySize();
+
+      if (!restoredRef.current) {
+        const stateToRestore = replayData
+          ? mergeReplayWithBufferedOutput(replayData, bufferedOutput)
+          : `${initialSavedStateRef.current ?? ""}${bufferedOutput}`;
+        if (stateToRestore) {
+          restoredRef.current = true;
+          term.write(stateToRestore);
+          bufferedOutput = "";
+        }
+      }
+      hydrated = true;
+      flushBufferedOutput();
+
       // 当输出/退出事件监听建立后再通知外部：避免外部过早下发命令导致丢失起始输出。
       onPtyReady?.(sessionId, ptyId);
     };
@@ -770,9 +865,9 @@ export default function TerminalPane({
         return null;
       }
       return addon.serialize({
-        excludeAltBuffer: true,
+        excludeAltBuffer: false,
         excludeModes: true,
-        scrollback: 1000,
+        scrollback: TERMINAL_SCROLLBACK_LINES,
       });
     });
 
@@ -785,7 +880,7 @@ export default function TerminalPane({
           entry.cachedState = addon.serialize({
             excludeAltBuffer: false,
             excludeModes: true,
-            scrollback: 1000,
+            scrollback: TERMINAL_SCROLLBACK_LINES,
           });
         }
       } catch (error) {
@@ -806,7 +901,7 @@ export default function TerminalPane({
       lastResizeSignatureRef.current = null;
       unlistenOutput?.();
       unlistenExit?.();
-      releasePtySession(registryKey);
+      releasePtySession(registryKey, clientId);
       // 注意：xterm@5 的 AddonManager 会在 core dispose 之后再 dispose addons，
       // WebglAddon 的 dispose 会调用 renderService.setRenderer，这时 renderService 已被 dispose
       // 会导致 `this._renderer.value.onRequestRedraw` 报错。
@@ -814,13 +909,7 @@ export default function TerminalPane({
       // 这里手动先 dispose WebglAddon，并把 `term.dispose()` 延迟到下一轮事件循环，
       // 避免 WebglAddon dispose 触发的渲染刷新/Viewport 定时器在 renderer 被销毁后执行，
       // 导致 `this._renderer.value.dimensions` 等空引用报错。
-      try {
-        webglAddonRef.current?.dispose();
-      } catch (error) {
-        console.warn("释放 WebGL 终端渲染器失败。", error);
-      } finally {
-        webglAddonRef.current = null;
-      }
+      disposeWebglAddon();
       setTimeout(() => {
         try {
           term.dispose();
@@ -829,7 +918,17 @@ export default function TerminalPane({
         }
       }, 0);
     };
-  }, [cwd, savedState, sessionId, windowLabel, onExit, onPtyReady, onRegisterSnapshotProvider, closeSearch]);
+  }, [
+    clientId,
+    closeSearch,
+    cwd,
+    disposeWebglAddon,
+    onExit,
+    onPtyReady,
+    onRegisterSnapshotProvider,
+    sessionId,
+    windowLabel,
+  ]);
 
   useEffect(() => {
     const term = termRef.current;
@@ -854,12 +953,13 @@ export default function TerminalPane({
       if (!webglAddonRef.current) {
         return;
       }
-      try {
-        webglAddonRef.current.dispose();
-      } catch (error) {
-        console.warn("释放 WebGL 终端渲染器失败。", error);
-      } finally {
-        webglAddonRef.current = null;
+      disposeWebglAddon();
+      return;
+    }
+
+    if (webglPermanentlyDisabled) {
+      if (webglAddonRef.current) {
+        disposeWebglAddon();
       }
       return;
     }
@@ -869,18 +969,21 @@ export default function TerminalPane({
     }
     try {
       const addon = new WebglAddon();
+      const contextLossUnlisten = addon.onContextLoss(() => {
+        console.warn("检测到 WebGL 上下文丢失，已回退到默认终端渲染器。");
+        setWebglPermanentlyDisabled(true);
+        disposeWebglAddon();
+      });
       term.loadAddon(addon);
+      webglContextLossListenerRef.current?.dispose();
+      webglContextLossListenerRef.current = contextLossUnlisten;
       webglAddonRef.current = addon;
     } catch (error) {
       console.warn("WebGL 终端渲染初始化失败，将回退到默认渲染。", error);
-      try {
-        webglAddonRef.current?.dispose();
-      } catch {
-        // ignore
-      }
-      webglAddonRef.current = null;
+      setWebglPermanentlyDisabled(true);
+      disposeWebglAddon();
     }
-  }, [useWebgl]);
+  }, [disposeWebglAddon, useWebgl, webglPermanentlyDisabled]);
 
   useEffect(() => {
     if (!isActive) {
@@ -900,6 +1003,11 @@ export default function TerminalPane({
       } catch (error) {
         console.warn("终端尺寸自适配失败，稍后将重试。", error);
       }
+    }
+    try {
+      termRef.current?.refresh(0, Math.max(0, (termRef.current?.rows ?? 1) - 1));
+    } catch (error) {
+      console.warn("终端激活后刷新失败。", error);
     }
     termRef.current?.focus();
   }, [isActive]);
