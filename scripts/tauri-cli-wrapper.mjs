@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,10 +51,19 @@ function syncTauriDevUrl(port) {
   console.log(`[tauri-wrapper] 已同步 devUrl -> ${expectedDevUrl}`);
 }
 
-function resolveLocalTauriBinary() {
+function resolveTauriCliCommand() {
   const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-  const binName = process.platform === "win32" ? "tauri.cmd" : "tauri";
-  return path.resolve(scriptDir, "../node_modules/.bin", binName);
+  const tauriCliPath = path.resolve(scriptDir, "../node_modules/@tauri-apps/cli/tauri.js");
+  if (existsSync(tauriCliPath)) {
+    return {
+      command: process.execPath,
+      args: [tauriCliPath],
+    };
+  }
+  return {
+    command: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+    args: ["exec", "tauri"],
+  };
 }
 
 function main() {
@@ -63,14 +72,16 @@ function main() {
     syncTauriDevUrl(resolveVitePort());
   }
 
-  const tauriBinaryPath = resolveLocalTauriBinary();
-  const result = spawnSync(tauriBinaryPath, args, {
+  const tauriCli = resolveTauriCliCommand();
+  const result = spawnSync(tauriCli.command, [...tauriCli.args, ...args], {
     stdio: "inherit",
     env: process.env,
   });
 
   if (result.error) {
-    console.error(`[tauri-wrapper] 启动 Tauri CLI 失败: ${result.error.message}`);
+    console.error(
+      `[tauri-wrapper] 启动 Tauri CLI 失败 (${tauriCli.command}): ${result.error.message}`
+    );
     process.exit(1);
   }
 

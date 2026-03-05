@@ -299,11 +299,12 @@
 # 修复 Windows release 构建失败（tauri wrapper）任务清单
 
 - [x] 定位 release 失败链路（`pnpm tauri build` -> `scripts/tauri-cli-wrapper.mjs`）
-- [x] 将 wrapper 调用从 `pnpm exec tauri` 改为直接调用本地 `node_modules/.bin/tauri(.cmd)`，规避 Windows 子进程解析差异
+- [x] 修复 wrapper 调用方式：改为 `node @tauri-apps/cli/tauri.js`（失败时回退 `pnpm.cmd/pnpm exec tauri`）
 - [x] 增加 wrapper 错误输出，失败时打印底层 spawn 错误信息
 - [x] 本地验证：`pnpm tauri build --help`、`pnpm build`
+- [ ] GitHub release workflow 复跑并确认 Windows job 通过
 
 ## Review
-- 根因是 wrapper 在子进程层再次依赖 `pnpm`，在 Windows runner 上存在命令解析不稳定，导致脚本直接以 `1` 退出且无有效错误上下文。
-- 现在改为调用项目内 Tauri CLI 可执行文件（Windows 使用 `tauri.cmd`），减少对全局 PATH 与 shell 解析行为的依赖。
-- 新增显式错误日志后，后续若仍失败可直接看到 `spawn` 级错误信息，定位成本更低。
+- 首次修复尝试直接执行 `tauri.cmd`，在 Windows runner 命中 `spawnSync ... EINVAL`；已据此调整为 Node 直接启动 CLI JS 入口，规避 `.cmd` 子进程兼容差异。
+- 当前 wrapper 不再依赖递归 `pnpm` 且补齐失败日志，后续 CI 再失败时可直接定位到具体子进程错误。
+- 待完成：复跑 release workflow，确认 windows-latest 的 `Tauri build and release` 成功。
