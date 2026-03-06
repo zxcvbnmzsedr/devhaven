@@ -360,3 +360,15 @@
 - 本次修复将“状态展示”与“本地 runtime 持有”解耦，Run 面板可正确反映跨端 quick command 运行态。
 - 新增停止对账 effect，保证跨端 stop 不再只改状态机而不终止真实 PTY。
 - 变更范围限定在前端状态协同层，未改动 command 协议与存储结构，风险可控。
+
+---
+
+# 2.8.1 发版任务清单
+
+- [x] 升级应用版本到 `2.8.1`（`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json`）
+- [x] 执行发版前验证并记录结果（`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml --locked`）
+- [x] 提交发版变更、创建 `v2.8.1` tag 并 push
+
+## Review
+- 版本号已在前端与 Tauri/Rust 侧统一升级到 `2.8.1`，构建与锁文件状态一致。
+- 发版前验证通过：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml --locked`。
