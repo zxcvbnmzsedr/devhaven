@@ -812,6 +812,34 @@ export function useQuickCommandRuntime({
   stopScriptRef.current = stopScript;
 
   useEffect(() => {
+    const runtimeEntries = Object.entries(scriptRuntimeById);
+    if (runtimeEntries.length === 0) {
+      return;
+    }
+
+    for (const [scriptId, runtime] of runtimeEntries) {
+      if (!runtime || !isScriptRuntimeValid(runtime)) {
+        continue;
+      }
+      const quickJob = quickCommandJobByScriptId[scriptId] ?? null;
+      if (!quickJob) {
+        continue;
+      }
+      const quickState = toScriptExecutionStateFromQuickState(quickJob.state);
+      if (quickState !== "stoppingSoft" && quickState !== "stoppingHard") {
+        continue;
+      }
+      const localPhase = scriptLocalPhaseById[scriptId] ?? null;
+      if (localPhase === "stoppingSoft" || localPhase === "stoppingHard") {
+        continue;
+      }
+
+      // 其他端发起了停止请求时，本端若持有会话应主动执行实际停止。
+      stopScript(scriptId);
+    }
+  }, [isScriptRuntimeValid, quickCommandJobByScriptId, scriptLocalPhaseById, scriptRuntimeById, stopScript]);
+
+  useEffect(() => {
     if (pendingRestartByScriptIdRef.current.size === 0) {
       return;
     }

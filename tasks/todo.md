@@ -345,3 +345,18 @@
 - [x] WebGL 上下文丢失后本实例永久降级，避免来回切 Tab 反复启用触发白屏
 - [x] 激活 Pane 时强制 refresh 一次，修复偶发重绘缺失
 - [x] 验证：`npm run build`、`cargo check --manifest-path src-tauri/Cargo.toml`
+
+---
+
+# 快捷命令运行状态同步修复任务清单
+
+- [x] 根因定位：确认 Run 面板状态依赖本地 runtime 映射，跨端快照存在状态缺失
+- [x] 修复 Run 面板状态计算：优先使用 quick command 全局状态（仅未结束 tab）
+- [x] 修复 Active Run 按钮状态：基于 quick command 快照同步运行态
+- [x] 修复跨端停止闭环：其他端发起 stop 时，本端持有会话自动执行实际停止
+- [x] 验证：`npm run build`
+
+## Review
+- 本次修复将“状态展示”与“本地 runtime 持有”解耦，Run 面板可正确反映跨端 quick command 运行态。
+- 新增停止对账 effect，保证跨端 stop 不再只改状态机而不终止真实 PTY。
+- 变更范围限定在前端状态协同层，未改动 command 协议与存储结构，风险可控。

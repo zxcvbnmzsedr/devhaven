@@ -51,14 +51,15 @@ function resolveTabExecutionState({
   scriptLocalPhaseById: Record<string, ScriptLocalPhase>;
   isScriptRuntimeValid: (runtime: ScriptRuntime) => boolean;
 }) {
+  const quickJob = quickCommandJobByScriptId[tab.scriptId] ?? null;
+  if (quickJob && (tab.endedAt === null || tab.endedAt === undefined)) {
+    return toScriptExecutionStateFromQuickState(quickJob.state);
+  }
+
   const runtime = scriptRuntimeById[tab.scriptId] ?? null;
   const runtimeMatches = Boolean(runtime && runtime.tabId === tab.id && isScriptRuntimeValid(runtime));
   if (!runtimeMatches) {
     return "idle";
-  }
-  const quickJob = quickCommandJobByScriptId[tab.scriptId] ?? null;
-  if (quickJob) {
-    return toScriptExecutionStateFromQuickState(quickJob.state);
   }
   return scriptLocalPhaseById[tab.scriptId] ?? "running";
 }

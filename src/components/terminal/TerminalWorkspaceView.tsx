@@ -1571,14 +1571,14 @@ function TerminalWorkspaceView({
   const activeRunTab = runPanelActiveTabId ? runPanelTabs.find((t) => t.id === runPanelActiveTabId) ?? null : null;
   const activeTabRunning = (() => {
     if (!activeRunTab) return false;
-    const runtime = scriptRuntimeById[activeRunTab.scriptId] ?? null;
-    const runtimeMatches = Boolean(runtime && runtime.tabId === activeRunTab.id && isScriptRuntimeValid(runtime));
-    if (!runtimeMatches) return false;
     const quickJob = quickCommandJobByScriptId[activeRunTab.scriptId] ?? null;
-    if (quickJob) {
+    if (quickJob && (activeRunTab.endedAt === null || activeRunTab.endedAt === undefined)) {
       const state = toScriptExecutionStateFromQuickState(quickJob.state);
       return state === "running" || state === "starting";
     }
+    const runtime = scriptRuntimeById[activeRunTab.scriptId] ?? null;
+    const runtimeMatches = Boolean(runtime && runtime.tabId === activeRunTab.id && isScriptRuntimeValid(runtime));
+    if (!runtimeMatches) return false;
     const localPhase = scriptLocalPhaseById[activeRunTab.scriptId] ?? null;
     return localPhase === "starting" || localPhase === null;
   })();
