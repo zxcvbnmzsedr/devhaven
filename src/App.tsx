@@ -22,6 +22,7 @@ import { useWorktreeManager } from "./hooks/useWorktreeManager";
 import { useAppActions } from "./hooks/useAppActions";
 import { useAppViewState } from "./hooks/useAppViewState";
 import { HEATMAP_CONFIG } from "./models/heatmap";
+import { isTauriRuntime } from "./platform/runtime";
 import type { ProjectListViewMode } from "./models/types";
 import { APP_RESUME_MIN_INACTIVE_MS, dispatchAppResumeEvent } from "./utils/appResume";
 import { MAIN_WINDOW_LABEL, shouldBlockReloadShortcut } from "./utils/worktreeHelpers";
@@ -150,8 +151,10 @@ function AppLayout() {
     }
 
     let resumeFrame: number | null = null;
-    let hiddenAt: number | null = null;
-    let resumeDispatchedForHiddenAt: number | null = null;
+    let inactiveAt: number | null = null;
+    let resumeDispatchedForInactiveAt: number | null = null;
+    let disposed = false;
+    let unlistenTauriFocus: (() => void) | null = null;
 
     const clearScheduledResume = () => {
       if (resumeFrame !== null) {
@@ -172,46 +175,98 @@ function AppLayout() {
       });
     };
 
-    const maybeRecoverFromHidden = () => {
-      if (hiddenAt === null || resumeDispatchedForHiddenAt === hiddenAt) {
+    const markInactive = () => {
+      inactiveAt = Date.now();
+      resumeDispatchedForInactiveAt = null;
+      clearScheduledResume();
+    };
+
+    const maybeRecoverFromInactive = () => {
+      if (inactiveAt === null || resumeDispatchedForInactiveAt === inactiveAt) {
         return;
       }
 
-      const inactiveMs = Date.now() - hiddenAt;
+      const inactiveMs = Date.now() - inactiveAt;
       if (inactiveMs < APP_RESUME_MIN_INACTIVE_MS) {
         return;
       }
 
-      resumeDispatchedForHiddenAt = hiddenAt;
+      resumeDispatchedForInactiveAt = inactiveAt;
       scheduleResumeRecovery();
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
-        hiddenAt = Date.now();
-        resumeDispatchedForHiddenAt = null;
-        clearScheduledResume();
+        markInactive();
         return;
       }
 
       if (document.visibilityState === "visible") {
-        maybeRecoverFromHidden();
+        maybeRecoverFromInactive();
       }
+    };
+
+    const handleWindowBlur = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      markInactive();
+    };
+
+    const handleWindowFocus = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+      maybeRecoverFromInactive();
     };
 
     const handlePageShow = (event: PageTransitionEvent) => {
       if (event.persisted) {
+        if (inactiveAt === null) {
+          inactiveAt = Date.now() - APP_RESUME_MIN_INACTIVE_MS;
+          resumeDispatchedForInactiveAt = null;
+        }
         scheduleResumeRecovery();
       }
     };
 
+    const registerTauriFocusRecovery = async () => {
+      if (!isTauriRuntime()) {
+        return;
+      }
+
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const currentWindow = getCurrentWindow();
+        unlistenTauriFocus = await currentWindow.onFocusChanged(({ payload: focused }) => {
+          if (disposed) {
+            return;
+          }
+          if (focused) {
+            handleWindowFocus();
+            return;
+          }
+          handleWindowBlur();
+        });
+      } catch (error) {
+        console.warn("注册 Tauri 窗口焦点恢复监听失败。", error);
+      }
+    };
+
     window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("focus", handleWindowFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    void registerTauriFocusRecovery();
 
     return () => {
+      disposed = true;
       clearScheduledResume();
       window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("focus", handleWindowFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      unlistenTauriFocus?.();
     };
   }, []);
 

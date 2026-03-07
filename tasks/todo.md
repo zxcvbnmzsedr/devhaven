@@ -438,3 +438,21 @@
 - `src-tauri/src/lib.rs` 现通过 catalog 宏生成 `invoke_handler`；`src-tauri/src/web_server.rs` 只保留 HTTP 路由与响应封装，旧的超长 `match` 与参数解包 helper 已移除。
 - Web 命令失败现在返回正确 HTTP 状态码与 `{ code, message, details? }` 错误体；前端 `src/platform/commandClient.ts` 已同步改为按 status 解析，并兼容旧 `{ ok, data }` 成功包裹。
 - 验证通过：`cargo test --manifest-path src-tauri/Cargo.toml command_catalog -- --nocapture`。
+
+---
+
+# macOS 锁屏/睡眠后黑屏恢复链补强任务清单
+
+- [x] 排查 macOS 锁屏睡眠后黑屏根因
+- [x] 检查前端恢复事件与全屏遮罩
+- [x] 检查 Rust/Tauri 窗口生命周期支持
+- [x] 汇总结论与验证方案
+- [x] 补强恢复触发：纳入 `blur/focus` 与 Tauri `onFocusChanged`
+- [x] 构建验证：执行前端构建确认类型与打包通过
+
+## Review
+- 当前更像前端恢复信号覆盖不全导致的渲染恢复遗漏，而不是 Rust 后端崩溃。
+- 最可疑回归点是 `src/App.tsx` 恢复逻辑：删除了 `window.focus` 触发，并将恢复收窄为 `visibilitychange + hidden >= 15s`。
+- 若黑屏主要发生在终端工作区，`terminalUseWebglRenderer=true` 会放大 macOS 睡眠唤醒后的 WebGL/WKWebView 重绘问题。
+- 若黑屏伴随无法点击，需优先排查 `InteractionLockOverlay` 是否因休眠期间丢失解锁事件而残留。
+- 当前修复方向保持最小化：先补恢复信号链，不改业务状态机；若后续仍偶发，再评估将 macOS 默认终端渲染切到非 WebGL。
