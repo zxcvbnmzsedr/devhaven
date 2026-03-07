@@ -26,14 +26,15 @@ import { isTauriRuntime } from "./platform/runtime";
 import type { ProjectListViewMode } from "./models/types";
 import { APP_RESUME_MIN_INACTIVE_MS, dispatchAppResumeEvent } from "./utils/appResume";
 import { MAIN_WINDOW_LABEL, shouldBlockReloadShortcut } from "./utils/worktreeHelpers";
-import { DevHavenProvider, useDevHavenContext } from "./state/DevHavenContext";
+import { DevHavenProvider, useDevHavenActions, useDevHavenState } from "./state/DevHavenContext";
 import { useHeatmapData } from "./state/useHeatmapData";
 const TerminalWorkspaceWindow = lazy(() => import("./components/terminal/TerminalWorkspaceWindow"));
 
 /** 应用主布局，负责筛选、状态联动与面板展示。 */
 function AppLayout() {
+  const { appState, projects, projectMap, isLoading, error } = useDevHavenState();
   const {
-    appState, projects, projectMap, isLoading, error, refresh,
+    refresh,
     addDirectory, removeDirectory, addProjects,
     addTag, renameTag, removeTag, toggleTagHidden, setTagColor,
     addTagToProject, addTagToProjects, removeTagFromProject,
@@ -42,7 +43,7 @@ function AppLayout() {
     refreshProject, updateGitDaily, updateSettings,
     moveProjectToRecycleBin, moveProjectsToRecycleBin, restoreProjectFromRecycleBin,
     toggleProjectFavorite,
-  } = useDevHavenContext();
+  } = useDevHavenActions();
 
   const { toast, showToast } = useToast();
   const viewState = useAppViewState({ appState, projects });
@@ -520,6 +521,9 @@ function AppLayout() {
               onExit={handleTerminalExit}
               windowLabel={MAIN_WINDOW_LABEL}
               isVisible={terminal.showTerminalWorkspace}
+              terminalTheme={appState.settings.terminalTheme}
+              sharedScriptsRoot={appState.settings.sharedScriptsRoot}
+              terminalUseWebglRenderer={appState.settings.terminalUseWebglRenderer}
               codexProjectStatusById={codex.codexProjectStatusById}
               gitWorktreesByProjectId={terminal.terminalGitWorktreesByProjectId}
             />

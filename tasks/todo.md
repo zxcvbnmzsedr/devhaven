@@ -456,3 +456,21 @@
 - 若黑屏主要发生在终端工作区，`terminalUseWebglRenderer=true` 会放大 macOS 睡眠唤醒后的 WebGL/WKWebView 重绘问题。
 - 若黑屏伴随无法点击，需优先排查 `InteractionLockOverlay` 是否因休眠期间丢失解锁事件而残留。
 - 当前修复方向保持最小化：先补恢复信号链，不改业务状态机；若后续仍偶发，再评估将 macOS 默认终端渲染切到非 WebGL。
+
+---
+
+# 全局状态粗粒度治理（2026-03-07）任务清单
+
+- [x] 拆分 `DevHavenContext` 为 state/actions 双 Provider
+- [x] 移除整包 `useDevHavenContext` 消费入口
+- [x] 收紧 `AppLayout` 与顶层 hooks 的状态/动作读取边界
+- [x] 将 `TerminalWorkspaceWindow` / `TerminalWorkspaceView` 改为父层显式传入最小设置 props
+- [x] 运行构建与测试验证
+- [x] 追加复盘结论
+
+## Review
+- 本次不引入新状态库，直接把 `DevHavenContext` 收敛为 `state/actions` 双 Provider，优先止住“整包 Context 任意变化导致所有消费者一起重跑”的问题。
+- `AppLayout` 改为分别读取状态与动作，终端窗口/终端视图不再直接依赖全局 Context，只接收主题、共享脚本目录、WebGL 开关等最小必要设置。
+- 为了让边界收紧真正转化成收益，`TerminalWorkspaceWindow` 增加了 `memo` 包裹；在父层因标签、回收站、设置弹窗等非终端状态重渲染时，终端窗口可直接复用。
+- 架构文档已同步回写 `AGENTS.md`，补充新的状态订阅约定与终端区设置传递方式。
+- 验证通过：`npm run build`、`cargo test --manifest-path src-tauri/Cargo.toml`。

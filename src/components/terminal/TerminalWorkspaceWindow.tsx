@@ -1,12 +1,11 @@
 import type { CSSProperties } from "react";
-import { useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 
 import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
 import type { Project, ProjectScript, ProjectWorktree } from "../../models/types";
 import { isTauriRuntime } from "../../platform/runtime";
 import type { GitWorktreeListItem } from "../../services/gitWorktree";
 import { useSystemColorScheme } from "../../hooks/useSystemColorScheme";
-import { useDevHavenContext } from "../../state/DevHavenContext";
 import {
   getTerminalThemePresetByName,
   resolveTerminalThemeName,
@@ -39,6 +38,9 @@ export type TerminalWorkspaceWindowProps = {
   onExit?: () => void;
   windowLabel: string;
   isVisible: boolean;
+  terminalTheme: string;
+  sharedScriptsRoot: string;
+  terminalUseWebglRenderer: boolean;
   codexProjectStatusById: Record<string, CodexProjectStatus>;
   gitWorktreesByProjectId: Record<string, GitWorktreeListItem[] | undefined>;
 };
@@ -127,7 +129,7 @@ function resolveActiveProject(
   return openProjects.find((project) => project.id === activeProjectId) ?? openProjects[0];
 }
 
-export default function TerminalWorkspaceWindow({
+function TerminalWorkspaceWindow({
   openProjects,
   activeProjectId,
   quickCommandDispatch,
@@ -144,15 +146,17 @@ export default function TerminalWorkspaceWindow({
   onExit,
   windowLabel,
   isVisible,
+  terminalTheme,
+  sharedScriptsRoot,
+  terminalUseWebglRenderer,
   codexProjectStatusById,
   gitWorktreesByProjectId,
 }: TerminalWorkspaceWindowProps) {
-  const { appState } = useDevHavenContext();
   const systemScheme = useSystemColorScheme();
   const terminalThemePreset = useMemo(() => {
-    const resolvedName = resolveTerminalThemeName(appState.settings.terminalTheme, systemScheme);
+    const resolvedName = resolveTerminalThemeName(terminalTheme, systemScheme);
     return getTerminalThemePresetByName(resolvedName);
-  }, [appState.settings.terminalTheme, systemScheme]);
+  }, [terminalTheme, systemScheme]);
 
   const terminalStyle = useMemo(() => {
     return {
@@ -426,6 +430,8 @@ export default function TerminalWorkspaceWindow({
                 quickCommandDispatch={projectQuickCommandDispatch}
                 windowLabel={windowLabel}
                 xtermTheme={terminalThemePreset.xterm}
+                sharedScriptsRoot={sharedScriptsRoot}
+                terminalUseWebglRenderer={terminalUseWebglRenderer}
                 codexRunningCount={codexProjectStatusById[project.id]?.runningCount ?? 0}
                 scripts={project.scripts ?? EMPTY_PROJECT_SCRIPTS}
                 onAddProjectScript={onAddProjectScript}
@@ -439,3 +445,5 @@ export default function TerminalWorkspaceWindow({
     </div>
   );
 }
+
+export default memo(TerminalWorkspaceWindow);

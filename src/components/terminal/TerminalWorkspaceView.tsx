@@ -17,7 +17,6 @@ import type {
   TerminalWorkspace,
 } from "../../models/terminal";
 import type { ProjectScript, ScriptParamField, SharedScriptEntry } from "../../models/types";
-import { useDevHavenContext } from "../../state/DevHavenContext";
 import { resolveRuntimeClientId } from "../../platform/runtime";
 import { gitIsRepo } from "../../services/gitManagement";
 import { listSharedScripts } from "../../services/sharedScripts";
@@ -65,6 +64,8 @@ export type TerminalWorkspaceViewProps = {
   quickCommandDispatch?: TerminalQuickCommandDispatch | null;
   windowLabel: string;
   xtermTheme: ITheme;
+  sharedScriptsRoot: string;
+  terminalUseWebglRenderer: boolean;
   codexRunningCount?: number;
   scripts?: ProjectScript[];
   onAddProjectScript: (
@@ -157,6 +158,12 @@ function areTerminalWorkspaceViewPropsEqual(
   if (prevProps.xtermTheme !== nextProps.xtermTheme) {
     return false;
   }
+  if (prevProps.sharedScriptsRoot !== nextProps.sharedScriptsRoot) {
+    return false;
+  }
+  if (prevProps.terminalUseWebglRenderer !== nextProps.terminalUseWebglRenderer) {
+    return false;
+  }
   if (prevProps.codexRunningCount !== nextProps.codexRunningCount) {
     return false;
   }
@@ -189,13 +196,14 @@ function TerminalWorkspaceView({
   quickCommandDispatch,
   windowLabel,
   xtermTheme,
+  sharedScriptsRoot,
+  terminalUseWebglRenderer,
   codexRunningCount = 0,
   scripts = [],
   onAddProjectScript,
   onUpdateProjectScript,
   onRemoveProjectScript,
 }: TerminalWorkspaceViewProps) {
-  const { appState } = useDevHavenContext();
   const workspaceDefaultsRef = useRef<{
     defaultRunPanelOpen: boolean;
     defaultRunPanelHeight: number;
@@ -355,7 +363,7 @@ function TerminalWorkspaceView({
     let cancelled = false;
     setSharedScriptsLoading(true);
     setSharedScriptsError(null);
-    void listSharedScripts(appState.settings.sharedScriptsRoot)
+    void listSharedScripts(sharedScriptsRoot)
       .then((entries) => {
         if (cancelled) {
           return;
@@ -378,7 +386,7 @@ function TerminalWorkspaceView({
     return () => {
       cancelled = true;
     };
-  }, [appState.settings.sharedScriptsRoot, runConfigurationsDialog]);
+  }, [runConfigurationsDialog, sharedScriptsRoot]);
 
   const registerSnapshotProvider = useCallback(
     (sessionId: string, provider: () => string | null) => {
@@ -600,7 +608,7 @@ function TerminalWorkspaceView({
     projectPath,
     windowLabel,
     scripts,
-    sharedScriptsRoot: appState.settings.sharedScriptsRoot,
+    sharedScriptsRoot,
     workspace,
     updateWorkspace,
     onRequestSessionClose: requestSessionClose,
@@ -1663,7 +1671,7 @@ function TerminalWorkspaceView({
                       savedState={workspace.sessions[sessionId]?.savedState ?? null}
                       windowLabel={windowLabel}
                       clientId={runtimeClientId}
-                      useWebgl={appState.settings.terminalUseWebglRenderer && tab.id === workspace.activeTabId}
+                      useWebgl={terminalUseWebglRenderer && tab.id === workspace.activeTabId}
                       theme={xtermTheme}
                       isActive={tab.id === workspace.activeTabId && isPaneActive}
                       onActivate={(nextSessionId) => handleActivateSession(tab.id, nextSessionId)}
@@ -1725,7 +1733,7 @@ function TerminalWorkspaceView({
             windowLabel={windowLabel}
             clientId={runtimeClientId}
             xtermTheme={xtermTheme}
-            terminalUseWebglRenderer={appState.settings.terminalUseWebglRenderer}
+            terminalUseWebglRenderer={terminalUseWebglRenderer}
             scriptRuntimeById={scriptRuntimeById}
             quickCommandJobByScriptId={quickCommandJobByScriptId}
             scriptLocalPhaseById={scriptLocalPhaseById}

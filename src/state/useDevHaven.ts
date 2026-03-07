@@ -68,6 +68,10 @@ export type DevHavenState = {
   error: string | null;
 };
 
+export type DevHavenStateValue = DevHavenState & {
+  projectMap: Map<string, Project>;
+};
+
 export type DevHavenActions = {
   refresh: () => Promise<void>;
   addProjects: (paths: string[]) => Promise<void>;
@@ -105,10 +109,7 @@ export type DevHavenActions = {
   removeTagFromProject: (projectId: string, tag: string) => Promise<void>;
 };
 
-export type DevHavenStore = DevHavenState &
-  DevHavenActions & {
-    projectMap: Map<string, Project>;
-  };
+export type DevHavenStore = DevHavenStateValue & DevHavenActions;
 
 /** 项目管理主 Hook，封装状态、缓存与业务操作。 */
 export function useDevHaven(): DevHavenStore {
