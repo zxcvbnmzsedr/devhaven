@@ -908,6 +908,10 @@ pub fn run() {
                 .is_locked();
             if locked {
                 api.prevent_exit();
+                return;
+            }
+            if let Err(error) = storage::flush_terminal_workspace_store(app_handle) {
+                log::warn!("退出前刷盘终端工作区失败: {}", error);
             }
         }
     });
