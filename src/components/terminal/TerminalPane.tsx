@@ -9,26 +9,20 @@ import "xterm/css/xterm.css";
 
 import { copyToClipboard, openInFinder } from "../../services/system";
 import {
-  createTerminalSession,
-  killTerminal,
+  buildTerminalPtyRegistryKey,
+  cacheTerminalPtyState,
+  consumeTerminalPtyCachedState,
+  ensureTerminalPtyId,
   listenTerminalExit,
   listenTerminalOutput,
+  releaseTerminalPtySession,
   resizeTerminal,
+  retainTerminalPtySession,
   writeTerminal,
 } from "../../services/terminal";
 import { openPathRuntime, openUrlRuntime } from "../../platform/runtime";
 import { APP_RESUME_EVENT } from "../../utils/appResume";
 
-type PtyRegistryEntry = {
-  ptyId: string | null;
-  cachedState: string | null;
-  refs: number;
-  killTimer: number | null;
-  creating: Promise<PtyReadyResult> | null;
-};
-
-const PTY_REGISTRY = new Map<string, PtyRegistryEntry>();
-const PTY_KILL_GRACE_MS = 1000;
 const TERMINAL_SCROLLBACK_LINES = 5000;
 const CONNECT_OUTPUT_BUFFER_MAX_CHARS = 512 * 1024;
 const REPLAY_OVERLAP_SCAN_MAX_CHARS = 64 * 1024;
@@ -46,11 +40,6 @@ const LOCAL_PATH_MATCH_WINDOW_MAX_CHARS = 2048;
 type LocalPathToken = {
   displayPath: string;
   openPath: string;
-};
-
-type PtyReadyResult = {
-  ptyId: string;
-  replayData: string | null;
 };
 
 function isMacOS() {
@@ -276,10 +265,6 @@ function createLocalPathLinkProvider(
   };
 }
 
-function buildPtyRegistryKey(windowLabel: string, sessionId: string) {
-  return `${windowLabel}::${sessionId}`;
-}
-
 function mergeReplayWithBufferedOutput(replayData: string, bufferedOutput: string): string {
   if (!replayData) {
     return bufferedOutput;
@@ -297,116 +282,6 @@ function mergeReplayWithBufferedOutput(replayData: string, bufferedOutput: strin
 
   return replayData + bufferedOutput;
 }
-
-function getOrCreateRegistryEntry(key: string): PtyRegistryEntry {
-  const existing = PTY_REGISTRY.get(key);
-  if (existing) {
-    return existing;
-  }
-  const next: PtyRegistryEntry = { ptyId: null, cachedState: null, refs: 0, killTimer: null, creating: null };
-  PTY_REGISTRY.set(key, next);
-  return next;
-}
-
-function retainPtySession(key: string) {
-  const entry = getOrCreateRegistryEntry(key);
-  entry.refs += 1;
-  if (entry.killTimer !== null) {
-    window.clearTimeout(entry.killTimer);
-    entry.killTimer = null;
-  }
-}
-
-function releasePtySession(key: string, clientId: string) {
-  const entry = PTY_REGISTRY.get(key);
-  if (!entry) {
-    return;
-  }
-  entry.refs = Math.max(0, entry.refs - 1);
-  if (entry.refs > 0) {
-    return;
-  }
-  if (entry.killTimer !== null) {
-    return;
-  }
-  if (!entry.ptyId && !entry.creating) {
-    PTY_REGISTRY.delete(key);
-    return;
-  }
-
-  entry.killTimer = window.setTimeout(() => {
-    void (async () => {
-      const current = PTY_REGISTRY.get(key);
-      if (!current || current.refs > 0) {
-        return;
-      }
-      current.killTimer = null;
-
-      let ptyId = current.ptyId;
-      if (!ptyId && current.creating) {
-        try {
-          const created = await current.creating;
-          ptyId = created.ptyId;
-        } catch {
-          // ignore
-        }
-      }
-
-      const latest = PTY_REGISTRY.get(key);
-      if (!latest || latest.refs > 0) {
-        return;
-      }
-
-      if (ptyId) {
-        try {
-          await killTerminal(ptyId, { clientId });
-        } catch {
-          // ignore
-        }
-      }
-      PTY_REGISTRY.delete(key);
-    })();
-  }, PTY_KILL_GRACE_MS);
-}
-
-async function ensurePtyId(
-  key: string,
-  request: { cwd: string; cols: number; rows: number; windowLabel: string; sessionId: string; clientId: string },
-): Promise<PtyReadyResult> {
-  const entry = getOrCreateRegistryEntry(key);
-  if (entry.ptyId) {
-    return { ptyId: entry.ptyId, replayData: null };
-  }
-  if (entry.creating) {
-    return entry.creating;
-  }
-
-  entry.creating = (async () => {
-    const result = await createTerminalSession({
-      projectPath: request.cwd,
-      cols: request.cols,
-      rows: request.rows,
-      windowLabel: request.windowLabel,
-      sessionId: request.sessionId,
-      clientId: request.clientId,
-    });
-    entry.ptyId = result.ptyId;
-    return {
-      ptyId: result.ptyId,
-      replayData: result.replayData ?? null,
-    };
-  })();
-
-  try {
-    return await entry.creating;
-  } finally {
-    const latest = PTY_REGISTRY.get(key);
-    if (latest) {
-      latest.creating = null;
-    }
-  }
-}
-
 export type TerminalPaneProps = {
   sessionId: string;
   cwd: string;
@@ -420,6 +295,7 @@ export type TerminalPaneProps = {
   onExit: (sessionId: string, code?: number | null) => void;
   onPtyReady?: (sessionId: string, ptyId: string) => void;
   onRegisterSnapshotProvider: (sessionId: string, provider: () => string | null) => () => void;
+  preserveSessionOnUnmount?: boolean;
 };
 
 export default function TerminalPane({
@@ -435,6 +311,7 @@ export default function TerminalPane({
   onExit,
   onPtyReady,
   onRegisterSnapshotProvider,
+  preserveSessionOnUnmount = false,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -628,9 +505,9 @@ export default function TerminalPane({
     if (!container) {
       return;
     }
-    const registryKey = buildPtyRegistryKey(windowLabel, sessionId);
-    retainPtySession(registryKey);
-    const registryEntry = getOrCreateRegistryEntry(registryKey);
+    const registryKey = buildTerminalPtyRegistryKey(windowLabel, sessionId);
+    retainTerminalPtySession(registryKey);
+    const cachedState = consumeTerminalPtyCachedState(registryKey);
 
     let disposed = false;
     const term = new Terminal({
@@ -823,12 +700,6 @@ export default function TerminalPane({
         syncPtySize();
       });
     }
-    const cachedState = registryEntry.cachedState;
-    if (cachedState && !restoredRef.current) {
-      restoredRef.current = true;
-      registryEntry.cachedState = null;
-      term.write(cachedState);
-    }
     termRef.current = term;
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
@@ -922,8 +793,8 @@ export default function TerminalPane({
       }
 
       try {
-        const ready = await ensurePtyId(registryKey, {
-          cwd,
+        const ready = await ensureTerminalPtyId(registryKey, {
+          projectPath: cwd,
           cols: term.cols,
           rows: term.rows,
           windowLabel,
@@ -931,7 +802,7 @@ export default function TerminalPane({
           clientId,
         });
         ptyId = ready.ptyId;
-        replayData = ready.replayData;
+        replayData = ready.replayData ?? null;
       } catch (error) {
         unlistenOutput?.();
         unlistenOutput = null;
@@ -950,9 +821,11 @@ export default function TerminalPane({
       syncPtySize();
 
       if (!restoredRef.current) {
-        const stateToRestore = replayData
-          ? mergeReplayWithBufferedOutput(replayData, bufferedOutput)
-          : `${initialSavedStateRef.current ?? ""}${bufferedOutput}`;
+        const baseState = cachedState ?? initialSavedStateRef.current ?? "";
+        const replayRestoredState = replayData ? mergeReplayWithBufferedOutput(baseState, replayData) : baseState;
+        const stateToRestore = bufferedOutput
+          ? mergeReplayWithBufferedOutput(replayRestoredState, bufferedOutput)
+          : replayRestoredState;
         if (stateToRestore) {
           restoredRef.current = true;
           term.write(stateToRestore);
@@ -983,14 +856,16 @@ export default function TerminalPane({
     return () => {
       disposed = true;
       try {
-        const entry = PTY_REGISTRY.get(registryKey);
         const addon = serializeAddonRef.current;
-        if (entry && addon) {
-          entry.cachedState = addon.serialize({
-            excludeAltBuffer: false,
-            excludeModes: true,
-            scrollback: TERMINAL_SCROLLBACK_LINES,
-          });
+        if (addon) {
+          cacheTerminalPtyState(
+            registryKey,
+            addon.serialize({
+              excludeAltBuffer: false,
+              excludeModes: true,
+              scrollback: TERMINAL_SCROLLBACK_LINES,
+            }),
+          );
         }
       } catch (error) {
         console.warn("缓存终端状态失败。", error);
@@ -1012,7 +887,7 @@ export default function TerminalPane({
       lastResizeSignatureRef.current = null;
       unlistenOutput?.();
       unlistenExit?.();
-      releasePtySession(registryKey, clientId);
+      releaseTerminalPtySession(registryKey, clientId, { preserve: preserveSessionOnUnmount });
       // 注意：xterm@5 的 AddonManager 会在 core dispose 之后再 dispose addons，
       // WebglAddon 的 dispose 会调用 renderService.setRenderer，这时 renderService 已被 dispose
       // 会导致 `this._renderer.value.onRequestRedraw` 报错。
@@ -1040,6 +915,7 @@ export default function TerminalPane({
     onRegisterSnapshotProvider,
     sessionId,
     windowLabel,
+    preserveSessionOnUnmount,
   ]);
 
   useEffect(() => {

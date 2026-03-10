@@ -508,13 +508,14 @@ function AppLayout() {
               openProjects={terminal.terminalOpenProjects}
               activeProjectId={terminal.terminalActiveProjectId}
               quickCommandDispatch={terminal.terminalQuickCommandDispatch}
-              onSelectProject={terminal.setTerminalActiveProjectId}
+              onSelectProject={terminal.selectTerminalProject}
               onCloseProject={terminal.handleCloseTerminalProject}
               onCreateWorktree={handleTerminalCreateWorktree}
               onOpenWorktree={handleTerminalOpenWorktree}
               onDeleteWorktree={handleTerminalDeleteWorktree}
               onRetryWorktree={handleTerminalRetryWorktree}
               onRefreshWorktrees={handleTerminalRefreshWorktrees}
+              onRegisterPersistWorkspace={terminal.registerTerminalWorkspacePersistence}
               onAddProjectScript={addProjectScript}
               onUpdateProjectScript={updateProjectScript}
               onRemoveProjectScript={removeProjectScript}

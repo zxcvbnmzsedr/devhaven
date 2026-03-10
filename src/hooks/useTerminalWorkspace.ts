@@ -29,6 +29,11 @@ export type UseTerminalWorkspaceReturn = {
   setTerminalOpenProjects: Dispatch<SetStateAction<Project[]>>;
   terminalActiveProjectId: string | null;
   setTerminalActiveProjectId: Dispatch<SetStateAction<string | null>>;
+  selectTerminalProject: (projectId: string) => void;
+  registerTerminalWorkspacePersistence: (
+    projectId: string,
+    persistWorkspace: (() => Promise<void>) | null,
+  ) => void;
   terminalQuickCommandDispatch: TerminalQuickCommandDispatch | null;
   terminalGitWorktreesByProjectId: Record<string, GitWorktreeListItem[]>;
   setTerminalGitWorktreesByProjectId: Dispatch<SetStateAction<Record<string, GitWorktreeListItem[]>>>;
@@ -71,6 +76,65 @@ export function useTerminalWorkspace({
   const terminalRestoreCheckedRef = useRef(false);
   const worktreeAutoSyncedProjectIdsRef = useRef<Set<string>>(new Set());
   const worktreeSyncingProjectIdsRef = useRef<Set<string>>(new Set());
+  const terminalWorkspacePersistenceRef = useRef(new Map<string, () => Promise<void>>());
+  const terminalProjectSwitchSeqRef = useRef(0);
+
+  const registerTerminalWorkspacePersistence = useCallback(
+    (projectId: string, persistWorkspace: (() => Promise<void>) | null) => {
+      const normalizedProjectId = projectId.trim();
+      if (!normalizedProjectId) {
+        return;
+      }
+      if (persistWorkspace) {
+        terminalWorkspacePersistenceRef.current.set(normalizedProjectId, persistWorkspace);
+        return;
+      }
+      terminalWorkspacePersistenceRef.current.delete(normalizedProjectId);
+    },
+    [],
+  );
+
+  const persistTerminalWorkspaceIfNeeded = useCallback(async (projectId: string | null) => {
+    const normalizedProjectId = projectId?.trim();
+    if (!normalizedProjectId) {
+      return;
+    }
+    const persistWorkspace = terminalWorkspacePersistenceRef.current.get(normalizedProjectId);
+    if (!persistWorkspace) {
+      return;
+    }
+    try {
+      await persistWorkspace();
+    } catch (error) {
+      console.error("切换项目前保存终端工作区失败。", error);
+    }
+  }, []);
+
+  const selectTerminalProject = useCallback(
+    (projectId: string) => {
+      const nextProjectId = projectId.trim();
+      if (!nextProjectId) {
+        return;
+      }
+      setShowTerminalWorkspace(true);
+      const currentActiveProjectId = terminalActiveProjectIdRef.current;
+      if (currentActiveProjectId === nextProjectId) {
+        return;
+      }
+
+      const switchSeq = terminalProjectSwitchSeqRef.current + 1;
+      terminalProjectSwitchSeqRef.current = switchSeq;
+
+      void (async () => {
+        await persistTerminalWorkspaceIfNeeded(currentActiveProjectId);
+        if (terminalProjectSwitchSeqRef.current !== switchSeq) {
+          return;
+        }
+        setTerminalActiveProjectId(nextProjectId);
+      })();
+    },
+    [persistTerminalWorkspaceIfNeeded],
+  );
 
   const openTerminalWorkspace = useCallback(
     (project: Project) => {
@@ -103,9 +167,9 @@ export function useTerminalWorkspace({
 
         return next;
       });
-      setTerminalActiveProjectId(project.id);
+      selectTerminalProject(project.id);
     },
-    [projects],
+    [projects, selectTerminalProject],
   );
 
   const dispatchTerminalQuickCommand = useCallback((action: Omit<TerminalQuickCommandDispatch, "seq">) => {
@@ -468,6 +532,8 @@ export function useTerminalWorkspace({
     setTerminalOpenProjects,
     terminalActiveProjectId,
     setTerminalActiveProjectId,
+    selectTerminalProject,
+    registerTerminalWorkspacePersistence,
     terminalQuickCommandDispatch,
     terminalGitWorktreesByProjectId,
     setTerminalGitWorktreesByProjectId,

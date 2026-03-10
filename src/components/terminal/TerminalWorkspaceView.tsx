@@ -20,6 +20,7 @@ import type { ProjectScript, ScriptParamField, SharedScriptEntry } from "../../m
 import { resolveRuntimeClientId } from "../../platform/runtime";
 import { gitIsRepo } from "../../services/gitManagement";
 import { listSharedScripts } from "../../services/sharedScripts";
+import { terminateTerminalSessions } from "../../services/terminal";
 import {
   listenTerminalWorkspaceSync,
   loadTerminalWorkspace,
@@ -68,6 +69,8 @@ export type TerminalWorkspaceViewProps = {
   terminalUseWebglRenderer: boolean;
   codexRunningCount?: number;
   scripts?: ProjectScript[];
+  onRegisterPersistWorkspace?: (projectId: string, persistWorkspace: (() => Promise<void>) | null) => void;
+  onRegisterWorkspaceSessionIds?: (projectId: string, sessionIds: string[]) => void;
   onAddProjectScript: (
     projectId: string,
     script: {
@@ -170,6 +173,12 @@ function areTerminalWorkspaceViewPropsEqual(
   if (prevProps.scripts !== nextProps.scripts) {
     return false;
   }
+  if (prevProps.onRegisterPersistWorkspace !== nextProps.onRegisterPersistWorkspace) {
+    return false;
+  }
+  if (prevProps.onRegisterWorkspaceSessionIds !== nextProps.onRegisterWorkspaceSessionIds) {
+    return false;
+  }
   if (prevProps.onAddProjectScript !== nextProps.onAddProjectScript) {
     return false;
   }
@@ -200,6 +209,8 @@ function TerminalWorkspaceView({
   terminalUseWebglRenderer,
   codexRunningCount = 0,
   scripts = [],
+  onRegisterPersistWorkspace,
+  onRegisterWorkspaceSessionIds,
   onAddProjectScript,
   onUpdateProjectScript,
   onRemoveProjectScript,
@@ -431,6 +442,23 @@ function TerminalWorkspaceView({
   }, [runtimeClientId]);
 
   useEffect(() => {
+    if (!projectId || !onRegisterPersistWorkspace) {
+      return;
+    }
+    onRegisterPersistWorkspace(projectId, saveWorkspace);
+    return () => {
+      onRegisterPersistWorkspace(projectId, null);
+    };
+  }, [onRegisterPersistWorkspace, projectId, saveWorkspace]);
+
+  useEffect(() => {
+    if (!projectId || !workspace || !onRegisterWorkspaceSessionIds) {
+      return;
+    }
+    onRegisterWorkspaceSessionIds(projectId, Object.keys(workspace.sessions));
+  }, [onRegisterWorkspaceSessionIds, projectId, workspace]);
+
+  useEffect(() => {
     if (!workspace) {
       return;
     }
@@ -457,6 +485,57 @@ function TerminalWorkspaceView({
       setWorkspace((prev) => (prev ? updater(prev) : prev));
     },
     [],
+  );
+
+  const terminateWorkspaceSessions = useCallback(
+    (sessionIds: string[]) => {
+      if (sessionIds.length === 0) {
+        return;
+      }
+      void terminateTerminalSessions(windowLabel, sessionIds, runtimeClientId).catch((error) => {
+        console.error("关闭终端会话失败。", error);
+      });
+    },
+    [runtimeClientId, windowLabel],
+  );
+
+  const captureSessionSnapshots = useCallback(
+    (currentWorkspace: TerminalWorkspace, sessionIds: string[]) => {
+      if (sessionIds.length === 0) {
+        return currentWorkspace;
+      }
+      let changed = false;
+      const nextSessions = { ...currentWorkspace.sessions };
+      for (const sessionId of sessionIds) {
+        const snapshot = nextSessions[sessionId];
+        if (!snapshot) {
+          continue;
+        }
+        const provider = snapshotProviders.current.get(sessionId);
+        if (!provider) {
+          continue;
+        }
+        const savedState = provider() ?? null;
+        if (snapshot.savedState === savedState) {
+          continue;
+        }
+        nextSessions[sessionId] = { ...snapshot, savedState };
+        changed = true;
+      }
+      return changed ? { ...currentWorkspace, sessions: nextSessions } : currentWorkspace;
+    },
+    [],
+  );
+
+  const captureActiveTabSnapshots = useCallback(
+    (currentWorkspace: TerminalWorkspace) => {
+      const activeTab = currentWorkspace.tabs.find((tab) => tab.id === currentWorkspace.activeTabId);
+      if (!activeTab) {
+        return currentWorkspace;
+      }
+      return captureSessionSnapshots(currentWorkspace, collectSessionIds(activeTab.root));
+    },
+    [captureSessionSnapshots],
   );
 
   const closeSessionLayout = useCallback(
@@ -1134,21 +1213,28 @@ function TerminalWorkspaceView({
 
   const handleSelectTab = useCallback(
     (tabId: string) => {
-      updateWorkspace((current) => ({ ...current, activeTabId: tabId }));
+      updateWorkspace((current) => {
+        if (current.activeTabId === tabId) {
+          return current;
+        }
+        const currentWithSnapshots = captureActiveTabSnapshots(current);
+        return { ...currentWithSnapshots, activeTabId: tabId };
+      });
     },
-    [updateWorkspace],
+    [captureActiveTabSnapshots, updateWorkspace],
   );
 
   const handleNewTab = useCallback(() => {
     updateWorkspace((current) => {
+      const currentWithSnapshots = captureActiveTabSnapshots(current);
       const sessionId = createId();
       const tabId = createId();
-      const title = getNextTerminalTitle(current.tabs);
+      const title = getNextTerminalTitle(currentWithSnapshots.tabs);
       return {
-        ...current,
+        ...currentWithSnapshots,
         activeTabId: tabId,
         tabs: [
-          ...current.tabs,
+          ...currentWithSnapshots.tabs,
           {
             id: tabId,
             title,
@@ -1157,18 +1243,19 @@ function TerminalWorkspaceView({
           },
         ],
         sessions: {
-          ...current.sessions,
-          [sessionId]: { id: sessionId, cwd: current.projectPath, savedState: null },
+          ...currentWithSnapshots.sessions,
+          [sessionId]: { id: sessionId, cwd: currentWithSnapshots.projectPath, savedState: null },
         },
       };
     });
-  }, [updateWorkspace]);
+  }, [captureActiveTabSnapshots, updateWorkspace]);
 
   const handleCloseTab = useCallback(
     (tabId: string) => {
       const current = workspaceRef.current;
       const closedTab = current?.tabs.find((tab) => tab.id === tabId) ?? null;
       const removedSessions = closedTab ? collectSessionIds(closedTab.root) : [];
+      terminateWorkspaceSessions(removedSessions);
       finalizeRuntimeBySessionIds(removedSessions, 130, "终端标签页已关闭");
       cleanupRuntimeBySessionIds(removedSessions);
 
@@ -1214,7 +1301,7 @@ function TerminalWorkspaceView({
         };
       });
     },
-    [cleanupRuntimeBySessionIds, finalizeRuntimeBySessionIds, updateWorkspace],
+    [cleanupRuntimeBySessionIds, finalizeRuntimeBySessionIds, terminateWorkspaceSessions, updateWorkspace],
   );
 
   const handleSelectTabRelative = useCallback(
@@ -1228,10 +1315,11 @@ function TerminalWorkspaceView({
           return current;
         }
         const nextIndex = (currentIndex + delta + current.tabs.length) % current.tabs.length;
-        return { ...current, activeTabId: current.tabs[nextIndex].id };
+        const currentWithSnapshots = captureActiveTabSnapshots(current);
+        return { ...currentWithSnapshots, activeTabId: current.tabs[nextIndex].id };
       });
     },
-    [updateWorkspace],
+    [captureActiveTabSnapshots, updateWorkspace],
   );
 
   const handleSelectTabIndex = useCallback(
@@ -1240,10 +1328,14 @@ function TerminalWorkspaceView({
         if (index < 0 || index >= current.tabs.length) {
           return current;
         }
-        return { ...current, activeTabId: current.tabs[index].id };
+        if (current.tabs[index]?.id === current.activeTabId) {
+          return current;
+        }
+        const currentWithSnapshots = captureActiveTabSnapshots(current);
+        return { ...currentWithSnapshots, activeTabId: current.tabs[index].id };
       });
     },
-    [updateWorkspace],
+    [captureActiveTabSnapshots, updateWorkspace],
   );
 
   const handleSplit = useCallback(
@@ -1443,7 +1535,8 @@ function TerminalWorkspaceView({
         if (!activeTab) {
           return;
         }
-        handleSessionExit(activeTab.activeSessionId);
+        terminateWorkspaceSessions([activeTab.activeSessionId]);
+        handleSessionExit(activeTab.activeSessionId, 130);
         return;
       }
 
@@ -1575,6 +1668,8 @@ function TerminalWorkspaceView({
       : runPanelTabs[runPanelTabs.length - 1]?.id ?? null;
   const runPanelOpen = Boolean(runPanelState.open && runPanelTabs.length > 0);
   const runPanelHeight = Math.max(MIN_RUN_PANEL_HEIGHT, Math.min(720, runPanelState.height));
+  const activeWorkspaceTab =
+    workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0] ?? null;
 
   const activeRunTab = runPanelActiveTabId ? runPanelTabs.find((t) => t.id === runPanelActiveTabId) ?? null : null;
   const activeTabRunning = (() => {
@@ -1652,17 +1747,15 @@ function TerminalWorkspaceView({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <div className="relative flex min-h-0 min-w-0 flex-1">
-            {workspace.tabs.map((tab) => (
+            {activeWorkspaceTab ? (
               <div
-                key={tab.id}
-                className={`absolute inset-0 flex min-h-0 flex-1 ${
-                  tab.id === workspace.activeTabId ? "opacity-100" : "opacity-0 pointer-events-none"
-                }`}
+                key={activeWorkspaceTab.id}
+                className="absolute inset-0 flex min-h-0 flex-1"
               >
                 <SplitLayout
-                  root={tab.root}
-                  activeSessionId={tab.activeSessionId}
-                  onActivate={(sessionId) => handleActivateSession(tab.id, sessionId)}
+                  root={activeWorkspaceTab.root}
+                  activeSessionId={activeWorkspaceTab.activeSessionId}
+                  onActivate={(sessionId) => handleActivateSession(activeWorkspaceTab.id, sessionId)}
                   onResize={handleResize}
                   renderPane={(sessionId, isPaneActive) => (
                     <TerminalPane
@@ -1671,18 +1764,19 @@ function TerminalWorkspaceView({
                       savedState={workspace.sessions[sessionId]?.savedState ?? null}
                       windowLabel={windowLabel}
                       clientId={runtimeClientId}
-                      useWebgl={terminalUseWebglRenderer && tab.id === workspace.activeTabId}
+                      useWebgl={terminalUseWebglRenderer}
                       theme={xtermTheme}
-                      isActive={tab.id === workspace.activeTabId && isPaneActive}
-                      onActivate={(nextSessionId) => handleActivateSession(tab.id, nextSessionId)}
+                      isActive={isPaneActive}
+                      onActivate={(nextSessionId) => handleActivateSession(activeWorkspaceTab.id, nextSessionId)}
                       onPtyReady={handlePtyReady}
                       onExit={handleSessionExit}
                       onRegisterSnapshotProvider={registerSnapshotProvider}
+                      preserveSessionOnUnmount
                     />
                   )}
                 />
               </div>
-            ))}
+            ) : null}
           </div>
           {rightSidebarOpen ? (
             <ResizablePanel

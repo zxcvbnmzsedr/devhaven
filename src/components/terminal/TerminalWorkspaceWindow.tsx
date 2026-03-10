@@ -1,10 +1,11 @@
 import type { CSSProperties } from "react";
-import { memo, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 
 import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
 import type { Project, ProjectScript, ProjectWorktree } from "../../models/types";
-import { isTauriRuntime } from "../../platform/runtime";
+import { isTauriRuntime, resolveRuntimeClientId } from "../../platform/runtime";
 import type { GitWorktreeListItem } from "../../services/gitWorktree";
+import { terminateTerminalSessions } from "../../services/terminal";
 import { useSystemColorScheme } from "../../hooks/useSystemColorScheme";
 import {
   getTerminalThemePresetByName,
@@ -24,6 +25,10 @@ export type TerminalWorkspaceWindowProps = {
   onDeleteWorktree: (projectId: string, worktreePath: string) => void;
   onRetryWorktree: (projectId: string, worktreePath: string) => void;
   onRefreshWorktrees: (projectId: string) => void;
+  onRegisterPersistWorkspace: (
+    projectId: string,
+    persistWorkspace: (() => Promise<void>) | null,
+  ) => void;
   onAddProjectScript: (
     projectId: string,
     script: {
@@ -140,6 +145,7 @@ function TerminalWorkspaceWindow({
   onDeleteWorktree,
   onRetryWorktree,
   onRefreshWorktrees,
+  onRegisterPersistWorkspace,
   onAddProjectScript,
   onUpdateProjectScript,
   onRemoveProjectScript,
@@ -152,6 +158,8 @@ function TerminalWorkspaceWindow({
   codexProjectStatusById,
   gitWorktreesByProjectId,
 }: TerminalWorkspaceWindowProps) {
+  const workspaceSessionIdsRef = useRef(new Map<string, string[]>());
+  const runtimeClientIdRef = useRef(resolveRuntimeClientId());
   const systemScheme = useSystemColorScheme();
   const terminalThemePreset = useMemo(() => {
     const resolvedName = resolveTerminalThemeName(terminalTheme, systemScheme);
@@ -178,6 +186,45 @@ function TerminalWorkspaceWindow({
   const openProjectsByPath = useMemo(() => {
     return new Map(openProjects.map((project) => [project.path, project]));
   }, [openProjects]);
+  const registerWorkspaceSessionIds = useCallback((projectId: string, sessionIds: string[]) => {
+    workspaceSessionIdsRef.current.set(projectId, sessionIds);
+  }, []);
+  const handleCloseProject = useCallback(
+    (projectId: string) => {
+      const closingProject = openProjects.find((project) => project.id === projectId) ?? null;
+      const closingPaths = new Set<string>();
+      if (closingProject) {
+        closingPaths.add(closingProject.path);
+        if (!closingProject.id.startsWith("worktree:")) {
+          for (const worktree of closingProject.worktrees ?? []) {
+            closingPaths.add(worktree.path);
+          }
+        }
+      }
+      const closingProjectIds =
+        closingPaths.size > 0
+          ? openProjects.filter((project) => closingPaths.has(project.path)).map((project) => project.id)
+          : [projectId];
+      const sessionIds = Array.from(
+        new Set(closingProjectIds.flatMap((id) => workspaceSessionIdsRef.current.get(id) ?? [])),
+      );
+      if (sessionIds.length > 0) {
+        void terminateTerminalSessions(windowLabel, sessionIds, runtimeClientIdRef.current).catch((error) => {
+          console.error("关闭项目关联终端失败。", error);
+        });
+      }
+      closingProjectIds.forEach((id) => workspaceSessionIdsRef.current.delete(id));
+      onCloseProject(projectId);
+    },
+    [onCloseProject, openProjects, windowLabel],
+  );
+  const activeProjectQuickCommandDispatch =
+    quickCommandDispatch &&
+    activeProject &&
+    quickCommandDispatch.projectPath === activeProject.path &&
+    quickCommandDispatch.projectId === activeProject.id
+      ? quickCommandDispatch
+      : null;
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -293,7 +340,7 @@ function TerminalWorkspaceWindow({
                       onClick={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
-                        onCloseProject(project.id);
+                        handleCloseProject(project.id);
                       }}
                       aria-label={`关闭 ${project.name}`}
                       title="关闭项目"
@@ -407,40 +454,28 @@ function TerminalWorkspaceWindow({
         </div>
       </aside>
       <main className="relative min-w-0 flex-1">
-        {openProjects.map((project) => {
-          const isActive = (activeProject?.id ?? "") === project.id;
-          const projectQuickCommandDispatch =
-            quickCommandDispatch &&
-            quickCommandDispatch.projectPath === project.path &&
-            quickCommandDispatch.projectId === project.id
-              ? quickCommandDispatch
-              : null;
-          return (
-            <div
-              key={project.id}
-              className={`absolute inset-0 ${
-                isActive ? "opacity-100" : "opacity-0 pointer-events-none"
-              }`}
-            >
-              <TerminalWorkspaceView
-                projectId={project.id}
-                projectPath={project.path}
-                projectName={project.name}
-                isActive={isVisible && isActive}
-                quickCommandDispatch={projectQuickCommandDispatch}
-                windowLabel={windowLabel}
-                xtermTheme={terminalThemePreset.xterm}
-                sharedScriptsRoot={sharedScriptsRoot}
-                terminalUseWebglRenderer={terminalUseWebglRenderer}
-                codexRunningCount={codexProjectStatusById[project.id]?.runningCount ?? 0}
-                scripts={project.scripts ?? EMPTY_PROJECT_SCRIPTS}
-                onAddProjectScript={onAddProjectScript}
-                onUpdateProjectScript={onUpdateProjectScript}
-                onRemoveProjectScript={onRemoveProjectScript}
-              />
-            </div>
-          );
-        })}
+        {activeProject ? (
+          <div key={activeProject.id} className="absolute inset-0">
+            <TerminalWorkspaceView
+              projectId={activeProject.id}
+              projectPath={activeProject.path}
+              projectName={activeProject.name}
+              isActive={isVisible}
+              quickCommandDispatch={activeProjectQuickCommandDispatch}
+              windowLabel={windowLabel}
+              xtermTheme={terminalThemePreset.xterm}
+              sharedScriptsRoot={sharedScriptsRoot}
+              terminalUseWebglRenderer={terminalUseWebglRenderer}
+              codexRunningCount={codexProjectStatusById[activeProject.id]?.runningCount ?? 0}
+              scripts={activeProject.scripts ?? EMPTY_PROJECT_SCRIPTS}
+              onRegisterPersistWorkspace={onRegisterPersistWorkspace}
+              onRegisterWorkspaceSessionIds={registerWorkspaceSessionIds}
+              onAddProjectScript={onAddProjectScript}
+              onUpdateProjectScript={onUpdateProjectScript}
+              onRemoveProjectScript={onRemoveProjectScript}
+            />
+          </div>
+        ) : null}
       </main>
     </div>
   );
