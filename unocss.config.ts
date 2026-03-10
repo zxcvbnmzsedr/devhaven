@@ -88,7 +88,7 @@ export default defineConfig({
     },
     spacing: {
       sidebar: "220px",
-      detail: "380px",
+      detail: "420px",
       "card-h": "135px",
       "card-min": "250px",
       "card-max": "400px",

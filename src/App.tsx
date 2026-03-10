@@ -338,13 +338,7 @@ function AppLayout() {
   return (
     <div className="relative h-full bg-background">
       <InteractionLockOverlay />
-      <div
-        className={`grid h-full ${
-          selection.showDetailPanel
-            ? "grid-cols-[220px_minmax(0,1fr)_380px]"
-            : "grid-cols-[220px_minmax(0,1fr)]"
-        }`}
-      >
+      <div className="grid h-full grid-cols-[220px_minmax(0,1fr)]">
         <Sidebar
           appState={appState}
           projects={viewState.visibleProjects}
@@ -413,23 +407,23 @@ function AppLayout() {
           getTagColor={appActions.getTagColor}
           searchInputRef={filter.searchInputRef}
         />
-        {selection.showDetailPanel ? (
-          <DetailPanel
-            project={selection.resolvedSelectedProject}
-            tags={appState.tags}
-            onClose={handleCloseDetailPanel}
-            onAddTagToProject={addTagToProject}
-            onRemoveTagFromProject={removeTagFromProject}
-            onRunProjectScript={terminal.handleRunProjectScript}
-            onStopProjectScript={terminal.handleStopProjectScript}
-            onAddProjectScript={addProjectScript}
-            onUpdateProjectScript={updateProjectScript}
-            onRemoveProjectScript={removeProjectScript}
-            sharedScriptsRoot={appState.settings.sharedScriptsRoot}
-            getTagColor={appActions.getTagColor}
-          />
-        ) : null}
       </div>
+
+      <DetailPanel
+        isOpen={selection.showDetailPanel}
+        project={selection.resolvedSelectedProject}
+        tags={appState.tags}
+        onClose={handleCloseDetailPanel}
+        onAddTagToProject={addTagToProject}
+        onRemoveTagFromProject={removeTagFromProject}
+        onRunProjectScript={terminal.handleRunProjectScript}
+        onStopProjectScript={terminal.handleStopProjectScript}
+        onAddProjectScript={addProjectScript}
+        onUpdateProjectScript={updateProjectScript}
+        onRemoveProjectScript={removeProjectScript}
+        sharedScriptsRoot={appState.settings.sharedScriptsRoot}
+        getTagColor={appActions.getTagColor}
+      />
 
       <TagEditDialog
         title={viewState.tagDialogState?.mode === "edit" ? "编辑标签" : "新建标签"}

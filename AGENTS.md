@@ -65,29 +65,31 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - 标签持久化与变更动作：`src/state/useDevHaven.ts`（写入 `app_state.json`）
 
 ### D. 项目详情面板（备注/分支/Markdown/快捷操作）
-- 详情面板容器：`src/components/DetailPanel.tsx`
+- 详情面板现为右侧 overlay 抽屉：`src/App.tsx` 负责挂载与开关，`src/components/DetailPanel.tsx` 负责状态编排与 Tab 切换
+- 详情面板展示已拆分为 3 个子区：`src/components/DetailOverviewTab.tsx`（基础信息/标签/Todo）、`src/components/DetailEditTab.tsx`（备注/README fallback/Markdown）、`src/components/DetailAutomationTab.tsx`（快捷命令/分支）
 - 项目卡片：`src/components/ProjectCard.tsx`（通常在主列表中触发打开详情）
-- 项目快捷命令（配置/编辑/删除/运行/停止）：`src/components/DetailPanel.tsx`（入口）→ `src/hooks/useTerminalWorkspace.ts`（派发 `quickCommandDispatch`）→ `src/components/terminal/TerminalWorkspaceView.tsx`（执行与会话管理）→ `src/services/quickCommands.ts` ↔ `src-tauri/src/quick_command_manager.rs`（作业状态）；不再配置“停止命令”文本，停止为运行态终止；持久化在 `projects.json`（字段：`Project.scripts`，模型：`src/models/types.ts`，当前仅 `name/start/paramSchema/templateParams`）
+- 项目快捷命令（配置/编辑/删除/运行/停止）：`src/components/DetailAutomationTab.tsx`（入口 UI）→ `src/components/DetailPanel.tsx`（脚本弹窗/参数编排）→ `src/hooks/useTerminalWorkspace.ts`（派发 `quickCommandDispatch`）→ `src/components/terminal/TerminalWorkspaceView.tsx`（执行与会话管理）→ `src/services/quickCommands.ts` ↔ `src-tauri/src/quick_command_manager.rs`（作业状态）；不再配置“停止命令”文本，停止为运行态终止；持久化在 `projects.json`（字段：`Project.scripts`，模型：`src/models/types.ts`，当前仅 `name/start/paramSchema/templateParams`）
 - 快捷命令 v2（已切流）：前端类型/服务 `src/models/quickCommands.ts` + `src/services/quickCommands.ts`（`quick_command_start/quick_command_stop/quick_command_finish/quick_command_list/quick_command_snapshot` + `quick-command-event`）；后端 `src-tauri/src/quick_command_manager.rs`；Command 注册：`src-tauri/src/lib.rs`（`quick_command_start/quick_command_stop/quick_command_finish/quick_command_list/quick_command_snapshot`）
 - 通用脚本中心（跨项目复用 + 参数化）：默认目录 `~/.devhaven/scripts`（设置页不再提供动态路径配置）→ 读取共享脚本 `src/services/sharedScripts.ts` ↔ `src-tauri/src/shared_scripts.rs`（Command：`list_shared_scripts`，优先 `manifest.json`，回退目录扫描；目录首次为空时自动注入内置脚本：Jenkins 部署 `jenkins-depoly`、远程日志查看 `remote_log_viewer.sh`）→ 详情面板为快捷命令填充模板与参数快照（`src/components/DetailPanel.tsx`，`ProjectScript.paramSchema/templateParams`）→ 执行前在终端渲染模板参数（`src/components/terminal/TerminalWorkspaceView.tsx`、`src/utils/scriptTemplate.ts`）
 - 通用脚本可视化编辑：设置页“脚本”分类内嵌 `src/components/SharedScriptsManagerModal.tsx`，可编辑清单字段（id/路径/命令模板/参数）并直接编辑脚本文件内容；支持“一键恢复内置预设（仅补齐缺失项）”；前端 `src/services/sharedScripts.ts` ↔ 后端 `src-tauri/src/shared_scripts.rs`（Commands：`save_shared_scripts_manifest`、`restore_shared_script_presets`、`read_shared_script_file`、`write_shared_script_file`）
 - Git 分支列表：
+  - UI：`src/components/DetailAutomationTab.tsx`
   - 前端：`src/services/git.ts`
   - 后端：`src-tauri/src/git_ops.rs`（`list_branches`）
   - Command：`src-tauri/src/lib.rs`（`list_branches`）
 - 项目备注 `PROJECT_NOTES.md`：
-  - UI：`src/components/DetailPanel.tsx`（备注为空时自动读取项目根 `README.md` 作为只读参考，可一键“用 README 初始化”）
+  - UI：`src/components/DetailEditTab.tsx`（备注为空时自动读取项目根 `README.md` 作为只读参考，可一键“用 README 初始化”）
   - 前端：`src/services/notes.ts`
   - README 回退读取：`src/services/markdown.ts`（`read_project_markdown_file`）
   - 后端：`src-tauri/src/notes.rs`
   - Command：`src-tauri/src/lib.rs`（`read_project_notes/read_project_notes_previews/write_project_notes`）
 - 项目 Todo `PROJECT_TODO.md`（详情面板可勾选、增删、自动保存）：
-  - UI：`src/components/DetailPanel.tsx`
+  - UI：`src/components/DetailOverviewTab.tsx`
   - 前端：`src/services/notes.ts`
   - 后端：`src-tauri/src/notes.rs`
   - Command：`src-tauri/src/lib.rs`（`read_project_todo/write_project_todo`）
 - 项目内 Markdown 文件浏览/预览：
-  - UI：`src/components/ProjectMarkdownSection.tsx`
+  - UI：`src/components/DetailEditTab.tsx`、`src/components/ProjectMarkdownSection.tsx`
   - 前端：`src/services/markdown.ts`
   - 后端：`src-tauri/src/markdown.rs`
   - Command：`src-tauri/src/lib.rs`（`list_project_markdown_files/read_project_markdown_file`）
