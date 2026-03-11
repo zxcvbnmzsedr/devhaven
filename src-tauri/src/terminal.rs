@@ -232,11 +232,87 @@ fn trim_terminal_output_cache(cache: &mut String) {
     }
 
     let target_start = cache.len().saturating_sub(TERMINAL_OUTPUT_CACHE_MAX_BYTES);
-    let mut start = target_start;
-    while start < cache.len() && !cache.is_char_boundary(start) {
-        start += 1;
-    }
+    let start = adjust_trim_start_for_escape_sequence(cache, target_start);
     cache.drain(..start);
+}
+
+fn advance_to_char_boundary(text: &str, mut index: usize) -> usize {
+    while index < text.len() && !text.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
+fn find_csi_sequence_end(bytes: &[u8], mut index: usize) -> Option<usize> {
+    while let Some(&byte) = bytes.get(index) {
+        if (0x40..=0x7e).contains(&byte) {
+            return Some(index + 1);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn find_st_terminated_sequence_end(bytes: &[u8], mut index: usize) -> Option<usize> {
+    while let Some(&byte) = bytes.get(index) {
+        if byte == 0x1b && bytes.get(index + 1) == Some(&b'\\') {
+            return Some(index + 2);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn find_osc_sequence_end(bytes: &[u8], mut index: usize) -> Option<usize> {
+    while let Some(&byte) = bytes.get(index) {
+        if byte == 0x07 {
+            return Some(index + 1);
+        }
+        if byte == 0x1b && bytes.get(index + 1) == Some(&b'\\') {
+            return Some(index + 2);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn find_escape_sequence_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let marker = *bytes.get(start + 1)?;
+    match marker {
+        b'[' => find_csi_sequence_end(bytes, start + 2),
+        b']' => find_osc_sequence_end(bytes, start + 2),
+        b'P' | b'^' | b'_' | b'X' => find_st_terminated_sequence_end(bytes, start + 2),
+        _ => {
+            let mut index = start + 1;
+            while let Some(&byte) = bytes.get(index) {
+                if (0x30..=0x7e).contains(&byte) {
+                    return Some(index + 1);
+                }
+                index += 1;
+            }
+            None
+        }
+    }
+}
+
+fn adjust_trim_start_for_escape_sequence(cache: &str, start: usize) -> usize {
+    let bytes = cache.as_bytes();
+    let mut safe_start = advance_to_char_boundary(cache, start);
+
+    while safe_start > 0 {
+        let Some(escape_index) = bytes[..safe_start].iter().rposition(|byte| *byte == 0x1b) else {
+            break;
+        };
+        let Some(sequence_end) = find_escape_sequence_end(bytes, escape_index) else {
+            return cache.len();
+        };
+        if sequence_end <= safe_start {
+            break;
+        }
+        safe_start = advance_to_char_boundary(cache, sequence_end);
+    }
+
+    safe_start
 }
 
 fn append_terminal_output_cache(state: &TerminalState, pty_id: &str, chunk: &str) {
@@ -701,4 +777,85 @@ pub fn terminal_kill(
     }
     remove_terminal_session_index_by_pty(&state, &pty_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trim_terminal_output_cache_keeps_plain_text_tail() {
+        let mut cache = "a".repeat(TERMINAL_OUTPUT_CACHE_MAX_BYTES + 32);
+        trim_terminal_output_cache(&mut cache);
+
+        assert_eq!(cache.len(), TERMINAL_OUTPUT_CACHE_MAX_BYTES);
+        assert!(cache.chars().all(|ch| ch == 'a'));
+    }
+
+    #[test]
+    fn trim_terminal_output_cache_skips_partial_csi_sequence() {
+        let csi = "\u{1b}[?1;2c";
+        let prefix = "r".repeat(19);
+        let inside_offset = 2;
+        let suffix = "v".repeat(TERMINAL_OUTPUT_CACHE_MAX_BYTES + inside_offset - csi.len());
+        let mut cache = format!("{prefix}{csi}{suffix}");
+
+        trim_terminal_output_cache(&mut cache);
+
+        assert_eq!(cache.len(), suffix.len());
+        assert!(cache.chars().all(|ch| ch == 'v'));
+    }
+
+    #[test]
+    fn trim_terminal_output_cache_skips_partial_osc_sequence_with_st() {
+        let osc = concat!(
+            "\u{1b}]10;rgb:8383/9494/9696\u{1b}\\",
+            "\u{1b}]11;rgb:0000/2b2b/3636\u{1b}\\",
+        );
+        let prefix = "p".repeat(17);
+        let inside_offset = 5;
+        let suffix = "x".repeat(TERMINAL_OUTPUT_CACHE_MAX_BYTES + inside_offset - osc.len());
+        let mut cache = format!("{prefix}{osc}{suffix}");
+
+        trim_terminal_output_cache(&mut cache);
+
+        let expected_prefix = "\u{1b}]11;rgb:0000/2b2b/3636\u{1b}\\";
+        assert_eq!(cache.len(), expected_prefix.len() + suffix.len());
+        assert!(cache.starts_with(expected_prefix));
+        assert!(cache[expected_prefix.len()..].chars().all(|ch| ch == 'x'));
+    }
+
+    #[test]
+    fn trim_terminal_output_cache_skips_partial_osc_sequence_with_bel() {
+        let osc = concat!(
+            "\u{1b}]10;rgb:8383/9494/9696\u{7}",
+            "\u{1b}]11;rgb:0000/2b2b/3636\u{7}",
+        );
+        let prefix = "q".repeat(11);
+        let inside_offset = 3;
+        let suffix = "y".repeat(TERMINAL_OUTPUT_CACHE_MAX_BYTES + inside_offset - osc.len());
+        let mut cache = format!("{prefix}{osc}{suffix}");
+
+        trim_terminal_output_cache(&mut cache);
+
+        let expected_prefix = "\u{1b}]11;rgb:0000/2b2b/3636\u{7}";
+        assert_eq!(cache.len(), expected_prefix.len() + suffix.len());
+        assert!(cache.starts_with(expected_prefix));
+        assert!(cache[expected_prefix.len()..].chars().all(|ch| ch == 'y'));
+    }
+
+    #[test]
+    fn trim_terminal_output_cache_drops_when_boundary_lands_inside_second_osc() {
+        let first_osc = "\u{1b}]10;rgb:8383/9494/9696\u{7}";
+        let second_osc = "\u{1b}]11;rgb:0000/2b2b/3636\u{7}";
+        let prefix = "z".repeat(23);
+        let inside_offset = 4;
+        let suffix = "w".repeat(TERMINAL_OUTPUT_CACHE_MAX_BYTES + inside_offset - second_osc.len());
+        let mut cache = format!("{prefix}{first_osc}{second_osc}{suffix}");
+
+        trim_terminal_output_cache(&mut cache);
+
+        assert_eq!(cache.len(), suffix.len());
+        assert!(cache.chars().all(|ch| ch == 'w'));
+    }
 }

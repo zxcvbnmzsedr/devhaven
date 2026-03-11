@@ -122,6 +122,7 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - 终端工作区显示 Codex CLI 运行状态（按项目/Worktree 路径归属聚合会话）：`src/utils/codexProjectStatus.ts`、`src/hooks/useCodexIntegration.ts`、`src/App.tsx` → `src/components/terminal/TerminalWorkspaceWindow.tsx`/`src/components/terminal/TerminalWorkspaceView.tsx`
 - 终端快捷键（iTerm2/浏览器风格）：`src/components/terminal/TerminalWorkspaceView.tsx`（⌘T 新建 Tab、⌘W 关闭 Pane/Tab、⌘↑/⌘↓/⌘←/⌘→ 上一/下一 Tab、⌘⇧[ / ⌘⇧] 上一/下一 Tab、⌘1..⌘9 快速切换 Tab、⌘D 分屏）
 - 终端高级能力（仅当前 Pane 搜索 + 修饰键点击链接）：`src/components/terminal/TerminalPane.tsx`（Search/WebLinks addons，mac `⌘F`、Win/Linux `Ctrl+Shift+F` 打开搜索，`Enter/Shift+Enter/Esc` 导航/关闭；链接需 `Cmd/Ctrl+点击`，支持 `http/https/mailto` 与本地路径 `/Users/...`、`Users/...`、`~/...`）→ URL 用 `@tauri-apps/plugin-opener` 的 `openUrl`，本地路径优先走 `src/services/system.ts` 的 `openInFinder`（失败回退 `openPath`）↔ `src-tauri/capabilities/terminal.json`（`opener:default` 权限）
+- 终端连接期输出缓冲裁剪（避免切换项目恢复时把 `CSI/OSC` 控制序列从中间截断并显示成裸文本）：`src/components/terminal/terminalEscapeTrim.ts`（前端 escape-aware tail trim helper） + `src/components/terminal/TerminalPane.tsx`（`bufferedOutput` 超限裁剪） + `src/components/terminal/terminalEscapeTrim.test.mjs`（Node 内建 test 覆盖 plain text / OSC / CSI）
 - 会话/PTY 通信：
   - macOS shell 启动链路：`src-tauri/src/terminal.rs` 中 `terminal_create_session` 使用 login shell 风格启动（`/usr/bin/login -flp <user> /bin/bash --noprofile --norc -c "exec -l <shell>"`），以对齐 Ghostty 并加载用户 login 环境（例如 `~/.zprofile` 的 PATH）。
   - 跨端会话复用：后端按 `sessionId` 复用已有 PTY；前端附带 `clientId` 进行附着，`terminal_kill` 在默认模式下按客户端引用释放，仅最后一个附着客户端离开时才真正结束 PTY（`force=true` 可强制结束）。

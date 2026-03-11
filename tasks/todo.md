@@ -1,3 +1,42 @@
+# 当前任务：补齐项目切换时终端控制字符残片的前端根因修复
+
+- [x] 复核现有后端 replay cache 修复与切换项目恢复链路
+- [x] 先补失败测试，锁定连接期缓冲裁剪切进 CSI/OSC 序列的场景
+- [x] 实现前端连接期缓冲的 escape-aware 裁剪，并补齐 Rust 侧 CSI 覆盖
+- [x] 跑针对性验证并在文末追加复盘
+
+## Working Notes
+- 现有未提交改动已经在 `src-tauri/src/terminal.rs` 修掉了 Rust replay cache 的 ANSI 边界问题，这一轮不要覆盖它，而是补齐前端 `bufferedOutput` 同类漏点。
+- `TerminalPane` 连接阶段在 `hydrated=false` 时会把 live output 先堆进 `bufferedOutput`，超过 512 KiB 后直接 `slice()`，这里仍可能把 `CSI ?1;2c` 或 `OSC 10/11` 从中间切开。
+- 本次只修根因、只防新增，不增加“文本正则清洗”兜底，不强制丢弃历史 snapshot。
+
+## Review
+- 新增 `src/components/terminal/terminalEscapeTrim.ts`，把前端连接期缓冲的“裁头保尾”改成 escape-aware trim，和 Rust replay cache 保持同类边界策略。
+- `src/components/terminal/TerminalPane.tsx` 在 `bufferedOutput` 超限时不再裸 `slice()`，避免把 `CSI ?1;2c` / `OSC 10;11;rgb...` 的前缀截掉后写进 xterm。
+- 新增 `src/components/terminal/terminalEscapeTrim.test.mjs`，先用 Node 内建 test 跑出缺失 helper 的失败，再覆盖 plain text / partial OSC / partial CSI 三个场景。
+- Rust 侧补了一条 `trim_terminal_output_cache_skips_partial_csi_sequence`，确认 replay cache 对 `CSI` 残片也不会回放成裸文本。
+- 验证通过：`node --test src/components/terminal/terminalEscapeTrim.test.mjs`、`cargo test --manifest-path src-tauri/Cargo.toml`、`pnpm build`。
+
+# 当前任务：修复 xterm.js 偶发显示裸露 `10;rgb...11;rgb...` 控制串
+
+- [x] 读取仓库约束、相关技能与现有终端链路
+- [x] 排查前后端 terminal-output / replay / snapshot 恢复路径
+- [x] 先补失败测试，锁定“缓存截断切进 OSC 序列”场景
+- [x] 实现最小修复，避免重放缓存从控制序列中间开始
+- [x] 跑针对性验证并记录复盘
+
+## Working Notes
+- 用户给出的 `10;rgb:...11;rgb:...` 很像 OSC 10 / OSC 11 颜色查询响应体被当成普通文本渲染，重点怀疑“重放缓存从转义序列中间开始”。
+- `TerminalPane` 恢复顺序是 `cachedState/savedState + replayData + bufferedOutput`，真正写入 xterm 前没有做 ANSI 边界修复。
+- Rust 侧 `output_cache_by_pty` 会按 4 MiB 上限从头裁剪，但当前只保证 UTF-8 边界，不保证 ANSI/OSC 边界；如果裁进 `ESC ] 10/11 ... BEL/ST` 中间，后续恢复就会把尾巴当普通字符显示。
+- 连接期 `bufferedOutput` 也有 512 KiB 的头部裁剪，但时间窗口很短，优先先修更大概率触发的 Rust replay cache。
+
+## Review
+- 根因确认：不是 xterm live stream 自己把 OSC 10/11 打印出来，而是 Rust replay cache 头部裁剪只看 UTF-8，不看 ANSI/OSC 边界，导致恢复时从控制序列中间开始回放。
+- 修复方式：在 `trim_terminal_output_cache` 增加 escape-aware 起点调整；若裁剪点落在 CSI/OSC/DCS/APC/PM/SOS 等控制序列内部，就把起点推进到该序列结束之后。
+- 新增 4 条 Rust 单测，覆盖普通文本、BEL 终止的 OSC、ST 终止的 OSC、以及裁剪点落到第二段 OSC 内部的场景。
+- 验证通过：`cargo test --manifest-path src-tauri/Cargo.toml`、`pnpm build`。
+
 # 当前任务：第二刀性能优化——活跃挂载 + PTY 生命周期解耦
 
 - [x] 读取仓库约束、相关技能与现有性能敏感链路

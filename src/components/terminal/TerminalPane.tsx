@@ -22,6 +22,7 @@ import {
 } from "../../services/terminal";
 import { openPathRuntime, openUrlRuntime } from "../../platform/runtime";
 import { APP_RESUME_EVENT } from "../../utils/appResume";
+import { trimTerminalOutputTail } from "./terminalEscapeTrim";
 
 const TERMINAL_SCROLLBACK_LINES = 5000;
 const CONNECT_OUTPUT_BUFFER_MAX_CHARS = 512 * 1024;
@@ -753,7 +754,7 @@ export default function TerminalPane({
           if (!hydrated) {
             bufferedOutput += chunk;
             if (bufferedOutput.length > CONNECT_OUTPUT_BUFFER_MAX_CHARS) {
-              bufferedOutput = bufferedOutput.slice(-CONNECT_OUTPUT_BUFFER_MAX_CHARS);
+              bufferedOutput = trimTerminalOutputTail(bufferedOutput, CONNECT_OUTPUT_BUFFER_MAX_CHARS);
             }
             return;
           }
