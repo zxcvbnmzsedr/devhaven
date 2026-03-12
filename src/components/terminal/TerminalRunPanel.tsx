@@ -35,7 +35,6 @@ type TerminalRunPanelProps = {
   activeTabRunning?: boolean;
   onPtyReady: (sessionId: string, ptyId: string) => void;
   onExit: (sessionId: string, code?: number | null) => void;
-  onRegisterSnapshotProvider?: (sessionId: string, provider: () => string | null) => () => void;
 };
 
 function resolveTabExecutionState({
@@ -123,8 +122,10 @@ export default function TerminalRunPanel({
   activeTabRunning = false,
   onPtyReady,
   onExit,
-  onRegisterSnapshotProvider,
 }: TerminalRunPanelProps) {
+  const activeTab = activeTabId ? tabs.find((tab) => tab.id === activeTabId) ?? null : tabs[0] ?? null;
+  const activeSession = activeTab ? sessions[activeTab.sessionId] ?? null : null;
+
   if (!open) {
     return null;
   }
@@ -218,38 +219,28 @@ export default function TerminalRunPanel({
           <div className="flex h-full items-center justify-center text-[12px] text-[var(--terminal-muted-fg)]">
             暂无运行任务
           </div>
+        ) : !activeTab || !activeSession ? (
+          <div className="flex h-full items-center justify-center text-[12px] text-[var(--terminal-muted-fg)]">
+            当前运行会话不可用
+          </div>
         ) : (
-          tabs.map((tab) => {
-            const session = sessions[tab.sessionId];
-            if (!session) {
-              return null;
-            }
-            const isActive = tab.id === activeTabId;
-            return (
-              <div
-                key={tab.id}
-                className={`absolute inset-0 flex min-h-0 min-w-0 ${
-                  isActive ? "opacity-100" : "pointer-events-none opacity-0"
-                }`}
-              >
-                <PaneHost
-                  kind="run"
-                  sessionId={tab.sessionId}
-                  cwd={session.cwd ?? projectPath}
-                  savedState={session.savedState ?? null}
-                  windowLabel={windowLabel}
-                  clientId={clientId}
-                  useWebgl={terminalUseWebglRenderer && isActive}
-                  theme={xtermTheme}
-                  isActive={isActive}
-                  onActivate={() => onSelectTab(tab.id)}
-                  onPtyReady={onPtyReady}
-                  onExit={onExit}
-                  onRegisterSnapshotProvider={onRegisterSnapshotProvider}
-                />
-              </div>
-            );
-          })
+          <div className="absolute inset-0 flex min-h-0 min-w-0">
+            <PaneHost
+              kind="run"
+              sessionId={activeTab.sessionId}
+              cwd={activeSession.cwd ?? projectPath}
+              savedState={activeSession.savedState ?? null}
+              windowLabel={windowLabel}
+              clientId={clientId}
+              useWebgl={terminalUseWebglRenderer}
+              theme={xtermTheme}
+              isActive
+              onActivate={() => onSelectTab(activeTab.id)}
+              onPtyReady={onPtyReady}
+              onExit={onExit}
+              preserveSessionOnUnmount
+            />
+          </div>
         )}
       </div>
     </section>

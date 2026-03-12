@@ -85,3 +85,24 @@
 - 本轮修复四：`src/components/terminal/TerminalPane.tsx` 在 `fitAddon.fit()` 后新增 viewport rows clamp，基于真实 `.xterm-viewport` 高度把 rows 收口，避免 Tauri/WebKit 一类运行时里出现“滚动到底但最后几行仍被裁掉”。
 - 新增回归保护：`src/components/terminal/terminalViewportFit.ts` + `src/components/terminal/terminalViewportFit.test.mjs`，把 rows clamp 规则固化为可测试纯函数；并同步更新 `AGENTS.md` 记录终端尺寸收口点。
 - 本轮验证通过：`node --test src/components/terminal/terminalViewportFit.test.mjs src/styles/global.css.test.mjs`、`pnpm build`。
+
+## 终端内存优化任务（Ghostty 模式映射）
+
+- [x] 为终端 replay 缓冲补测试，并将 Rust 侧输出缓存改成分块 ring buffer
+- [x] 为 WebGL 启用策略补测试，并将前端改成“仅单一可见 terminal/run pane 启用 WebGL”
+- [x] 删除前端 cachedState / SerializeAddon 重复缓存路径，并让后台 pane 只保留最小恢复锚点
+- [x] 收紧终端 scrollback / 连接期缓冲预算，并让 Run 面板仅挂载活动 tab
+- [x] 更新 `AGENTS.md` 并完成构建、测试、审查结论
+
+## Review（终端内存优化）
+
+- 已将 Rust 侧 PTY replay 从单个大字符串改为分块缓冲：`src-tauri/src/terminal.rs` 现使用 16KB x 320 chunks 的 `TerminalReplayBuffer`，总预算固定为 5MiB/PTY，并保留 escape-safe trim 语义。
+- 已为 replay 缓冲补齐单测：覆盖纯文本 tail 保留、OSC 截断安全和 chunk 上限约束；验证命令为 `cargo test terminal_replay_buffer --manifest-path src-tauri/Cargo.toml`。
+- 已删除前端重复历史缓存：`src/components/terminal/TerminalPane.tsx` 不再使用 `SerializeAddon`、`cacheTerminalPtyState`、`consumeTerminalPtyCachedState`，恢复只依赖后端 replay 和最小 `savedState` 锚点。
+- 已把 xterm 可视层预算收口：`scrollback` 从 5000 降到 1000，连接期 `bufferedOutput` 从 512KB 降到 128KB，减少多终端场景下前端字符串常驻。
+- 已新增 WebGL 资格策略：`src/components/terminal/terminalMemoryPolicy.ts` + `terminalMemoryPolicy.test.mjs` 固化“仅工作区可见且仅 1 个可见 terminal/run pane 时启用 WebGL”，避免多 Pane 同时持有高内存 renderer。
+- 已将 Run 面板改为仅挂载活动 tab：`src/components/terminal/TerminalRunPanel.tsx` 不再把所有 run tab 的 `TerminalPane` 全部常驻挂载；切 tab / 收起面板时通过 `preserveSessionOnUnmount` 保活后台 PTY，后台任务继续运行，但不再保留完整前端 UI 实例。
+- 已同步更新 `AGENTS.md` 记录新的终端内存预算与 WebGL gating 行为。
+- 本轮验证通过：`node --test src/components/terminal/terminalMemoryPolicy.test.mjs src/components/terminal/terminalViewportFit.test.mjs src/components/terminal/terminalEscapeTrim.test.mjs`、`cargo test terminal_replay_buffer --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml`、`pnpm exec tsc --noEmit`、`pnpm build`。
+- 用户回归反馈补充修复：`src/components/terminal/TerminalWorkspaceView.tsx` 现在在 load/sync/update 的同一时刻同步刷新 `layoutSnapshotRef`，避免“新建终端后立刻切项目”时 `saveWorkspace()` 持久化旧快照，导致返回项目后看起来像终端被关闭。
+- 用户偏好调整：按最新要求把 PTY replay 预算从 512KB 提升到 5MiB，以换取切项目/切视图后更长的终端恢复缓冲。

@@ -20,7 +20,6 @@ type TerminalSessionPaneHostProps = {
   onActivate: (sessionId: string) => void;
   onExit: (sessionId: string, code?: number | null) => void;
   onPtyReady?: (sessionId: string, ptyId: string) => void;
-  onRegisterSnapshotProvider?: (sessionId: string, provider: () => string | null) => () => void;
   preserveSessionOnUnmount?: boolean;
 };
 

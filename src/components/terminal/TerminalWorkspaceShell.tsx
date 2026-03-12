@@ -33,7 +33,7 @@ export type TerminalWorkspaceShellProps = {
   windowLabel: string;
   runtimeClientId: string;
   xtermTheme: ITheme;
-  terminalUseWebglRenderer: boolean;
+  terminalPaneUseWebgl: boolean;
   scripts: ProjectScript[];
   selectedScriptId: string | null;
   selectedScriptState: ScriptExecutionState;
@@ -99,7 +99,7 @@ export default function TerminalWorkspaceShell({
   windowLabel,
   runtimeClientId,
   xtermTheme,
-  terminalUseWebglRenderer,
+  terminalPaneUseWebgl,
   scripts,
   selectedScriptId,
   selectedScriptState,
@@ -205,7 +205,7 @@ export default function TerminalWorkspaceShell({
                           savedState={pane.restoreAnchor?.savedState ?? null}
                           windowLabel={windowLabel}
                           clientId={runtimeClientId}
-                          useWebgl={terminalUseWebglRenderer}
+                          useWebgl={terminalPaneUseWebgl && isPaneActive}
                           theme={xtermTheme}
                           isActive={isPaneActive}
                           onActivate={(nextSessionId) => onActivateSession(activeWorkspaceTab.id, nextSessionId)}
@@ -305,7 +305,7 @@ export default function TerminalWorkspaceShell({
             windowLabel={windowLabel}
             clientId={runtimeClientId}
             xtermTheme={xtermTheme}
-            terminalUseWebglRenderer={terminalUseWebglRenderer}
+            terminalUseWebglRenderer={terminalPaneUseWebgl}
             scriptRuntimeById={scriptRuntimeById}
             quickCommandJobByScriptId={quickCommandJobByScriptId}
             scriptLocalPhaseById={scriptLocalPhaseById}

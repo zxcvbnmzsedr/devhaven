@@ -50,7 +50,6 @@ export type TerminalPaneExitPayload = {
 
 type TerminalPtyRegistryEntry = {
   ptyId: string | null;
-  cachedState: string | null;
   refs: number;
   parked: boolean;
   needsReplay: boolean;
@@ -90,7 +89,6 @@ function getOrCreateTerminalPtyRegistryEntry(key: string): TerminalPtyRegistryEn
   }
   const next: TerminalPtyRegistryEntry = {
     ptyId: null,
-    cachedState: null,
     refs: 0,
     parked: false,
     needsReplay: false,
@@ -115,24 +113,6 @@ export function retainTerminalPtySession(key: string) {
   entry.parked = false;
   entry.terminating = false;
   clearTerminalPtyKillTimer(entry);
-}
-
-export function consumeTerminalPtyCachedState(key: string) {
-  const entry = TERMINAL_PTY_REGISTRY.get(key);
-  if (!entry?.cachedState) {
-    return null;
-  }
-  const cachedState = entry.cachedState;
-  entry.cachedState = null;
-  return cachedState;
-}
-
-export function cacheTerminalPtyState(key: string, cachedState: string | null) {
-  const entry = TERMINAL_PTY_REGISTRY.get(key);
-  if (!entry) {
-    return;
-  }
-  entry.cachedState = cachedState;
 }
 
 async function killTerminalPtyRegistryEntry(key: string, clientId: string) {

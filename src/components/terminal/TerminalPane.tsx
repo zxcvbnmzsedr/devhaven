@@ -4,14 +4,11 @@ import { FitAddon } from "xterm-addon-fit";
 import { SearchAddon } from "xterm-addon-search";
 import { WebglAddon } from "xterm-addon-webgl";
 import { WebLinksAddon } from "xterm-addon-web-links";
-import { SerializeAddon } from "xterm-addon-serialize";
 import "xterm/css/xterm.css";
 
 import { copyToClipboard, openInFinder } from "../../services/system";
 import {
   buildTerminalPtyRegistryKey,
-  cacheTerminalPtyState,
-  consumeTerminalPtyCachedState,
   ensureTerminalPtyId,
   listenTerminalExit,
   listenTerminalOutput,
@@ -25,8 +22,8 @@ import { APP_RESUME_EVENT } from "../../utils/appResume";
 import { trimTerminalOutputTail } from "./terminalEscapeTrim";
 import { clampRowsToViewport } from "./terminalViewportFit";
 
-const TERMINAL_SCROLLBACK_LINES = 5000;
-const CONNECT_OUTPUT_BUFFER_MAX_CHARS = 512 * 1024;
+const TERMINAL_SCROLLBACK_LINES = 1000;
+const CONNECT_OUTPUT_BUFFER_MAX_CHARS = 128 * 1024;
 const REPLAY_OVERLAP_SCAN_MAX_CHARS = 64 * 1024;
 const WAKE_RECOVERY_DELAYS_MS = [120, 360] as const;
 const SEARCH_OPTIONS = {
@@ -296,7 +293,6 @@ export type TerminalPaneProps = {
   onActivate: (sessionId: string) => void;
   onExit: (sessionId: string, code?: number | null) => void;
   onPtyReady?: (sessionId: string, ptyId: string) => void;
-  onRegisterSnapshotProvider?: (sessionId: string, provider: () => string | null) => () => void;
   preserveSessionOnUnmount?: boolean;
 };
 
@@ -312,14 +308,12 @@ export default function TerminalPane({
   onActivate,
   onExit,
   onPtyReady,
-  onRegisterSnapshotProvider,
   preserveSessionOnUnmount = false,
 }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
-  const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const webLinksAddonRef = useRef<WebLinksAddon | null>(null);
   const webglAddonRef = useRef<WebglAddon | null>(null);
   const webglContextLossListenerRef = useRef<IDisposable | null>(null);
@@ -509,7 +503,6 @@ export default function TerminalPane({
     }
     const registryKey = buildTerminalPtyRegistryKey(windowLabel, sessionId);
     retainTerminalPtySession(registryKey);
-    const cachedState = consumeTerminalPtyCachedState(registryKey);
 
     let disposed = false;
     const term = new Terminal({
@@ -595,7 +588,6 @@ export default function TerminalPane({
     const cursorStyleHandler = term.parser.registerCsiHandler({ intermediates: " ", final: "q" }, () => true);
     const fitAddon = new FitAddon();
     const searchAddon = new SearchAddon();
-    const serializeAddon = new SerializeAddon();
     const webLinksAddon = new WebLinksAddon((event, rawUrl) => {
       const shouldOpen = shouldOpenByModifierKey(event, isMacRef.current);
       if (!shouldOpen) {
@@ -632,7 +624,6 @@ export default function TerminalPane({
     );
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
-    term.loadAddon(serializeAddon);
     term.loadAddon(webLinksAddon);
     const safeFit = () => {
       if (disposed) {
@@ -725,7 +716,6 @@ export default function TerminalPane({
     termRef.current = term;
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
-    serializeAddonRef.current = serializeAddon;
     webLinksAddonRef.current = webLinksAddon;
     webglAddonRef.current = null;
 
@@ -837,7 +827,7 @@ export default function TerminalPane({
       syncPtySize();
 
       if (!restoredRef.current) {
-        const baseState = cachedState ?? initialSavedStateRef.current ?? "";
+        const baseState = initialSavedStateRef.current ?? "";
         const replayRestoredState = replayData ? mergeReplayWithBufferedOutput(baseState, replayData) : baseState;
         const stateToRestore = bufferedOutput
           ? mergeReplayWithBufferedOutput(replayRestoredState, bufferedOutput)
@@ -857,36 +847,8 @@ export default function TerminalPane({
 
     void connect();
 
-    const unregisterSnapshot = onRegisterSnapshotProvider?.(sessionId, () => {
-      const addon = serializeAddonRef.current;
-      if (!addon) {
-        return null;
-      }
-      return addon.serialize({
-        excludeAltBuffer: false,
-        excludeModes: true,
-        scrollback: TERMINAL_SCROLLBACK_LINES,
-      });
-    });
-
     return () => {
       disposed = true;
-      try {
-        const addon = serializeAddonRef.current;
-        if (addon) {
-          cacheTerminalPtyState(
-            registryKey,
-            addon.serialize({
-              excludeAltBuffer: false,
-              excludeModes: true,
-              scrollback: TERMINAL_SCROLLBACK_LINES,
-            }),
-          );
-        }
-      } catch (error) {
-        console.warn("缓存终端状态失败。", error);
-      }
-      unregisterSnapshot?.();
       searchAddonRef.current = null;
       webLinksAddonRef.current = null;
       cursorStyleHandler.dispose();
@@ -928,7 +890,6 @@ export default function TerminalPane({
     disposeWebglAddon,
     onExit,
     onPtyReady,
-    onRegisterSnapshotProvider,
     sessionId,
     windowLabel,
     preserveSessionOnUnmount,

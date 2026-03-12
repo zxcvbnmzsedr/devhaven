@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
@@ -16,7 +16,10 @@ use crate::terminal_runtime::{shared_runtime, SessionId};
 
 const TERMINAL_OUTPUT_BATCH_MS: u64 = 8;
 const TERMINAL_OUTPUT_BATCH_MAX_BYTES: usize = 32 * 1024;
-const TERMINAL_OUTPUT_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
+const TERMINAL_OUTPUT_CACHE_CHUNK_BYTES: usize = 16 * 1024;
+const TERMINAL_OUTPUT_CACHE_MAX_CHUNKS: usize = 320;
+const TERMINAL_OUTPUT_CACHE_MAX_BYTES: usize =
+    TERMINAL_OUTPUT_CACHE_CHUNK_BYTES * TERMINAL_OUTPUT_CACHE_MAX_CHUNKS;
 
 /// 将 PTY 的字节流按 UTF-8 逐步解码。
 ///
@@ -70,7 +73,7 @@ pub struct TerminalState {
     pub session_to_pty: Arc<Mutex<HashMap<String, String>>>,
     pub pty_to_session: Arc<Mutex<HashMap<String, String>>>,
     pub pty_clients: Arc<Mutex<HashMap<String, HashSet<String>>>>,
-    pub output_cache_by_pty: Arc<Mutex<HashMap<String, String>>>,
+    output_cache_by_pty: Arc<Mutex<HashMap<String, TerminalReplayBuffer>>>,
 }
 
 pub struct PtySession {
@@ -226,6 +229,84 @@ fn trim_terminal_output_cache(cache: &mut String) {
     cache.drain(..start);
 }
 
+#[derive(Debug, Default, Clone)]
+struct TerminalReplayBuffer {
+    chunks: VecDeque<String>,
+    total_bytes: usize,
+}
+
+impl TerminalReplayBuffer {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn append(&mut self, chunk: &str) {
+        if chunk.is_empty() {
+            return;
+        }
+
+        let mut start = 0;
+        while start < chunk.len() {
+            let mut end = (start + TERMINAL_OUTPUT_CACHE_CHUNK_BYTES).min(chunk.len());
+            while end > start && !chunk.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == start {
+                end = chunk.len();
+            }
+
+            self.push_chunk(chunk[start..end].to_string());
+            start = end;
+        }
+
+        if self.total_bytes > TERMINAL_OUTPUT_CACHE_MAX_BYTES
+            || self.chunks.len() > TERMINAL_OUTPUT_CACHE_MAX_CHUNKS
+        {
+            self.rebalance();
+        }
+    }
+
+    fn replay_data(&self) -> String {
+        let mut replay = String::with_capacity(self.total_bytes);
+        for chunk in &self.chunks {
+            replay.push_str(chunk);
+        }
+        replay
+    }
+
+    #[cfg(test)]
+    fn chunk_count(&self) -> usize {
+        self.chunks.len()
+    }
+
+    fn push_chunk(&mut self, chunk: String) {
+        self.total_bytes += chunk.len();
+        self.chunks.push_back(chunk);
+    }
+
+    fn rebalance(&mut self) {
+        let mut replay = self.replay_data();
+        trim_terminal_output_cache(&mut replay);
+
+        self.chunks.clear();
+        self.total_bytes = 0;
+
+        let mut start = 0;
+        while start < replay.len() {
+            let mut end = (start + TERMINAL_OUTPUT_CACHE_CHUNK_BYTES).min(replay.len());
+            while end > start && !replay.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == start {
+                end = replay.len();
+            }
+
+            self.push_chunk(replay[start..end].to_string());
+            start = end;
+        }
+    }
+}
+
 fn advance_to_char_boundary(text: &str, mut index: usize) -> usize {
     while index < text.len() && !text.is_char_boundary(index) {
         index += 1;
@@ -315,9 +396,8 @@ fn append_terminal_output_cache(state: &TerminalState, pty_id: &str, chunk: &str
     };
     let cache = cache_by_pty
         .entry(pty_id.to_string())
-        .or_insert_with(String::new);
-    cache.push_str(chunk);
-    trim_terminal_output_cache(cache);
+        .or_insert_with(TerminalReplayBuffer::new);
+    cache.append(chunk);
 }
 
 fn register_terminal_session_index(
@@ -489,7 +569,11 @@ pub fn terminal_create_session(
             .output_cache_by_pty
             .lock()
             .ok()
-            .and_then(|cache_by_pty| cache_by_pty.get(&existing_pty).cloned())
+            .and_then(|cache_by_pty| {
+                cache_by_pty
+                    .get(&existing_pty)
+                    .map(TerminalReplayBuffer::replay_data)
+            })
             .filter(|value| !value.is_empty());
         return Ok(TerminalCreateResult {
             pty_id: existing_pty,
@@ -558,7 +642,7 @@ pub fn terminal_create_session(
     }
 
     if let Ok(mut cache_by_pty) = state.output_cache_by_pty.lock() {
-        cache_by_pty.insert(pty_id.clone(), String::new());
+        cache_by_pty.insert(pty_id.clone(), TerminalReplayBuffer::new());
     }
     let _ = runtime.bind_session_pty(&runtime_session_id, pty_id.clone());
 
@@ -805,6 +889,46 @@ pub fn terminal_kill(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_replay_buffer_keeps_plain_text_tail() {
+        let mut buffer = TerminalReplayBuffer::new();
+        buffer.append(&"a".repeat(TERMINAL_OUTPUT_CACHE_MAX_BYTES + 32));
+
+        let replay = buffer.replay_data();
+        assert_eq!(replay.len(), TERMINAL_OUTPUT_CACHE_MAX_BYTES);
+        assert!(replay.chars().all(|ch| ch == 'a'));
+    }
+
+    #[test]
+    fn terminal_replay_buffer_skips_partial_osc_sequence_with_bel() {
+        let osc = concat!(
+            "\u{1b}]10;rgb:8383/9494/9696\u{7}",
+            "\u{1b}]11;rgb:0000/2b2b/3636\u{7}",
+        );
+        let prefix = "q".repeat(11);
+        let inside_offset = 3;
+        let suffix = "y".repeat(TERMINAL_OUTPUT_CACHE_MAX_BYTES + inside_offset - osc.len());
+
+        let mut buffer = TerminalReplayBuffer::new();
+        buffer.append(&format!("{prefix}{osc}{suffix}"));
+
+        let replay = buffer.replay_data();
+        let expected_prefix = "\u{1b}]11;rgb:0000/2b2b/3636\u{7}";
+        assert_eq!(replay.len(), expected_prefix.len() + suffix.len());
+        assert!(replay.starts_with(expected_prefix));
+        assert!(replay[expected_prefix.len()..].chars().all(|ch| ch == 'y'));
+    }
+
+    #[test]
+    fn terminal_replay_buffer_caps_chunk_count() {
+        let mut buffer = TerminalReplayBuffer::new();
+        for _ in 0..(TERMINAL_OUTPUT_CACHE_MAX_CHUNKS + 4) {
+            buffer.append(&"b".repeat(TERMINAL_OUTPUT_CACHE_CHUNK_BYTES));
+        }
+
+        assert!(buffer.chunk_count() <= TERMINAL_OUTPUT_CACHE_MAX_CHUNKS);
+    }
 
     #[test]
     fn trim_terminal_output_cache_keeps_plain_text_tail() {

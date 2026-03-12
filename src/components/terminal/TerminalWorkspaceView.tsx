@@ -67,6 +67,7 @@ import {
   type ScriptExecutionState,
 } from "../../hooks/useQuickCommandRuntime";
 import TerminalWorkspaceShell from "./TerminalWorkspaceShell";
+import { countVisibleTerminalPanes, shouldEnableTerminalWebgl } from "./terminalMemoryPolicy";
 import { buildTerminalWorkspaceShellModel } from "./terminalWorkspaceShellModel";
 
 export type TerminalWorkspaceViewProps = {
@@ -320,6 +321,19 @@ function TerminalWorkspaceView({
   const previewFilePath = shellModel?.previewFilePath ?? null;
   const previewDirty = shellModel?.previewDirty ?? false;
   const gitSelected = shellModel?.gitSelected ?? null;
+  const visibleTerminalPaneCount = useMemo(
+    () =>
+      countVisibleTerminalPanes({
+        activePaneKinds: Object.values(shellModel?.activePaneProjections ?? {}).map((pane) => pane.kind),
+        hasVisibleRunPanelTab: Boolean(shellModel?.runPanelOpen && shellModel?.activeRunTab),
+      }),
+    [shellModel],
+  );
+  const terminalPaneUseWebgl = shouldEnableTerminalWebgl({
+    terminalUseWebglRenderer,
+    workspaceVisible: isActive,
+    visibleTerminalPaneCount,
+  });
 
   useEffect(() => {
     layoutSnapshotRef.current = layoutSnapshot;
@@ -365,6 +379,7 @@ function TerminalWorkspaceView({
         const next = data ?? createDefaultLayoutSnapshot(projectPath, projectId, defaults);
         layoutDirtyRef.current = false;
         layoutDirtyRevisionRef.current = 0;
+        layoutSnapshotRef.current = next;
         setLayoutSnapshot(next);
       })
       .catch((loadError) => {
@@ -374,7 +389,9 @@ function TerminalWorkspaceView({
         setError(loadError instanceof Error ? loadError.message : String(loadError));
         layoutDirtyRef.current = false;
         layoutDirtyRevisionRef.current = 0;
-        setLayoutSnapshot(createDefaultLayoutSnapshot(projectPath, projectId, workspaceDefaultsRef.current));
+        const fallback = createDefaultLayoutSnapshot(projectPath, projectId, workspaceDefaultsRef.current);
+        layoutSnapshotRef.current = fallback;
+        setLayoutSnapshot(fallback);
       });
     return () => {
       cancelled = true;
@@ -399,10 +416,12 @@ function TerminalWorkspaceView({
             const fallback = createDefaultLayoutSnapshot(projectPath, projectId, workspaceDefaultsRef.current);
             layoutDirtyRef.current = false;
             layoutDirtyRevisionRef.current = 0;
-            setLayoutSnapshot({
+            const nextSnapshot = {
               ...fallback,
               updatedAt: Number(payload.updatedAt ?? payload.revision ?? fallback.updatedAt) || fallback.updatedAt,
-            });
+            };
+            layoutSnapshotRef.current = nextSnapshot;
+            setLayoutSnapshot(nextSnapshot);
             return;
           }
           const incomingUpdatedAt = Number(payload.updatedAt ?? payload.revision ?? 0);
@@ -417,6 +436,7 @@ function TerminalWorkspaceView({
               }
               layoutDirtyRef.current = false;
               layoutDirtyRevisionRef.current = 0;
+              layoutSnapshotRef.current = snapshot;
               setLayoutSnapshot(snapshot);
             })
             .catch((syncError) => {
@@ -548,7 +568,9 @@ function TerminalWorkspaceView({
         }
         layoutDirtyRevisionRef.current += 1;
         layoutDirtyRef.current = true;
-        return touchLayoutSnapshot(nextSnapshot);
+        const touchedSnapshot = touchLayoutSnapshot(nextSnapshot);
+        layoutSnapshotRef.current = touchedSnapshot;
+        return touchedSnapshot;
       });
     },
     [],
@@ -1528,7 +1550,7 @@ function TerminalWorkspaceView({
         windowLabel={windowLabel}
         runtimeClientId={runtimeClientId}
         xtermTheme={xtermTheme}
-        terminalUseWebglRenderer={terminalUseWebglRenderer}
+        terminalPaneUseWebgl={terminalPaneUseWebgl}
         scripts={scripts}
         selectedScriptId={selectedScriptId}
         selectedScriptState={selectedScriptState}
