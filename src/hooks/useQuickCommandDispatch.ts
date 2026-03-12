@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef } from "react";
 
 import type { TerminalQuickCommandDispatch } from "../models/quickCommands";
-import type { TerminalWorkspace } from "../models/terminal";
+import type { TerminalLayoutSnapshot } from "../models/terminal";
 import type { ProjectScript } from "../models/types";
 
 type UseQuickCommandDispatchParams = {
   projectId: string | null;
   projectPath: string;
   scripts: ProjectScript[];
-  workspace: TerminalWorkspace | null;
+  layoutSnapshot: TerminalLayoutSnapshot | null;
   quickCommandDispatch: TerminalQuickCommandDispatch | null | undefined;
   runQuickCommand: (script: ProjectScript) => void;
   stopScript: (scriptId: string) => void;
@@ -19,7 +19,7 @@ export function useQuickCommandDispatch({
   projectId,
   projectPath,
   scripts,
-  workspace,
+  layoutSnapshot,
   quickCommandDispatch,
   runQuickCommand,
   stopScript,
@@ -43,7 +43,7 @@ export function useQuickCommandDispatch({
         return;
       }
 
-      if (!workspace) {
+      if (!layoutSnapshot) {
         pendingQuickCommandDispatchRef.current = dispatch;
         return;
       }
@@ -62,7 +62,7 @@ export function useQuickCommandDispatch({
 
       stopScript(dispatch.scriptId);
     },
-    [projectId, projectPath, runQuickCommand, scripts, showPanelMessage, stopScript, workspace],
+    [layoutSnapshot, projectId, projectPath, runQuickCommand, scripts, showPanelMessage, stopScript],
   );
 
   useEffect(() => {
@@ -70,7 +70,7 @@ export function useQuickCommandDispatch({
   }, [handleQuickCommandDispatch, quickCommandDispatch]);
 
   useEffect(() => {
-    if (!workspace) {
+    if (!layoutSnapshot) {
       return;
     }
     const pending = pendingQuickCommandDispatchRef.current;
@@ -79,5 +79,5 @@ export function useQuickCommandDispatch({
     }
     pendingQuickCommandDispatchRef.current = null;
     handleQuickCommandDispatch(pending);
-  }, [handleQuickCommandDispatch, workspace]);
+  }, [handleQuickCommandDispatch, layoutSnapshot]);
 }

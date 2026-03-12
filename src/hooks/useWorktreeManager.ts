@@ -6,7 +6,7 @@ import type { Project, ProjectWorktree } from "../models/types";
 import { jsDateToSwiftDate } from "../models/types";
 import { gitDeleteBranch, gitWorktreeList, gitWorktreeRemove, type GitWorktreeListItem } from "../services/gitWorktree";
 import { gitIsRepo } from "../services/gitManagement";
-import { deleteTerminalWorkspace } from "../services/terminalWorkspace";
+import { deleteTerminalLayout } from "../services/terminalWorkspace";
 import {
   listenWorktreeInitProgress,
   worktreeInitCreate,
@@ -534,7 +534,7 @@ export function useWorktreeManager({
 
       const removeRecordOnly = async () => {
         await removeProjectWorktree(sourceProject.id, worktree.path);
-        await deleteTerminalWorkspace(worktree.path).catch(() => undefined);
+        await deleteTerminalLayout(worktree.path).catch(() => undefined);
         showToast("worktree 记录已移除", "success");
       };
 
@@ -621,7 +621,7 @@ export function useWorktreeManager({
       }
 
       await removeProjectWorktree(sourceProject.id, worktree.path);
-      await deleteTerminalWorkspace(worktree.path).catch(() => undefined);
+      await deleteTerminalLayout(worktree.path).catch(() => undefined);
       removeWorktreeFromGitCache(projectId, worktree.path);
       if (branchDeleteError) {
         showToast(`worktree 已删除，但分支删除失败：${branchDeleteError}`, "error");

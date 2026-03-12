@@ -28,10 +28,29 @@ export type QuickCommandSnapshot = {
   updatedAt: number;
 };
 
+export type QuickCommandEventType = "started" | "stateChanged" | "exited" | "workspaceRestored" | (string & {});
+
 export type QuickCommandEvent = {
-  type: "started" | "stateChanged" | "exited" | (string & {});
+  type: QuickCommandEventType;
   job: QuickCommandJob;
   snapshot: QuickCommandSnapshot;
+};
+
+export type QuickCommandStateChangedPayload = {
+  jobId: string;
+  scriptId: string;
+  projectId: string;
+  projectPath: string;
+  state: QuickCommandState;
+  updatedAt: number;
+  exitCode?: number | null;
+  error?: string | null;
+};
+
+export type QuickCommandRuntimeProjection = {
+  projectPath: string;
+  jobs: QuickCommandJob[];
+  updatedAt: number;
 };
 
 export type StartQuickCommandRequest = {
@@ -66,3 +85,17 @@ export type TerminalQuickCommandDispatch = {
   projectPath: string;
   scriptId: string;
 };
+
+export function buildQuickCommandRuntimeProjection(
+  snapshot: QuickCommandSnapshot,
+  projectPath?: string | null,
+): QuickCommandRuntimeProjection {
+  const normalizedPath = (projectPath ?? "").trim();
+  return {
+    projectPath: normalizedPath,
+    jobs: normalizedPath
+      ? snapshot.jobs.filter((job) => job.projectPath === normalizedPath)
+      : [...snapshot.jobs],
+    updatedAt: snapshot.updatedAt,
+  };
+}

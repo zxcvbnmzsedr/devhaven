@@ -1,8 +1,12 @@
-import type { TerminalTab } from "../../models/terminal";
 import { IconPlusCircle, IconX } from "../Icons";
 
+type HeaderTab = {
+  id: string;
+  title: string;
+};
+
 type TerminalTabsProps = {
-  tabs: TerminalTab[];
+  tabs: HeaderTab[];
   activeTabId: string;
   onSelect: (tabId: string) => void;
   onNewTab: () => void;

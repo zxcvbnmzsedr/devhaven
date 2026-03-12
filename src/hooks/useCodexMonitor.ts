@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listenEvent } from "../platform/eventClient";
 
 import type { CodexAgentEvent, CodexMonitorSession, CodexMonitorSnapshot } from "../models/codex";
@@ -32,6 +32,7 @@ export function useCodexMonitor(): CodexMonitorStore {
   const [agentEvents, setAgentEvents] = useState<CodexAgentEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const snapshotSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     let canceled = false;
@@ -83,9 +84,13 @@ export function useCodexMonitor(): CodexMonitorStore {
       if (canceled) {
         return;
       }
-      setSnapshot(next);
-      setSessions(next.sessions ?? []);
-      setIsCodexRunning(Boolean(next.isCodexRunning));
+      const nextSignature = buildSnapshotSignature(next);
+      if (snapshotSignatureRef.current !== nextSignature) {
+        snapshotSignatureRef.current = nextSignature;
+        setSnapshot(next);
+        setSessions(next.sessions ?? []);
+        setIsCodexRunning(Boolean(next.isCodexRunning));
+      }
       setError(null);
       setIsLoading(false);
     };
@@ -170,4 +175,25 @@ export function useCodexMonitor(): CodexMonitorStore {
     isLoading,
     error,
   };
+}
+
+function buildSnapshotSignature(snapshot: CodexMonitorSnapshot) {
+  const sessionSignature = (snapshot.sessions ?? [])
+    .map((session) =>
+      [
+        session.id,
+        session.cwd,
+        session.cliVersion ?? "",
+        session.model ?? "",
+        session.effort ?? "",
+        String(session.startedAt),
+        String(session.lastActivityAt),
+        session.state,
+        session.isRunning ? "1" : "0",
+        session.sessionTitle ?? "",
+        session.details ?? "",
+      ].join(":"),
+    )
+    .join("|");
+  return `${snapshot.isCodexRunning ? "1" : "0"}::${sessionSignature}`;
 }

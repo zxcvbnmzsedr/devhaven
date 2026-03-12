@@ -21,7 +21,9 @@ import {
 
 const LIST_INITIAL_BATCH_SIZE = 60;
 const LIST_BATCH_SIZE = 60;
-const LIST_LOAD_MORE_THRESHOLD = 240;
+const CARD_INITIAL_BATCH_SIZE = 48;
+const CARD_BATCH_SIZE = 48;
+const LOAD_MORE_THRESHOLD = 240;
 
 export type MainContentProps = {
   projects: Project[];
@@ -105,9 +107,11 @@ function MainContent({
 }: MainContentProps) {
   const [notePreviewByPath, setNotePreviewByPath] = useState<Record<string, string>>({});
   const [renderedListCount, setRenderedListCount] = useState(LIST_INITIAL_BATCH_SIZE);
+  const [renderedCardCount, setRenderedCardCount] = useState(CARD_INITIAL_BATCH_SIZE);
   const pendingNotePreviewPathsRef = useRef<Set<string>>(new Set());
   const notePreviewByPathRef = useRef<Record<string, string>>(notePreviewByPath);
-  const filteredProjectIdsRef = useRef<string[]>([]);
+  const filteredListProjectIdsRef = useRef<string[]>([]);
+  const filteredCardProjectIdsRef = useRef<string[]>([]);
   const previousViewModeRef = useRef<ProjectListViewMode>(viewMode);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const selectedProjectIds = useMemo(() => Array.from(selectedProjects), [selectedProjects]);
@@ -136,13 +140,26 @@ function MainContent({
     () => filteredProjects.slice(0, renderedListCount),
     [filteredProjects, renderedListCount],
   );
+  const renderedCardProjects = useMemo(
+    () => filteredProjects.slice(0, renderedCardCount),
+    [filteredProjects, renderedCardCount],
+  );
   const hasMoreListProjects = renderedListCount < filteredProjects.length;
+  const hasMoreCardProjects = renderedCardCount < filteredProjects.length;
   const loadMoreListProjects = useCallback(() => {
     setRenderedListCount((current) => {
       if (current >= filteredProjects.length) {
         return current;
       }
       return Math.min(current + LIST_BATCH_SIZE, filteredProjects.length);
+    });
+  }, [filteredProjects.length]);
+  const loadMoreCardProjects = useCallback(() => {
+    setRenderedCardCount((current) => {
+      if (current >= filteredProjects.length) {
+        return current;
+      }
+      return Math.min(current + CARD_BATCH_SIZE, filteredProjects.length);
     });
   }, [filteredProjects.length]);
   const listProjectPaths = useMemo(
@@ -157,15 +174,21 @@ function MainContent({
   );
   const handleContentScroll = useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
-      if (viewMode !== "list" || !hasMoreListProjects) {
+      const shouldLoadMore =
+        (viewMode === "list" && hasMoreListProjects) || (viewMode === "card" && hasMoreCardProjects);
+      if (!shouldLoadMore) {
         return;
       }
       const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
-      if (scrollHeight - scrollTop - clientHeight <= LIST_LOAD_MORE_THRESHOLD) {
-        loadMoreListProjects();
+      if (scrollHeight - scrollTop - clientHeight <= LOAD_MORE_THRESHOLD) {
+        if (viewMode === "list") {
+          loadMoreListProjects();
+          return;
+        }
+        loadMoreCardProjects();
       }
     },
-    [hasMoreListProjects, loadMoreListProjects, viewMode],
+    [hasMoreCardProjects, hasMoreListProjects, loadMoreCardProjects, loadMoreListProjects, viewMode],
   );
 
   useEffect(() => {
@@ -174,12 +197,11 @@ function MainContent({
 
   useEffect(() => {
     const wasListMode = previousViewModeRef.current === "list";
-    previousViewModeRef.current = viewMode;
     if (viewMode !== "list") {
       return;
     }
     const nextProjectIds = filteredProjects.map((project) => project.id);
-    const previousProjectIds = filteredProjectIdsRef.current;
+    const previousProjectIds = filteredListProjectIdsRef.current;
     const projectIdsChanged =
       nextProjectIds.length !== previousProjectIds.length ||
       nextProjectIds.some((projectId, index) => projectId !== previousProjectIds[index]);
@@ -187,9 +209,30 @@ function MainContent({
       return;
     }
     // 仅在列表首次进入或项目 ID 真实变化时重置批次，避免无效重算。
-    filteredProjectIdsRef.current = nextProjectIds;
+    filteredListProjectIdsRef.current = nextProjectIds;
     setRenderedListCount(Math.min(filteredProjects.length, LIST_INITIAL_BATCH_SIZE));
   }, [filteredProjects, viewMode]);
+
+  useEffect(() => {
+    const wasCardMode = previousViewModeRef.current === "card";
+    if (viewMode !== "card") {
+      return;
+    }
+    const nextProjectIds = filteredProjects.map((project) => project.id);
+    const previousProjectIds = filteredCardProjectIdsRef.current;
+    const projectIdsChanged =
+      nextProjectIds.length !== previousProjectIds.length ||
+      nextProjectIds.some((projectId, index) => projectId !== previousProjectIds[index]);
+    if (!projectIdsChanged && wasCardMode) {
+      return;
+    }
+    filteredCardProjectIdsRef.current = nextProjectIds;
+    setRenderedCardCount(Math.min(filteredProjects.length, CARD_INITIAL_BATCH_SIZE));
+  }, [filteredProjects, viewMode]);
+
+  useEffect(() => {
+    previousViewModeRef.current = viewMode;
+  }, [viewMode]);
 
   useEffect(() => {
     if (viewMode !== "list" || !hasMoreListProjects) {
@@ -199,10 +242,23 @@ function MainContent({
     if (!container) {
       return;
     }
-    if (container.scrollHeight - container.clientHeight <= LIST_LOAD_MORE_THRESHOLD) {
+    if (container.scrollHeight - container.clientHeight <= LOAD_MORE_THRESHOLD) {
       loadMoreListProjects();
     }
   }, [hasMoreListProjects, loadMoreListProjects, renderedListCount, viewMode]);
+
+  useEffect(() => {
+    if (viewMode !== "card" || !hasMoreCardProjects) {
+      return;
+    }
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return;
+    }
+    if (container.scrollHeight - container.clientHeight <= LOAD_MORE_THRESHOLD) {
+      loadMoreCardProjects();
+    }
+  }, [hasMoreCardProjects, loadMoreCardProjects, renderedCardCount, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "list") {
@@ -417,7 +473,7 @@ function MainContent({
           </div>
         ) : (
           <div className="grid grid-cols-[repeat(auto-fit,minmax(250px,1fr))] gap-4 p-4">
-            {filteredProjects.map((project) => (
+            {renderedCardProjects.map((project) => (
               <ProjectCard
                 key={project.id}
                 project={project}

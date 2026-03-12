@@ -1,21 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { QuickCommandJob, QuickCommandState } from "../models/quickCommands";
-import type { TerminalWorkspace } from "../models/terminal";
+import {
+  buildSessionSnapshotMap,
+  upsertRunPanelTabInSnapshot,
+  type RunPanelState,
+  type TerminalLayoutSnapshot,
+} from "../models/terminal";
 import type { ProjectScript } from "../models/types";
 import {
   finishQuickCommand,
-  getQuickCommandSnapshot,
-  listenQuickCommandEvent,
+  getQuickCommandRuntimeProjection,
+  listenQuickCommandStateChanged,
   startQuickCommand,
   stopQuickCommand as stopQuickCommandJob,
 } from "../services/quickCommands";
 import { killTerminal, writeTerminal } from "../services/terminal";
 import { renderScriptTemplateCommand } from "../utils/scriptTemplate";
-import { collectSessionIds, createId } from "../utils/terminalLayout";
+import { createId } from "../utils/terminalLayout";
 
 const QUICK_COMMAND_FORCE_KILL_TIMEOUT_MS = 1500;
-const QUICK_COMMAND_RECONCILE_INTERVAL_MS = 10000;
 const DEFAULT_RUN_PANEL_HEIGHT = 240;
 
 export type ScriptRuntime = {
@@ -34,8 +38,8 @@ export type UseQuickCommandRuntimeParams = {
   windowLabel: string;
   scripts: ProjectScript[];
   sharedScriptsRoot: string;
-  workspace: TerminalWorkspace | null;
-  updateWorkspace: (updater: (prev: TerminalWorkspace) => TerminalWorkspace) => void;
+  layoutSnapshot: TerminalLayoutSnapshot | null;
+  updateLayoutSnapshot: (updater: (prev: TerminalLayoutSnapshot) => TerminalLayoutSnapshot) => void;
   onRequestSessionClose?: (sessionId: string, code?: number | null) => void;
 };
 
@@ -123,16 +127,16 @@ function wrapQuickCommandForShell(command: string, environment?: Record<string, 
   return envPrefix + `sh -lc ${shellQuote(normalized)}; exit $?`;
 }
 
-function getRunPanelState(workspace: TerminalWorkspace) {
-  return workspace.ui?.runPanel ?? { open: false, height: DEFAULT_RUN_PANEL_HEIGHT, activeTabId: null, tabs: [] };
+function getRunPanelState(snapshot: TerminalLayoutSnapshot | null): RunPanelState {
+  return snapshot?.ui?.runPanel ?? { open: false, height: DEFAULT_RUN_PANEL_HEIGHT, activeTabId: null, tabs: [] };
 }
 
 function resolveReusableRunTab(
-  workspace: TerminalWorkspace,
+  snapshot: TerminalLayoutSnapshot,
   scriptId: string,
   preferredTabId?: string | null,
 ) {
-  const runPanel = getRunPanelState(workspace);
+  const runPanel = getRunPanelState(snapshot);
   if (preferredTabId) {
     const preferred = runPanel.tabs.find((tab) => tab.id === preferredTabId && tab.scriptId === scriptId);
     if (preferred) {
@@ -160,8 +164,8 @@ export function useQuickCommandRuntime({
   windowLabel,
   scripts,
   sharedScriptsRoot,
-  workspace,
-  updateWorkspace,
+  layoutSnapshot,
+  updateLayoutSnapshot,
   onRequestSessionClose,
 }: UseQuickCommandRuntimeParams): UseQuickCommandRuntimeReturn {
   const [panelMessage, setPanelMessage] = useState<string | null>(null);
@@ -174,7 +178,7 @@ export function useQuickCommandRuntime({
   const [scriptLocalPhaseById, setScriptLocalPhaseById] = useState<Record<string, ScriptLocalPhase>>({});
   const scriptLocalPhaseByIdRef = useRef<Record<string, ScriptLocalPhase>>({});
 
-  const workspaceRef = useRef<TerminalWorkspace | null>(workspace);
+  const layoutSnapshotRef = useRef<TerminalLayoutSnapshot | null>(layoutSnapshot);
   const sessionPtyIdRef = useRef(new Map<string, string>());
   const scriptIdBySessionIdRef = useRef(new Map<string, string>());
   const pendingStartBySessionIdRef = useRef(new Map<string, string>());
@@ -186,8 +190,8 @@ export function useQuickCommandRuntime({
   const scriptsRef = useRef<ProjectScript[]>(scripts);
 
   useEffect(() => {
-    workspaceRef.current = workspace;
-  }, [workspace]);
+    layoutSnapshotRef.current = layoutSnapshot;
+  }, [layoutSnapshot]);
 
   useLayoutEffect(() => {
     scriptRuntimeByIdRef.current = scriptRuntimeById;
@@ -342,7 +346,7 @@ export function useQuickCommandRuntime({
 
   const applyQuickCommandSnapshot = useCallback(
     (jobs: QuickCommandJob[]) => {
-      const currentProjectPath = normalizePathForCompare(workspaceRef.current?.projectPath || projectPath);
+      const currentProjectPath = normalizePathForCompare(layoutSnapshotRef.current?.projectPath || projectPath);
       const next: Record<string, QuickCommandJob> = {};
       for (const job of jobs) {
         if (!job?.scriptId) {
@@ -417,59 +421,61 @@ export function useQuickCommandRuntime({
   }, [finalizeRuntimeBySessionIds, projectId, projectPath]);
 
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    let unlistenStateChanged: (() => void) | null = null;
     let cancelled = false;
 
-    const refreshSnapshot = async () => {
+    const normalizedProjectPath = normalizePathForCompare(projectPath);
+
+    const loadJobs = async () => {
       try {
-        const snapshot = await getQuickCommandSnapshot();
+        const projection = await getQuickCommandRuntimeProjection(projectPath);
         if (cancelled) {
           return;
         }
-        applyQuickCommandSnapshot(snapshot.jobs ?? []);
+        applyQuickCommandSnapshot(projection.jobs);
       } catch (error) {
         if (!cancelled) {
-          console.error("拉取快捷命令快照失败。", error);
+          console.error("拉取快捷命令运行时投影失败。", error);
         }
       }
     };
 
     const registerListener = async () => {
       try {
-        unlisten = await listenQuickCommandEvent((event) => {
+        unlistenStateChanged = await listenQuickCommandStateChanged((event) => {
           if (cancelled) {
             return;
           }
-          const jobs = event.payload?.snapshot?.jobs ?? [];
-          applyQuickCommandSnapshot(jobs);
+          const payload = event.payload;
+          if (!payload || normalizePathForCompare(payload.projectPath) !== normalizedProjectPath) {
+            return;
+          }
+          void loadJobs();
         });
       } catch (error) {
         if (!cancelled) {
-          console.error("监听快捷命令事件失败。", error);
+          console.error("监听快捷命令状态事件失败。", error);
         }
+        unlistenStateChanged = null;
       }
     };
 
-    void refreshSnapshot();
+    void loadJobs();
     void registerListener();
-
-    const timer = window.setInterval(() => {
-      void refreshSnapshot();
-    }, QUICK_COMMAND_RECONCILE_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
-      unlisten?.();
+      unlistenStateChanged?.();
     };
-  }, [applyQuickCommandSnapshot]);
+  }, [applyQuickCommandSnapshot, projectPath]);
 
   const isScriptRuntimeValid = useCallback((runtime: ScriptRuntime) => {
-    const current = workspaceRef.current;
+    const current = layoutSnapshotRef.current;
     if (!current) {
       return false;
     }
-    if (!current.sessions[runtime.sessionId]) {
+    const sessions = buildSessionSnapshotMap(current);
+    if (!sessions[runtime.sessionId]) {
       return false;
     }
     const runPanel = getRunPanelState(current);
@@ -565,7 +571,7 @@ export function useQuickCommandRuntime({
         showPanelMessage(rendered.error);
         return;
       }
-      const current = workspaceRef.current;
+      const current = layoutSnapshotRef.current;
       if (!current) {
         showPanelMessage("终端工作区尚未就绪");
         return;
@@ -655,7 +661,6 @@ export function useQuickCommandRuntime({
 
         const sessionId = createId();
         const tabId = reusableRunTab?.id ?? createId();
-        const replacedSessionId = reusableRunTab?.sessionId ?? null;
         scriptIdBySessionIdRef.current.set(sessionId, script.id);
         pendingStartBySessionIdRef.current.set(sessionId, shellCommand);
 
@@ -665,49 +670,29 @@ export function useQuickCommandRuntime({
         }));
         clearScriptLocalPhase([script.id]);
 
-        updateWorkspace((ws) => {
-          const currentRunPanel = getRunPanelState(ws);
-          const resolvedReusableRunTab = resolveReusableRunTab(ws, script.id, tabId);
+        updateLayoutSnapshot((snapshot) => {
+          const currentRunPanel = snapshot.ui?.runPanel ?? {
+            open: false,
+            height: DEFAULT_RUN_PANEL_HEIGHT,
+            activeTabId: null,
+            tabs: [],
+          };
+          const resolvedReusableRunTab = currentRunPanel.tabs.find((tab) =>
+            tab.id === tabId || (tab.scriptId === script.id && tab.id === reusableRunTab?.id),
+          ) ?? null;
           const title = script.name.trim() ? script.name.trim() : `运行 ${currentRunPanel.tabs.length + 1}`;
-          const nextRunTab = {
-            id: resolvedReusableRunTab?.id ?? tabId,
-            title,
-            sessionId,
-            scriptId: script.id,
-            createdAt: Date.now(),
-            endedAt: null,
-            exitCode: null,
-          };
-          const nextTabs = resolvedReusableRunTab
-            ? currentRunPanel.tabs.map((tab) => (tab.id === resolvedReusableRunTab.id ? nextRunTab : tab))
-            : [...currentRunPanel.tabs, nextRunTab];
-          const nextSessions = {
-            ...ws.sessions,
-            [sessionId]: { id: sessionId, cwd: ws.projectPath, savedState: null },
-          };
-          const previousSessionId = resolvedReusableRunTab?.sessionId ?? replacedSessionId;
-          if (previousSessionId && previousSessionId !== sessionId) {
-            const sessionStillUsedByRunTabs = nextTabs.some((tab) => tab.sessionId === previousSessionId);
-            const sessionStillUsedByTerminalTabs = ws.tabs.some((tab) =>
-              collectSessionIds(tab.root).includes(previousSessionId),
-            );
-            if (!sessionStillUsedByRunTabs && !sessionStillUsedByTerminalTabs) {
-              delete nextSessions[previousSessionId];
-            }
-          }
-          return {
-            ...ws,
-            sessions: nextSessions,
-            ui: {
-              ...(ws.ui ?? {}),
-              runPanel: {
-                ...currentRunPanel,
-                open: true,
-                activeTabId: nextRunTab.id,
-                tabs: nextTabs,
-              },
+          return upsertRunPanelTabInSnapshot(snapshot, {
+            tab: {
+              id: resolvedReusableRunTab?.id ?? tabId,
+              title,
+              sessionId,
+              scriptId: script.id,
+              createdAt: Date.now(),
+              endedAt: null,
+              exitCode: null,
             },
-          };
+            cwd: snapshot.projectPath,
+          });
         });
       })();
     },
@@ -719,7 +704,7 @@ export function useQuickCommandRuntime({
       projectPath,
       sharedScriptsRoot,
       showPanelMessage,
-      updateWorkspace,
+      updateLayoutSnapshot,
       windowLabel,
     ],
   );

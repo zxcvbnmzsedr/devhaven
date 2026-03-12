@@ -1,14 +1,13 @@
 import type { ReactNode, RefObject } from "react";
 import { Fragment, useRef } from "react";
 
-import type { SplitNode, SplitOrientation } from "../../models/terminal";
+import type { SplitOrientation, TerminalPaneNode } from "../../models/terminal";
 
 type SplitLayoutProps = {
-  root: SplitNode;
-  activeSessionId: string;
-  onActivate: (sessionId: string) => void;
+  root: TerminalPaneNode;
+  activePaneId: string;
   onResize: (path: number[], ratios: number[]) => void;
-  renderPane: (sessionId: string, isActive: boolean) => ReactNode;
+  renderPane: (paneId: string, isActive: boolean) => ReactNode;
   path?: number[];
 };
 
@@ -81,8 +80,7 @@ function SplitDivider({ orientation, index, ratios, path, containerRef, onResize
 
 export default function SplitLayout({
   root,
-  activeSessionId,
-  onActivate,
+  activePaneId,
   onResize,
   renderPane,
   path = [],
@@ -98,20 +96,21 @@ export default function SplitLayout({
     <div ref={containerRef} className={containerClass}>
       {children.map((child, index) => {
         const ratio = ratios[index] ?? 1 / children.length;
-        const childKey = child.type === "pane" ? `pane:${child.sessionId}` : `${path.join("-")}-${index}`;
+        const childKey = child.type === "leaf" ? `pane:${child.paneId}` : `${path.join("-")}-${index}`;
         return (
           <Fragment key={childKey}>
             <div
-              className="min-h-0 min-w-0 flex"
-              style={{ flexBasis: `${ratio * 100}%`, flexGrow: ratio, flexShrink: 0 }}
+              className="flex h-full min-h-0 min-w-0"
+              style={{ flexBasis: 0, flexGrow: ratio, flexShrink: 1 }}
             >
-              {child.type === "pane" ? (
-                <div className="h-full w-full">{renderPane(child.sessionId, child.sessionId === activeSessionId)}</div>
+              {child.type === "leaf" ? (
+                <div className="h-full w-full min-h-0 min-w-0">
+                  {renderPane(child.paneId, child.paneId === activePaneId)}
+                </div>
               ) : (
                 <SplitLayout
                   root={child}
-                  activeSessionId={activeSessionId}
-                  onActivate={onActivate}
+                  activePaneId={activePaneId}
                   onResize={onResize}
                   renderPane={renderPane}
                   path={[...path, index]}

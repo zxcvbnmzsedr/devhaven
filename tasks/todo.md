@@ -1,83 +1,87 @@
-# 当前任务：补齐项目切换时终端控制字符残片的前端根因修复
+# 本次任务清单
 
-- [x] 复核现有后端 replay cache 修复与切换项目恢复链路
-- [x] 先补失败测试，锁定连接期缓冲裁剪切进 CSI/OSC 序列的场景
-- [x] 实现前端连接期缓冲的 escape-aware 裁剪，并补齐 Rust 侧 CSI 覆盖
-- [x] 跑针对性验证并在文末追加复盘
-
-## Working Notes
-- 现有未提交改动已经在 `src-tauri/src/terminal.rs` 修掉了 Rust replay cache 的 ANSI 边界问题，这一轮不要覆盖它，而是补齐前端 `bufferedOutput` 同类漏点。
-- `TerminalPane` 连接阶段在 `hydrated=false` 时会把 live output 先堆进 `bufferedOutput`，超过 512 KiB 后直接 `slice()`，这里仍可能把 `CSI ?1;2c` 或 `OSC 10/11` 从中间切开。
-- 本次只修根因、只防新增，不增加“文本正则清洗”兜底，不强制丢弃历史 snapshot。
+- [x] 建立 terminal_runtime 新真相源（session/layout/quick-command）
+- [x] 建立 typed event 与按 scope 订阅协议
+- [x] 切换持久化到 LayoutSnapshot 并实现旧 workspace 导入
+- [x] 切换前端到 runtime client / selectors / TerminalWorkspaceShell
+- [x] 统一 pane 系统（terminal/run/tool/overlay）
+- [x] 删除旧 workspace 保存/广播/轮询路径并完成集成
+- [x] 跑构建与关键测试，确认当前阶段可继续集成
 
 ## Review
-- 新增 `src/components/terminal/terminalEscapeTrim.ts`，把前端连接期缓冲的“裁头保尾”改成 escape-aware trim，和 Rust replay cache 保持同类边界策略。
-- `src/components/terminal/TerminalPane.tsx` 在 `bufferedOutput` 超限时不再裸 `slice()`，避免把 `CSI ?1;2c` / `OSC 10;11;rgb...` 的前缀截掉后写进 xterm。
-- 新增 `src/components/terminal/terminalEscapeTrim.test.mjs`，先用 Node 内建 test 跑出缺失 helper 的失败，再覆盖 plain text / partial OSC / partial CSI 三个场景。
-- Rust 侧补了一条 `trim_terminal_output_cache_skips_partial_csi_sequence`，确认 replay cache 对 `CSI` 残片也不会回放成裸文本。
-- 验证通过：`node --test src/components/terminal/terminalEscapeTrim.test.mjs`、`cargo test --manifest-path src-tauri/Cargo.toml`、`pnpm build`。
+- 当前阶段已完成：按一次切换策略把终端工作区迁移到 Rust mux-lite runtime + projection UI，当前主路径已切到 runtime snapshot + projection shell。
+- 已完成 Rust runtime core 收口：`src-tauri/src/terminal_runtime/*` 现保留 session registry、quick-command registry、JSON layout snapshot registry、scoped 事件与全局 `shared_runtime()`，早期未接线的 typed layout registry 骨架已删除。
+- `src-tauri/src/terminal.rs` 已接入 runtime：创建/复用会话时注册 session、绑定 client/pty、输出时递增 seq、退出时标记 exited，并改为仅发 scoped pane 事件。
+- 已完成前端协议收口：`src/services/terminal.ts`、`src/services/quickCommands.ts`、`src/terminal-runtime-client/runtimeClient.ts` 不再回退到 legacy terminal/quick-command/workspace 通道。
+- 已完成 Rust/Web 协议删旧一轮：`load/save/list_terminal_workspace*` 与 `quick_command_snapshot/quick-command-event` 已从 command/web 路由退役，WS 只向显式订阅事件推送。
+- 已完成前端 shell 收口第一步：`TerminalWorkspaceView` 顶层 state 持有 `TerminalLayoutSnapshot`，渲染 shell 已拆到 `TerminalWorkspaceShell`，主视图 header/tabs/active pane/run configuration 选择态统一改为消费 shell model / selectors。
+- 已修正该切换里的两处明显回归风险：项目切换时通过 `snapshot.projectPath/projectId` 守卫避免把旧 snapshot 解释成新项目，保存布局时加入本地 dirty revision 防止保存期间的新编辑被误清脏标记。
+- 已继续把一部分 UI 状态改为 snapshot 原生更新：右侧文件预览改为落在 `layoutSnapshot.panes[filePreview]`，right sidebar / run panel / activeTab / runConfiguration 的一部分更新已不再走 legacy bridge。
+- 已补充 snapshot 原生 helper 与测试：`src/models/terminal.ts` 新增 append/activate/split/remove/update-ratios 等 helper，`src/models/terminal.snapshot.test.mjs` 覆盖 6 个核心用例；主工作区里 New Tab / Split / Activate / Close Tab / Close Session 已开始复用这些 helper。
+- 已把 run panel 进一步收口到 snapshot 原生 helper：`src/models/terminal.ts` 新增 run panel 的 upsert/remove/sync/activate/resize/exit helpers，`TerminalWorkspaceView` 与 `useQuickCommandRuntime` 已改为复用这些 helper，减少 UI 层手写对象展开。
+- 已补充 run panel 回归测试：`src/models/terminal.snapshot.test.mjs` 现覆盖 10 个核心用例，包含 run pane 创建、run tab 清理、失效会话裁剪与退出码回写。
+- 已修正 run tab 关闭语义回归：关闭运行标签页时现在会同步终止底层 terminal session，再做 quick command finalize / runtime cleanup / snapshot 清理，避免出现 UI 关闭但后台 PTY 残留的孤儿会话。
+- 已移除默认布局初始化里的 legacy 桥接：`createDefaultLayoutSnapshot` 现在直接在 `src/utils/terminalLayout.ts` 产出 `TerminalLayoutSnapshot`，`TerminalWorkspaceView` 不再通过 `createDefaultWorkspace -> convertLegacyWorkspaceToLayoutSnapshot` 初始化默认布局。
+- 已收窄前端 legacy 兼容边界：`src/services/terminalWorkspace.ts` 删除 legacy 布局转换导出，未使用的 `src/terminal-runtime-client/projections.ts` 已移除，窗口/Tab/Pane projection 统一回收到 `src/models/terminal.ts` 与 `src/terminal-runtime-client/selectors.ts`，避免新代码继续误接 `TerminalWorkspace` 兼容口。
+- 已补充默认快照入口测试：`src/models/terminal.snapshot.test.mjs` 现覆盖 11 个核心用例，新增默认 snapshot 直接构造验证。
+- 已继续收口右侧工具 pane：`src/models/terminal.ts` 新增 right sidebar / file preview 的 snapshot helper（sidebar 联动、showHidden、preview pane upsert/select/remove），`TerminalWorkspaceView` 已改为复用这些 helper，减少 view 层手写 patch。
+- 已补充右侧栏回归测试：`src/models/terminal.snapshot.test.mjs` 现覆盖 16 个核心用例，新增 right sidebar 联动、preview pane 生命周期、showHidden 写回与 preview selector 验证。
+- 已将 Git 选中文件纳入 snapshot：`src/models/terminal.ts` 新增 `gitDiff` pane 的 upsert/select helper，`TerminalWorkspaceView` / `TerminalRightSidebar` / `TerminalGitPanel` / `TerminalGitFileViewPanel` 不再依赖侧边栏内部 `useState` 保存 Git 选择态。
+- 已补充 Git pane 回归测试：`src/models/terminal.snapshot.test.mjs` 现覆盖 18 个核心用例，新增 git diff pane 的 snapshot 存储与 selector 验证。
+- 已开始抽离 shell/projection 视图模型：新增 `src/components/terminal/terminalWorkspaceShellModel.ts`，把 `TerminalWorkspaceView` 中的 active tab projection、run panel、sidebar、preview、git diff 选择态派生统一收口到纯函数，减少视图组件内的派生状态散落。
+- 已补充 shell model 测试：`src/components/terminal/terminalWorkspaceShellModel.test.mjs` 覆盖 active tab / run panel fallback / sidebar fallback / preview / git diff 选择态推导。
+- 已完成前端 shell 收口：新增 `src/components/terminal/TerminalWorkspaceShell.tsx`，`TerminalWorkspaceView` 现在把 headerTabs / activeTabId / active pane projection / run configuration 选择态统一改为消费 shell model，不再在渲染层直接散读 `activeSnapshot`。
+- 已推进 pane host 统一：`src/components/terminal/PaneHost.tsx` 现可直接承载 `terminal/run/filePreview/gitDiff/overlay`，`TerminalRunPanel` 与 `TerminalRightSidebar` 已改为复用同一 host 分发逻辑，为后续 tree/overlay 真正统一铺路。
+- 已把主 tree 渲染接到统一 pane 分发：`TerminalWorkspaceShell.tsx` 的 `SplitLayout.renderPane` 现按 pane kind 统一走 `PaneHost`，tree / run panel / right sidebar 终于共用同一套 pane 装配入口。
+- 已把 quick command runtime snapshot 读路径切到 Rust runtime registry：`quick_command_runtime_snapshot` 现直接读取 `shared_runtime().list_quick_commands(...)`，不再从 `QuickCommandManager` 独立快照回传前端。
+- 已把 terminal layout 主路径切到 Rust runtime：`load/save/delete/list_terminal_layout_snapshot*` 现先确保 runtime 从 `terminal_workspaces.json` 导入，再以 runtime snapshot registry 作为命令读写真相源，storage 退回为持久化后端。
+- 已补充 runtime layout snapshot 回归测试：`cargo test runtime_layout_snapshot_registry_round_trips_json_snapshots --manifest-path src-tauri/Cargo.toml` 覆盖 runtime 导入 / 读取 / 汇总 / 删除 JSON snapshot 行为。
+- 已删除未接线的 typed layout runtime 骨架：`src-tauri/src/terminal_runtime/{layout_registry,pane_registry,tab_registry,window_registry}.rs` 与相关类型/方法已移除，`terminal_runtime` 现只保留主路径真正使用的 session / quick-command / JSON layout snapshot 语义。
+- 已清理最后一批小尾巴：删除 `TerminalWorkspaceHeader` 未用 prop、压平 `PaneHost` 的 gitDiff 分支、合并 `AGENTS.md` 重复条目、修正 Review 状态文案。
+- 已删除零引用的 legacy hook：`src/hooks/useQuickCommandPanel.ts` 已移除，并同步更新 `AGENTS.md`，避免旧 `TerminalWorkspace` 语义继续在前端扩散。
+- 已清理前端 legacy terminal utils：`src/utils/terminalLayout.ts` 中零引用的 legacy workspace/split 工具已删除，当前仅保留 `createId`、`TerminalWorkspaceDefaults` 与 snapshot 默认布局构造，避免继续在前端保留无人调用的旧工作区算法。
+- 已清理前端 legacy terminal model 转换：`src/models/terminal.ts` 中未再被主路径使用的 `TerminalWorkspace/SplitNode` 旧模型与双向布局转换已删除，前端工作区模型进一步收敛到 `TerminalLayoutSnapshot` / pane projection 语义。
+- 已删除 Rust 侧零引用旧 workspace API：`src-tauri/src/storage.rs` 不再暴露 `load/save/list_terminal_workspace*` 与反向 legacy 转换，`src-tauri/src/models.rs` 同步移除 `TerminalWorkspaceSummary`，后端公开存储接口只剩 layout snapshot 语义。
+- 已把 legacy 导入挪出热路径：`TerminalWorkspaceStoreState` 现在在首次加载磁盘缓存时就把旧记录归一化为 snapshot，并标记待刷盘；`load_layout_snapshot` 若在已加载缓存里再遇到 legacy 记录会直接报错，避免运行时按条目懒转换。
+- 已补充 Rust 存储迁移测试：`cargo test storage --manifest-path src-tauri/Cargo.toml` 现覆盖 snapshot-only store 更新、legacy 读盘归一化、热路径拒绝未归一化旧记录等行为。
+- 本轮最新验证：`node --test src/models/terminal.snapshot.test.mjs`、`pnpm exec tsc --noEmit`、`pnpm build`、`cargo test storage --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml` 通过。
+- 本轮补充验证：`node --test src/components/terminal/terminalWorkspaceShellModel.test.mjs`、`pnpm exec tsc --noEmit`、`pnpm build` 通过。
+- 本轮最终验证：`node --test src/components/terminal/terminalWorkspaceShellModel.test.mjs`、`pnpm exec tsc --noEmit`、`pnpm build`、`cargo test runtime_layout_snapshot_registry_round_trips_json_snapshots --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml` 通过，且 `cargo check` 已无 warning。
+- 当前状态：本轮可直接收尾的小尾巴已清完；当前工作区已没有新的编译 warning / 未用 prop / 旧读路径残留，后续若继续就是新的功能或新的架构任务，而不是“收尾”。
 
-# 当前任务：修复 xterm.js 偶发显示裸露 `10;rgb...11;rgb...` 控制串
+## 性能收尾任务
 
-- [x] 读取仓库约束、相关技能与现有终端链路
-- [x] 排查前后端 terminal-output / replay / snapshot 恢复路径
-- [x] 先补失败测试，锁定“缓存截断切进 OSC 序列”场景
-- [x] 实现最小修复，避免重放缓存从控制序列中间开始
-- [x] 跑针对性验证并记录复盘
+- [x] 卡片模式补齐增量渲染，避免卡片视图继续全量挂载全部项目卡片
+- [x] 收敛 Git Daily / 热力图 / Codex 监控的重复全量更新路径
+- [x] 跑验证并补充本轮 Review
 
-## Working Notes
-- 用户给出的 `10;rgb:...11;rgb:...` 很像 OSC 10 / OSC 11 颜色查询响应体被当成普通文本渲染，重点怀疑“重放缓存从转义序列中间开始”。
-- `TerminalPane` 恢复顺序是 `cachedState/savedState + replayData + bufferedOutput`，真正写入 xterm 前没有做 ANSI 边界修复。
-- Rust 侧 `output_cache_by_pty` 会按 4 MiB 上限从头裁剪，但当前只保证 UTF-8 边界，不保证 ANSI/OSC 边界；如果裁进 `ESC ] 10/11 ... BEL/ST` 中间，后续恢复就会把尾巴当普通字符显示。
-- 连接期 `bufferedOutput` 也有 512 KiB 的头部裁剪，但时间窗口很短，优先先修更大概率触发的 Rust replay cache。
+## Review（性能收尾）
 
-## Review
-- 根因确认：不是 xterm live stream 自己把 OSC 10/11 打印出来，而是 Rust replay cache 头部裁剪只看 UTF-8，不看 ANSI/OSC 边界，导致恢复时从控制序列中间开始回放。
-- 修复方式：在 `trim_terminal_output_cache` 增加 escape-aware 起点调整；若裁剪点落在 CSI/OSC/DCS/APC/PM/SOS 等控制序列内部，就把起点推进到该序列结束之后。
-- 新增 4 条 Rust 单测，覆盖普通文本、BEL 终止的 OSC、ST 终止的 OSC、以及裁剪点落到第二段 OSC 内部的场景。
-- 验证通过：`cargo test --manifest-path src-tauri/Cargo.toml`、`pnpm build`。
+- 已补齐卡片模式的批次渲染：`MainContent` 现在和列表模式一样按批次加载卡片，并在滚动接近底部或首屏未撑满时继续续载，避免卡片视图一次性挂满全部项目。
+- 已把 Git Daily 自动补算改为小批次推进：`useAppActions` 现在按批次刷新缺失项目，并在签名变化时中断旧任务，降低大量项目首屏加载时的后台突刺。
+- 已把热力图缓存刷新从“每次项目数组变化都重新读盘”收窄为“按签名/项目数变化同步”，优先复用内存缓存，仅在必要时重建并回写。
+- 已给 Codex 监控补上快照去重：Rust 侧忽略仅 `updatedAt` 变化的重复快照推送，前端 hook 也按快照签名跳过重复 `setState`，减少无效重渲染。
+- 本轮验证通过：`pnpm exec tsc --noEmit`、`pnpm build`、`cargo test record_snapshot_state_ignores_updated_at_only_changes --manifest-path src-tauri/Cargo.toml`、`cargo test storage --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml`。
 
-# 当前任务：第二刀性能优化——活跃挂载 + PTY 生命周期解耦
+## 终端滚动问题任务（2026-03-12）
 
-- [x] 读取仓库约束、相关技能与现有性能敏感链路
-- [x] 确认根因集中在终端工作区常驻挂载与事件 fan-out
-- [x] 延续第一刀的项目切换前保存链路
-- [x] 补齐切换 Tab 前的 workspace 快照回写安全性
-- [x] 实现仅挂载当前激活 Tab 的 `SplitLayout` / `TerminalPane`
-- [x] 修复隐藏卸载误杀运行中 PTY 的生命周期耦合问题
-- [x] 补齐关闭项目时的显式 PTY 回收链路
-- [x] 跑构建验证并记录结果
+- [x] 定位终端区域无法滚动到底的根因
+- [x] 实现最小修复并补充验证
+- [x] 完成验证并追加审查结论
 
-## Working Notes
-- 先按“用户说的是 DevHaven 打开多个项目后 UI/交互变卡”这个假设排查。
-- 已知仓库最近做过一次“终端工作区持久化写放大”整改，需要确认这是否只是其中一个点，还是仍有更大的渲染/事件广播瓶颈。
-- 已补充落地计划：`docs/plans/2026-03-10-project-scale-performance-plan.md`，按收益优先处理终端常驻挂载、事件 fan-out，再处理主界面全量渲染与后台增量化。
-- `tauri://localhost` 高内存基本可视为 WebView 渲染进程在吃内存；当前最大头不是 Rust 后端本身，而是前端常驻的 xterm/Monaco/隐藏 workspace/tab 树与其缓存状态。
-- 用户补充的担心是对的：如果“隐藏即卸载”仍然沿用原先的 PTY ref 计数回收，切项目/切 tab 后 1 秒就可能把仍在运行的会话杀掉，优化收益会变成行为回归。
+## Review（终端滚动问题）
 
-## Archive：整改终端工作区持久化写放大
+- 根因确认：`src/styles/global.css` 对 `.terminal-pane .xterm-viewport` 追加了 `height: 100%`，覆盖了 xterm 自己按 viewport/scroll area 计算的滚动容器尺寸，导致终端滚动位置无法稳定落到最底部。
+- 修复方式：删除 `.xterm-viewport` 的固定高度覆盖，仅保留 `.terminal-pane .xterm` 的容器高度约束，让 xterm 恢复默认 viewport 布局逻辑。
+- 回归保护：新增 `src/styles/global.css.test.mjs`，明确断言样式表不得再次把 `.xterm-viewport` 固定成 `height: 100%`。
+- 本轮验证通过：`node --test src/styles/global.css.test.mjs`、`pnpm build`。
 
-- [x] 读取仓库约束、相关技能与现有保存链路
-- [x] 明确问题根因与最小可行整改方案
-- [x] 先写失败测试，锁定缓存/批量落盘行为
-- [x] 实现 Rust 侧终端工作区内存缓存与延迟刷盘
-- [x] 保持现有命令接口与跨窗口同步兼容
-- [x] 跑针对性测试与构建验证
-- [x] 追加复盘总结
+## Review（终端滚动问题 - 跟进）
 
-## Review（归档）
-- 已将终端工作区保存改为“内存更新 + debounce 异步刷盘”，避免每次 UI 微调都全量读改写 `terminal_workspaces.json`。
-- 保持前端调用协议、同步事件与现有文件格式兼容；退出应用时会补一次同步 flush，降低 debounce 窗口内状态丢失风险。
-- 新增两条 Rust 单测覆盖缓存状态机与摘要行为；`cargo test --manifest-path src-tauri/Cargo.toml` 与 `npm run build` 已通过。
-
-## Review
-- 卡顿根因分成两类：主界面“项目总数变多”与终端工作区“已打开项目/Tab/Pane 变多”；其中终端层的结构性成本更重。
-- 终端窗口当前会把每个已打开项目的 `TerminalWorkspaceView` 常驻挂载、每个项目内部的所有 Tab 也常驻挂载，仅通过 `opacity-0` 隐藏，导致 PTY 监听、快捷命令轮询、工作区保存/同步等成本按已打开总量线性放大。
-- 主界面则存在顶层 `AppLayout` 串联多个派生 hook、卡片模式全量渲染、Git Daily 自动补算与热力图签名重建等叠加成本；项目一多时任何 `projects` 级状态变更都会放大为整页重算。
-- 第一刀已落地：终端主窗口只挂载当前激活项目的 `TerminalWorkspaceView`，不再把所有已打开项目的终端树长期留在 `tauri://localhost` 渲染进程里。
-- 为避免切换项目时丢失 workspace 状态，新增了“切换前注册并主动保存当前激活 workspace”的链路，再执行激活项目切换。
-- 第二刀已落地：主终端区只渲染活动 Tab 的 `SplitLayout` / `TerminalPane`，不再把一个项目下所有 tab 的 xterm 树、监听器和 scrollback 一起常驻。
-- 为避免切 Tab 时丢失隐藏前的终端内容，新增了“切换前抓取当前活动 Tab session 快照并写回 `workspace.sessions`”的链路。
-- 已补齐 PTY 生命周期：隐藏卸载改为“park + 缓存序列化状态 + 下次附着走 replay”，只有用户显式关闭 tab / pane / project 时才会真正触发 PTY terminate。
-- 已补齐“关闭项目”这条回收链路：窗口层会汇总被关闭 root project / worktree 对应的全部 sessionId，并在移除 UI 前显式结束这些 PTY，避免 parked 会话残留在后端。
-- `npm run build` 已通过；本仓库当前没有现成前端单测基建，这一轮先用类型检查 + 生产构建兜底。
+- 根据用户后续截图继续排查后，确认仅移除 `.xterm-viewport` 固定高度还不够；真正的主因是终端 pane 的高度链路在 `PaneHost` / `SplitLayout` / `TerminalRunPanel` 一带没有完全闭合，`fitAddon.fit()` 会在部分容器上拿到偏大的可用高度。
+- 本轮修复一：`src/components/terminal/PaneHost.tsx` 给 terminal/run host 显式补上 `h-full w-full`，避免 `TerminalPane` 的 `h-full` 落在 auto-height 父层上失效。
+- 本轮修复二：`src/components/terminal/TerminalRunPanel.tsx` 给运行 tab 的绝对定位内容层补齐 `flex min-h-0 min-w-0`，避免 Run 面板里的终端高度链路再次退回 auto。
+- 本轮修复三：`src/components/terminal/SplitLayout.tsx` 把 child 分配改成 `flex-basis: 0 + flex-grow 权重`，同时补齐 `h-full/min-h-0/min-w-0`，让 divider 不再把 100% 配额额外顶出容器。
+- 本轮修复四：`src/components/terminal/TerminalPane.tsx` 在 `fitAddon.fit()` 后新增 viewport rows clamp，基于真实 `.xterm-viewport` 高度把 rows 收口，避免 Tauri/WebKit 一类运行时里出现“滚动到底但最后几行仍被裁掉”。
+- 新增回归保护：`src/components/terminal/terminalViewportFit.ts` + `src/components/terminal/terminalViewportFit.test.mjs`，把 rows clamp 规则固化为可测试纯函数；并同步更新 `AGENTS.md` 记录终端尺寸收口点。
+- 本轮验证通过：`node --test src/components/terminal/terminalViewportFit.test.mjs src/styles/global.css.test.mjs`、`pnpm build`。

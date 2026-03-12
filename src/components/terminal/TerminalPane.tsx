@@ -23,6 +23,7 @@ import {
 import { openPathRuntime, openUrlRuntime } from "../../platform/runtime";
 import { APP_RESUME_EVENT } from "../../utils/appResume";
 import { trimTerminalOutputTail } from "./terminalEscapeTrim";
+import { clampRowsToViewport } from "./terminalViewportFit";
 
 const TERMINAL_SCROLLBACK_LINES = 5000;
 const CONNECT_OUTPUT_BUFFER_MAX_CHARS = 512 * 1024;
@@ -295,7 +296,7 @@ export type TerminalPaneProps = {
   onActivate: (sessionId: string) => void;
   onExit: (sessionId: string, code?: number | null) => void;
   onPtyReady?: (sessionId: string, ptyId: string) => void;
-  onRegisterSnapshotProvider: (sessionId: string, provider: () => string | null) => () => void;
+  onRegisterSnapshotProvider?: (sessionId: string, provider: () => string | null) => () => void;
   preserveSessionOnUnmount?: boolean;
 };
 
@@ -637,13 +638,33 @@ export default function TerminalPane({
       if (disposed) {
         return;
       }
-      const core = (term as Terminal & { _core?: { _renderService?: { hasRenderer?: () => boolean } } })._core;
+      const core = (
+        term as Terminal & {
+          _core?: {
+            _renderService?: {
+              hasRenderer?: () => boolean;
+              dimensions?: { css?: { cell?: { height?: number } } };
+            };
+          };
+        }
+      )._core;
       const renderService = core?._renderService;
       if (renderService && typeof renderService.hasRenderer === "function" && !renderService.hasRenderer()) {
         return;
       }
       try {
         fitAddon.fit();
+        const viewport = term.element?.querySelector(".xterm-viewport");
+        const cellHeight = renderService?.dimensions?.css?.cell?.height ?? 0;
+        const viewportHeight = viewport instanceof HTMLElement ? viewport.getBoundingClientRect().height : 0;
+        const nextRows = clampRowsToViewport({
+          currentRows: term.rows,
+          cellHeight,
+          viewportHeight,
+        });
+        if (nextRows < term.rows) {
+          term.resize(term.cols, nextRows);
+        }
       } catch (error) {
         console.warn("终端尺寸自适配失败，稍后将重试。", error);
       }
@@ -739,10 +760,7 @@ export default function TerminalPane({
       };
 
       try {
-        const outputUnlisten = await listenTerminalOutput((event) => {
-          if (event.payload.sessionId !== sessionId) {
-            return;
-          }
+        const outputUnlisten = await listenTerminalOutput(sessionId, (event) => {
           if (disposed) {
             return;
           }
@@ -773,10 +791,7 @@ export default function TerminalPane({
       }
 
       try {
-        const exitUnlisten = await listenTerminalExit((event) => {
-          if (event.payload.sessionId !== sessionId) {
-            return;
-          }
+        const exitUnlisten = await listenTerminalExit(sessionId, (event) => {
           if (disposed) {
             return;
           }
@@ -842,7 +857,7 @@ export default function TerminalPane({
 
     void connect();
 
-    const unregisterSnapshot = onRegisterSnapshotProvider(sessionId, () => {
+    const unregisterSnapshot = onRegisterSnapshotProvider?.(sessionId, () => {
       const addon = serializeAddonRef.current;
       if (!addon) {
         return null;
@@ -871,7 +886,7 @@ export default function TerminalPane({
       } catch (error) {
         console.warn("缓存终端状态失败。", error);
       }
-      unregisterSnapshot();
+      unregisterSnapshot?.();
       searchAddonRef.current = null;
       webLinksAddonRef.current = null;
       cursorStyleHandler.dispose();

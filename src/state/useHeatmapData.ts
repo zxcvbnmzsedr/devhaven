@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { HeatmapCacheEntry, HeatmapCacheFile, HeatmapData } from "../models/heatmap";
 import { EMPTY_HEATMAP_CACHE } from "../models/heatmap";
@@ -25,34 +25,53 @@ export function useHeatmapData(projects: Project[], gitIdentities: GitIdentity[]
   const [cache, setCache] = useState<HeatmapCacheFile>(EMPTY_HEATMAP_CACHE);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const cacheRef = useRef<HeatmapCacheFile>(EMPTY_HEATMAP_CACHE);
+  const hasLoadedCacheRef = useRef(false);
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
+  const gitDailySignature = useMemo(
+    () => buildGitDailySignature(projects, gitIdentities),
+    [gitIdentities, projects],
+  );
+  const gitDailySignatureRef = useRef(gitDailySignature);
+  gitDailySignatureRef.current = gitDailySignature;
+
+  const syncCache = useCallback(async (nextProjects: Project[], nextSignature: string, force?: boolean) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      let workingCache = cacheRef.current;
+      if (!hasLoadedCacheRef.current) {
+        workingCache = await loadHeatmapCache().catch(() => EMPTY_HEATMAP_CACHE);
+        hasLoadedCacheRef.current = true;
+      }
+      const shouldRebuild = shouldRefreshCache(workingCache, nextProjects, nextSignature, force);
+      if (shouldRebuild) {
+        const rebuilt = buildHeatmapCache(nextProjects, nextSignature);
+        cacheRef.current = rebuilt;
+        setCache(rebuilt);
+        await saveHeatmapCache(rebuilt);
+      } else {
+        cacheRef.current = workingCache;
+        setCache(workingCache);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   const refresh = useCallback(
     async (force?: boolean) => {
-      setIsLoading(true);
-      setError(null);
-      try {
-        const stored = await loadHeatmapCache().catch(() => EMPTY_HEATMAP_CACHE);
-        const gitDailySignature = buildGitDailySignature(projects, gitIdentities);
-        const shouldRebuild = shouldRefreshCache(stored, projects, gitDailySignature, force);
-        if (shouldRebuild) {
-          const rebuilt = buildHeatmapCache(projects, gitDailySignature);
-          setCache(rebuilt);
-          await saveHeatmapCache(rebuilt);
-        } else {
-          setCache(stored);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setIsLoading(false);
-      }
+      await syncCache(projectsRef.current, gitDailySignatureRef.current, force);
     },
-    [gitIdentities, projects],
+    [syncCache],
   );
 
   useEffect(() => {
-    void refresh(false);
-  }, [refresh]);
+    void syncCache(projectsRef.current, gitDailySignature, false);
+  }, [gitDailySignature, projects.length, syncCache]);
 
   const getHeatmapData = useCallback(
     (days: number) => buildHeatmapData(cache, days),

@@ -8,13 +8,12 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
-use crate::web_event_bus;
+use crate::terminal_runtime::events::{self, TerminalExitEventPayload, TerminalOutputEventPayload};
+use crate::terminal_runtime::{shared_runtime, SessionId};
 
-const TERMINAL_OUTPUT_EVENT: &str = "terminal-output";
-const TERMINAL_EXIT_EVENT: &str = "terminal-exit";
 const TERMINAL_OUTPUT_BATCH_MS: u64 = 8;
 const TERMINAL_OUTPUT_BATCH_MAX_BYTES: usize = 32 * 1024;
 const TERMINAL_OUTPUT_CACHE_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -90,32 +89,23 @@ pub struct TerminalCreateResult {
     pub replay_data: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct TerminalOutputPayload {
-    session_id: String,
-    data: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-struct TerminalExitPayload {
-    session_id: String,
-    code: Option<i32>,
-}
-
 fn emit_terminal_output(app_handle: &AppHandle, session_id: &str, data: &mut String) {
     if data.is_empty() {
         return;
     }
 
-    let payload = TerminalOutputPayload {
+    let seq = shared_runtime()
+        .note_session_output(&SessionId::from_string(session_id.to_string()))
+        .ok()
+        .flatten();
+    let payload = TerminalOutputEventPayload {
         session_id: session_id.to_string(),
         data: std::mem::take(data),
+        seq_start: seq,
+        seq_end: seq,
     };
 
-    let _ = app_handle.emit(TERMINAL_OUTPUT_EVENT, payload.clone());
-    web_event_bus::publish(TERMINAL_OUTPUT_EVENT, &payload);
+    events::emit_terminal_output(app_handle, payload);
 }
 
 fn default_shell() -> String {
@@ -481,9 +471,20 @@ pub fn terminal_create_session(
     let shell = default_shell();
     let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let client_id = normalize_client_id(client_id, &window_label);
+    let runtime = shared_runtime();
+    let runtime_session_id = SessionId::from_string(session_id.clone());
+    let _ = runtime.register_session(
+        runtime_session_id.clone(),
+        project_path.clone(),
+        project_path.clone(),
+        None,
+        Some(shell.clone()),
+    );
+    let _ = runtime.attach_session_client(&runtime_session_id, client_id.clone());
 
     if let Some(existing_pty) = find_existing_pty_by_session(&state, &session_id)? {
         attach_terminal_client(&state, &existing_pty, &client_id)?;
+        let _ = runtime.bind_session_pty(&runtime_session_id, existing_pty.clone());
         let replay_data = state
             .output_cache_by_pty
             .lock()
@@ -559,6 +560,7 @@ pub fn terminal_create_session(
     if let Ok(mut cache_by_pty) = state.output_cache_by_pty.lock() {
         cache_by_pty.insert(pty_id.clone(), String::new());
     }
+    let _ = runtime.bind_session_pty(&runtime_session_id, pty_id.clone());
 
     let app_handle = app.clone();
     let sessions_map = state.sessions.clone();
@@ -658,12 +660,15 @@ pub fn terminal_create_session(
             Err(_) => None,
         };
 
-        let payload = TerminalExitPayload {
+        let payload = TerminalExitEventPayload {
             session_id: session_id_for_output.clone(),
             code: exit_code,
         };
-        let _ = app_handle.emit(TERMINAL_EXIT_EVENT, payload.clone());
-        web_event_bus::publish(TERMINAL_EXIT_EVENT, &payload);
+        let _ = shared_runtime().mark_session_exited(
+            &SessionId::from_string(session_id_for_output.clone()),
+            exit_code,
+        );
+        events::emit_terminal_exit(&app_handle, payload);
         if let Ok(mut sessions) = sessions_map.lock() {
             sessions.remove(&pty_id_for_output);
         }
@@ -755,6 +760,23 @@ pub fn terminal_kill(
             .filter(|value| !value.is_empty()),
         force.unwrap_or(false),
     )?;
+    let normalized_client_id = client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let runtime = shared_runtime();
+    let runtime_session_id = SessionId::from_string(
+        state
+            .pty_to_session
+            .lock()
+            .ok()
+            .and_then(|index| index.get(&pty_id).cloned())
+            .unwrap_or_else(|| pty_id.clone()),
+    );
+    if let Some(client_id) = normalized_client_id.as_deref() {
+        let _ = runtime.detach_session_client(&runtime_session_id, client_id);
+    }
     if !should_terminate {
         return Ok(());
     }
@@ -775,6 +797,7 @@ pub fn terminal_kill(
         let _ = child.kill();
         let _ = child.wait();
     }
+    let _ = runtime.mark_session_exited(&runtime_session_id, None);
     remove_terminal_session_index_by_pty(&state, &pty_id);
     Ok(())
 }

@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
+use crate::terminal_runtime::{
+    QUICK_COMMAND_STATE_CHANGED_EVENT, QuickCommandStateChangedPayload, shared_runtime,
+    JobId as RuntimeJobId, QuickCommandState as RuntimeQuickCommandState,
+};
 use crate::web_event_bus;
-
-pub const QUICK_COMMAND_EVENT: &str = "quick-command-event";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -58,23 +60,6 @@ pub struct QuickCommandSnapshot {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum QuickCommandEventType {
-    Started,
-    StateChanged,
-    Exited,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QuickCommandEvent {
-    #[serde(rename = "type")]
-    pub event_type: QuickCommandEventType,
-    pub job: QuickCommandJob,
-    pub snapshot: QuickCommandSnapshot,
-}
-
 #[derive(Clone, Default)]
 pub struct QuickCommandManager {
     inner: Arc<Mutex<QuickCommandRuntime>>,
@@ -112,14 +97,25 @@ pub fn quick_command_start(
         error: None,
     };
 
-    let snapshot = state.upsert_job(job.clone());
+    state.upsert_job(job.clone());
+    let _ = shared_runtime().start_quick_command(
+        job.project_id.clone(),
+        job.project_path.clone(),
+        job.script_id.clone(),
+        job.command.clone(),
+    );
 
-    emit_quick_command_event(
+    emit_quick_command_state_changed(
         &app,
-        QuickCommandEvent {
-            event_type: QuickCommandEventType::Started,
-            job: job.clone(),
-            snapshot,
+        QuickCommandStateChangedPayload {
+            job_id: job.job_id.clone(),
+            script_id: job.script_id.clone(),
+            project_id: job.project_id.clone(),
+            project_path: job.project_path.clone(),
+            state: RuntimeQuickCommandState::Running,
+            updated_at: job.updated_at,
+            exit_code: job.exit_code,
+            error: job.error.clone(),
         },
     );
 
@@ -136,15 +132,29 @@ pub fn quick_command_stop(
 ) -> Result<QuickCommandJob, String> {
     let is_force = force.unwrap_or(false);
 
-    let (stopping_job, stopping_snapshot, changed) = state.request_stop(&job_id, is_force)?;
+    let (stopping_job, _stopping_snapshot, changed) = state.request_stop(&job_id, is_force)?;
 
     if changed {
-        emit_quick_command_event(
+        let runtime_state = if is_force {
+            RuntimeQuickCommandState::StoppingHard
+        } else {
+            RuntimeQuickCommandState::StoppingSoft
+        };
+        let _ = shared_runtime().update_quick_command_state(
+            &RuntimeJobId::from_string(job_id.clone()),
+            runtime_state.clone(),
+        );
+        emit_quick_command_state_changed(
             &app,
-            QuickCommandEvent {
-                event_type: QuickCommandEventType::StateChanged,
-                job: stopping_job.clone(),
-                snapshot: stopping_snapshot,
+            QuickCommandStateChangedPayload {
+                job_id: stopping_job.job_id.clone(),
+                script_id: stopping_job.script_id.clone(),
+                project_id: stopping_job.project_id.clone(),
+                project_path: stopping_job.project_path.clone(),
+                state: runtime_state,
+                updated_at: stopping_job.updated_at,
+                exit_code: stopping_job.exit_code,
+                error: stopping_job.error.clone(),
             },
         );
     }
@@ -168,16 +178,32 @@ pub fn quick_command_finish(
         QuickCommandState::Exited
     };
 
-    let (finished_job, finished_snapshot, changed) =
-        state.finish_job(&job_id, final_state, resolved_code, error)?;
+    let (finished_job, _finished_snapshot, changed) =
+        state.finish_job(&job_id, final_state.clone(), resolved_code, error.clone())?;
 
     if changed {
-        emit_quick_command_event(
+        let runtime_state = if final_state == QuickCommandState::Exited {
+            RuntimeQuickCommandState::Exited
+        } else {
+            RuntimeQuickCommandState::Failed
+        };
+        let _ = shared_runtime().finish_quick_command(
+            &RuntimeJobId::from_string(job_id.clone()),
+            runtime_state.clone(),
+            Some(resolved_code),
+            error.clone(),
+        );
+        emit_quick_command_state_changed(
             &app,
-            QuickCommandEvent {
-                event_type: QuickCommandEventType::Exited,
-                job: finished_job.clone(),
-                snapshot: finished_snapshot,
+            QuickCommandStateChangedPayload {
+                job_id: finished_job.job_id.clone(),
+                script_id: finished_job.script_id.clone(),
+                project_id: finished_job.project_id.clone(),
+                project_path: finished_job.project_path.clone(),
+                state: runtime_state,
+                updated_at: finished_job.updated_at,
+                exit_code: finished_job.exit_code,
+                error: finished_job.error.clone(),
             },
         );
     }
@@ -194,18 +220,14 @@ pub fn quick_command_list(
     state.list_jobs(project_path.as_deref())
 }
 
-#[tauri::command]
-/// 获取任务快照。
-pub fn quick_command_snapshot(state: State<QuickCommandManager>) -> QuickCommandSnapshot {
-    state.snapshot()
-}
-
-/// 向前端广播 quick command 事件。
-pub fn emit_quick_command_event(app_handle: &AppHandle, event: QuickCommandEvent) {
-    if let Err(error) = app_handle.emit(QUICK_COMMAND_EVENT, event.clone()) {
-        log::warn!("发送 quick-command-event 失败: {}", error);
+fn emit_quick_command_state_changed(
+    app_handle: &AppHandle,
+    payload: QuickCommandStateChangedPayload,
+) {
+    if let Err(error) = app_handle.emit(QUICK_COMMAND_STATE_CHANGED_EVENT, payload.clone()) {
+        log::warn!("发送 {} 失败: {}", QUICK_COMMAND_STATE_CHANGED_EVENT, error);
     }
-    web_event_bus::publish(QUICK_COMMAND_EVENT, &event);
+    web_event_bus::publish(QUICK_COMMAND_STATE_CHANGED_EVENT, &payload);
 }
 
 impl QuickCommandManager {
@@ -302,11 +324,6 @@ impl QuickCommandManager {
 
         jobs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
         jobs
-    }
-
-    fn snapshot(&self) -> QuickCommandSnapshot {
-        let runtime = lock_runtime(&self.inner);
-        runtime.snapshot()
     }
 }
 

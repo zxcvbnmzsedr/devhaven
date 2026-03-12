@@ -1,10 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import type { TerminalRightSidebarTab } from "../../models/terminal";
 import { IconFolder, IconGitBranch, IconX } from "../Icons";
+import PaneHost from "./PaneHost";
 import TerminalFileExplorerPanel from "./TerminalFileExplorerPanel";
-import TerminalFilePreviewPanel from "./TerminalFilePreviewPanel";
 import TerminalGitPanel from "./TerminalGitPanel";
-import TerminalGitFileViewPanel from "./TerminalGitFileViewPanel";
 import type { GitSelectedFile } from "./TerminalGitPanel";
 
 type TabButtonProps = {
@@ -45,6 +44,9 @@ export type TerminalRightSidebarProps = {
   onSelectFile: (relativePath: string) => void;
   onClosePreview: () => void;
   onPreviewDirtyChange: (dirty: boolean) => void;
+  gitSelected: GitSelectedFile | null;
+  onSelectGitFile: (next: GitSelectedFile | null) => void;
+  onCloseGitSelection: () => void;
   onChangeTab: (tab: TerminalRightSidebarTab) => void;
   onClose: () => void;
 };
@@ -61,17 +63,15 @@ export default function TerminalRightSidebar({
   onSelectFile,
   onClosePreview,
   onPreviewDirtyChange,
+  gitSelected,
+  onSelectGitFile,
+  onCloseGitSelection,
   onChangeTab,
   onClose,
 }: TerminalRightSidebarProps) {
   const filesActive = activeTab === "files";
   const gitActive = activeTab === "git";
   const treeWidth = Math.min(320, Math.max(220, Math.round(sidebarWidth * 0.4)));
-  const [gitSelected, setGitSelected] = useState<GitSelectedFile | null>(null);
-
-  useEffect(() => {
-    setGitSelected(null);
-  }, [projectPath]);
 
   return (
     <aside className="h-full flex flex-col overflow-hidden">
@@ -123,21 +123,15 @@ export default function TerminalRightSidebar({
                 onClose={onClose}
               />
             </div>
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-              {previewFilePath ? (
-                <TerminalFilePreviewPanel
-                  embedded
-                  projectPath={projectPath}
-                  relativePath={previewFilePath}
-                  onDirtyChange={onPreviewDirtyChange}
-                  onClose={onClosePreview}
-                />
-              ) : (
-                <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--terminal-bg)] text-[12px] text-[var(--terminal-muted-fg)]">
-                  选择文件以预览/编辑
-                </div>
-              )}
-            </div>
+            <PaneHost
+              kind="filePreview"
+              className="flex min-h-0 min-w-0 flex-1 flex-col"
+              projectPath={projectPath}
+              relativePath={previewFilePath}
+              onClose={onClosePreview}
+              onDirtyChange={onPreviewDirtyChange}
+              emptyMessage="选择文件以预览/编辑"
+            />
           </div>
         </div>
 
@@ -153,16 +147,16 @@ export default function TerminalRightSidebar({
                   projectPath={projectPath}
                   onClose={onClose}
                   selected={gitSelected}
-                  onSelect={setGitSelected}
+                  onSelect={onSelectGitFile}
                 />
               </div>
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <TerminalGitFileViewPanel
-                  projectPath={projectPath}
-                  selected={gitSelected}
-                  onCloseSelected={() => setGitSelected(null)}
-                />
-              </div>
+              <PaneHost
+                kind="gitDiff"
+                className="flex min-h-0 min-w-0 flex-1 flex-col"
+                projectPath={projectPath}
+                selected={gitSelected}
+                onCloseSelected={onCloseGitSelection}
+              />
             </div>
           </div>
         ) : null}

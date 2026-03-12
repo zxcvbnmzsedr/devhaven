@@ -86,17 +86,17 @@ export default function TerminalGitFileViewPanel({
   const [diffError, setDiffError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 
-  const relativePath = selected?.file.path ?? null;
+  const relativePath = selected?.path ?? null;
   const fileName = useMemo(() => (relativePath ? getFileName(relativePath) : ""), [relativePath]);
 
   useEffect(() => {
-    const nextPath = selected?.file.path ?? null;
+    const nextPath = selected?.path ?? null;
     if (nextPath && lastPathRef.current !== nextPath) {
       setViewMode("diff");
       setFileDirty(false);
     }
     lastPathRef.current = nextPath;
-  }, [selected?.file.path]);
+  }, [selected?.path]);
 
   const switcher = useMemo(() => {
     return <ViewModeSwitch mode={viewMode} onChange={setViewMode} />;
@@ -121,9 +121,9 @@ export default function TerminalGitFileViewPanel({
     setDiffContents(null);
 
     const staged = selected.category === "staged";
-    const oldRelativePath = selected.file.oldPath ?? null;
+    const oldRelativePath = selected.oldPath ?? null;
 
-    gitGetDiffContents(projectPath, selected.file.path, staged, oldRelativePath)
+    gitGetDiffContents(projectPath, selected.path, staged, oldRelativePath)
       .then((contents) => {
         if (requestIdRef.current !== requestId) {
           return;
@@ -169,7 +169,7 @@ export default function TerminalGitFileViewPanel({
         <TerminalFilePreviewPanel
           embedded
           projectPath={projectPath}
-          relativePath={selected.file.path}
+          relativePath={selected.path}
           onClose={onCloseSelected}
           onDirtyChange={setFileDirty}
           headerAddon={
@@ -241,7 +241,7 @@ export default function TerminalGitFileViewPanel({
                   <TerminalMonacoDiffViewer
                     original={diffContents.original}
                     modified={diffContents.modified}
-                    language={detectLanguage(selected.file.path)}
+                    language={detectLanguage(selected.path)}
                   />
                 </div>
               </div>

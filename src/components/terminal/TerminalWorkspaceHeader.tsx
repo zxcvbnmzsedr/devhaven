@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { ScriptExecutionState } from "../../hooks/useQuickCommandRuntime";
-import type { TerminalRightSidebarTab, TerminalTab } from "../../models/terminal";
+import type { TerminalRightSidebarTab } from "../../models/terminal";
 import type { ProjectScript } from "../../models/types";
 import { IconChevronDown, IconFolder, IconGitBranch, IconPlay, IconRerun, IconSettings, IconSquareStop } from "../Icons";
 import TerminalTabs from "./TerminalTabs";
+
+type TerminalHeaderTab = {
+  id: string;
+  title: string;
+};
 
 type TerminalWorkspaceHeaderProps = {
   projectName: string | null | undefined;
@@ -15,11 +20,10 @@ type TerminalWorkspaceHeaderProps = {
   scripts: ProjectScript[];
   selectedScriptId: string | null;
   selectedScriptState: ScriptExecutionState;
-  quickCommandMessage: string | null;
   runDisabled: boolean;
   stopDisabled: boolean;
   scriptActionsDisabled: boolean;
-  tabs: TerminalTab[];
+  tabs: TerminalHeaderTab[];
   activeTabId: string;
   onSelectScript: (scriptId: string) => void;
   onEditScript: () => void;
@@ -41,7 +45,6 @@ export default function TerminalWorkspaceHeader({
   scripts,
   selectedScriptId,
   selectedScriptState,
-  quickCommandMessage: _quickCommandMessage,
   runDisabled,
   stopDisabled,
   scriptActionsDisabled,

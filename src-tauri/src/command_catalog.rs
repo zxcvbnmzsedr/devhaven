@@ -75,17 +75,17 @@ macro_rules! devhaven_for_each_command {
             { collect_git_daily, web_collect_git_daily }
             { load_heatmap_cache, web_load_heatmap_cache }
             { save_heatmap_cache, web_save_heatmap_cache }
-            { load_terminal_workspace, web_load_terminal_workspace }
-            { save_terminal_workspace, web_save_terminal_workspace }
-            { delete_terminal_workspace, web_delete_terminal_workspace }
-            { list_terminal_workspace_summaries, web_list_terminal_workspace_summaries }
+            { load_terminal_layout_snapshot, web_load_terminal_layout_snapshot }
+            { save_terminal_layout_snapshot, web_save_terminal_layout_snapshot }
+            { delete_terminal_layout_snapshot, web_delete_terminal_layout_snapshot }
+            { list_terminal_layout_snapshot_summaries, web_list_terminal_layout_snapshot_summaries }
             { get_codex_monitor_snapshot, web_get_codex_monitor_snapshot }
             { apply_web_server_config, web_apply_web_server_config }
             { quick_command_start, web_quick_command_start }
             { quick_command_stop, web_quick_command_stop }
             { quick_command_finish, web_quick_command_finish }
             { quick_command_list, web_quick_command_list }
-            { quick_command_snapshot, web_quick_command_snapshot }
+            { quick_command_runtime_snapshot, web_quick_command_runtime_snapshot }
             { terminal_create_session, web_terminal_create_session }
             { terminal_write, web_terminal_write }
             { terminal_resize, web_terminal_resize }
@@ -751,29 +751,38 @@ fn web_save_heatmap_cache(app: &AppHandle, _guard: &PathGuard, payload: &Value) 
     serialize_result(crate::save_heatmap_cache(app.clone(), cache))
 }
 
-fn web_load_terminal_workspace(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
+fn web_load_terminal_layout_snapshot(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
     let project_path = required::<String>(payload, &["projectPath", "project_path"])?;
     guard.ensure_allowed_path(&project_path, "projectPath")?;
-    serialize_result(crate::load_terminal_workspace(app.clone(), project_path))
+    serialize_result(crate::load_terminal_layout_snapshot(app.clone(), project_path))
 }
 
-fn web_save_terminal_workspace(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
+fn web_save_terminal_layout_snapshot(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
     let project_path = required::<String>(payload, &["projectPath", "project_path"])?;
     guard.ensure_allowed_path(&project_path, "projectPath")?;
-    let workspace = required::<crate::models::TerminalWorkspace>(payload, &["workspace"])?;
+    let snapshot = required::<Value>(payload, &["snapshot"])?;
     let source_client_id = optional::<String>(payload, &["sourceClientId", "source_client_id"])?;
-    serialize_result(crate::save_terminal_workspace(app.clone(), project_path, workspace, source_client_id))
+    serialize_result(crate::save_terminal_layout_snapshot(
+        app.clone(),
+        project_path,
+        snapshot,
+        source_client_id,
+    ))
 }
 
-fn web_delete_terminal_workspace(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
+fn web_delete_terminal_layout_snapshot(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
     let project_path = required::<String>(payload, &["projectPath", "project_path"])?;
     guard.ensure_allowed_path(&project_path, "projectPath")?;
     let source_client_id = optional::<String>(payload, &["sourceClientId", "source_client_id"])?;
-    serialize_result(crate::delete_terminal_workspace(app.clone(), project_path, source_client_id))
+    serialize_result(crate::delete_terminal_layout_snapshot(
+        app.clone(),
+        project_path,
+        source_client_id,
+    ))
 }
 
-fn web_list_terminal_workspace_summaries(app: &AppHandle, _guard: &PathGuard, _payload: &Value) -> WebCommandResult {
-    serialize_result(crate::list_terminal_workspace_summaries(app.clone()))
+fn web_list_terminal_layout_snapshot_summaries(app: &AppHandle, _guard: &PathGuard, _payload: &Value) -> WebCommandResult {
+    serialize_result(crate::list_terminal_layout_snapshot_summaries(app.clone()))
 }
 
 fn web_get_codex_monitor_snapshot(app: &AppHandle, _guard: &PathGuard, _payload: &Value) -> WebCommandResult {
@@ -828,9 +837,9 @@ fn web_quick_command_list(app: &AppHandle, guard: &PathGuard, payload: &Value) -
     serialize_value(crate::quick_command_manager::quick_command_list(state, project_path))
 }
 
-fn web_quick_command_snapshot(app: &AppHandle, _guard: &PathGuard, _payload: &Value) -> WebCommandResult {
-    let state = app.state::<QuickCommandManager>();
-    serialize_value(crate::quick_command_manager::quick_command_snapshot(state))
+fn web_quick_command_runtime_snapshot(_app: &AppHandle, _guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let project_path = optional::<String>(payload, &["projectPath", "project_path"])?;
+    serialize_value(crate::quick_command_runtime_snapshot(project_path))
 }
 
 fn web_terminal_create_session(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {

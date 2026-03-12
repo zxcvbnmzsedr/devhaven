@@ -25,7 +25,8 @@ export type GitFileCategory = "staged" | "unstaged" | "untracked";
 
 export type GitSelectedFile = {
   category: GitFileCategory;
-  file: GitChangedFile;
+  path: string;
+  oldPath?: string | null;
 };
 
 function formatGitStatusBadge(status: GitChangedFile["status"]): string {
@@ -123,8 +124,14 @@ export default function TerminalGitPanel({
 
       if (selected) {
         const findIn = (category: GitFileCategory, files: GitChangedFile[]) => {
-          const matched = files.find((file) => file.path === selected.file.path);
-          return matched ? ({ category, file: matched } as const) : null;
+          const matched = files.find((file) => file.path === selected.path);
+          return matched
+            ? ({
+                category,
+                path: matched.path,
+                oldPath: matched.oldPath ?? null,
+              } as const)
+            : null;
         };
 
         const current =
@@ -144,8 +151,7 @@ export default function TerminalGitPanel({
           onSelect(null);
         } else if (
           fallback.category !== selected.category ||
-          fallback.file.status !== selected.file.status ||
-          fallback.file.oldPath !== selected.file.oldPath
+          fallback.oldPath !== (selected.oldPath ?? null)
         ) {
           onSelect(fallback);
         }
@@ -388,7 +394,7 @@ export default function TerminalGitPanel({
               ) : (
                 <div className="space-y-1 pb-2">
                   {stagedFiles.map((file) => {
-                    const active = selected?.category === "staged" && selected.file.path === file.path;
+                    const active = selected?.category === "staged" && selected.path === file.path;
                     return (
                       <div
                         key={`staged:${file.path}`}
@@ -399,7 +405,9 @@ export default function TerminalGitPanel({
                         <button
                           type="button"
                           className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() => onSelect({ category: "staged", file })}
+                          onClick={() =>
+                            onSelect({ category: "staged", path: file.path, oldPath: file.oldPath ?? null })
+                          }
                           title={describeFile(file)}
                         >
                           <span className="w-4 shrink-0 text-[10px] font-semibold text-[var(--terminal-muted-fg)]">
@@ -432,7 +440,7 @@ export default function TerminalGitPanel({
               ) : (
                 <div className="space-y-1 pb-2">
                   {unstagedFiles.map((file) => {
-                    const active = selected?.category === "unstaged" && selected.file.path === file.path;
+                    const active = selected?.category === "unstaged" && selected.path === file.path;
                     return (
                       <div
                         key={`unstaged:${file.path}`}
@@ -443,7 +451,9 @@ export default function TerminalGitPanel({
                         <button
                           type="button"
                           className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() => onSelect({ category: "unstaged", file })}
+                          onClick={() =>
+                            onSelect({ category: "unstaged", path: file.path, oldPath: file.oldPath ?? null })
+                          }
                           title={describeFile(file)}
                         >
                           <span className="w-4 shrink-0 text-[10px] font-semibold text-[var(--terminal-muted-fg)]">
@@ -485,7 +495,7 @@ export default function TerminalGitPanel({
               ) : (
                 <div className="space-y-1 pb-2">
                   {untrackedFiles.map((file) => {
-                    const active = selected?.category === "untracked" && selected.file.path === file.path;
+                    const active = selected?.category === "untracked" && selected.path === file.path;
                     return (
                       <div
                         key={`untracked:${file.path}`}
@@ -496,7 +506,9 @@ export default function TerminalGitPanel({
                         <button
                           type="button"
                           className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                          onClick={() => onSelect({ category: "untracked", file })}
+                          onClick={() =>
+                            onSelect({ category: "untracked", path: file.path, oldPath: file.oldPath ?? null })
+                          }
                           title={describeFile(file)}
                         >
                           <span className="w-4 shrink-0 text-[10px] font-semibold text-[var(--terminal-muted-fg)]">

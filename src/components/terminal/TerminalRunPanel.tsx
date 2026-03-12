@@ -9,7 +9,7 @@ import {
 import type { QuickCommandJob } from "../../models/quickCommands";
 import type { RunPanelTab, TerminalSessionSnapshot } from "../../models/terminal";
 import { IconChevronsDownUp, IconPlay, IconRerun, IconSquareStop, IconX } from "../Icons";
-import TerminalPane from "./TerminalPane";
+import PaneHost from "./PaneHost";
 
 type TerminalRunPanelProps = {
   open: boolean;
@@ -35,7 +35,7 @@ type TerminalRunPanelProps = {
   activeTabRunning?: boolean;
   onPtyReady: (sessionId: string, ptyId: string) => void;
   onExit: (sessionId: string, code?: number | null) => void;
-  onRegisterSnapshotProvider: (sessionId: string, provider: () => string | null) => () => void;
+  onRegisterSnapshotProvider?: (sessionId: string, provider: () => string | null) => () => void;
 };
 
 function resolveTabExecutionState({
@@ -228,11 +228,12 @@ export default function TerminalRunPanel({
             return (
               <div
                 key={tab.id}
-                className={`absolute inset-0 min-h-0 ${
+                className={`absolute inset-0 flex min-h-0 min-w-0 ${
                   isActive ? "opacity-100" : "pointer-events-none opacity-0"
                 }`}
               >
-                <TerminalPane
+                <PaneHost
+                  kind="run"
                   sessionId={tab.sessionId}
                   cwd={session.cwd ?? projectPath}
                   savedState={session.savedState ?? null}

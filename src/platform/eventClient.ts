@@ -8,6 +8,15 @@ type EventEnvelope = {
   payload: unknown;
 };
 
+export type ListenEventOptions = {
+  scope?: string;
+};
+
+type SubscriptionMessage = {
+  type: "subscribe";
+  events: string[];
+};
+
 let socket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let nextHandlerId = 0;
@@ -29,6 +38,25 @@ function scheduleReconnect() {
     reconnectTimer = null;
     ensureSocket();
   }, 1000);
+}
+
+function buildSubscriptionEventNames() {
+  return Array.from(handlers.keys()).sort();
+}
+
+function syncSocketSubscriptions() {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  const message: SubscriptionMessage = {
+    type: "subscribe",
+    events: buildSubscriptionEventNames(),
+  };
+  try {
+    socket.send(JSON.stringify(message));
+  } catch (error) {
+    console.warn("[eventClient] 同步 WS 订阅失败", error);
+  }
 }
 
 function dispatchEnvelope(envelope: EventEnvelope) {
@@ -60,6 +88,10 @@ function ensureSocket() {
   const wsBase = resolveWebApiBase().replace(/^http/i, "ws");
   const windowLabel = encodeURIComponent(resolveRuntimeWindowLabel());
   socket = new WebSocket(`${wsBase}/api/ws?windowLabel=${windowLabel}`);
+
+  socket.onopen = () => {
+    syncSocketSubscriptions();
+  };
 
   socket.onmessage = (event) => {
     try {
@@ -93,6 +125,7 @@ function releaseSocketIfIdle() {
   }
 
   if (handlers.size > 0) {
+    syncSocketSubscriptions();
     return;
   }
 
@@ -107,6 +140,7 @@ function releaseSocketIfIdle() {
 export async function listenEvent<TPayload>(
   eventName: string,
   handler: EventHandler<TPayload>,
+  _options?: ListenEventOptions,
 ): Promise<UnlistenFn> {
   if (isTauriRuntime()) {
     return listen<TPayload>(eventName, handler as (event: TauriEvent<TPayload>) => void);
@@ -120,6 +154,7 @@ export async function listenEvent<TPayload>(
   handlers.set(eventName, eventHandlers);
 
   ensureSocket();
+  syncSocketSubscriptions();
 
   let active = true;
   return () => {

@@ -20,29 +20,31 @@ pub struct AppStateFile {
     pub settings: AppSettings,
 }
 
-pub type TerminalWorkspace = JsonValue;
+pub type TerminalLayoutSnapshot = JsonValue;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TerminalWorkspaceSummary {
+pub struct TerminalLayoutSnapshotSummary {
     pub project_path: String,
     #[serde(default)]
     pub project_id: Option<String>,
     #[serde(default)]
     pub updated_at: Option<i64>,
+    #[serde(default)]
+    pub revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalWorkspacesFile {
     pub version: i32,
     #[serde(default)]
-    pub workspaces: HashMap<String, TerminalWorkspace>,
+    pub workspaces: HashMap<String, TerminalLayoutSnapshot>,
 }
 
 impl Default for TerminalWorkspacesFile {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             workspaces: HashMap::new(),
         }
     }
@@ -699,7 +701,7 @@ pub enum CodexMonitorState {
     NeedsAttention,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexMonitorSession {
     pub id: String,
@@ -748,7 +750,7 @@ pub struct CodexAgentEvent {
     pub working_directory: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexMonitorSnapshot {
     pub sessions: Vec<CodexMonitorSession>,

@@ -1,5 +1,9 @@
 import { invokeCommand } from "../platform/commandClient";
 import { listenEvent } from "../platform/eventClient";
+import {
+  terminalPaneExitEventName,
+  terminalPaneOutputEventName,
+} from "../terminal-runtime-client/subscriptions";
 
 export type TerminalCreateRequest = {
   projectPath: string;
@@ -27,7 +31,19 @@ export type TerminalOutputPayload = {
   data: string;
 };
 
+export type TerminalPaneOutputPayload = {
+  sessionId: string;
+  data: string;
+  seqStart?: number | null;
+  seqEnd?: number | null;
+};
+
 export type TerminalExitPayload = {
+  sessionId: string;
+  code?: number | null;
+};
+
+export type TerminalPaneExitPayload = {
   sessionId: string;
   code?: number | null;
 };
@@ -43,98 +59,16 @@ type TerminalPtyRegistryEntry = {
   creating: Promise<TerminalPtyReadyResult> | null;
 };
 
-type TerminalEventHandler<TPayload> = (event: { payload: TPayload }) => void;
-type UnlistenFn = () => void;
-
 const PTY_KILL_GRACE_MS = 1000;
 const TERMINAL_PTY_REGISTRY = new Map<string, TerminalPtyRegistryEntry>();
 
-function createSharedTerminalEventListener<TPayload>(
-  eventName: string,
-  options?: { afterDispatch?: (event: { payload: TPayload }) => void },
-) {
-  let nextHandlerId = 0;
-  const handlers = new Map<number, TerminalEventHandler<TPayload>>();
-  let baseUnlisten: UnlistenFn | null = null;
-  let baseSubscriptionPromise: Promise<void> | null = null;
-
-  const releaseBaseSubscription = () => {
-    if (handlers.size > 0 || baseSubscriptionPromise) {
-      return;
-    }
-
-    if (!baseUnlisten) {
-      return;
-    }
-
-    const unlistenBase = baseUnlisten;
-    baseUnlisten = null;
-    unlistenBase();
-  };
-
-  const dispatch = (event: { payload: TPayload }) => {
-    for (const handler of handlers.values()) {
-      try {
-        handler(event);
-      } catch (error) {
-        console.error(`[terminal] ${eventName} handler failed`, error);
-      }
-    }
-    options?.afterDispatch?.(event);
-  };
-
-  const ensureBaseSubscription = async () => {
-    if (baseUnlisten) {
-      return;
-    }
-
-    if (!baseSubscriptionPromise) {
-      baseSubscriptionPromise = listenEvent<TPayload>(eventName, dispatch)
-        .then((unlisten) => {
-          baseUnlisten = unlisten;
-          baseSubscriptionPromise = null;
-
-          // 如果订阅建立前所有 handler 都已取消，立即释放底层监听。
-          releaseBaseSubscription();
-        })
-        .catch((error) => {
-          baseSubscriptionPromise = null;
-          throw error;
-        });
-    }
-
-    await baseSubscriptionPromise;
-  };
-
-  return async (handler: TerminalEventHandler<TPayload>) => {
-    const handlerId = nextHandlerId;
-    nextHandlerId += 1;
-    handlers.set(handlerId, handler);
-
-    try {
-      await ensureBaseSubscription();
-    } catch (error) {
-      handlers.delete(handlerId);
-      releaseBaseSubscription();
-      throw error;
-    }
-
-    let active = true;
-    return () => {
-      if (!active) {
-        return;
-      }
-
-      active = false;
-      handlers.delete(handlerId);
-      releaseBaseSubscription();
-    };
-  };
+function terminalOutputEventName(sessionId: string) {
+  return terminalPaneOutputEventName(sessionId);
 }
 
-const registerTerminalOutputHandler = createSharedTerminalEventListener<TerminalOutputPayload>(
-  "terminal-output",
-);
+function terminalExitEventName(sessionId: string) {
+  return terminalPaneExitEventName(sessionId);
+}
 
 function cleanupTerminalPtyEntriesBySessionId(sessionId: string) {
   const suffix = `::${sessionId}`;
@@ -144,16 +78,6 @@ function cleanupTerminalPtyEntriesBySessionId(sessionId: string) {
     }
   }
 }
-
-const registerTerminalExitHandler = createSharedTerminalEventListener<TerminalExitPayload>("terminal-exit", {
-  afterDispatch: (event) => {
-    const sessionId = event.payload.sessionId?.trim();
-    if (!sessionId) {
-      return;
-    }
-    cleanupTerminalPtyEntriesBySessionId(sessionId);
-  },
-});
 
 export function buildTerminalPtyRegistryKey(windowLabel: string, sessionId: string) {
   return `${windowLabel}::${sessionId}`;
@@ -365,13 +289,49 @@ export async function killTerminal(
 }
 
 export async function listenTerminalOutput(
+  sessionId: string,
+  handler: (event: { payload: TerminalOutputPayload }) => void,
+): Promise<() => void>;
+export async function listenTerminalOutput(
+  sessionId: string,
   handler: (event: { payload: TerminalOutputPayload }) => void,
 ) {
-  return registerTerminalOutputHandler(handler);
+  return listenEvent<TerminalOutputPayload>(terminalOutputEventName(sessionId.trim()), handler);
 }
 
 export async function listenTerminalExit(
+  sessionId: string,
+  handler: (event: { payload: TerminalExitPayload }) => void,
+): Promise<() => void>;
+export async function listenTerminalExit(
+  sessionId: string,
   handler: (event: { payload: TerminalExitPayload }) => void,
 ) {
-  return registerTerminalExitHandler(handler);
+  return listenEvent<TerminalExitPayload>(terminalExitEventName(sessionId.trim()), (event) => {
+    const resolvedSessionId = event.payload.sessionId?.trim();
+    if (resolvedSessionId) {
+      cleanupTerminalPtyEntriesBySessionId(resolvedSessionId);
+    }
+    handler(event);
+  });
+}
+
+export async function listenTerminalPaneOutput(
+  sessionId: string,
+  handler: (event: { payload: TerminalPaneOutputPayload }) => void,
+) {
+  return listenEvent<TerminalPaneOutputPayload>(terminalPaneOutputEventName(sessionId.trim()), handler);
+}
+
+export async function listenTerminalPaneExit(
+  sessionId: string,
+  handler: (event: { payload: TerminalPaneExitPayload }) => void,
+) {
+  return listenEvent<TerminalPaneExitPayload>(terminalPaneExitEventName(sessionId.trim()), (event) => {
+    const resolvedSessionId = event.payload.sessionId?.trim();
+    if (resolvedSessionId) {
+      cleanupTerminalPtyEntriesBySessionId(resolvedSessionId);
+    }
+    handler(event);
+  });
 }

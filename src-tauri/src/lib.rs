@@ -14,6 +14,7 @@ mod skills;
 mod storage;
 mod system;
 mod terminal;
+mod terminal_runtime;
 mod time_utils;
 mod web_event_bus;
 mod web_server;
@@ -21,6 +22,8 @@ mod worktree_init;
 mod worktree_setup;
 
 use serde::Serialize;
+use serde_json::{Value as JsonValue, json};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -37,14 +40,14 @@ use crate::models::{
     GitWorktreeAddResult, GitWorktreeListItem, GlobalSkillInstallRequest, GlobalSkillInstallResult,
     GlobalSkillUninstallRequest, GlobalSkillsSnapshot, HeatmapCacheFile, InteractionLockPayload,
     MarkdownFileEntry, Project, ProjectNotesPreview, SharedScriptEntry, SharedScriptManifestScript,
-    SharedScriptPresetRestoreResult, TerminalWorkspace, TerminalWorkspaceSummary,
+    SharedScriptPresetRestoreResult, TerminalLayoutSnapshotSummary,
     WorktreeInitCancelResult, WorktreeInitCreateBlockingResult, WorktreeInitJobStatus,
     WorktreeInitRetryRequest, WorktreeInitStartRequest, WorktreeInitStartResult,
     WorktreeInitStatusQuery, WorktreeInitStep,
 };
 use crate::quick_command_manager::{
-    QuickCommandManager, quick_command_finish, quick_command_list, quick_command_snapshot,
-    quick_command_start, quick_command_stop,
+    QuickCommandManager, quick_command_finish, quick_command_list, quick_command_start,
+    quick_command_stop,
 };
 use crate::system::EditorOpenParams;
 use crate::terminal::{
@@ -52,18 +55,36 @@ use crate::terminal::{
 };
 
 const INTERACTION_LOCK_REASON_WORKTREE_CREATE: &str = "worktree-create";
-const TERMINAL_WORKSPACE_SYNC_EVENT: &str = "terminal-workspace-sync";
+const TERMINAL_WINDOW_LAYOUT_CHANGED_EVENT: &str = "terminal-window-layout-changed";
+const TERMINAL_WORKSPACE_RESTORED_EVENT: &str = "terminal-workspace-restored";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TerminalWorkspaceSyncPayload {
+struct TerminalWindowLayoutChangedPayload {
     project_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    workspace: Option<TerminalWorkspace>,
+    project_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    source_client_id: Option<String>,
+    window_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    change_type: Option<String>,
     deleted: bool,
-    updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalWorkspaceRestoredPayload {
+    project_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_id: Option<String>,
+    restored_at: i64,
+    imported_from_legacy: bool,
 }
 
 fn now_unix_millis() -> i64 {
@@ -73,25 +94,69 @@ fn now_unix_millis() -> i64 {
     }
 }
 
-fn emit_terminal_workspace_sync_event(
+fn terminal_layout_runtime_loaded_flag() -> &'static Mutex<bool> {
+    static LOADED: OnceLock<Mutex<bool>> = OnceLock::new();
+    LOADED.get_or_init(|| Mutex::new(false))
+}
+
+fn ensure_terminal_layout_runtime_loaded(app: &AppHandle) -> Result<(), String> {
+    let mut loaded = terminal_layout_runtime_loaded_flag()
+        .lock()
+        .map_err(|_| "terminal runtime layout 初始化锁已损坏".to_string())?;
+    if *loaded {
+        return Ok(());
+    }
+    let snapshots = storage::load_all_terminal_layout_snapshots(app)?;
+    crate::terminal_runtime::shared_runtime().import_layout_snapshots(snapshots)?;
+    *loaded = true;
+    Ok(())
+}
+
+fn emit_terminal_window_layout_changed_event(
     app: &AppHandle,
     project_path: String,
-    workspace: Option<TerminalWorkspace>,
-    source_client_id: Option<String>,
+    project_id: Option<String>,
+    window_id: Option<String>,
+    revision: Option<i64>,
+    updated_at: Option<i64>,
+    change_type: Option<&str>,
     deleted: bool,
 ) {
-    let payload = TerminalWorkspaceSyncPayload {
+    let payload = TerminalWindowLayoutChangedPayload {
         project_path,
-        workspace,
-        source_client_id,
+        project_id,
+        window_id,
+        revision,
+        updated_at,
+        change_type: change_type.map(|value| value.to_string()),
         deleted,
-        updated_at: now_unix_millis(),
     };
 
-    if let Err(error) = app.emit(TERMINAL_WORKSPACE_SYNC_EVENT, payload.clone()) {
-        log::warn!("发送 terminal-workspace-sync 失败: {}", error);
+    if let Err(error) = app.emit(TERMINAL_WINDOW_LAYOUT_CHANGED_EVENT, payload.clone()) {
+        log::warn!("发送 {} 失败: {}", TERMINAL_WINDOW_LAYOUT_CHANGED_EVENT, error);
     }
-    web_event_bus::publish(TERMINAL_WORKSPACE_SYNC_EVENT, &payload);
+    web_event_bus::publish(TERMINAL_WINDOW_LAYOUT_CHANGED_EVENT, &payload);
+}
+
+fn emit_terminal_workspace_restored_event(
+    app: &AppHandle,
+    project_path: String,
+    project_id: Option<String>,
+    window_id: Option<String>,
+    imported_from_legacy: bool,
+) {
+    let payload = TerminalWorkspaceRestoredPayload {
+        project_path,
+        project_id,
+        window_id,
+        restored_at: now_unix_millis(),
+        imported_from_legacy,
+    };
+
+    if let Err(error) = app.emit(TERMINAL_WORKSPACE_RESTORED_EVENT, payload.clone()) {
+        log::warn!("发送 {} 失败: {}", TERMINAL_WORKSPACE_RESTORED_EVENT, error);
+    }
+    web_event_bus::publish(TERMINAL_WORKSPACE_RESTORED_EVENT, &payload);
 }
 
 #[tauri::command]
@@ -765,51 +830,80 @@ fn save_heatmap_cache(app: AppHandle, cache: HeatmapCacheFile) -> Result<(), Str
 }
 
 #[tauri::command]
-fn load_terminal_workspace(
+fn load_terminal_layout_snapshot(
     app: AppHandle,
     project_path: String,
-) -> Result<Option<TerminalWorkspace>, String> {
-    log_command_result("load_terminal_workspace", || {
-        log::info!("load_terminal_workspace path={}", project_path);
-        storage::load_terminal_workspace(&app, &project_path)
+) -> Result<Option<JsonValue>, String> {
+    log_command_result("load_terminal_layout_snapshot", || {
+        log::info!("load_terminal_layout_snapshot path={}", project_path);
+        ensure_terminal_layout_runtime_loaded(&app)?;
+        let snapshot = crate::terminal_runtime::shared_runtime()
+            .load_layout_snapshot_by_project_path(&project_path)?;
+        if let Some(snapshot_obj) = snapshot.as_ref().and_then(|value| value.as_object()) {
+            emit_terminal_workspace_restored_event(
+                &app,
+                project_path.clone(),
+                snapshot_obj.get("projectId").and_then(|value| value.as_str()).map(|value| value.to_string()),
+                snapshot_obj.get("windowId").and_then(|value| value.as_str()).map(|value| value.to_string()),
+                snapshot_obj
+                    .get("importedFromLegacy")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+            );
+        }
+        Ok(snapshot)
     })
 }
 
 #[tauri::command]
-fn save_terminal_workspace(
+fn save_terminal_layout_snapshot(
     app: AppHandle,
     project_path: String,
-    workspace: TerminalWorkspace,
-    source_client_id: Option<String>,
-) -> Result<(), String> {
-    log_command_result("save_terminal_workspace", || {
-        log::info!("save_terminal_workspace path={}", project_path);
-        storage::save_terminal_workspace(&app, &project_path, workspace.clone())?;
-        emit_terminal_workspace_sync_event(
+    snapshot: JsonValue,
+    _source_client_id: Option<String>,
+) -> Result<JsonValue, String> {
+    log_command_result("save_terminal_layout_snapshot", || {
+        log::info!("save_terminal_layout_snapshot path={}", project_path);
+        ensure_terminal_layout_runtime_loaded(&app)?;
+        let snapshot = storage::normalize_terminal_layout_snapshot_for_store(&project_path, snapshot);
+        crate::terminal_runtime::shared_runtime()
+            .upsert_layout_snapshot(project_path.clone(), snapshot.clone())?;
+        let snapshot = storage::save_terminal_layout_snapshot(&app, &project_path, snapshot)?;
+        let snapshot_obj = snapshot.as_object().cloned().unwrap_or_default();
+        emit_terminal_window_layout_changed_event(
             &app,
             project_path.clone(),
-            Some(workspace),
-            source_client_id,
+            snapshot_obj.get("projectId").and_then(|value| value.as_str()).map(|value| value.to_string()),
+            snapshot_obj.get("windowId").and_then(|value| value.as_str()).map(|value| value.to_string()),
+            snapshot_obj.get("revision").and_then(|value| value.as_i64()),
+            snapshot_obj.get("updatedAt").and_then(|value| value.as_i64()),
+            Some("snapshotSaved"),
             false,
         );
-        Ok(())
+        Ok(snapshot)
     })
 }
 
 #[tauri::command]
-fn delete_terminal_workspace(
+fn delete_terminal_layout_snapshot(
     app: AppHandle,
     project_path: String,
-    source_client_id: Option<String>,
+    _source_client_id: Option<String>,
 ) -> Result<(), String> {
-    log_command_result("delete_terminal_workspace", || {
-        log::info!("delete_terminal_workspace path={}", project_path);
-        storage::delete_terminal_workspace(&app, &project_path)?;
-        emit_terminal_workspace_sync_event(
+    log_command_result("delete_terminal_layout_snapshot", || {
+        log::info!("delete_terminal_layout_snapshot path={}", project_path);
+        ensure_terminal_layout_runtime_loaded(&app)?;
+        let _ = crate::terminal_runtime::shared_runtime()
+            .delete_layout_snapshot(&project_path)?;
+        storage::delete_terminal_layout_snapshot(&app, &project_path)?;
+        emit_terminal_window_layout_changed_event(
             &app,
             project_path.clone(),
             None,
-            source_client_id,
+            None,
+            None,
+            Some(now_unix_millis()),
+            Some("snapshotDeleted"),
             true,
         );
         Ok(())
@@ -817,11 +911,39 @@ fn delete_terminal_workspace(
 }
 
 #[tauri::command]
-fn list_terminal_workspace_summaries(
+fn list_terminal_layout_snapshot_summaries(
     app: AppHandle,
-) -> Result<Vec<TerminalWorkspaceSummary>, String> {
-    log_command_result("list_terminal_workspace_summaries", || {
-        storage::list_terminal_workspace_summaries(&app)
+) -> Result<Vec<TerminalLayoutSnapshotSummary>, String> {
+    log_command_result("list_terminal_layout_snapshot_summaries", || {
+        ensure_terminal_layout_runtime_loaded(&app)?;
+        crate::terminal_runtime::shared_runtime().list_layout_snapshot_summaries()
+    })
+}
+
+#[tauri::command]
+fn quick_command_runtime_snapshot(project_path: Option<String>) -> JsonValue {
+    let jobs = crate::terminal_runtime::shared_runtime()
+        .list_quick_commands(project_path.as_deref())
+        .unwrap_or_default();
+    let updated_at = jobs.iter().map(|job| job.updated_at).max().unwrap_or_default();
+    json!({
+        "projectPath": project_path.unwrap_or_default(),
+        "jobs": jobs.into_iter().map(|job| {
+            json!({
+                "jobId": job.job_id.as_str(),
+                "projectId": job.project_id,
+                "projectPath": job.project_path,
+                "scriptId": job.script_id,
+                "command": job.command,
+                "windowLabel": JsonValue::Null,
+                "state": job.state,
+                "createdAt": job.created_at,
+                "updatedAt": job.updated_at,
+                "exitCode": job.exit_code,
+                "error": job.error,
+            })
+        }).collect::<Vec<_>>(),
+        "updatedAt": updated_at,
     })
 }
 

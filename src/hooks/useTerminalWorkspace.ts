@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 
 import type { TerminalQuickCommandDispatch } from "../models/quickCommands";
-import type { TerminalWorkspaceSummary } from "../models/terminal";
+import type { TerminalLayoutSnapshotSummary } from "../models/terminal";
 import type { Project } from "../models/types";
-import { deleteTerminalWorkspace, listTerminalWorkspaceSummaries } from "../services/terminalWorkspace";
+import { deleteTerminalLayout, listTerminalLayoutSummaries } from "../services/terminalWorkspace";
 import { gitWorktreeList, type GitWorktreeListItem } from "../services/gitWorktree";
 import {
   isSamePath,
@@ -265,7 +265,7 @@ export function useTerminalWorkspace({
 
       // 先卸载终端 pane（清理 PTY/定时保存），再异步删除持久化工作区，避免竞态把 workspace 又写回去。
       window.setTimeout(() => {
-        void Promise.all(Array.from(closingPaths).map((path) => deleteTerminalWorkspace(path))).catch((error) => {
+        void Promise.all(Array.from(closingPaths).map((path) => deleteTerminalLayout(path))).catch((error) => {
           console.error("删除终端工作区失败。", error);
           showToast("关闭项目失败，请重试", "error");
         });
@@ -376,9 +376,9 @@ export function useTerminalWorkspace({
     let cancelled = false;
 
     void (async () => {
-      let summaries: TerminalWorkspaceSummary[] = [];
+      let summaries: TerminalLayoutSnapshotSummary[] = [];
       try {
-        summaries = await listTerminalWorkspaceSummaries();
+        summaries = await listTerminalLayoutSummaries();
       } catch (error) {
         console.error("读取终端工作区列表失败。", error);
         return;

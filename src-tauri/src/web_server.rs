@@ -3,6 +3,7 @@ use std::net::TcpListener as StdTcpListener;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::collections::HashSet;
 
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
@@ -390,6 +391,7 @@ async fn handle_websocket_upgrade(
 
 async fn handle_websocket(mut socket: WebSocket, window_label: Option<String>) {
     let mut rx = web_event_bus::subscribe();
+    let mut subscribed_events: HashSet<String> = HashSet::new();
 
     loop {
         tokio::select! {
@@ -397,7 +399,7 @@ async fn handle_websocket(mut socket: WebSocket, window_label: Option<String>) {
                 let Ok(event) = result else {
                     continue;
                 };
-                if !should_send_event_to_ws_client(&event, window_label.as_deref()) {
+                if !should_send_event_to_ws_client(&event, window_label.as_deref(), &subscribed_events) {
                     continue;
                 }
                 let text = match serde_json::to_string(&event) {
@@ -414,6 +416,16 @@ async fn handle_websocket(mut socket: WebSocket, window_label: Option<String>) {
             incoming = socket.recv() => {
                 match incoming {
                     Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(message) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if message.get("type").and_then(|value| value.as_str()) == Some("subscribe") {
+                                subscribed_events.clear();
+                                if let Some(events) = message.get("events").and_then(|value| value.as_array()) {
+                                    subscribed_events.extend(events.iter().filter_map(|value| value.as_str().map(|item| item.to_string())));
+                                }
+                            }
+                        }
+                    }
                     Some(Ok(_)) => {}
                     Some(Err(_)) => break,
                 }
@@ -425,14 +437,68 @@ async fn handle_websocket(mut socket: WebSocket, window_label: Option<String>) {
 
 fn should_send_event_to_ws_client(
     event: &web_event_bus::WebEventEnvelope,
-    expected_window_label: Option<&str>,
+    _expected_window_label: Option<&str>,
+    subscribed_events: &HashSet<String>,
 ) -> bool {
-    if event.event == "terminal-output"
-        || event.event == "terminal-exit"
-        || event.event == "quick-command-event"
-    {
-        return true;
+    subscribed_events.contains(&event.event)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_send_event_to_ws_client;
+    use crate::web_event_bus::WebEventEnvelope;
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    fn envelope(event: &str) -> WebEventEnvelope {
+        WebEventEnvelope {
+            event: event.to_string(),
+            payload: json!({}),
+            ts: 0,
+        }
     }
 
-    expected_window_label.is_some()
+    #[test]
+    fn websocket_client_requires_explicit_subscription_for_scoped_events() {
+        let subscribed_events = HashSet::from([
+            "terminal-pane-output:session-1".to_string(),
+            "quick-command-state-changed".to_string(),
+        ]);
+
+        assert!(should_send_event_to_ws_client(
+            &envelope("terminal-pane-output:session-1"),
+            Some("main"),
+            &subscribed_events,
+        ));
+        assert!(should_send_event_to_ws_client(
+            &envelope("quick-command-state-changed"),
+            Some("main"),
+            &subscribed_events,
+        ));
+        assert!(!should_send_event_to_ws_client(
+            &envelope("terminal-output"),
+            Some("main"),
+            &subscribed_events,
+        ));
+        assert!(!should_send_event_to_ws_client(
+            &envelope("quick-command-event"),
+            Some("main"),
+            &subscribed_events,
+        ));
+    }
+
+    #[test]
+    fn websocket_client_without_subscriptions_does_not_receive_runtime_events() {
+        let subscribed_events = HashSet::new();
+        assert!(!should_send_event_to_ws_client(
+            &envelope("terminal-pane-output:session-1"),
+            Some("main"),
+            &subscribed_events,
+        ));
+        assert!(!should_send_event_to_ws_client(
+            &envelope("quick-command-state-changed"),
+            Some("main"),
+            &subscribed_events,
+        ));
+    }
 }

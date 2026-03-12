@@ -75,6 +75,13 @@ struct MonitorRuntime {
     previous_states: HashMap<String, CodexMonitorState>,
     previous_process_running: bool,
     has_bootstrapped: bool,
+    last_snapshot_state: Option<MonitorSnapshotState>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct MonitorSnapshotState {
+    sessions: Vec<CodexMonitorSession>,
+    is_codex_running: bool,
 }
 
 #[derive(Default)]
@@ -172,7 +179,7 @@ fn next_process_poll_interval_ms() -> u64 {
 }
 
 pub fn get_snapshot(app: &AppHandle) -> Result<CodexMonitorSnapshot, String> {
-    refresh_monitoring(app, false).map(|(snapshot, _)| snapshot)
+    refresh_monitoring(app, false).map(|(snapshot, _, _)| snapshot)
 }
 
 fn watch_loop(rx: Receiver<Result<notify::Event, notify::Error>>, app: AppHandle) {
@@ -221,11 +228,13 @@ fn should_refresh_for_event(event: &notify::Event) -> bool {
 
 fn emit_monitoring(app: &AppHandle) {
     match refresh_monitoring(app, true) {
-        Ok((snapshot, events)) => {
-            if let Err(error) = app.emit(CODEX_MONITOR_SNAPSHOT_EVENT, snapshot.clone()) {
-                log::warn!("推送 Codex 监控快照失败: {}", error);
+        Ok((snapshot, events, snapshot_changed)) => {
+            if snapshot_changed {
+                if let Err(error) = app.emit(CODEX_MONITOR_SNAPSHOT_EVENT, snapshot.clone()) {
+                    log::warn!("推送 Codex 监控快照失败: {}", error);
+                }
+                web_event_bus::publish(CODEX_MONITOR_SNAPSHOT_EVENT, &snapshot);
             }
-            web_event_bus::publish(CODEX_MONITOR_SNAPSHOT_EVENT, &snapshot);
             for event in events {
                 if let Err(error) = app.emit(CODEX_MONITOR_AGENT_EVENT, event.clone()) {
                     log::warn!("推送 Codex 监控事件失败: {}", error);
@@ -242,7 +251,7 @@ fn emit_monitoring(app: &AppHandle) {
 fn refresh_monitoring(
     app: &AppHandle,
     emit_events: bool,
-) -> Result<(CodexMonitorSnapshot, Vec<CodexAgentEvent>), String> {
+) -> Result<(CodexMonitorSnapshot, Vec<CodexAgentEvent>, bool), String> {
     let base_dir = app
         .path()
         .home_dir()
@@ -398,8 +407,19 @@ fn refresh_monitoring(
         updated_at: now_ms,
     };
     let events = build_monitor_events(&mut runtime, &snapshot, now_ms, emit_events);
+    let snapshot_changed = record_snapshot_state(&mut runtime, &snapshot);
 
-    Ok((snapshot, events))
+    Ok((snapshot, events, snapshot_changed))
+}
+
+fn record_snapshot_state(runtime: &mut MonitorRuntime, snapshot: &CodexMonitorSnapshot) -> bool {
+    let next_state = MonitorSnapshotState {
+        sessions: snapshot.sessions.clone(),
+        is_codex_running: snapshot.is_codex_running,
+    };
+    let changed = runtime.last_snapshot_state.as_ref() != Some(&next_state);
+    runtime.last_snapshot_state = Some(next_state);
+    changed
 }
 
 fn build_monitor_events(
@@ -1423,5 +1443,41 @@ mod tests {
 
         assert!(classification.indicates_error);
         assert!(!classification.indicates_needs_attention);
+    }
+
+    #[test]
+    fn record_snapshot_state_ignores_updated_at_only_changes() {
+        let mut runtime = MonitorRuntime::default();
+        let snapshot = CodexMonitorSnapshot {
+            sessions: vec![CodexMonitorSession {
+                id: "session-1".to_string(),
+                cwd: "/tmp/project".to_string(),
+                cli_version: Some("0.1.0".to_string()),
+                model: Some("gpt-5".to_string()),
+                effort: Some("medium".to_string()),
+                started_at: 10,
+                last_activity_at: 20,
+                state: CodexMonitorState::Working,
+                is_running: true,
+                session_title: Some("demo".to_string()),
+                details: Some("running".to_string()),
+            }],
+            is_codex_running: true,
+            updated_at: 100,
+        };
+
+        assert!(record_snapshot_state(&mut runtime, &snapshot));
+
+        let mut same_state_new_timestamp = snapshot.clone();
+        same_state_new_timestamp.updated_at = 200;
+        assert!(!record_snapshot_state(
+            &mut runtime,
+            &same_state_new_timestamp
+        ));
+
+        let mut changed_state = same_state_new_timestamp.clone();
+        changed_state.sessions[0].state = CodexMonitorState::Completed;
+        changed_state.sessions[0].is_running = false;
+        assert!(record_snapshot_state(&mut runtime, &changed_state));
     }
 }

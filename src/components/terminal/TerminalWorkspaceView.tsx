@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -9,12 +10,34 @@ import {
 import type { ITheme } from "xterm";
 
 import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
+import {
+  activateRunPanelTabInSnapshot,
+  appendTerminalTabToSnapshot,
+  activateTerminalSessionInSnapshot,
+  buildSessionSnapshotMap,
+  collectPaneIds,
+  markRunPanelTabExitedInSnapshot,
+  removePaneFromSnapshot,
+  removeRunPanelSessionFromSnapshot,
+  removeTerminalSessionFromSnapshot,
+  removeTerminalTabFromSnapshot,
+  setRunPanelHeightInSnapshot,
+  setRunPanelOpenInSnapshot,
+  setFileExplorerShowHiddenInSnapshot,
+  splitTerminalSessionInSnapshot,
+  syncRunPanelTabsInSnapshot,
+  updateRightSidebarStateInSnapshot,
+  updateLayoutNodeRatios,
+  upsertFilePreviewPaneInSnapshot,
+  upsertGitDiffPaneInSnapshot,
+} from "../../models/terminal";
 import type {
+  TerminalLayoutSnapshot,
+  TerminalLayoutTab,
   RunPanelState,
   RightSidebarState,
   SplitDirection,
   TerminalRightSidebarTab,
-  TerminalWorkspace,
 } from "../../models/terminal";
 import type { ProjectScript, ScriptParamField, SharedScriptEntry } from "../../models/types";
 import { resolveRuntimeClientId } from "../../platform/runtime";
@@ -22,9 +45,9 @@ import { gitIsRepo } from "../../services/gitManagement";
 import { listSharedScripts } from "../../services/sharedScripts";
 import { terminateTerminalSessions } from "../../services/terminal";
 import {
-  listenTerminalWorkspaceSync,
-  loadTerminalWorkspace,
-  saveTerminalWorkspace,
+  listenTerminalLayoutChanged,
+  loadTerminalLayout,
+  saveTerminalLayout,
 } from "../../services/terminalWorkspace";
 import {
   applySharedScriptCommandTemplate,
@@ -33,14 +56,8 @@ import {
   renderScriptTemplateCommand,
 } from "../../utils/scriptTemplate";
 import {
-  collectSessionIds,
-  createDefaultWorkspace,
+  createDefaultLayoutSnapshot,
   createId,
-  findPanePath,
-  normalizeWorkspace,
-  removePane,
-  splitPane,
-  updateSplitRatios,
 } from "../../utils/terminalLayout";
 import { isInteractionLocked } from "../../utils/interactionLock";
 import { useQuickCommandDispatch } from "../../hooks/useQuickCommandDispatch";
@@ -49,13 +66,8 @@ import {
   useQuickCommandRuntime,
   type ScriptExecutionState,
 } from "../../hooks/useQuickCommandRuntime";
-import { IconChevronDown } from "../Icons";
-import ResizablePanel from "./ResizablePanel";
-import SplitLayout from "./SplitLayout";
-import TerminalPane from "./TerminalPane";
-import TerminalRunPanel from "./TerminalRunPanel";
-import TerminalRightSidebar from "./TerminalRightSidebar";
-import TerminalWorkspaceHeader from "./TerminalWorkspaceHeader";
+import TerminalWorkspaceShell from "./TerminalWorkspaceShell";
+import { buildTerminalWorkspaceShellModel } from "./terminalWorkspaceShellModel";
 
 export type TerminalWorkspaceViewProps = {
   projectId: string | null;
@@ -100,6 +112,8 @@ const DEFAULT_RUN_PANEL: RunPanelState = {
 const MIN_RUN_PANEL_HEIGHT = 140;
 const MIN_RIGHT_SIDEBAR_WIDTH = 360;
 const MAX_RIGHT_SIDEBAR_WIDTH = 960;
+const RIGHT_SIDEBAR_PREVIEW_PANE_ID = "right-sidebar:file-preview";
+const RIGHT_SIDEBAR_GIT_DIFF_PANE_ID = "right-sidebar:git-diff";
 
 type ScriptFormState = {
   scriptId: string | null;
@@ -116,7 +130,7 @@ type RunConfigurationsDialogState = {
   draft: ScriptFormState;
 };
 
-function getNextTerminalTitle(tabs: TerminalWorkspace["tabs"]) {
+function getNextTerminalTitle(tabs: Array<Pick<TerminalLayoutTab, "title">>) {
   const used = new Set<number>();
   for (const tab of tabs) {
     const match = tab.title.match(TERMINAL_TITLE_PATTERN);
@@ -135,8 +149,38 @@ function getNextTerminalTitle(tabs: TerminalWorkspace["tabs"]) {
   return `终端 ${next}`;
 }
 
-function getRunPanelState(workspace: TerminalWorkspace) {
-  return workspace.ui?.runPanel ?? DEFAULT_RUN_PANEL;
+function touchLayoutSnapshot(snapshot: TerminalLayoutSnapshot): TerminalLayoutSnapshot {
+  const now = Date.now();
+  return {
+    ...snapshot,
+    updatedAt: now,
+    revision: now,
+  };
+}
+
+function collectSessionIdsForLayoutTab(snapshot: TerminalLayoutSnapshot, tab: TerminalLayoutTab): string[] {
+  const sessionIds: string[] = [];
+  collectPaneIds(tab.root).forEach((paneId) => {
+    const pane = snapshot.panes[paneId];
+    if ((pane?.kind === "terminal" || pane?.kind === "run") && pane.sessionId) {
+      sessionIds.push(pane.sessionId);
+    }
+  });
+  return sessionIds;
+}
+
+function findLayoutTabBySessionId(
+  snapshot: TerminalLayoutSnapshot,
+  sessionId: string,
+): TerminalLayoutTab | null {
+  return (
+    snapshot.tabs.find((tab) =>
+      collectPaneIds(tab.root).some((paneId) => {
+        const pane = snapshot.panes[paneId];
+        return (pane?.kind === "terminal" || pane?.kind === "run") && pane.sessionId === sessionId;
+      }),
+    ) ?? null
+  );
 }
 
 function areTerminalWorkspaceViewPropsEqual(
@@ -227,12 +271,9 @@ function TerminalWorkspaceView({
     defaultFileExplorerShowHidden: false,
   });
 
-  const [workspace, setWorkspace] = useState<TerminalWorkspace | null>(null);
+  const [layoutSnapshot, setLayoutSnapshot] = useState<TerminalLayoutSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const workspaceRef = useRef<TerminalWorkspace | null>(null);
-  const snapshotProviders = useRef(new Map<string, () => string | null>());
-  const [previewFilePath, setPreviewFilePath] = useState<string | null>(null);
-  const [previewDirty, setPreviewDirty] = useState(false);
+  const layoutSnapshotRef = useRef<TerminalLayoutSnapshot | null>(null);
   const [isGitRepo, setIsGitRepo] = useState(false);
   const [runConfigurationsDialog, setRunConfigurationsDialog] = useState<RunConfigurationsDialogState | null>(null);
   const [sharedScripts, setSharedScripts] = useState<SharedScriptEntry[]>([]);
@@ -240,11 +281,49 @@ function TerminalWorkspaceView({
   const [sharedScriptsError, setSharedScriptsError] = useState<string | null>(null);
   const runtimeClientIdRef = useRef(resolveRuntimeClientId());
   const runtimeClientId = runtimeClientIdRef.current;
-  const skipAutoSaveFingerprintRef = useRef<string | null>(null);
+  const layoutDirtyRef = useRef(false);
+  const layoutDirtyRevisionRef = useRef(0);
+
+  const activeSnapshot = useMemo(() => {
+    if (!layoutSnapshot) {
+      return null;
+    }
+    if (layoutSnapshot.projectPath !== projectPath) {
+      return null;
+    }
+    if (projectId && layoutSnapshot.projectId && layoutSnapshot.projectId !== projectId) {
+      return null;
+    }
+    return layoutSnapshot;
+  }, [layoutSnapshot, projectId, projectPath]);
+
+  const sessionSnapshots = useMemo(
+    () => (activeSnapshot ? buildSessionSnapshotMap(activeSnapshot) : {}),
+    [activeSnapshot],
+  );
+
+  const shellModel = useMemo(
+    () =>
+      activeSnapshot
+        ? buildTerminalWorkspaceShellModel(activeSnapshot, {
+            isGitRepo,
+            defaultFileExplorerPanelOpen: workspaceDefaultsRef.current.defaultFileExplorerPanelOpen,
+            defaultFileExplorerShowHidden: workspaceDefaultsRef.current.defaultFileExplorerShowHidden,
+            minRunPanelHeight: MIN_RUN_PANEL_HEIGHT,
+            minRightSidebarWidth: MIN_RIGHT_SIDEBAR_WIDTH,
+            maxRightSidebarWidth: MAX_RIGHT_SIDEBAR_WIDTH,
+          })
+        : null,
+    [activeSnapshot, isGitRepo],
+  );
+
+  const previewFilePath = shellModel?.previewFilePath ?? null;
+  const previewDirty = shellModel?.previewDirty ?? false;
+  const gitSelected = shellModel?.gitSelected ?? null;
 
   useEffect(() => {
-    workspaceRef.current = workspace;
-  }, [workspace]);
+    layoutSnapshotRef.current = layoutSnapshot;
+  }, [layoutSnapshot]);
 
   useEffect(() => {
     let cancelled = false;
@@ -276,25 +355,26 @@ function TerminalWorkspaceView({
     }
     let cancelled = false;
     setError(null);
-    setPreviewFilePath(null);
-    setPreviewDirty(false);
-    loadTerminalWorkspace(projectPath)
+    setLayoutSnapshot(null);
+    loadTerminalLayout(projectPath)
       .then((data) => {
         if (cancelled) {
           return;
         }
         const defaults = workspaceDefaultsRef.current;
-        const next = data
-          ? normalizeWorkspace(data, projectPath, projectId, defaults)
-          : createDefaultWorkspace(projectPath, projectId, defaults);
-        setWorkspace(next);
+        const next = data ?? createDefaultLayoutSnapshot(projectPath, projectId, defaults);
+        layoutDirtyRef.current = false;
+        layoutDirtyRevisionRef.current = 0;
+        setLayoutSnapshot(next);
       })
       .catch((loadError) => {
         if (cancelled) {
           return;
         }
         setError(loadError instanceof Error ? loadError.message : String(loadError));
-        setWorkspace(createDefaultWorkspace(projectPath, projectId, workspaceDefaultsRef.current));
+        layoutDirtyRef.current = false;
+        layoutDirtyRevisionRef.current = 0;
+        setLayoutSnapshot(createDefaultLayoutSnapshot(projectPath, projectId, workspaceDefaultsRef.current));
       });
     return () => {
       cancelled = true;
@@ -307,7 +387,7 @@ function TerminalWorkspaceView({
 
     const register = async () => {
       try {
-        unlisten = await listenTerminalWorkspaceSync((event) => {
+        unlisten = await listenTerminalLayoutChanged((event) => {
           if (cancelled) {
             return;
           }
@@ -315,43 +395,39 @@ function TerminalWorkspaceView({
           if (!payload || payload.projectPath !== projectPath) {
             return;
           }
-          if (payload.sourceClientId && payload.sourceClientId === runtimeClientId) {
+          if (payload.deleted) {
+            const fallback = createDefaultLayoutSnapshot(projectPath, projectId, workspaceDefaultsRef.current);
+            layoutDirtyRef.current = false;
+            layoutDirtyRevisionRef.current = 0;
+            setLayoutSnapshot({
+              ...fallback,
+              updatedAt: Number(payload.updatedAt ?? payload.revision ?? fallback.updatedAt) || fallback.updatedAt,
+            });
             return;
           }
-
-          setWorkspace((current) => {
-            const currentUpdatedAt = current?.updatedAt ?? 0;
-            const incomingUpdatedAt = Number(payload.updatedAt ?? 0);
-            if (incomingUpdatedAt > 0 && incomingUpdatedAt <= currentUpdatedAt) {
-              return current;
-            }
-
-            if (payload.deleted) {
-              const fallback = createDefaultWorkspace(projectPath, projectId, workspaceDefaultsRef.current);
-              const next = {
-                ...fallback,
-                updatedAt: incomingUpdatedAt || fallback.updatedAt,
-              };
-              skipAutoSaveFingerprintRef.current = JSON.stringify(next);
-              return next;
-            }
-
-            if (!payload.workspace) {
-              return current;
-            }
-            const next = normalizeWorkspace(
-              payload.workspace,
-              projectPath,
-              projectId,
-              workspaceDefaultsRef.current,
-            );
-            skipAutoSaveFingerprintRef.current = JSON.stringify(next);
-            return next;
-          });
+          const incomingUpdatedAt = Number(payload.updatedAt ?? payload.revision ?? 0);
+          const currentUpdatedAt = layoutSnapshotRef.current?.updatedAt ?? 0;
+          if (incomingUpdatedAt > 0 && incomingUpdatedAt <= currentUpdatedAt) {
+            return;
+          }
+          void loadTerminalLayout(projectPath)
+            .then((snapshot) => {
+              if (cancelled || !snapshot) {
+                return;
+              }
+              layoutDirtyRef.current = false;
+              layoutDirtyRevisionRef.current = 0;
+              setLayoutSnapshot(snapshot);
+            })
+            .catch((syncError) => {
+              if (!cancelled) {
+                console.error("同步终端布局快照失败。", syncError);
+              }
+            });
         });
       } catch (syncError) {
         if (!cancelled) {
-          console.error("监听终端工作区同步事件失败。", syncError);
+          console.error("监听终端布局变更事件失败。", syncError);
         }
       }
     };
@@ -399,45 +475,20 @@ function TerminalWorkspaceView({
     };
   }, [runConfigurationsDialog, sharedScriptsRoot]);
 
-  const registerSnapshotProvider = useCallback(
-    (sessionId: string, provider: () => string | null) => {
-      snapshotProviders.current.set(sessionId, provider);
-      return () => snapshotProviders.current.delete(sessionId);
-    },
-    [],
-  );
-
   const saveWorkspace = useCallback(async () => {
-    const current = workspaceRef.current;
-    if (!current) {
+    const current = layoutSnapshotRef.current;
+    if (!current || !layoutDirtyRef.current) {
       return;
     }
-    const currentFingerprint = JSON.stringify(current);
-    if (
-      skipAutoSaveFingerprintRef.current &&
-      skipAutoSaveFingerprintRef.current === currentFingerprint
-    ) {
-      skipAutoSaveFingerprintRef.current = null;
-      return;
-    }
-    skipAutoSaveFingerprintRef.current = null;
+    const saveRevision = layoutDirtyRevisionRef.current;
 
-    const sessions = { ...current.sessions };
-    Object.entries(sessions).forEach(([sessionId, snapshot]) => {
-      const provider = snapshotProviders.current.get(sessionId);
-      if (provider) {
-        sessions[sessionId] = { ...snapshot, savedState: provider() ?? null };
-      }
-    });
-    const payload = {
-      ...current,
-      sessions,
-      updatedAt: Date.now(),
-    };
     try {
-      await saveTerminalWorkspace(current.projectPath, payload, runtimeClientId);
+      await saveTerminalLayout(current.projectPath, current, runtimeClientId);
+      if (layoutDirtyRevisionRef.current === saveRevision) {
+        layoutDirtyRef.current = false;
+      }
     } catch (saveError) {
-      console.error("保存终端工作空间失败。", saveError);
+      console.error("保存终端布局快照失败。", saveError);
     }
   }, [runtimeClientId]);
 
@@ -452,23 +503,11 @@ function TerminalWorkspaceView({
   }, [onRegisterPersistWorkspace, projectId, saveWorkspace]);
 
   useEffect(() => {
-    if (!projectId || !workspace || !onRegisterWorkspaceSessionIds) {
+    if (!projectId || !activeSnapshot || !onRegisterWorkspaceSessionIds) {
       return;
     }
-    onRegisterWorkspaceSessionIds(projectId, Object.keys(workspace.sessions));
-  }, [onRegisterWorkspaceSessionIds, projectId, workspace]);
-
-  useEffect(() => {
-    if (!workspace) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      void saveWorkspace();
-    }, 800);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [workspace, saveWorkspace]);
+    onRegisterWorkspaceSessionIds(projectId, Object.keys(sessionSnapshots));
+  }, [activeSnapshot, onRegisterWorkspaceSessionIds, projectId, sessionSnapshots]);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
@@ -480,9 +519,37 @@ function TerminalWorkspaceView({
     };
   }, [saveWorkspace]);
 
-  const updateWorkspace = useCallback(
-    (updater: (current: TerminalWorkspace) => TerminalWorkspace) => {
-      setWorkspace((prev) => (prev ? updater(prev) : prev));
+  useEffect(() => {
+    const handleBlur = () => {
+      void saveWorkspace();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        void saveWorkspace();
+      }
+    };
+    window.addEventListener("blur", handleBlur);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("blur", handleBlur);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [saveWorkspace]);
+
+  const updateLayoutSnapshot = useCallback(
+    (updater: (current: TerminalLayoutSnapshot) => TerminalLayoutSnapshot) => {
+      setLayoutSnapshot((prevSnapshot) => {
+        if (!prevSnapshot) {
+          return prevSnapshot;
+        }
+        const nextSnapshot = updater(prevSnapshot);
+        if (nextSnapshot === prevSnapshot) {
+          return prevSnapshot;
+        }
+        layoutDirtyRevisionRef.current += 1;
+        layoutDirtyRef.current = true;
+        return touchLayoutSnapshot(nextSnapshot);
+      });
     },
     [],
   );
@@ -499,167 +566,54 @@ function TerminalWorkspaceView({
     [runtimeClientId, windowLabel],
   );
 
-  const captureSessionSnapshots = useCallback(
-    (currentWorkspace: TerminalWorkspace, sessionIds: string[]) => {
-      if (sessionIds.length === 0) {
-        return currentWorkspace;
-      }
-      let changed = false;
-      const nextSessions = { ...currentWorkspace.sessions };
-      for (const sessionId of sessionIds) {
-        const snapshot = nextSessions[sessionId];
-        if (!snapshot) {
-          continue;
-        }
-        const provider = snapshotProviders.current.get(sessionId);
-        if (!provider) {
-          continue;
-        }
-        const savedState = provider() ?? null;
-        if (snapshot.savedState === savedState) {
-          continue;
-        }
-        nextSessions[sessionId] = { ...snapshot, savedState };
-        changed = true;
-      }
-      return changed ? { ...currentWorkspace, sessions: nextSessions } : currentWorkspace;
-    },
-    [],
-  );
-
-  const captureActiveTabSnapshots = useCallback(
-    (currentWorkspace: TerminalWorkspace) => {
-      const activeTab = currentWorkspace.tabs.find((tab) => tab.id === currentWorkspace.activeTabId);
-      if (!activeTab) {
-        return currentWorkspace;
-      }
-      return captureSessionSnapshots(currentWorkspace, collectSessionIds(activeTab.root));
-    },
-    [captureSessionSnapshots],
-  );
-
   const closeSessionLayout = useCallback(
     (sessionId: string) => {
-      const current = workspaceRef.current;
+      const current = layoutSnapshotRef.current;
       if (!current) {
-        return [sessionId];
+        return;
       }
-      const targetTab = current.tabs.find((tab) => findPanePath(tab.root, sessionId) !== null) ?? null;
+      const targetTab = findLayoutTabBySessionId(current, sessionId);
       if (!targetTab) {
-        return [sessionId];
+        return;
       }
 
-      const nextRoot = removePane(targetTab.root, sessionId);
-      const beforeSessionIds = collectSessionIds(targetTab.root);
-      const afterSessionIds = nextRoot ? collectSessionIds(nextRoot) : [];
-      const afterSet = new Set(afterSessionIds);
-      const removedSessions = beforeSessionIds.filter((id) => !afterSet.has(id));
-
-      updateWorkspace((currentWorkspace) => {
-        const targetIndex = currentWorkspace.tabs.findIndex((tab) => findPanePath(tab.root, sessionId) !== null);
-        if (targetIndex < 0) {
-          return currentWorkspace;
-        }
-
-        const tab = currentWorkspace.tabs[targetIndex];
-        const updatedRoot = removePane(tab.root, sessionId);
-        const tabBeforeSessionIds = collectSessionIds(tab.root);
-        const tabAfterSessionIds = updatedRoot ? collectSessionIds(updatedRoot) : [];
-        const tabAfterSet = new Set(tabAfterSessionIds);
-        const removed = tabBeforeSessionIds.filter((id) => !tabAfterSet.has(id));
-
-        const nextSessions = { ...currentWorkspace.sessions };
-        removed.forEach((id) => {
-          delete nextSessions[id];
-        });
-
-        if (!updatedRoot) {
-          const remainingTabs = currentWorkspace.tabs.filter((item) => item.id !== tab.id);
-          if (remainingTabs.length === 0) {
+      updateLayoutSnapshot((currentSnapshot) =>
+        removeTerminalSessionFromSnapshot(currentSnapshot, sessionId, {
+          createFallbackTab: () => {
             const nextSessionId = createId();
-            const nextTabId = createId();
             return {
-              ...currentWorkspace,
-              activeTabId: nextTabId,
-              tabs: [
-                {
-                  id: nextTabId,
-                  title: "终端 1",
-                  root: { type: "pane", sessionId: nextSessionId },
-                  activeSessionId: nextSessionId,
-                },
-              ],
-              sessions: {
-                ...nextSessions,
-                [nextSessionId]: { id: nextSessionId, cwd: currentWorkspace.projectPath, savedState: null },
-              },
+              tabId: createId(),
+              paneId: `pane:${nextSessionId}`,
+              sessionId: nextSessionId,
+              title: "终端 1",
+              cwd: currentSnapshot.projectPath,
             };
-          }
-          const nextActiveTabId =
-            currentWorkspace.activeTabId === tab.id ? remainingTabs[0].id : currentWorkspace.activeTabId;
-          return {
-            ...currentWorkspace,
-            tabs: remainingTabs,
-            activeTabId: nextActiveTabId,
-            sessions: nextSessions,
-          };
-        }
-
-        const nextActiveSessionId = tabAfterSet.has(tab.activeSessionId)
-          ? tab.activeSessionId
-          : tabAfterSessionIds[0];
-        const nextTab = { ...tab, root: updatedRoot, activeSessionId: nextActiveSessionId };
-        return {
-          ...currentWorkspace,
-          tabs: currentWorkspace.tabs.map((item) => (item.id === tab.id ? nextTab : item)),
-          sessions: nextSessions,
-        };
-      });
-
-      return removedSessions;
+          },
+        }),
+      );
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const closeRunPanelSession = useCallback(
     (sessionId: string, options?: { closePanelWhenEmpty?: boolean }) => {
-      const current = workspaceRef.current;
+      const current = layoutSnapshotRef.current;
       if (!current) {
         return false;
       }
-      const currentRunPanel = getRunPanelState(current);
+      const currentRunPanel = current.ui?.runPanel ?? DEFAULT_RUN_PANEL;
       const targetTab = currentRunPanel.tabs.find((tab) => tab.sessionId === sessionId);
       if (!targetTab) {
         return false;
       }
-      updateWorkspace((currentWorkspace) => {
-        const runPanel = getRunPanelState(currentWorkspace);
-        const target = runPanel.tabs.find((tab) => tab.sessionId === sessionId);
-        if (!target) {
-          return currentWorkspace;
-        }
-        const nextTabs = runPanel.tabs.filter((tab) => tab.id !== target.id);
-        const nextActiveTabId =
-          runPanel.activeTabId === target.id ? nextTabs[nextTabs.length - 1]?.id ?? null : runPanel.activeTabId;
-        const nextSessions = { ...currentWorkspace.sessions };
-        delete nextSessions[sessionId];
-        return {
-          ...currentWorkspace,
-          sessions: nextSessions,
-          ui: {
-            ...(currentWorkspace.ui ?? {}),
-            runPanel: {
-              ...runPanel,
-              tabs: nextTabs,
-              activeTabId: nextActiveTabId,
-              open: nextTabs.length > 0 ? runPanel.open : !(options?.closePanelWhenEmpty ?? true),
-            },
-          },
-        };
-      });
+      updateLayoutSnapshot((currentSnapshot) =>
+        removeRunPanelSessionFromSnapshot(currentSnapshot, sessionId, {
+          keepOpenWhenEmpty: !(options?.closePanelWhenEmpty ?? true),
+        }),
+      );
       return true;
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const requestSessionClose = useCallback(
@@ -673,7 +627,6 @@ function TerminalWorkspaceView({
     scriptRuntimeById,
     quickCommandJobByScriptId,
     scriptLocalPhaseById,
-    panelMessage,
     showPanelMessage,
     runQuickCommand,
     stopScript,
@@ -688,8 +641,8 @@ function TerminalWorkspaceView({
     windowLabel,
     scripts,
     sharedScriptsRoot,
-    workspace,
-    updateWorkspace,
+    layoutSnapshot: activeSnapshot,
+    updateLayoutSnapshot,
     onRequestSessionClose: requestSessionClose,
   });
 
@@ -697,7 +650,7 @@ function TerminalWorkspaceView({
     projectId,
     projectPath,
     scripts,
-    workspace,
+    layoutSnapshot: activeSnapshot,
     quickCommandDispatch,
     runQuickCommand,
     stopScript,
@@ -705,47 +658,21 @@ function TerminalWorkspaceView({
   });
 
   useEffect(() => {
-    if (!workspace) {
+    if (!activeSnapshot) {
       return;
     }
-    updateWorkspace((current) => {
-      const currentRunPanel = getRunPanelState(current);
-      const validTabs = currentRunPanel.tabs.filter((tab) => Boolean(current.sessions[tab.sessionId]));
-      const nextActiveTabId =
-        currentRunPanel.activeTabId && validTabs.some((tab) => tab.id === currentRunPanel.activeTabId)
-          ? currentRunPanel.activeTabId
-          : validTabs[validTabs.length - 1]?.id ?? null;
-      const nextOpen = validTabs.length > 0 ? currentRunPanel.open : false;
-      if (
-        validTabs.length === currentRunPanel.tabs.length &&
-        nextActiveTabId === currentRunPanel.activeTabId &&
-        nextOpen === currentRunPanel.open
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        ui: {
-          ...(current.ui ?? {}),
-          runPanel: {
-            ...currentRunPanel,
-            tabs: validTabs,
-            activeTabId: nextActiveTabId,
-            open: nextOpen,
-          },
-        },
-      };
-    });
-  }, [updateWorkspace, workspace]);
+    const validSessionIds = new Set(Object.keys(sessionSnapshots));
+    updateLayoutSnapshot((current) => syncRunPanelTabsInSnapshot(current, validSessionIds));
+  }, [activeSnapshot, sessionSnapshots, updateLayoutSnapshot]);
 
   const setRunConfigurationScriptId = useCallback(
     (scriptId: string | null) => {
       const nextScriptId =
         scriptId && scripts.some((script) => script.id === scriptId) ? scriptId : scripts[0]?.id ?? null;
-      updateWorkspace((current) => ({
+      updateLayoutSnapshot((current) => ({
         ...current,
         ui: {
-          ...current.ui,
+          ...(current.ui ?? {}),
           runConfiguration: {
             ...(current.ui?.runConfiguration ?? { selectedScriptId: null }),
             selectedScriptId: nextScriptId,
@@ -753,14 +680,14 @@ function TerminalWorkspaceView({
         },
       }));
     },
-    [scripts, updateWorkspace],
+    [scripts, updateLayoutSnapshot],
   );
 
   useEffect(() => {
-    if (!workspace) {
+    if (!activeSnapshot) {
       return;
     }
-    const currentSelected = workspace.ui?.runConfiguration?.selectedScriptId ?? null;
+    const currentSelected = shellModel?.selectedRunConfigurationId ?? null;
     const nextSelected =
       currentSelected && scripts.some((script) => script.id === currentSelected)
         ? currentSelected
@@ -769,7 +696,7 @@ function TerminalWorkspaceView({
       return;
     }
     setRunConfigurationScriptId(nextSelected);
-  }, [scripts, setRunConfigurationScriptId, workspace]);
+  }, [activeSnapshot, scripts, setRunConfigurationScriptId, shellModel]);
 
   useEffect(() => {
     if (!runConfigurationsDialog) {
@@ -809,7 +736,7 @@ function TerminalWorkspaceView({
   }, [runConfigurationsDialog, scripts]);
 
   const resolveSelectedScript = useCallback((): ProjectScript | null => {
-    const current = workspaceRef.current;
+    const current = layoutSnapshotRef.current;
     const selectedScriptId = current?.ui?.runConfiguration?.selectedScriptId ?? null;
     const resolvedScriptId =
       selectedScriptId && scripts.some((script) => script.id === selectedScriptId)
@@ -1096,88 +1023,43 @@ function TerminalWorkspaceView({
 
   const setRunPanelOpen = useCallback(
     (open: boolean) => {
-      updateWorkspace((current) => {
-        const runPanel = getRunPanelState(current);
-        if (runPanel.open === open) {
-          return current;
-        }
-        return {
-          ...current,
-          ui: {
-            ...(current.ui ?? {}),
-            runPanel: {
-              ...runPanel,
-              open,
-            },
-          },
-        };
-      });
+      updateLayoutSnapshot((current) => setRunPanelOpenInSnapshot(current, open));
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const setRunPanelHeight = useCallback(
     (height: number) => {
       const normalizedHeight = Math.max(MIN_RUN_PANEL_HEIGHT, Math.min(720, Math.round(height)));
-      updateWorkspace((current) => {
-        const runPanel = getRunPanelState(current);
-        if (runPanel.height === normalizedHeight) {
-          return current;
-        }
-        return {
-          ...current,
-          ui: {
-            ...(current.ui ?? {}),
-            runPanel: {
-              ...runPanel,
-              height: normalizedHeight,
-            },
-          },
-        };
-      });
+      updateLayoutSnapshot((current) => setRunPanelHeightInSnapshot(current, normalizedHeight));
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const handleSelectRunTab = useCallback(
     (tabId: string) => {
-      updateWorkspace((current) => {
-        const runPanel = getRunPanelState(current);
-        if (!runPanel.tabs.some((tab) => tab.id === tabId)) {
-          return current;
-        }
-        return {
-          ...current,
-          ui: {
-            ...(current.ui ?? {}),
-            runPanel: {
-              ...runPanel,
-              open: true,
-              activeTabId: tabId,
-            },
-          },
-        };
-      });
+      updateLayoutSnapshot((current) => activateRunPanelTabInSnapshot(current, tabId, { open: true }));
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const handleCloseRunTab = useCallback(
     (tabId: string) => {
-      const current = workspaceRef.current;
+      const current = layoutSnapshotRef.current;
       if (!current) {
         return;
       }
-      const runPanel = getRunPanelState(current);
+      const runPanel = current.ui?.runPanel ?? DEFAULT_RUN_PANEL;
       const targetTab = runPanel.tabs.find((tab) => tab.id === tabId);
       if (!targetTab) {
         return;
       }
+      terminateWorkspaceSessions([targetTab.sessionId]);
       finalizeRuntimeBySessionIds([targetTab.sessionId], 130, "运行标签页已关闭");
       cleanupRuntimeBySessionIds([targetTab.sessionId]);
       closeRunPanelSession(targetTab.sessionId, { closePanelWhenEmpty: true });
     },
-    [cleanupRuntimeBySessionIds, closeRunPanelSession, finalizeRuntimeBySessionIds],
+    [cleanupRuntimeBySessionIds, closeRunPanelSession, finalizeRuntimeBySessionIds, terminateWorkspaceSessions],
   );
 
   const handleBeginResizeRunPanel = useCallback(
@@ -1186,11 +1068,11 @@ function TerminalWorkspaceView({
         return;
       }
       event.preventDefault();
-      const current = workspaceRef.current;
+      const current = layoutSnapshotRef.current;
       if (!current) {
         return;
       }
-      const runPanel = getRunPanelState(current);
+      const runPanel = current.ui?.runPanel ?? DEFAULT_RUN_PANEL;
       const startClientY = event.clientY;
       const startHeight = runPanel.height;
       const maxHeight = Math.max(MIN_RUN_PANEL_HEIGHT, window.innerHeight - 120);
@@ -1213,100 +1095,57 @@ function TerminalWorkspaceView({
 
   const handleSelectTab = useCallback(
     (tabId: string) => {
-      updateWorkspace((current) => {
+      updateLayoutSnapshot((current) => {
         if (current.activeTabId === tabId) {
           return current;
         }
-        const currentWithSnapshots = captureActiveTabSnapshots(current);
-        return { ...currentWithSnapshots, activeTabId: tabId };
+        return { ...current, activeTabId: tabId };
       });
     },
-    [captureActiveTabSnapshots, updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const handleNewTab = useCallback(() => {
-    updateWorkspace((current) => {
-      const currentWithSnapshots = captureActiveTabSnapshots(current);
+    updateLayoutSnapshot((current) => {
       const sessionId = createId();
       const tabId = createId();
-      const title = getNextTerminalTitle(currentWithSnapshots.tabs);
-      return {
-        ...currentWithSnapshots,
-        activeTabId: tabId,
-        tabs: [
-          ...currentWithSnapshots.tabs,
-          {
-            id: tabId,
-            title,
-            root: { type: "pane", sessionId },
-            activeSessionId: sessionId,
-          },
-        ],
-        sessions: {
-          ...currentWithSnapshots.sessions,
-          [sessionId]: { id: sessionId, cwd: currentWithSnapshots.projectPath, savedState: null },
-        },
-      };
+      const title = getNextTerminalTitle(current.tabs);
+      return appendTerminalTabToSnapshot(current, {
+        tabId,
+        paneId: `pane:${sessionId}`,
+        sessionId,
+        title,
+        cwd: current.projectPath,
+      });
     });
-  }, [captureActiveTabSnapshots, updateWorkspace]);
+  }, [updateLayoutSnapshot]);
 
   const handleCloseTab = useCallback(
     (tabId: string) => {
-      const current = workspaceRef.current;
+      const current = layoutSnapshotRef.current;
       const closedTab = current?.tabs.find((tab) => tab.id === tabId) ?? null;
-      const removedSessions = closedTab ? collectSessionIds(closedTab.root) : [];
+      const removedSessions = current && closedTab ? collectSessionIdsForLayoutTab(current, closedTab) : [];
       terminateWorkspaceSessions(removedSessions);
       finalizeRuntimeBySessionIds(removedSessions, 130, "终端标签页已关闭");
       cleanupRuntimeBySessionIds(removedSessions);
 
-      updateWorkspace((currentWorkspace) => {
-        const remainingTabs = currentWorkspace.tabs.filter((tab) => tab.id !== tabId);
-        const removedTab = currentWorkspace.tabs.find((tab) => tab.id === tabId);
-        const removedSessionIds = removedTab ? collectSessionIds(removedTab.root) : [];
-        if (remainingTabs.length === 0) {
-          const nextSessions = { ...currentWorkspace.sessions };
-          removedSessionIds.forEach((sessionId) => {
-            delete nextSessions[sessionId];
-          });
-          const nextSessionId = createId();
-          const nextTabId = createId();
-          return {
-            ...currentWorkspace,
-            activeTabId: nextTabId,
-            tabs: [
-              {
-                id: nextTabId,
-                title: "终端 1",
-                root: { type: "pane", sessionId: nextSessionId },
-                activeSessionId: nextSessionId,
-              },
-            ],
-            sessions: {
-              ...nextSessions,
-              [nextSessionId]: { id: nextSessionId, cwd: currentWorkspace.projectPath, savedState: null },
-            },
-          };
-        }
-        const nextSessions = { ...currentWorkspace.sessions };
-        removedSessionIds.forEach((sessionId) => {
-          delete nextSessions[sessionId];
+      updateLayoutSnapshot((currentSnapshot) => {
+        const nextSessionId = createId();
+        return removeTerminalTabFromSnapshot(currentSnapshot, tabId, {
+          tabId: createId(),
+          paneId: `pane:${nextSessionId}`,
+          sessionId: nextSessionId,
+          title: "终端 1",
+          cwd: currentSnapshot.projectPath,
         });
-        const nextActiveTabId =
-          currentWorkspace.activeTabId === tabId ? remainingTabs[0].id : currentWorkspace.activeTabId;
-        return {
-          ...currentWorkspace,
-          tabs: remainingTabs,
-          activeTabId: nextActiveTabId,
-          sessions: nextSessions,
-        };
       });
     },
-    [cleanupRuntimeBySessionIds, finalizeRuntimeBySessionIds, terminateWorkspaceSessions, updateWorkspace],
+    [cleanupRuntimeBySessionIds, finalizeRuntimeBySessionIds, terminateWorkspaceSessions, updateLayoutSnapshot],
   );
 
   const handleSelectTabRelative = useCallback(
     (delta: number) => {
-      updateWorkspace((current) => {
+      updateLayoutSnapshot((current) => {
         if (current.tabs.length <= 1) {
           return current;
         }
@@ -1315,152 +1154,129 @@ function TerminalWorkspaceView({
           return current;
         }
         const nextIndex = (currentIndex + delta + current.tabs.length) % current.tabs.length;
-        const currentWithSnapshots = captureActiveTabSnapshots(current);
-        return { ...currentWithSnapshots, activeTabId: current.tabs[nextIndex].id };
+        return { ...current, activeTabId: current.tabs[nextIndex].id };
       });
     },
-    [captureActiveTabSnapshots, updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const handleSelectTabIndex = useCallback(
     (index: number) => {
-      updateWorkspace((current) => {
+      updateLayoutSnapshot((current) => {
         if (index < 0 || index >= current.tabs.length) {
           return current;
         }
         if (current.tabs[index]?.id === current.activeTabId) {
           return current;
         }
-        const currentWithSnapshots = captureActiveTabSnapshots(current);
-        return { ...currentWithSnapshots, activeTabId: current.tabs[index].id };
+        return { ...current, activeTabId: current.tabs[index].id };
       });
     },
-    [captureActiveTabSnapshots, updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const handleSplit = useCallback(
     (direction: SplitDirection) => {
-      updateWorkspace((current) => {
-        const activeTab = current.tabs.find((tab) => tab.id === current.activeTabId);
+      updateLayoutSnapshot((current) => {
+        const activeTab = current.tabs.find((tab) => tab.id === current.activeTabId) ?? null;
         if (!activeTab) {
           return current;
         }
+        const activePane = current.panes[activeTab.activePaneId];
+        if (!activePane || activePane.kind !== "terminal") {
+          return current;
+        }
         const newSessionId = createId();
-        const nextRoot = splitPane(activeTab.root, activeTab.activeSessionId, direction, newSessionId);
-        const nextTab = {
-          ...activeTab,
-          root: nextRoot,
-          activeSessionId: newSessionId,
-        };
-        return {
-          ...current,
-          tabs: current.tabs.map((tab) => (tab.id === activeTab.id ? nextTab : tab)),
-          sessions: {
-            ...current.sessions,
-            [newSessionId]: { id: newSessionId, cwd: current.projectPath, savedState: null },
-          },
-        };
+        return splitTerminalSessionInSnapshot(current, {
+          tabId: activeTab.id,
+          targetSessionId: activePane.sessionId,
+          direction,
+          newPaneId: `pane:${newSessionId}`,
+          newSessionId,
+          cwd: current.projectPath,
+        });
       });
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const handleSessionExit = useCallback(
     (sessionId: string, code?: number | null) => {
       handleQuickCommandSessionExit(sessionId, code);
-      const current = workspaceRef.current;
-      const runPanel = current ? getRunPanelState(current) : null;
+      const current = layoutSnapshotRef.current;
+      const runPanel = current?.ui?.runPanel ?? null;
       const runTab = runPanel?.tabs.find((tab) => tab.sessionId === sessionId) ?? null;
       if (runTab) {
         const resolvedCode = typeof code === "number" ? code : null;
-        updateWorkspace((currentWorkspace) => {
-          const currentRunPanel = getRunPanelState(currentWorkspace);
-          const nextTabs = currentRunPanel.tabs.map((tab) =>
-            tab.sessionId === sessionId
-              ? {
-                  ...tab,
-                  endedAt: Date.now(),
-                  exitCode: resolvedCode,
-                }
-              : tab,
-          );
-          return {
-            ...currentWorkspace,
-            ui: {
-              ...(currentWorkspace.ui ?? {}),
-              runPanel: {
-                ...currentRunPanel,
-                tabs: nextTabs,
-              },
-            },
-          };
-        });
+        updateLayoutSnapshot((current) =>
+          markRunPanelTabExitedInSnapshot(current, sessionId, {
+            endedAt: Date.now(),
+            exitCode: resolvedCode,
+          }),
+        );
         return;
       }
-      const removedSessions = closeSessionLayout(sessionId);
-      const extraRemovedSessions = removedSessions.filter((id) => id !== sessionId);
-      if (extraRemovedSessions.length > 0) {
-        cleanupRuntimeBySessionIds(extraRemovedSessions);
-      }
+      closeSessionLayout(sessionId);
     },
-    [cleanupRuntimeBySessionIds, closeSessionLayout, handleQuickCommandSessionExit, updateWorkspace],
+    [closeSessionLayout, handleQuickCommandSessionExit, updateLayoutSnapshot],
   );
 
   const setFileExplorerShowHidden = useCallback(
     (showHidden: boolean) => {
-      updateWorkspace((current) => ({
-        ...current,
-        ui: {
-          ...current.ui,
-          fileExplorerPanel: {
-            ...(current.ui?.fileExplorerPanel ?? {
-              open: workspaceDefaultsRef.current.defaultFileExplorerPanelOpen,
-              showHidden: workspaceDefaultsRef.current.defaultFileExplorerShowHidden,
-            }),
-            showHidden,
-          },
-        },
-      }));
+      updateLayoutSnapshot((current) => setFileExplorerShowHiddenInSnapshot(current, showHidden));
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const updateRightSidebar = useCallback(
     (updater: (current: RightSidebarState) => RightSidebarState) => {
-      updateWorkspace((current) => {
-        const ui = current.ui ?? {};
-        const filePanel = ui.fileExplorerPanel ?? {
-          open: workspaceDefaultsRef.current.defaultFileExplorerPanelOpen,
-          showHidden: workspaceDefaultsRef.current.defaultFileExplorerShowHidden,
-        };
-        const gitPanel = ui.gitPanel ?? { open: false };
-        const rightSidebar = ui.rightSidebar ?? DEFAULT_RIGHT_SIDEBAR;
-        const nextRightSidebar = updater(rightSidebar);
-        return {
-          ...current,
-          ui: {
-            ...ui,
-            rightSidebar: nextRightSidebar,
-            fileExplorerPanel: {
-              ...filePanel,
-              open: nextRightSidebar.open && nextRightSidebar.tab === "files",
-            },
-            gitPanel: {
-              ...gitPanel,
-              open: nextRightSidebar.open && nextRightSidebar.tab === "git",
-            },
-          },
-        };
-      });
+      updateLayoutSnapshot((current) => updateRightSidebarStateInSnapshot(current, updater));
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
+
+  const upsertPreviewPane = useCallback(
+    (relativePath: string, dirty: boolean) => {
+      updateLayoutSnapshot((current) =>
+        upsertFilePreviewPaneInSnapshot(current, {
+          paneId: RIGHT_SIDEBAR_PREVIEW_PANE_ID,
+          relativePath,
+          dirty,
+        }),
+      );
+    },
+    [updateLayoutSnapshot],
+  );
+
+  const clearPreviewPane = useCallback(() => {
+    updateLayoutSnapshot((current) => removePaneFromSnapshot(current, RIGHT_SIDEBAR_PREVIEW_PANE_ID));
+  }, [updateLayoutSnapshot]);
+
+  const upsertGitDiffPane = useCallback(
+    (selection: { category: "staged" | "unstaged" | "untracked"; path: string; oldPath?: string | null } | null) => {
+      updateLayoutSnapshot((current) =>
+        selection
+          ? upsertGitDiffPaneInSnapshot(current, {
+              paneId: RIGHT_SIDEBAR_GIT_DIFF_PANE_ID,
+              relativePath: selection.path,
+              oldRelativePath: selection.oldPath ?? null,
+              category: selection.category,
+            })
+          : removePaneFromSnapshot(current, RIGHT_SIDEBAR_GIT_DIFF_PANE_ID),
+      );
+    },
+    [updateLayoutSnapshot],
+  );
+
+  const clearGitDiffPane = useCallback(() => {
+    updateLayoutSnapshot((current) => removePaneFromSnapshot(current, RIGHT_SIDEBAR_GIT_DIFF_PANE_ID));
+  }, [updateLayoutSnapshot]);
 
   const closeRightSidebar = useCallback(() => {
     updateRightSidebar((current) => ({ ...current, open: false }));
-    setPreviewFilePath(null);
-    setPreviewDirty(false);
-  }, [updateRightSidebar]);
+    clearPreviewPane();
+    clearGitDiffPane();
+  }, [clearGitDiffPane, clearPreviewPane, updateRightSidebar]);
 
   const requestCloseRightSidebar = useCallback(() => {
     if (previewDirty) {
@@ -1527,7 +1343,7 @@ function TerminalWorkspaceView({
       if (key === "w" && !event.shiftKey) {
         event.preventDefault();
         event.stopPropagation();
-        const current = workspaceRef.current;
+        const current = layoutSnapshotRef.current;
         if (!current) {
           return;
         }
@@ -1535,8 +1351,12 @@ function TerminalWorkspaceView({
         if (!activeTab) {
           return;
         }
-        terminateWorkspaceSessions([activeTab.activeSessionId]);
-        handleSessionExit(activeTab.activeSessionId, 130);
+        const activePane = current.panes[activeTab.activePaneId];
+        if (!activePane || activePane.kind !== "terminal") {
+          return;
+        }
+        terminateWorkspaceSessions([activePane.sessionId]);
+        handleSessionExit(activePane.sessionId, 130);
         return;
       }
 
@@ -1565,7 +1385,7 @@ function TerminalWorkspaceView({
         if (Number.isFinite(digit) && digit >= 1 && digit <= 9) {
           event.preventDefault();
           event.stopPropagation();
-          const current = workspaceRef.current;
+          const current = layoutSnapshotRef.current;
           if (!current) {
             return;
           }
@@ -1583,12 +1403,15 @@ function TerminalWorkspaceView({
 
   const handleResize = useCallback(
     (path: number[], ratios: number[]) => {
-      updateWorkspace((current) => {
+      updateLayoutSnapshot((current) => {
         const activeTab = current.tabs.find((tab) => tab.id === current.activeTabId);
         if (!activeTab) {
           return current;
         }
-        const nextRoot = updateSplitRatios(activeTab.root, path, ratios);
+        const nextRoot = updateLayoutNodeRatios(activeTab.root, path, ratios);
+        if (nextRoot === activeTab.root) {
+          return current;
+        }
         const nextTab = { ...activeTab, root: nextRoot };
         return {
           ...current,
@@ -1596,19 +1419,14 @@ function TerminalWorkspaceView({
         };
       });
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   const handleActivateSession = useCallback(
     (tabId: string, sessionId: string) => {
-      updateWorkspace((current) => {
-        const nextTabs = current.tabs.map((tab) =>
-          tab.id === tabId ? { ...tab, activeSessionId: sessionId } : tab,
-        );
-        return { ...current, tabs: nextTabs };
-      });
+      updateLayoutSnapshot((current) => activateTerminalSessionInSnapshot(current, tabId, sessionId));
     },
-    [updateWorkspace],
+    [updateLayoutSnapshot],
   );
 
   if (!projectPath) {
@@ -1621,7 +1439,7 @@ function TerminalWorkspaceView({
     return <div className="flex h-full items-center justify-center text-[var(--terminal-muted-fg)]">{error}</div>;
   }
 
-  if (!workspace) {
+  if (!activeSnapshot) {
     return (
       <div className="flex h-full items-center justify-center text-[var(--terminal-muted-fg)]">
         正在加载终端工作空间...
@@ -1629,11 +1447,10 @@ function TerminalWorkspaceView({
     );
   }
 
-  const runConfigurationState = workspace.ui?.runConfiguration ?? { selectedScriptId: null };
   const selectedScriptId =
-    runConfigurationState.selectedScriptId &&
-    scripts.some((script) => script.id === runConfigurationState.selectedScriptId)
-      ? runConfigurationState.selectedScriptId
+    shellModel?.selectedRunConfigurationId &&
+    scripts.some((script) => script.id === shellModel.selectedRunConfigurationId)
+      ? shellModel.selectedRunConfigurationId
       : scripts[0]?.id ?? null;
   const selectedScript = selectedScriptId
     ? scripts.find((script) => script.id === selectedScriptId) ?? null
@@ -1660,18 +1477,21 @@ function TerminalWorkspaceView({
       selectedScriptState === "stoppingSoft" ||
       selectedScriptState === "stoppingHard"
     );
-  const runPanelState = workspace.ui?.runPanel ?? DEFAULT_RUN_PANEL;
-  const runPanelTabs = runPanelState.tabs;
-  const runPanelActiveTabId =
-    runPanelState.activeTabId && runPanelTabs.some((tab) => tab.id === runPanelState.activeTabId)
-      ? runPanelState.activeTabId
-      : runPanelTabs[runPanelTabs.length - 1]?.id ?? null;
-  const runPanelOpen = Boolean(runPanelState.open && runPanelTabs.length > 0);
-  const runPanelHeight = Math.max(MIN_RUN_PANEL_HEIGHT, Math.min(720, runPanelState.height));
-  const activeWorkspaceTab =
-    workspace.tabs.find((tab) => tab.id === workspace.activeTabId) ?? workspace.tabs[0] ?? null;
+  const filePanelShowHidden =
+    shellModel?.filePanelShowHidden ?? workspaceDefaultsRef.current.defaultFileExplorerShowHidden;
+  const rightSidebarOpen = shellModel?.rightSidebarOpen ?? false;
+  const rightSidebarWidth = shellModel?.rightSidebarWidth ?? DEFAULT_RIGHT_SIDEBAR.width;
+  const rightSidebarTab: TerminalRightSidebarTab = shellModel?.rightSidebarTab ?? DEFAULT_RIGHT_SIDEBAR.tab;
+  const headerTabs = shellModel?.headerTabs ?? [];
+  const activeTabId = shellModel?.activeTabId ?? activeSnapshot.activeTabId;
+  const activeWorkspaceTab = shellModel?.activeWorkspaceTab ?? null;
+  const activePaneProjections = shellModel?.activePaneProjections ?? {};
+  const runPanelTabs = shellModel?.runPanelTabs ?? [];
+  const runPanelActiveTabId = shellModel?.runPanelActiveTabId ?? null;
+  const runPanelOpen = shellModel?.runPanelOpen ?? false;
+  const runPanelHeight = shellModel?.runPanelHeight ?? DEFAULT_RUN_PANEL.height;
+  const activeRunTab = shellModel?.activeRunTab ?? null;
 
-  const activeRunTab = runPanelActiveTabId ? runPanelTabs.find((t) => t.id === runPanelActiveTabId) ?? null : null;
   const activeTabRunning = (() => {
     if (!activeRunTab) return false;
     const quickJob = quickCommandJobByScriptId[activeRunTab.scriptId] ?? null;
@@ -1698,36 +1518,44 @@ function TerminalWorkspaceView({
     stopScript(activeRunTab.scriptId);
   };
 
-  const filePanelState = workspace.ui?.fileExplorerPanel ?? {
-    open: workspaceDefaultsRef.current.defaultFileExplorerPanelOpen,
-    showHidden: workspaceDefaultsRef.current.defaultFileExplorerShowHidden,
-  };
-  const rightSidebarState = workspace.ui?.rightSidebar ?? DEFAULT_RIGHT_SIDEBAR;
-  const rightSidebarOpen = Boolean(rightSidebarState.open);
-  const rightSidebarWidth = Math.max(
-    MIN_RIGHT_SIDEBAR_WIDTH,
-    Math.min(MAX_RIGHT_SIDEBAR_WIDTH, rightSidebarState.width),
-  );
-  const rightSidebarTab: TerminalRightSidebarTab =
-    rightSidebarState.tab === "git" && !isGitRepo ? "files" : rightSidebarState.tab;
-
   return (
-    <div className="flex h-full flex-col bg-[var(--terminal-bg)] text-[var(--terminal-fg)]">
-      <TerminalWorkspaceHeader
+    <>
+      <TerminalWorkspaceShell
         projectName={projectName}
         projectPath={projectPath}
         codexRunningCount={codexRunningCount}
-        rightSidebarOpen={rightSidebarOpen}
-        rightSidebarTab={rightSidebarTab}
+        isGitRepo={isGitRepo}
+        windowLabel={windowLabel}
+        runtimeClientId={runtimeClientId}
+        xtermTheme={xtermTheme}
+        terminalUseWebglRenderer={terminalUseWebglRenderer}
         scripts={scripts}
         selectedScriptId={selectedScriptId}
         selectedScriptState={selectedScriptState}
-        quickCommandMessage={panelMessage}
         runDisabled={runDisabled}
         stopDisabled={stopDisabled}
         scriptActionsDisabled={!selectedScript}
-        tabs={workspace.tabs}
-        activeTabId={workspace.activeTabId}
+        headerTabs={headerTabs}
+        activeTabId={activeTabId}
+        activeWorkspaceTab={activeWorkspaceTab}
+        activePaneProjections={activePaneProjections}
+        rightSidebarOpen={rightSidebarOpen}
+        rightSidebarWidth={rightSidebarWidth}
+        rightSidebarTab={rightSidebarTab}
+        previewDirty={previewDirty}
+        previewFilePath={previewFilePath}
+        filePanelShowHidden={Boolean(filePanelShowHidden)}
+        gitSelected={gitSelected}
+        runPanelTabs={runPanelTabs}
+        runPanelActiveTabId={runPanelActiveTabId}
+        runPanelOpen={runPanelOpen}
+        runPanelHeight={runPanelHeight}
+        activeTabRunning={activeTabRunning}
+        sessionSnapshots={sessionSnapshots}
+        scriptRuntimeById={scriptRuntimeById}
+        quickCommandJobByScriptId={quickCommandJobByScriptId}
+        scriptLocalPhaseById={scriptLocalPhaseById}
+        isScriptRuntimeValid={isScriptRuntimeValid}
         onSelectScript={(scriptId) => setRunConfigurationScriptId(scriptId || null)}
         onEditScript={openRunConfigurationsDialog}
         onDeleteScript={removeSelectedScript}
@@ -1743,117 +1571,31 @@ function TerminalWorkspaceView({
         onSelectTab={handleSelectTab}
         onNewTab={handleNewTab}
         onCloseTab={handleCloseTab}
+        onResize={handleResize}
+        onActivateSession={handleActivateSession}
+        onPtyReady={handlePtyReady}
+        onSessionExit={handleSessionExit}
+        onSetRightSidebarWidth={setRightSidebarWidth}
+        onToggleShowHidden={setFileExplorerShowHidden}
+        onOpenPreview={(relativePath) => upsertPreviewPane(relativePath, false)}
+        onClosePreview={clearPreviewPane}
+        onPreviewDirtyChange={(dirty) => {
+          if (!previewFilePath) {
+            return;
+          }
+          upsertPreviewPane(previewFilePath, dirty);
+        }}
+        onSelectGitFile={upsertGitDiffPane}
+        onCloseGitSelection={clearGitDiffPane}
+        onChangeRightSidebarTab={setRightSidebarTab}
+        onCloseRightSidebar={requestCloseRightSidebar}
+        onSelectRunTab={handleSelectRunTab}
+        onCloseRunTab={handleCloseRunTab}
+        onSetRunPanelOpen={setRunPanelOpen}
+        onResizeRunPanelStart={handleBeginResizeRunPanel}
+        onRerunActiveTab={rerunActiveTab}
+        onStopActiveTab={stopActiveTab}
       />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          <div className="relative flex min-h-0 min-w-0 flex-1">
-            {activeWorkspaceTab ? (
-              <div
-                key={activeWorkspaceTab.id}
-                className="absolute inset-0 flex min-h-0 flex-1"
-              >
-                <SplitLayout
-                  root={activeWorkspaceTab.root}
-                  activeSessionId={activeWorkspaceTab.activeSessionId}
-                  onActivate={(sessionId) => handleActivateSession(activeWorkspaceTab.id, sessionId)}
-                  onResize={handleResize}
-                  renderPane={(sessionId, isPaneActive) => (
-                    <TerminalPane
-                      sessionId={sessionId}
-                      cwd={workspace.sessions[sessionId]?.cwd ?? workspace.projectPath}
-                      savedState={workspace.sessions[sessionId]?.savedState ?? null}
-                      windowLabel={windowLabel}
-                      clientId={runtimeClientId}
-                      useWebgl={terminalUseWebglRenderer}
-                      theme={xtermTheme}
-                      isActive={isPaneActive}
-                      onActivate={(nextSessionId) => handleActivateSession(activeWorkspaceTab.id, nextSessionId)}
-                      onPtyReady={handlePtyReady}
-                      onExit={handleSessionExit}
-                      onRegisterSnapshotProvider={registerSnapshotProvider}
-                      preserveSessionOnUnmount
-                    />
-                  )}
-                />
-              </div>
-            ) : null}
-          </div>
-          {rightSidebarOpen ? (
-            <ResizablePanel
-              width={rightSidebarWidth}
-              onWidthChange={setRightSidebarWidth}
-              minWidth={MIN_RIGHT_SIDEBAR_WIDTH}
-              maxWidth={MAX_RIGHT_SIDEBAR_WIDTH}
-              handleSide="left"
-            >
-              <TerminalRightSidebar
-                projectPath={projectPath}
-                isGitRepo={isGitRepo}
-                sidebarWidth={rightSidebarWidth}
-                activeTab={rightSidebarTab}
-                previewDirty={previewDirty}
-                previewFilePath={previewFilePath}
-                showHidden={Boolean(filePanelState.showHidden)}
-                onToggleShowHidden={setFileExplorerShowHidden}
-                onSelectFile={(relativePath) => {
-                  if (previewDirty && relativePath !== previewFilePath) {
-                    const ok = window.confirm("当前文件有未保存修改，确定切换文件？");
-                    if (!ok) {
-                      return;
-                    }
-                  }
-                  setPreviewFilePath(relativePath);
-                  setPreviewDirty(false);
-                }}
-                onClosePreview={() => {
-                  setPreviewFilePath(null);
-                  setPreviewDirty(false);
-                }}
-                onPreviewDirtyChange={setPreviewDirty}
-                onChangeTab={setRightSidebarTab}
-                onClose={requestCloseRightSidebar}
-              />
-            </ResizablePanel>
-          ) : null}
-        </div>
-        {runPanelOpen ? (
-          <TerminalRunPanel
-            open
-            height={runPanelHeight}
-            tabs={runPanelTabs}
-            activeTabId={runPanelActiveTabId}
-            sessions={workspace.sessions}
-            projectPath={projectPath}
-            windowLabel={windowLabel}
-            clientId={runtimeClientId}
-            xtermTheme={xtermTheme}
-            terminalUseWebglRenderer={terminalUseWebglRenderer}
-            scriptRuntimeById={scriptRuntimeById}
-            quickCommandJobByScriptId={quickCommandJobByScriptId}
-            scriptLocalPhaseById={scriptLocalPhaseById}
-            isScriptRuntimeValid={isScriptRuntimeValid}
-            onSelectTab={handleSelectRunTab}
-            onCloseTab={handleCloseRunTab}
-            onCollapse={() => setRunPanelOpen(false)}
-            onResizeStart={handleBeginResizeRunPanel}
-            onRerunActiveTab={rerunActiveTab}
-            onStopActiveTab={stopActiveTab}
-            activeTabRunning={activeTabRunning}
-            onPtyReady={handlePtyReady}
-            onExit={handleSessionExit}
-            onRegisterSnapshotProvider={registerSnapshotProvider}
-          />
-        ) : runPanelTabs.length > 0 ? (
-          <button
-            type="button"
-            className="inline-flex h-8 shrink-0 items-center gap-1 border-t border-[var(--terminal-divider)] bg-[var(--terminal-panel-bg)] px-3 text-[11px] font-semibold text-[var(--terminal-muted-fg)] transition-colors hover:text-[var(--terminal-fg)]"
-            onClick={() => setRunPanelOpen(true)}
-          >
-            <IconChevronDown size={14} />
-            <span>显示运行面板（{runPanelTabs.length}）</span>
-          </button>
-        ) : null}
-      </div>
       {runConfigurationsDialog ? (
         <div className="modal-overlay" role="dialog" aria-modal>
           <div className="modal-panel w-[min(980px,94vw)] max-h-[90vh] overflow-hidden p-0">
@@ -2062,7 +1804,7 @@ function TerminalWorkspaceView({
           </div>
         </div>
       ) : null}
-    </div>
+    </>
   );
 }
 
