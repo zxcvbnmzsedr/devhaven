@@ -5,8 +5,9 @@ export type TerminalViewportFitInput = {
   tolerancePx?: number;
 };
 
-// 保护性收口：某些运行时里 fitAddon 会把 rows 算大 1 行左右，
-// 最终表现为“滚动条已经到底，但最后几行仍被底部裁掉”。
+// 基于真实 viewport 高度二次校正 rows：
+// - fitAddon 估大时，避免底部内容被裁掉；
+// - fitAddon 估小时，避免 pane 放大后底部留下空白。
 export function clampRowsToViewport({
   currentRows,
   cellHeight,
@@ -24,10 +25,10 @@ export function clampRowsToViewport({
     return currentRows;
   }
 
-  const renderedHeight = currentRows * cellHeight;
-  if (renderedHeight <= viewportHeight + tolerancePx) {
+  const nextRows = Math.max(1, Math.floor((viewportHeight + tolerancePx) / cellHeight));
+  if (nextRows === currentRows) {
     return currentRows;
   }
 
-  return Math.max(1, Math.floor((viewportHeight + tolerancePx) / cellHeight));
+  return nextRows;
 }

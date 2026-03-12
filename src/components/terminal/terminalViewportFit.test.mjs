@@ -25,6 +25,17 @@ test("clampRowsToViewport trims one overflow row", () => {
   );
 });
 
+test("clampRowsToViewport grows rows when viewport can fit more content", () => {
+  assert.equal(
+    clampRowsToViewport({
+      currentRows: 36,
+      cellHeight: 18,
+      viewportHeight: 721,
+    }),
+    40,
+  );
+});
+
 test("clampRowsToViewport ignores invalid measurements", () => {
   assert.equal(
     clampRowsToViewport({

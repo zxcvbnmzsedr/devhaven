@@ -106,3 +106,45 @@
 - 本轮验证通过：`node --test src/components/terminal/terminalMemoryPolicy.test.mjs src/components/terminal/terminalViewportFit.test.mjs src/components/terminal/terminalEscapeTrim.test.mjs`、`cargo test terminal_replay_buffer --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml`、`pnpm exec tsc --noEmit`、`pnpm build`。
 - 用户回归反馈补充修复：`src/components/terminal/TerminalWorkspaceView.tsx` 现在在 load/sync/update 的同一时刻同步刷新 `layoutSnapshotRef`，避免“新建终端后立刻切项目”时 `saveWorkspace()` 持久化旧快照，导致返回项目后看起来像终端被关闭。
 - 用户偏好调整：按最新要求把 PTY replay 预算从 512KB 提升到 5MiB，以换取切项目/切视图后更长的终端恢复缓冲。
+
+## 终端切项目控制字符泄漏任务（2026-03-12）
+
+- [x] 复盘控制字符内容并定位到 replay 恢复链路
+- [x] 先写失败用例，锁定历史重放与实时输出分离规则
+- [x] 修复 hydration 期间的终端回包下行转发
+- [x] 完成测试、类型检查和构建验证
+
+## Review（终端切项目控制字符泄漏）
+
+- 根因确认：切项目恢复终端时，`TerminalPane` 在 replay 还原完成前就已经把 xterm `onData` 全量转发回 PTY，导致重放历史输出中的 DA/DSR/OSC 颜色查询再次触发 xterm 回包，shell 在错误时机收到这些响应后把控制字符碎片显示到界面。
+- 修复方式：新增 `src/components/terminal/terminalReplayRestore.ts`，把“历史重放”和“实时补发”拆成两段；`TerminalPane` 仅在历史重放完成后才打开 hydration gate，避免 replay 触发的终端响应被写回 PTY，同时保留实时输出阶段的正常终端协商。
+- 回归保护：新增 `src/components/terminal/terminalReplayRestore.test.mjs`，覆盖重放历史与实时输出去重分离的 3 个核心场景。
+- 本轮验证通过：`node --test src/components/terminal/terminalReplayRestore.test.mjs src/components/terminal/terminalEscapeTrim.test.mjs`、`pnpm exec tsc --noEmit`、`pnpm build`。
+
+## Pane 高度空白排查任务（2026-03-12）
+
+- [x] 对照终端 pane 高度链路与 run panel 拖拽实现，确认现象成因
+- [x] 输出根因说明并记录到任务清单
+
+## Review（Pane 高度空白排查）
+
+- 结论确认：当前“调整 pane 高度后内容区出现空白”的根因不是单一控件样式，而是 `SplitLayout -> PaneHost -> TerminalPane/xterm` 这一整条高度传递链一旦有任意一层退回 auto height，内容组件就会比 pane 实际可视区域更矮。
+- 关键位置一：`src/components/terminal/SplitLayout.tsx` 依赖 `flex-basis: 0 + flex-grow` 分配空间，并要求子层持续保持 `h-full/min-h-0/min-w-0`；这里如果后续改动丢掉任一约束，拖拽后会直接表现为 pane 容器高度变了，但叶子内容没有同步撑满。
+- 关键位置二：`src/components/terminal/PaneHost.tsx` 对 terminal/run 分支必须显式提供 `h-full w-full min-h-0 min-w-0`；否则 `TerminalPane` 的 `h-full` 会落到 auto-height 父容器上，最终在内容区底部留下空白。
+- 关键位置三：`src/components/terminal/TerminalRunPanel.tsx` 的活动内容层使用 `absolute inset-0 flex min-h-0 min-w-0` 承接高度；如果这一层退化，run panel 拖拽时最容易出现“外层高度更新了，但终端/内容层没有吃满”的空白。
+- 关键位置四：`src/components/terminal/TerminalPane.tsx` 内部依赖 `ResizeObserver + fitAddon.fit()` 把 xterm rows 收敛到新高度；即使容器高度传递正确，只要 fit 链路拿到的 viewport 高度滞后或被误算，终端仍会显示成“底部留白”。
+- 辅助结论：`src/styles/global.css` 当前只保留 `.terminal-pane .xterm { height: 100%; }`，说明这次现象已不是早先 `.xterm-viewport` 被强制 `height: 100%` 的那类 CSS 覆盖问题，而是布局高度链路与 xterm 自适配之间的配合问题。
+
+## Pane 高度空白修复任务（2026-03-12）
+
+- [x] 为 viewport 行数不足场景补失败测试
+- [x] 修正终端 viewport 行数同步逻辑并完成验证
+
+## Review（Pane 高度空白修复）
+
+- 根因确认：`src/components/terminal/terminalViewportFit.ts` 的行数校正逻辑只会处理“rows 偏大”的场景，不会处理“rows 偏小”的场景；因此 pane 高度被拉大后，即便 `ResizeObserver` 和 `fitAddon.fit()` 已触发，终端仍可能停留在较少的 rows，底部表现为持续空白。
+- 修复方式：保持现有布局链路不动，只把 viewport 校正从“单向 clamp”改成“按真实 viewport 高度双向同步”，让 rows 在 pane 变高和变矮时都能重新对齐。
+- 实现落点一：`src/components/terminal/terminalViewportFit.ts` 现在直接基于 `viewportHeight / cellHeight` 计算目标 rows，目标行数与当前不一致时就返回修正值。
+- 实现落点二：`src/components/terminal/TerminalPane.tsx` 现在在 `fitAddon.fit()` 之后只要发现 `nextRows !== term.rows` 就执行 `term.resize(...)`，不再局限于“只缩不扩”。
+- 回归保护：`src/components/terminal/terminalViewportFit.test.mjs` 新增“viewport 变大时应补足 rows”的失败用例，并按 TDD 先见红后转绿。
+- 本轮验证通过：`node --test src/components/terminal/terminalViewportFit.test.mjs`、`pnpm exec tsc --noEmit`、`pnpm build`。

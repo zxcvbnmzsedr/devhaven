@@ -20,11 +20,11 @@ import {
 import { openPathRuntime, openUrlRuntime } from "../../platform/runtime";
 import { APP_RESUME_EVENT } from "../../utils/appResume";
 import { trimTerminalOutputTail } from "./terminalEscapeTrim";
+import { buildTerminalReplayRestorePlan } from "./terminalReplayRestore";
 import { clampRowsToViewport } from "./terminalViewportFit";
 
 const TERMINAL_SCROLLBACK_LINES = 1000;
 const CONNECT_OUTPUT_BUFFER_MAX_CHARS = 128 * 1024;
-const REPLAY_OVERLAP_SCAN_MAX_CHARS = 64 * 1024;
 const WAKE_RECOVERY_DELAYS_MS = [120, 360] as const;
 const SEARCH_OPTIONS = {
   caseSensitive: false,
@@ -264,23 +264,6 @@ function createLocalPathLinkProvider(
   };
 }
 
-function mergeReplayWithBufferedOutput(replayData: string, bufferedOutput: string): string {
-  if (!replayData) {
-    return bufferedOutput;
-  }
-  if (!bufferedOutput) {
-    return replayData;
-  }
-
-  const maxOverlap = Math.min(REPLAY_OVERLAP_SCAN_MAX_CHARS, replayData.length, bufferedOutput.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (replayData.endsWith(bufferedOutput.slice(0, overlap))) {
-      return replayData + bufferedOutput.slice(overlap);
-    }
-  }
-
-  return replayData + bufferedOutput;
-}
 export type TerminalPaneProps = {
   sessionId: string;
   cwd: string;
@@ -325,6 +308,7 @@ export default function TerminalPane({
   const ptyIdRef = useRef<string | null>(null);
   const syncPtySizeRef = useRef<() => void>(() => undefined);
   const restoredRef = useRef(false);
+  const hydrationReadyRef = useRef(false);
   const initialSavedStateRef = useRef<string | null>(savedState ?? null);
   const themeRef = useRef<ITheme>(theme);
   const searchOpenRef = useRef(false);
@@ -653,7 +637,7 @@ export default function TerminalPane({
           cellHeight,
           viewportHeight,
         });
-        if (nextRows < term.rows) {
+        if (nextRows !== term.rows) {
           term.resize(term.cols, nextRows);
         }
       } catch (error) {
@@ -726,7 +710,7 @@ export default function TerminalPane({
 
     const disposable = term.onData((data) => {
       const ptyId = ptyIdRef.current;
-      if (!ptyId) {
+      if (!ptyId || !hydrationReadyRef.current) {
         return;
       }
       void writeTerminal(ptyId, data).catch(() => undefined);
@@ -740,6 +724,7 @@ export default function TerminalPane({
       let replayData: string | null = null;
       let hydrated = false;
       let bufferedOutput = "";
+      hydrationReadyRef.current = false;
 
       const flushBufferedOutput = () => {
         if (!bufferedOutput) {
@@ -827,18 +812,29 @@ export default function TerminalPane({
       syncPtySize();
 
       if (!restoredRef.current) {
-        const baseState = initialSavedStateRef.current ?? "";
-        const replayRestoredState = replayData ? mergeReplayWithBufferedOutput(baseState, replayData) : baseState;
-        const stateToRestore = bufferedOutput
-          ? mergeReplayWithBufferedOutput(replayRestoredState, bufferedOutput)
-          : replayRestoredState;
-        if (stateToRestore) {
+        const pendingBufferedOutput = bufferedOutput;
+        bufferedOutput = "";
+        const restorePlan = buildTerminalReplayRestorePlan(
+          initialSavedStateRef.current ?? "",
+          replayData,
+          pendingBufferedOutput,
+        );
+
+        if (restorePlan.historicalState) {
           restoredRef.current = true;
-          term.write(stateToRestore);
-          bufferedOutput = "";
+          await new Promise<void>((resolve) => {
+            term.write(restorePlan.historicalState, () => resolve());
+          });
+          if (disposed) {
+            return;
+          }
+        }
+        if (restorePlan.liveState) {
+          bufferedOutput = restorePlan.liveState + bufferedOutput;
         }
       }
       hydrated = true;
+      hydrationReadyRef.current = true;
       flushBufferedOutput();
 
       // 当输出/退出事件监听建立后再通知外部：避免外部过早下发命令导致丢失起始输出。
@@ -863,6 +859,8 @@ export default function TerminalPane({
       clearWakeRecoverySchedule();
       syncPtySizeRef.current = () => undefined;
       lastResizeSignatureRef.current = null;
+      hydrationReadyRef.current = false;
+      ptyIdRef.current = null;
       unlistenOutput?.();
       unlistenExit?.();
       releaseTerminalPtySession(registryKey, clientId, { preserve: preserveSessionOnUnmount });
