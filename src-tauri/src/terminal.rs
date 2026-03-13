@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, State, Manager};
 use uuid::Uuid;
 
+use crate::agent_control::{AgentControlState, TerminalBindingRecord, build_terminal_control_env};
 use crate::terminal_runtime::events::{self, TerminalExitEventPayload, TerminalOutputEventPayload};
 use crate::terminal_runtime::{shared_runtime, SessionId};
 
@@ -215,6 +216,25 @@ fn ensure_terminal_env(cmd: &mut CommandBuilder) {
                 cmd.env("PATH", joined);
             }
         }
+    }
+}
+
+fn apply_terminal_control_env(
+    cmd: &mut CommandBuilder,
+    context: Option<&TerminalBindingRecord>,
+    control_endpoint: Option<&str>,
+) {
+    let Some(context) = context else {
+        return;
+    };
+    for (key, value) in build_terminal_control_env(context) {
+        cmd.env(key, value);
+    }
+    if let Some(control_endpoint) = control_endpoint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        cmd.env("DEVHAVEN_CONTROL_ENDPOINT", control_endpoint);
     }
 }
 
@@ -611,18 +631,38 @@ fn remove_terminal_session_index_by_pty(state: &TerminalState, pty_id: &str) {
 pub fn terminal_create_session(
     app: AppHandle,
     state: State<TerminalState>,
+    control_state: State<AgentControlState>,
     project_path: String,
     cols: u16,
     rows: u16,
     window_label: String,
     session_id: Option<String>,
     client_id: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
 ) -> Result<TerminalCreateResult, String> {
     let shell = default_shell();
     let session_id = session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let client_id = normalize_client_id(client_id, &window_label);
     let runtime = shared_runtime();
     let runtime_session_id = SessionId::from_string(session_id.clone());
+    let control_context = TerminalBindingRecord {
+        terminal_session_id: session_id.clone(),
+        project_path: project_path.clone(),
+        workspace_id,
+        pane_id,
+        surface_id,
+        cwd: project_path.clone(),
+        window_label: Some(window_label.clone()),
+        updated_at: crate::agent_control::now_millis(),
+        exited: false,
+    };
+    let web_runtime = app.state::<crate::web_server::WebServerRuntime>();
+    let control_endpoint = crate::web_server::control_api_base_url(web_runtime.inner());
+    let control_command_endpoint = control_endpoint
+        .as_ref()
+        .map(|base| format!("{base}/api/cmd"));
     let _ = runtime.register_session(
         runtime_session_id.clone(),
         project_path.clone(),
@@ -631,6 +671,7 @@ pub fn terminal_create_session(
         Some(shell.clone()),
     );
     let _ = runtime.attach_session_client(&runtime_session_id, client_id.clone());
+    let _ = control_state.register_terminal_binding(control_context.clone());
 
     if let Some(existing_pty) = find_existing_pty_by_session(&state, &session_id)? {
         attach_terminal_client(&state, &existing_pty, &client_id)?;
@@ -667,6 +708,11 @@ pub fn terminal_create_session(
     let mut cmd = build_terminal_command(&shell);
     cmd.cwd(project_path);
     ensure_terminal_env(&mut cmd);
+    apply_terminal_control_env(
+        &mut cmd,
+        Some(&control_context),
+        control_command_endpoint.as_deref(),
+    );
 
     let child = pair
         .slave
@@ -721,6 +767,7 @@ pub fn terminal_create_session(
     let app_handle = app.clone();
     let sessions_map = state.sessions.clone();
     let terminal_state_for_cleanup = state.inner().clone();
+    let control_state_for_cleanup = control_state.inner().clone();
     let session_id_for_output = session_id.clone();
     let pty_id_for_output = pty_id.clone();
     let session_for_output = session.clone();
@@ -824,6 +871,7 @@ pub fn terminal_create_session(
             &SessionId::from_string(session_id_for_output.clone()),
             exit_code,
         );
+        let _ = control_state_for_cleanup.mark_terminal_session_exited(&session_id_for_output);
         events::emit_terminal_exit(&app_handle, payload);
         if let Ok(mut sessions) = sessions_map.lock() {
             sessions.remove(&pty_id_for_output);
@@ -970,6 +1018,38 @@ pub fn terminal_set_replay_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_terminal_control_env_includes_http_command_endpoint() {
+        let binding = TerminalBindingRecord {
+            terminal_session_id: "session-1".to_string(),
+            project_path: "/repo".to_string(),
+            workspace_id: Some("project-1".to_string()),
+            pane_id: Some("pane-1".to_string()),
+            surface_id: Some("surface-1".to_string()),
+            cwd: "/repo".to_string(),
+            window_label: Some("terminal-main".to_string()),
+            updated_at: 0,
+            exited: false,
+        };
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        apply_terminal_control_env(
+            &mut cmd,
+            Some(&binding),
+            Some("http://127.0.0.1:3210/api/cmd"),
+        );
+
+        assert_eq!(
+            cmd.get_env("DEVHAVEN_CONTROL_ENDPOINT")
+                .and_then(|value| value.to_str()),
+            Some("http://127.0.0.1:3210/api/cmd")
+        );
+        assert_eq!(
+            cmd.get_env("DEVHAVEN_TERMINAL_SESSION_ID")
+                .and_then(|value| value.to_str()),
+            Some("session-1")
+        );
+    }
 
     #[test]
     fn terminal_replay_buffer_keeps_plain_text_tail() {

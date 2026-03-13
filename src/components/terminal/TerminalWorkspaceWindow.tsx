@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { memo, useCallback, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
 import type { Project, ProjectScript, ProjectWorktree } from "../../models/types";
@@ -12,6 +12,13 @@ import {
   resolveTerminalThemeName,
 } from "../../themes/terminalThemes";
 import type { CodexProjectStatus } from "../../utils/codexProjectStatus";
+import type { ControlPlaneWorkspaceTree } from "../../models/controlPlane";
+import {
+  listenControlPlaneChanged,
+  loadControlPlaneTree,
+} from "../../services/controlPlane";
+import { projectControlPlaneWorkspace } from "../../utils/controlPlaneProjection";
+import { buildMountedWorkspaceEntries } from "./terminalWorkspaceMountModel";
 import TerminalWorkspaceView from "./TerminalWorkspaceView";
 
 export type TerminalWorkspaceWindowProps = {
@@ -218,13 +225,97 @@ function TerminalWorkspaceWindow({
     },
     [onCloseProject, openProjects, windowLabel],
   );
-  const activeProjectQuickCommandDispatch =
-    quickCommandDispatch &&
-    activeProject &&
-    quickCommandDispatch.projectPath === activeProject.path &&
-    quickCommandDispatch.projectId === activeProject.id
-      ? quickCommandDispatch
-      : null;
+  const mountedWorkspaceEntries = useMemo(
+    () =>
+      buildMountedWorkspaceEntries({
+        openProjects,
+        activeProjectId: activeProject?.id ?? null,
+        quickCommandDispatch,
+        workspaceVisible: isVisible,
+      }),
+    [activeProject?.id, isVisible, openProjects, quickCommandDispatch],
+  );
+  const [controlPlaneTreeByProjectId, setControlPlaneTreeByProjectId] = useState<
+    Record<string, ControlPlaneWorkspaceTree | null>
+  >({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTrees = async () => {
+      const entries = await Promise.all(
+        openProjects.map(async (project) => {
+          try {
+            const tree = await loadControlPlaneTree({
+              workspaceId: project.id,
+              projectPath: project.path,
+            });
+            return [project.id, tree] as const;
+          } catch (error) {
+            console.warn("读取控制平面快照失败。", error);
+            return [project.id, null] as const;
+          }
+        }),
+      );
+      if (cancelled) {
+        return;
+      }
+      setControlPlaneTreeByProjectId(Object.fromEntries(entries));
+    };
+
+    void loadTrees();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [openProjects]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    const projectByPath = new Map(openProjects.map((project) => [project.path, project]));
+
+    const refreshTree = async (projectId: string, projectPath: string) => {
+      try {
+        const tree = await loadControlPlaneTree({
+          workspaceId: projectId,
+          projectPath,
+        });
+        if (disposed) {
+          return;
+        }
+        setControlPlaneTreeByProjectId((current) => ({
+          ...current,
+          [projectId]: tree,
+        }));
+      } catch (error) {
+        console.warn("刷新控制平面快照失败。", error);
+      }
+    };
+
+    void listenControlPlaneChanged((event) => {
+      const projectPath = event.payload.projectPath;
+      if (!projectPath) {
+        return;
+      }
+      const matchedProject = projectByPath.get(projectPath);
+      if (!matchedProject) {
+        return;
+      }
+      void refreshTree(matchedProject.id, matchedProject.path);
+    }).then((nextUnlisten) => {
+      if (disposed) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [openProjects]);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -278,6 +369,9 @@ function TerminalWorkspaceWindow({
             const isActive = (activeProject?.id ?? "") === project.id;
             const codexStatus = codexProjectStatusById[project.id] ?? null;
             const codexRunningCount = codexStatus?.runningCount ?? 0;
+            const controlPlaneProjection = projectControlPlaneWorkspace(
+              controlPlaneTreeByProjectId[project.id] ?? null,
+            );
             const trackedWorktrees = project.worktrees ?? [];
             const gitWorktrees = gitWorktreesByProjectId[project.id];
             const worktreesToRender = mergeWorktreesToRender(trackedWorktrees, gitWorktrees);
@@ -291,18 +385,46 @@ function TerminalWorkspaceWindow({
                       ? "bg-[var(--terminal-accent-bg)] text-[var(--terminal-fg)]"
                       : "text-[var(--terminal-muted-fg)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)]"
                   }`}
-                >
-                  <button
-                    className="min-w-0 flex-1 truncate pr-6 text-left"
-                    title={project.name}
-                    onClick={() => onSelectProject(project.id)}
                   >
-                    {project.name}
-                  </button>
-                  <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
-                    {codexRunningCount > 0 ? (
-                      <span
-                        className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--terminal-accent)]"
+                    <button
+                      className="min-w-0 flex-1 pr-6 text-left"
+                      title={project.name}
+                      onClick={() => onSelectProject(project.id)}
+                    >
+                      <div className="truncate">{project.name}</div>
+                      {controlPlaneProjection.latestMessage ? (
+                        <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--terminal-muted-fg)]">
+                          {controlPlaneProjection.latestMessage}
+                        </div>
+                      ) : null}
+                    </button>
+                    <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
+                      {controlPlaneProjection.attention !== "idle" ? (
+                        <span
+                          className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${
+                            controlPlaneProjection.attention === "error"
+                              ? "bg-[rgba(239,68,68,0.95)]"
+                              : controlPlaneProjection.attention === "waiting"
+                                ? "bg-[rgba(245,158,11,0.95)]"
+                                : controlPlaneProjection.attention === "completed"
+                                  ? "bg-[rgba(34,197,94,0.95)]"
+                                  : "bg-[var(--terminal-accent)]"
+                          }`}
+                          title={`控制平面状态：${controlPlaneProjection.attention}`}
+                          aria-label={`控制平面状态：${controlPlaneProjection.attention}`}
+                        />
+                      ) : null}
+                      {controlPlaneProjection.unreadCount > 0 ? (
+                        <span
+                          className="inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--terminal-accent-bg)] px-1.5 text-[10px] font-semibold text-[var(--terminal-fg)]"
+                          title={`未读通知 ${controlPlaneProjection.unreadCount} 条`}
+                        >
+                          {controlPlaneProjection.unreadCount}
+                        </span>
+                      ) : null}
+                      {codexRunningCount > 0 ? (
+                        <span
+                          className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--terminal-accent)]"
                         title={`Codex 运行中（${codexRunningCount} 个会话）`}
                         aria-label={`Codex 运行中（${codexRunningCount} 个会话）`}
                       >
@@ -454,20 +576,25 @@ function TerminalWorkspaceWindow({
         </div>
       </aside>
       <main className="relative min-w-0 flex-1">
-        {activeProject ? (
-          <div key={activeProject.id} className="absolute inset-0">
+        {mountedWorkspaceEntries.map(({ project, isVisible: workspaceVisible, quickCommandDispatch: projectDispatch }) => (
+          <div
+            key={project.id}
+            className={`absolute inset-0 ${workspaceVisible ? "" : "pointer-events-none opacity-0"}`}
+            aria-hidden={workspaceVisible ? undefined : true}
+          >
             <TerminalWorkspaceView
-              projectId={activeProject.id}
-              projectPath={activeProject.path}
-              projectName={activeProject.name}
-              isActive={isVisible}
-              quickCommandDispatch={activeProjectQuickCommandDispatch}
+              projectId={project.id}
+              projectPath={project.path}
+              projectName={project.name}
+              isActive={workspaceVisible}
+              quickCommandDispatch={projectDispatch}
               windowLabel={windowLabel}
               xtermTheme={terminalThemePreset.xterm}
               sharedScriptsRoot={sharedScriptsRoot}
               terminalUseWebglRenderer={terminalUseWebglRenderer}
-              codexRunningCount={codexProjectStatusById[activeProject.id]?.runningCount ?? 0}
-              scripts={activeProject.scripts ?? EMPTY_PROJECT_SCRIPTS}
+              codexRunningCount={codexProjectStatusById[project.id]?.runningCount ?? 0}
+              controlPlaneTree={controlPlaneTreeByProjectId[project.id] ?? null}
+              scripts={project.scripts ?? EMPTY_PROJECT_SCRIPTS}
               onRegisterPersistWorkspace={onRegisterPersistWorkspace}
               onRegisterWorkspaceSessionIds={registerWorkspaceSessionIds}
               onAddProjectScript={onAddProjectScript}
@@ -475,7 +602,7 @@ function TerminalWorkspaceWindow({
               onRemoveProjectScript={onRemoveProjectScript}
             />
           </div>
-        ) : null}
+        ))}
       </main>
     </div>
   );

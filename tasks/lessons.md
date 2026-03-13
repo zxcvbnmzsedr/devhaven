@@ -12,3 +12,7 @@
 - 当用户明确要求“pane 先创建出来，再在 pane 内选择它是 shell 还是 agent”时，不能擅自改成“创建前弹菜单选类型”；两者虽然都叫“创建时决定身份”，但交互时序完全不同：前者需要 **pending pane / 未定型 pane**，后者只是创建菜单。
 - 对已定型的 pane，任何常驻在右上角的状态/控制都要极度克制；如果用户已经明确“视觉很怪”，优先删除常驻控制，让 pending pane 承担类型选择职责，已定型 pane 保持接近纯终端。
 - 对 pending pane 里的装饰性元素也要保持克制；如果用户点名不要标题、说明文案或加号图标，就直接删除，不要保留“我觉得有帮助”的占位装饰。
+- 一旦交互模型切到“pending pane 先出现，再选择 shell/agent”，就必须同步收敛所有默认/兜底入口：首次打开项目、最后一个 session 退出、最后一个 tab 关闭都要回到 pending pane，不能只改“新建 pane”路径，否则 pane 类型与真实会话会再次错位。
+- 对“只挂载当前 active workspace”的性能优化要特别谨慎：终端 PTY 虽然能靠 `preserveSessionOnUnmount` 保活，但项目级 `useQuickCommandRuntime` / pane agent 等 React 运行态仍会随着 workspace 卸载而被误判结束；只要用户需要后台继续跑任务，就应优先保持 workspace 挂载，仅把非激活项隐藏/降交互。
+- 当产品方向切到 cmux 式 primitive + control plane 时，不能继续把 provider 选择、运行态和 notification 绑在前端 pane mode 里；应优先把 terminal binding / agent session / notification 真相收口到后端 registry，再让前端只做 projection。
+- 当旧架构已经不再是主路径时，不要长期保留“兼容但无人使用”的 UI/Hook/adapter 壳层；最好在控制面和默认路径稳定后立刻做一次第三轮清场，把死代码删除，并用加载时归一化兼容历史快照。

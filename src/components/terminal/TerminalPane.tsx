@@ -268,7 +268,11 @@ function createLocalPathLinkProvider(
 
 export type TerminalPaneProps = {
   sessionId: string;
+  projectPath: string;
   cwd: string;
+  workspaceId?: string | null;
+  paneId?: string | null;
+  surfaceId?: string | null;
   savedState?: string | null;
   windowLabel: string;
   clientId: string;
@@ -284,7 +288,11 @@ export type TerminalPaneProps = {
 
 export default function TerminalPane({
   sessionId,
+  projectPath,
   cwd,
+  workspaceId,
+  paneId,
+  surfaceId,
   savedState,
   windowLabel,
   clientId,
@@ -790,12 +798,15 @@ export default function TerminalPane({
 
       try {
         const ready = await ensureTerminalPtyId(registryKey, {
-          projectPath: cwd,
+          projectPath,
           cols: term.cols,
           rows: term.rows,
           windowLabel,
           sessionId,
           clientId,
+          workspaceId,
+          paneId,
+          surfaceId,
         });
         ptyId = ready.ptyId;
         replayData = ready.replayData ?? null;

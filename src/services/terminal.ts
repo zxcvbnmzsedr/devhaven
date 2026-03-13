@@ -12,6 +12,9 @@ export type TerminalCreateRequest = {
   windowLabel: string;
   sessionId?: string;
   clientId?: string;
+  workspaceId?: string | null;
+  paneId?: string | null;
+  surfaceId?: string | null;
 };
 
 export type TerminalCreateResult = {

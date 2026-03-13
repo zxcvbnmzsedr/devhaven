@@ -3,11 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   activateTerminalSessionInSnapshot,
-  appendPendingTerminalTabToSnapshot,
   appendTerminalTabToSnapshot,
   collectPaneIds,
   markRunPanelTabExitedInSnapshot,
-  realizePendingTerminalPaneInSnapshot,
   removePaneFromSnapshot,
   removeTerminalSessionFromSnapshot,
   removeTerminalTabFromSnapshot,
@@ -24,6 +22,7 @@ import {
   updateLayoutNodeRatios,
 } from "./terminal.ts";
 import { createDefaultLayoutSnapshot } from "../utils/terminalLayout.ts";
+import { normalizeLayoutSnapshotForShellPrimitives } from "../utils/terminalLayout.ts";
 
 function createSnapshot() {
   return {
@@ -73,40 +72,6 @@ test("appendTerminalTabToSnapshot adds a new active terminal tab", () => {
   assert.equal(snapshot.tabs.length, 2);
   assert.equal(snapshot.tabs[1]?.activePaneId, "pane-2");
   assert.equal(snapshot.panes["pane-2"]?.kind, "terminal");
-});
-
-test("appendPendingTerminalTabToSnapshot adds a pending tab without session", () => {
-  const snapshot = appendPendingTerminalTabToSnapshot(createSnapshot(), {
-    tabId: "tab-2",
-    paneId: "pane-pending",
-    title: "新建 Pane",
-  });
-
-  assert.equal(snapshot.activeTabId, "tab-2");
-  assert.equal(snapshot.tabs[1]?.activePaneId, "pane-pending");
-  assert.equal(snapshot.panes["pane-pending"]?.kind, "pendingTerminal");
-});
-
-test("realizePendingTerminalPaneInSnapshot converts pending pane into agent terminal pane", () => {
-  const pending = appendPendingTerminalTabToSnapshot(createSnapshot(), {
-    tabId: "tab-2",
-    paneId: "pane-pending",
-    title: "新建 Pane",
-  });
-
-  const snapshot = realizePendingTerminalPaneInSnapshot(pending, "pane-pending", {
-    sessionId: "session-agent",
-    cwd: "/repo",
-    mode: "agent",
-    agent: { provider: "codex" },
-    tabTitle: "Codex Agent",
-  });
-
-  assert.equal(snapshot.tabs[1]?.title, "Codex Agent");
-  assert.equal(snapshot.panes["pane-pending"]?.kind, "terminal");
-  assert.equal(snapshot.panes["pane-pending"]?.sessionId, "session-agent");
-  assert.equal(snapshot.panes["pane-pending"]?.mode, "agent");
-  assert.equal(snapshot.panes["pane-pending"]?.agent?.provider, "codex");
 });
 
 test("activateTerminalSessionInSnapshot updates the active pane of a tab", () => {
@@ -176,9 +141,7 @@ test("removeTerminalSessionFromSnapshot drops the session pane and keeps sibling
     createFallbackTab: () => ({
       tabId: "tab-fallback",
       paneId: "pane-fallback",
-      sessionId: "session-fallback",
       title: "终端 1",
-      cwd: "/repo",
     }),
   });
 
@@ -188,18 +151,40 @@ test("removeTerminalSessionFromSnapshot drops the session pane and keeps sibling
   assert.equal(snapshot.panes["pane-2"], undefined);
 });
 
+test("removeTerminalSessionFromSnapshot creates a shell fallback tab when last session exits", () => {
+  const snapshot = removeTerminalSessionFromSnapshot(createSnapshot(), "session-1", {
+    createFallbackTab: () => ({
+      tabId: "tab-fallback",
+      paneId: "pane-fallback",
+      sessionId: "session-fallback",
+      cwd: "/repo",
+      title: "终端 1",
+    }),
+  });
+
+  assert.equal(snapshot.tabs.length, 1);
+  assert.equal(snapshot.activeTabId, "tab-fallback");
+  assert.equal(snapshot.tabs[0]?.title, "终端 1");
+  assert.equal(snapshot.tabs[0]?.activePaneId, "pane-fallback");
+  assert.equal(snapshot.panes["pane-fallback"]?.kind, "terminal");
+  assert.equal(snapshot.panes["pane-fallback"]?.sessionId, "session-fallback");
+  assert.equal(snapshot.panes["pane-1"], undefined);
+});
+
 test("removeTerminalTabFromSnapshot creates a fallback tab when last tab closes", () => {
   const snapshot = removeTerminalTabFromSnapshot(createSnapshot(), "tab-1", {
     tabId: "tab-fallback",
     paneId: "pane-fallback",
     sessionId: "session-fallback",
-    title: "终端 1",
     cwd: "/repo",
+    title: "终端 1",
   });
 
   assert.equal(snapshot.tabs.length, 1);
   assert.equal(snapshot.activeTabId, "tab-fallback");
   assert.equal(snapshot.tabs[0].id, "tab-fallback");
+  assert.equal(snapshot.tabs[0]?.title, "终端 1");
+  assert.equal(snapshot.panes["pane-fallback"]?.kind, "terminal");
   assert.equal(snapshot.panes["pane-fallback"]?.sessionId, "session-fallback");
   assert.equal(snapshot.panes["pane-1"], undefined);
 });
@@ -339,11 +324,51 @@ test("createDefaultLayoutSnapshot creates a version 2 snapshot without legacy wo
   assert.equal(snapshot.projectPath, "/repo");
   assert.equal(snapshot.tabs.length, 1);
   assert.equal(snapshot.activeTabId, snapshot.tabs[0]?.id);
+  assert.equal(snapshot.tabs[0]?.title, "终端 1");
   assert.equal(snapshot.tabs[0]?.root.type, "leaf");
   assert.equal(snapshot.panes[snapshot.tabs[0]?.activePaneId ?? ""]?.kind, "terminal");
+  assert.ok(snapshot.panes[snapshot.tabs[0]?.activePaneId ?? ""]?.sessionId);
   assert.equal(snapshot.ui?.runPanel?.height, 320);
   assert.equal(snapshot.ui?.runPanel?.open, false);
   assert.equal(snapshot.ui?.fileExplorerPanel?.showHidden, true);
+});
+
+test("normalizeLayoutSnapshotForShellPrimitives converts legacy pending panes into shell terminals", () => {
+  const snapshot = normalizeLayoutSnapshotForShellPrimitives({
+    version: 2,
+    projectId: "project-1",
+    projectPath: "/repo",
+    activeTabId: "tab-1",
+    updatedAt: 1,
+    revision: 1,
+    tabs: [
+      {
+        id: "tab-1",
+        title: "新建 Pane",
+        activePaneId: "pane-1",
+        root: {
+          type: "leaf",
+          paneId: "pane-1",
+        },
+      },
+    ],
+    panes: {
+      "pane-1": {
+        id: "pane-1",
+        kind: "pendingTerminal",
+        placement: "tree",
+        title: "新建 Pane",
+      },
+    },
+    ui: {},
+  }, {
+    createSessionId: () => "session-normalized",
+  });
+
+  assert.equal(snapshot.tabs[0]?.title, "终端 1");
+  assert.equal(snapshot.panes["pane-1"]?.kind, "terminal");
+  assert.equal(snapshot.panes["pane-1"]?.sessionId, "session-normalized");
+  assert.equal(snapshot.panes["pane-1"]?.cwd, "/repo");
 });
 
 test("updateRightSidebarStateInSnapshot mirrors file and git panel visibility", () => {

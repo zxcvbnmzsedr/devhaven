@@ -228,6 +228,7 @@ export default function TerminalRunPanel({
             <PaneHost
               kind="run"
               sessionId={activeTab.sessionId}
+              projectPath={projectPath}
               cwd={activeSession.cwd ?? projectPath}
               savedState={activeSession.savedState ?? null}
               windowLabel={windowLabel}

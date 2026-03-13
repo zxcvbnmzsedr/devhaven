@@ -2,7 +2,10 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import type { ITheme } from "xterm";
 
 import type { ScriptExecutionState, ScriptLocalPhase, ScriptRuntime } from "../../hooks/useQuickCommandRuntime";
-import type { PaneCreationTemplate } from "../../models/agent";
+import type {
+  ControlPlaneSurfaceProjection,
+  ControlPlaneWorkspaceProjection,
+} from "../../utils/controlPlaneProjection";
 import type { QuickCommandJob } from "../../models/quickCommands";
 import type {
   RunPanelTab,
@@ -28,8 +31,11 @@ type HeaderTab = {
 
 export type TerminalWorkspaceShellProps = {
   projectName: string | null | undefined;
+  projectId: string | null;
   projectPath: string;
   codexRunningCount: number;
+  controlPlaneProjection: ControlPlaneWorkspaceProjection;
+  activePaneControlProjection: ControlPlaneSurfaceProjection | null;
   isGitRepo: boolean;
   windowLabel: string;
   runtimeClientId: string;
@@ -76,7 +82,6 @@ export type TerminalWorkspaceShellProps = {
   onPtyReady: (sessionId: string, ptyId: string) => void;
   onSessionExit: (sessionId: string, code?: number | null) => void;
   onSessionOutput: (sessionId: string, data: string) => void;
-  onResolvePendingPane: (paneId: string, template: PaneCreationTemplate) => void;
   onSetRightSidebarWidth: (width: number) => void;
   onToggleShowHidden: (next: boolean) => void;
   onOpenPreview: (relativePath: string) => void;
@@ -96,8 +101,11 @@ export type TerminalWorkspaceShellProps = {
 
 export default function TerminalWorkspaceShell({
   projectName,
+  projectId,
   projectPath,
   codexRunningCount,
+  controlPlaneProjection,
+  activePaneControlProjection,
   isGitRepo,
   windowLabel,
   runtimeClientId,
@@ -144,7 +152,6 @@ export default function TerminalWorkspaceShell({
   onPtyReady,
   onSessionExit,
   onSessionOutput,
-  onResolvePendingPane,
   onSetRightSidebarWidth,
   onToggleShowHidden,
   onOpenPreview,
@@ -167,6 +174,8 @@ export default function TerminalWorkspaceShell({
         projectName={projectName}
         projectPath={projectPath}
         codexRunningCount={codexRunningCount}
+        controlPlaneProjection={controlPlaneProjection}
+        activePaneControlProjection={activePaneControlProjection}
         rightSidebarOpen={rightSidebarOpen}
         rightSidebarTab={rightSidebarTab}
         scripts={scripts}
@@ -206,7 +215,11 @@ export default function TerminalWorkspaceShell({
                         <PaneHost
                           kind={pane.kind}
                           sessionId={pane.sessionId}
+                          projectPath={projectPath}
                           cwd={pane.kind === "terminal" ? pane.cwd : pane.restoreAnchor?.cwd ?? projectPath}
+                          workspaceId={projectId ?? projectPath}
+                          paneId={pane.kind === "terminal" ? pane.id : null}
+                          surfaceId={pane.kind === "terminal" ? pane.id : null}
                           savedState={pane.restoreAnchor?.savedState ?? null}
                           windowLabel={windowLabel}
                           clientId={runtimeClientId}
@@ -218,14 +231,6 @@ export default function TerminalWorkspaceShell({
                           onExit={onSessionExit}
                           onOutput={onSessionOutput}
                           preserveSessionOnUnmount
-                        />
-                      );
-                    }
-                    if (pane.kind === "pendingTerminal") {
-                      return (
-                        <PaneHost
-                          kind="pendingTerminal"
-                          onSelectTemplate={(template) => onResolvePendingPane(pane.id, template)}
                         />
                       );
                     }
@@ -257,6 +262,14 @@ export default function TerminalWorkspaceShell({
                             oldPath: pane.oldRelativePath ?? null,
                           }}
                           onCloseSelected={onCloseGitSelection}
+                        />
+                      );
+                    }
+                    if (pane.kind === "pendingTerminal") {
+                      return (
+                        <PaneHost
+                          kind="overlay"
+                          emptyMessage="检测到旧版待定终端快照，请重新打开终端。"
                         />
                       );
                     }

@@ -1,20 +1,20 @@
 import type { ReactNode } from "react";
 import type { ITheme } from "xterm";
 
-import type {
-  PaneCreationTemplate,
-} from "../../models/agent";
 import TerminalPane from "./TerminalPane";
 import TerminalFilePreviewPanel from "./TerminalFilePreviewPanel";
 import TerminalGitFileViewPanel from "./TerminalGitFileViewPanel";
-import TerminalPendingPane from "./TerminalPendingPane";
 import type { GitSelectedFile } from "./TerminalGitPanel";
 
 type TerminalSessionPaneHostProps = {
   kind: "terminal" | "run";
   className?: string;
   sessionId: string;
+  projectPath: string;
   cwd: string;
+  workspaceId?: string | null;
+  paneId?: string | null;
+  surfaceId?: string | null;
   savedState?: string | null;
   windowLabel: string;
   clientId: string;
@@ -26,12 +26,6 @@ type TerminalSessionPaneHostProps = {
   onOutput?: (sessionId: string, data: string) => void;
   onPtyReady?: (sessionId: string, ptyId: string) => void;
   preserveSessionOnUnmount?: boolean;
-};
-
-type PendingTerminalPaneHostProps = {
-  kind: "pendingTerminal";
-  className?: string;
-  onSelectTemplate: (template: PaneCreationTemplate) => void;
 };
 
 type FilePreviewPaneHostProps = {
@@ -63,7 +57,6 @@ type ToolPaneHostProps = {
 
 export type PaneHostProps =
   | TerminalSessionPaneHostProps
-  | PendingTerminalPaneHostProps
   | FilePreviewPaneHostProps
   | GitDiffPaneHostProps
   | ToolPaneHostProps;
@@ -82,15 +75,6 @@ export default function PaneHost(props: PaneHostProps) {
     return (
       <div className={className ?? "flex h-full w-full min-h-0 min-w-0 flex-1"}>
         <TerminalPane {...terminalProps} />
-      </div>
-    );
-  }
-
-  if (props.kind === "pendingTerminal") {
-    const { className, onSelectTemplate } = props;
-    return (
-      <div className={className ?? "flex h-full w-full min-h-0 min-w-0 flex-1"}>
-        <TerminalPendingPane onSelectTemplate={onSelectTemplate} />
       </div>
     );
   }

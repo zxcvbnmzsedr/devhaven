@@ -1,3 +1,4 @@
+mod agent_control;
 mod command_catalog;
 mod codex_monitor;
 mod filesystem;
@@ -44,6 +45,11 @@ use crate::models::{
     WorktreeInitCancelResult, WorktreeInitCreateBlockingResult, WorktreeInitJobStatus,
     WorktreeInitRetryRequest, WorktreeInitStartRequest, WorktreeInitStartResult,
     WorktreeInitStatusQuery, WorktreeInitStep,
+};
+use crate::agent_control::{
+    AgentControlState, AgentSessionStatus, ControlPlaneIdentifyResult, ControlPlaneTree,
+    DevHavenAgentSessionEventRequest, DevHavenIdentifyRequest, DevHavenNotifyRequest,
+    DevHavenTreeRequest, NotificationMutationRequest,
 };
 use crate::quick_command_manager::{
     QuickCommandManager, quick_command_finish, quick_command_list, quick_command_start,
@@ -955,6 +961,144 @@ fn get_codex_monitor_snapshot(app: AppHandle) -> Result<CodexMonitorSnapshot, St
 }
 
 #[tauri::command]
+fn devhaven_identify(
+    state: State<AgentControlState>,
+    terminal_session_id: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+) -> Result<ControlPlaneIdentifyResult, String> {
+    log_command_result("devhaven_identify", || {
+        agent_control::identify_control_plane(
+            state,
+            DevHavenIdentifyRequest {
+                terminal_session_id,
+                workspace_id,
+                pane_id,
+                surface_id,
+            },
+        )
+    })
+}
+
+#[tauri::command]
+fn devhaven_tree(
+    state: State<AgentControlState>,
+    project_path: Option<String>,
+    workspace_id: Option<String>,
+) -> Result<Option<ControlPlaneTree>, String> {
+    log_command_result("devhaven_tree", || {
+        agent_control::tree_control_plane(
+            state,
+            DevHavenTreeRequest {
+                project_path,
+                workspace_id,
+            },
+        )
+    })
+}
+
+#[tauri::command]
+fn devhaven_notify(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    terminal_session_id: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+    agent_session_id: Option<String>,
+    project_path: Option<String>,
+    title: Option<String>,
+    message: String,
+    level: Option<String>,
+) -> Result<agent_control::NotificationRecord, String> {
+    log_command_result("devhaven_notify", || {
+        agent_control::notify_control_plane(
+            &app,
+            state,
+            DevHavenNotifyRequest {
+                terminal_session_id,
+                workspace_id,
+                pane_id,
+                surface_id,
+                agent_session_id,
+                project_path,
+                title,
+                message,
+                level,
+            },
+        )
+    })
+}
+
+#[tauri::command]
+fn devhaven_agent_session_event(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    agent_session_id: Option<String>,
+    terminal_session_id: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+    provider: String,
+    status: AgentSessionStatus,
+    project_path: Option<String>,
+    cwd: Option<String>,
+    message: Option<String>,
+) -> Result<agent_control::AgentSessionRecord, String> {
+    log_command_result("devhaven_agent_session_event", || {
+        agent_control::upsert_agent_session_event(
+            &app,
+            state,
+            DevHavenAgentSessionEventRequest {
+                agent_session_id,
+                terminal_session_id,
+                workspace_id,
+                pane_id,
+                surface_id,
+                provider,
+                status,
+                project_path,
+                cwd,
+                message,
+            },
+        )
+    })
+}
+
+#[tauri::command]
+fn devhaven_mark_notification_read(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    notification_id: String,
+) -> Result<(), String> {
+    log_command_result("devhaven_mark_notification_read", || {
+        agent_control::mark_notification_read_state(
+            &app,
+            state,
+            NotificationMutationRequest { notification_id },
+            true,
+        )
+    })
+}
+
+#[tauri::command]
+fn devhaven_mark_notification_unread(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    notification_id: String,
+) -> Result<(), String> {
+    log_command_result("devhaven_mark_notification_unread", || {
+        agent_control::mark_notification_read_state(
+            &app,
+            state,
+            NotificationMutationRequest { notification_id },
+            false,
+        )
+    })
+}
+
+#[tauri::command]
 fn apply_web_server_config(
     app: AppHandle,
     runtime: State<web_server::WebServerRuntime>,
@@ -980,6 +1124,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(AgentControlState::default())
         .manage(TerminalState::default())
         .manage(QuickCommandManager::default())
         .manage(worktree_init::WorktreeInitState::default())

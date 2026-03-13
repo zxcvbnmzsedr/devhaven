@@ -15,6 +15,7 @@ use crate::models::{
     SharedScriptManifestScript, WorktreeInitRetryRequest, WorktreeInitStartRequest,
     WorktreeInitStatusQuery,
 };
+use crate::agent_control::AgentControlState;
 use crate::quick_command_manager::QuickCommandManager;
 use crate::terminal::TerminalState;
 use crate::web_server::WebServerRuntime;
@@ -86,6 +87,12 @@ macro_rules! devhaven_for_each_command {
             { quick_command_finish, web_quick_command_finish }
             { quick_command_list, web_quick_command_list }
             { quick_command_runtime_snapshot, web_quick_command_runtime_snapshot }
+            { devhaven_identify, web_devhaven_identify }
+            { devhaven_tree, web_devhaven_tree }
+            { devhaven_notify, web_devhaven_notify }
+            { devhaven_agent_session_event, web_devhaven_agent_session_event }
+            { devhaven_mark_notification_read, web_devhaven_mark_notification_read }
+            { devhaven_mark_notification_unread, web_devhaven_mark_notification_unread }
             { terminal_create_session, web_terminal_create_session }
             { terminal_write, web_terminal_write }
             { terminal_resize, web_terminal_resize }
@@ -843,8 +850,94 @@ fn web_quick_command_runtime_snapshot(_app: &AppHandle, _guard: &PathGuard, payl
     serialize_value(crate::quick_command_runtime_snapshot(project_path))
 }
 
+fn web_devhaven_identify(app: &AppHandle, _guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let state = app.state::<AgentControlState>();
+    serialize_result(crate::devhaven_identify(
+        state,
+        optional::<String>(payload, &["terminalSessionId", "terminal_session_id"])?,
+        optional::<String>(payload, &["workspaceId", "workspace_id"])?,
+        optional::<String>(payload, &["paneId", "pane_id"])?,
+        optional::<String>(payload, &["surfaceId", "surface_id"])?,
+    ))
+}
+
+fn web_devhaven_tree(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let state = app.state::<AgentControlState>();
+    let project_path = optional::<String>(payload, &["projectPath", "project_path"])?;
+    if let Some(project_path) = project_path.as_deref() {
+        guard.ensure_allowed_path(project_path, "projectPath")?;
+    }
+    serialize_result(crate::devhaven_tree(
+        state,
+        project_path,
+        optional::<String>(payload, &["workspaceId", "workspace_id"])?,
+    ))
+}
+
+fn web_devhaven_notify(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let state = app.state::<AgentControlState>();
+    let project_path = optional::<String>(payload, &["projectPath", "project_path"])?;
+    if let Some(project_path) = project_path.as_deref() {
+        guard.ensure_allowed_path(project_path, "projectPath")?;
+    }
+    serialize_result(crate::devhaven_notify(
+        app.clone(),
+        state,
+        optional::<String>(payload, &["terminalSessionId", "terminal_session_id"])?,
+        optional::<String>(payload, &["workspaceId", "workspace_id"])?,
+        optional::<String>(payload, &["paneId", "pane_id"])?,
+        optional::<String>(payload, &["surfaceId", "surface_id"])?,
+        optional::<String>(payload, &["agentSessionId", "agent_session_id"])?,
+        project_path,
+        optional::<String>(payload, &["title"])?,
+        required::<String>(payload, &["message"])?,
+        optional::<String>(payload, &["level"])?,
+    ))
+}
+
+fn web_devhaven_agent_session_event(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let state = app.state::<AgentControlState>();
+    let project_path = optional::<String>(payload, &["projectPath", "project_path"])?;
+    if let Some(project_path) = project_path.as_deref() {
+        guard.ensure_allowed_path(project_path, "projectPath")?;
+    }
+    serialize_result(crate::devhaven_agent_session_event(
+        app.clone(),
+        state,
+        optional::<String>(payload, &["agentSessionId", "agent_session_id"])?,
+        optional::<String>(payload, &["terminalSessionId", "terminal_session_id"])?,
+        optional::<String>(payload, &["workspaceId", "workspace_id"])?,
+        optional::<String>(payload, &["paneId", "pane_id"])?,
+        optional::<String>(payload, &["surfaceId", "surface_id"])?,
+        required::<String>(payload, &["provider"])?,
+        required::<crate::agent_control::AgentSessionStatus>(payload, &["status"])?,
+        project_path,
+        optional::<String>(payload, &["cwd"])?,
+        optional::<String>(payload, &["message"])?,
+    ))
+}
+
+fn web_devhaven_mark_notification_read(app: &AppHandle, _guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let state = app.state::<AgentControlState>();
+    serialize_result(crate::devhaven_mark_notification_read(
+        app.clone(),
+        state,
+        required::<String>(payload, &["notificationId", "notification_id"])?,
+    ))
+}
+
+fn web_devhaven_mark_notification_unread(app: &AppHandle, _guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let state = app.state::<AgentControlState>();
+    serialize_result(crate::devhaven_mark_notification_unread(
+        app.clone(),
+        state,
+        required::<String>(payload, &["notificationId", "notification_id"])?,
+    ))
+}
+
 fn web_terminal_create_session(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
     let state = app.state::<TerminalState>();
+    let control_state = app.state::<AgentControlState>();
     let project_path = required::<String>(payload, &["projectPath", "project_path"])?;
     guard.ensure_allowed_path(&project_path, "projectPath")?;
     let cols = required::<u16>(payload, &["cols"])?;
@@ -852,15 +945,22 @@ fn web_terminal_create_session(app: &AppHandle, guard: &PathGuard, payload: &Val
     let window_label = required::<String>(payload, &["windowLabel", "window_label"])?;
     let session_id = optional::<String>(payload, &["sessionId", "session_id"])?;
     let client_id = optional::<String>(payload, &["clientId", "client_id"])?;
+    let workspace_id = optional::<String>(payload, &["workspaceId", "workspace_id"])?;
+    let pane_id = optional::<String>(payload, &["paneId", "pane_id"])?;
+    let surface_id = optional::<String>(payload, &["surfaceId", "surface_id"])?;
     serialize_result(crate::terminal::terminal_create_session(
         app.clone(),
         state,
+        control_state,
         project_path,
         cols,
         rows,
         window_label,
         session_id,
         client_id,
+        workspace_id,
+        pane_id,
+        surface_id,
     ))
 }
 
@@ -914,6 +1014,15 @@ mod tests {
         assert_eq!(web.len(), web_set.len(), "Web 命令列表不应重复");
         assert!(all_set.contains("open_in_editor"));
         assert!(!web_set.contains("open_in_editor"));
+        assert!(all_set.contains("devhaven_identify"));
+        assert!(all_set.contains("devhaven_tree"));
+        assert!(all_set.contains("devhaven_notify"));
+        assert!(all_set.contains("devhaven_agent_session_event"));
+        assert!(all_set.contains("devhaven_mark_notification_read"));
+        assert!(all_set.contains("devhaven_mark_notification_unread"));
+        assert!(web_set.contains("devhaven_identify"));
+        assert!(web_set.contains("devhaven_tree"));
+        assert!(web_set.contains("devhaven_notify"));
         assert!(web_set.is_subset(&all_set));
     }
 

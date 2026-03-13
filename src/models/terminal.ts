@@ -1,5 +1,3 @@
-import type { PaneAgentDescriptor, PaneAgentMode } from "./agent";
-
 export type SplitOrientation = "h" | "v";
 export type SplitDirection = "r" | "b" | "l" | "t";
 
@@ -94,8 +92,6 @@ export type TerminalShellPaneDescriptor = TerminalPaneDescriptorBase & {
   kind: "terminal";
   sessionId: TerminalSessionId;
   cwd: string;
-  mode?: PaneAgentMode;
-  agent?: PaneAgentDescriptor | null;
   restoreAnchor?: TerminalRestoreAnchor | null;
 };
 
@@ -392,13 +388,13 @@ function removeLayoutPaneFromNode(node: TerminalPaneNode, paneId: TerminalPaneId
   };
 }
 
-function createFallbackTabAndPane(
+function createTerminalTabAndPane(
   options: {
     tabId: TerminalTabId;
     paneId: TerminalPaneId;
     sessionId: TerminalSessionId;
-    title: string;
     cwd: string;
+    title: string;
   },
 ): { tab: TerminalLayoutTab; pane: TerminalPaneDescriptor } {
   return {
@@ -413,10 +409,9 @@ function createFallbackTabAndPane(
       id: options.paneId,
       kind: "terminal",
       placement: "tree",
+      title: options.title,
       sessionId: options.sessionId,
       cwd: options.cwd,
-      mode: "shell",
-      agent: null,
       restoreAnchor: {
         cwd: options.cwd,
         savedState: null,
@@ -488,8 +483,6 @@ export function appendTerminalTabToSnapshot(
         placement: "tree",
         sessionId: options.sessionId,
         cwd: options.cwd,
-        mode: "shell",
-        agent: null,
         restoreAnchor: {
           cwd: options.cwd,
           savedState: null,
@@ -537,8 +530,6 @@ export function realizePendingTerminalPaneInSnapshot(
   options: {
     sessionId: TerminalSessionId;
     cwd: string;
-    mode: PaneAgentMode;
-    agent?: PaneAgentDescriptor | null;
     tabTitle?: string | null;
   },
 ): TerminalLayoutSnapshot {
@@ -565,8 +556,6 @@ export function realizePendingTerminalPaneInSnapshot(
         placement: "tree",
         sessionId: options.sessionId,
         cwd: options.cwd,
-        mode: options.mode,
-        agent: options.mode === "agent" ? options.agent ?? { provider: "codex" } : null,
         restoreAnchor: {
           cwd: options.cwd,
           savedState: null,
@@ -1126,8 +1115,6 @@ export function splitTerminalSessionInSnapshot(
         placement: "tree",
         sessionId: options.newSessionId,
         cwd: options.cwd,
-        mode: "shell",
-        agent: null,
         restoreAnchor: {
           cwd: options.cwd,
           savedState: null,
@@ -1224,68 +1211,6 @@ export function splitPendingPaneInSnapshot(
   };
 }
 
-export function setTerminalPaneAgentMode(
-  snapshot: TerminalLayoutSnapshot,
-  paneId: TerminalPaneId,
-  options: {
-    mode: PaneAgentMode;
-    agent?: PaneAgentDescriptor | null;
-  },
-): TerminalLayoutSnapshot {
-  const pane = snapshot.panes[paneId];
-  if (!pane || pane.kind !== "terminal") {
-    return snapshot;
-  }
-
-  const nextAgent = options.agent ?? pane.agent ?? { provider: "codex" };
-  const nextMode: PaneAgentMode = options.mode;
-
-  if (pane.mode === nextMode && (pane.agent?.provider ?? null) === (nextAgent?.provider ?? null)) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    panes: {
-      ...snapshot.panes,
-      [paneId]: {
-        ...pane,
-        mode: nextMode,
-        agent: nextAgent,
-      },
-    },
-  };
-}
-
-export function setTerminalPaneAgentProvider(
-  snapshot: TerminalLayoutSnapshot,
-  paneId: TerminalPaneId,
-  provider: PaneAgentDescriptor["provider"],
-): TerminalLayoutSnapshot {
-  const pane = snapshot.panes[paneId];
-  if (!pane || pane.kind !== "terminal") {
-    return snapshot;
-  }
-
-  if (pane.agent?.provider === provider) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    panes: {
-      ...snapshot.panes,
-      [paneId]: {
-        ...pane,
-        agent: {
-          ...(pane.agent ?? {}),
-          provider,
-        },
-      },
-    },
-  };
-}
-
 export function removeTerminalSessionFromSnapshot(
   snapshot: TerminalLayoutSnapshot,
   sessionId: TerminalSessionId,
@@ -1294,8 +1219,8 @@ export function removeTerminalSessionFromSnapshot(
       tabId: TerminalTabId;
       paneId: TerminalPaneId;
       sessionId: TerminalSessionId;
-      title: string;
       cwd: string;
+      title: string;
     };
   },
 ): TerminalLayoutSnapshot {
@@ -1323,7 +1248,7 @@ export function removeTerminalSessionFromSnapshot(
     });
     const remainingTabs = snapshot.tabs.filter((item) => item.id !== tab.id);
     if (remainingTabs.length === 0) {
-      const fallback = createFallbackTabAndPane(options.createFallbackTab());
+      const fallback = createTerminalTabAndPane(options.createFallbackTab());
       return {
         ...snapshot,
         activeTabId: fallback.tab.id,
@@ -1370,8 +1295,8 @@ export function removeTerminalTabFromSnapshot(
     tabId: TerminalTabId;
     paneId: TerminalPaneId;
     sessionId: TerminalSessionId;
-    title: string;
     cwd: string;
+    title: string;
   },
 ): TerminalLayoutSnapshot {
   const tab = snapshot.tabs.find((item) => item.id === tabId);
@@ -1384,7 +1309,7 @@ export function removeTerminalTabFromSnapshot(
   });
   const remainingTabs = snapshot.tabs.filter((item) => item.id !== tabId);
   if (remainingTabs.length === 0) {
-    const fallbackEntry = createFallbackTabAndPane(fallback);
+    const fallbackEntry = createTerminalTabAndPane(fallback);
     return {
       ...snapshot,
       activeTabId: fallbackEntry.tab.id,

@@ -2,6 +2,7 @@ import type {
   QuickCommandsPanelState,
   RightSidebarState,
   TerminalLayoutSnapshot,
+  TerminalLayoutTab,
   TerminalRightSidebarTab,
   TerminalWorkspaceUi,
 } from "../models/terminal";
@@ -13,6 +14,7 @@ const DEFAULT_RUN_CONFIGURATION_SCRIPT_ID: string | null = null;
 const DEFAULT_FILE_PANEL_SHOW_HIDDEN = false;
 const DEFAULT_RIGHT_SIDEBAR_WIDTH = 520;
 const DEFAULT_RIGHT_SIDEBAR_TAB: TerminalRightSidebarTab = "files";
+const TERMINAL_TITLE_PATTERN = /^终端\s*(\d+)$/;
 
 export type TerminalWorkspaceDefaults = {
   defaultQuickCommandsPanelOpen?: boolean;
@@ -80,14 +82,79 @@ export function createId() {
   return value;
 }
 
+function getNextTerminalTitle(tabs: Array<Pick<TerminalLayoutTab, "title">>) {
+  const used = new Set<number>();
+  for (const tab of tabs) {
+    const match = tab.title.match(TERMINAL_TITLE_PATTERN);
+    if (!match) {
+      continue;
+    }
+    const value = Number(match[1]);
+    if (Number.isInteger(value) && value > 0) {
+      used.add(value);
+    }
+  }
+  let next = 1;
+  while (used.has(next)) {
+    next += 1;
+  }
+  return `终端 ${next}`;
+}
+
+export function normalizeLayoutSnapshotForShellPrimitives(
+  snapshot: TerminalLayoutSnapshot,
+  options?: {
+    createSessionId?: () => string;
+  },
+): TerminalLayoutSnapshot {
+  const createSessionId = options?.createSessionId ?? createId;
+  let changed = false;
+  const nextPanes = { ...snapshot.panes };
+  const nextTabs = snapshot.tabs.map((tab) => {
+    const activePane = nextPanes[tab.activePaneId];
+    if (activePane?.kind !== "pendingTerminal") {
+      return tab;
+    }
+    changed = true;
+    const nextTitle =
+      tab.title && tab.title !== "新建 Pane" ? tab.title : getNextTerminalTitle(snapshot.tabs);
+    nextPanes[tab.activePaneId] = {
+      id: activePane.id,
+      kind: "terminal",
+      placement: activePane.placement ?? "tree",
+      title: nextTitle,
+      sessionId: createSessionId(),
+      cwd: snapshot.projectPath,
+      restoreAnchor: {
+        cwd: snapshot.projectPath,
+        savedState: null,
+      },
+    };
+    return {
+      ...tab,
+      title: nextTitle,
+    };
+  });
+
+  if (!changed) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    tabs: nextTabs,
+    panes: nextPanes,
+  };
+}
+
 export function createDefaultLayoutSnapshot(
   projectPath: string,
   projectId: string | null,
   defaults?: TerminalWorkspaceDefaults,
 ): TerminalLayoutSnapshot {
-  const sessionId = createId();
   const tabId = createId();
-  const paneId = `pane:${sessionId}`;
+  const paneId = `pane:${createId()}`;
+  const sessionId = createId();
   const now = Date.now();
   return {
     version: 2,
@@ -108,10 +175,9 @@ export function createDefaultLayoutSnapshot(
         id: paneId,
         kind: "terminal",
         placement: "tree",
+        title: "终端 1",
         sessionId,
         cwd: projectPath,
-        mode: "shell",
-        agent: null,
         restoreAnchor: {
           cwd: projectPath,
           savedState: null,

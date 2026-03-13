@@ -3,6 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import type { ScriptExecutionState } from "../../hooks/useQuickCommandRuntime";
 import type { TerminalRightSidebarTab } from "../../models/terminal";
 import type { ProjectScript } from "../../models/types";
+import type {
+  ControlPlaneSurfaceProjection,
+  ControlPlaneWorkspaceProjection,
+} from "../../utils/controlPlaneProjection";
 import { IconChevronDown, IconFolder, IconGitBranch, IconPlay, IconRerun, IconSettings, IconSquareStop } from "../Icons";
 import TerminalTabs from "./TerminalTabs";
 
@@ -15,6 +19,8 @@ type TerminalWorkspaceHeaderProps = {
   projectName: string | null | undefined;
   projectPath: string;
   codexRunningCount: number;
+  controlPlaneProjection: ControlPlaneWorkspaceProjection;
+  activePaneControlProjection: ControlPlaneSurfaceProjection | null;
   rightSidebarOpen: boolean;
   rightSidebarTab: TerminalRightSidebarTab;
   scripts: ProjectScript[];
@@ -40,6 +46,8 @@ export default function TerminalWorkspaceHeader({
   projectName,
   projectPath,
   codexRunningCount,
+  controlPlaneProjection,
+  activePaneControlProjection,
   rightSidebarOpen,
   rightSidebarTab,
   scripts,
@@ -108,6 +116,39 @@ export default function TerminalWorkspaceHeader({
         >
           <span className="h-2 w-2 rounded-full bg-[var(--terminal-accent)]" aria-hidden="true" />
           <span className="whitespace-nowrap">Codex 运行中</span>
+        </div>
+      ) : null}
+      {controlPlaneProjection.attention !== "idle" || controlPlaneProjection.unreadCount > 0 ? (
+        <div
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--terminal-divider)] bg-[var(--terminal-hover-bg)] px-2 py-0.5 text-[11px] font-semibold text-[var(--terminal-muted-fg)]"
+          title={controlPlaneProjection.latestMessage ?? "控制平面状态更新"}
+        >
+          <span
+            className={`h-2 w-2 rounded-full ${
+              controlPlaneProjection.attention === "error"
+                ? "bg-[rgba(239,68,68,0.95)]"
+                : controlPlaneProjection.attention === "waiting"
+                  ? "bg-[rgba(245,158,11,0.95)]"
+                  : controlPlaneProjection.attention === "completed"
+                    ? "bg-[rgba(34,197,94,0.95)]"
+                    : "bg-[var(--terminal-accent)]"
+            }`}
+            aria-hidden="true"
+          />
+          <span className="whitespace-nowrap">控制面：{controlPlaneProjection.attention}</span>
+          {controlPlaneProjection.unreadCount > 0 ? (
+            <span className="rounded-full bg-[var(--terminal-accent-bg)] px-1.5 text-[10px] text-[var(--terminal-fg)]">
+              {controlPlaneProjection.unreadCount}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      {activePaneControlProjection?.latestMessage ? (
+        <div
+          className="max-w-[260px] truncate text-[11px] font-medium text-[var(--terminal-muted-fg)]"
+          title={activePaneControlProjection.latestMessage}
+        >
+          {activePaneControlProjection.latestMessage}
         </div>
       ) : null}
       <TerminalTabs

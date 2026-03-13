@@ -8,22 +8,16 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { ITheme } from "xterm";
+import type { ControlPlaneWorkspaceTree } from "../../models/controlPlane";
 
-import {
-  buildPaneAgentLaunchCommand,
-  PANE_AGENT_PROVIDER_LABEL,
-  resolveAgentShellFamily,
-  type PaneCreationTemplate,
-} from "../../models/agent";
 import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
 import {
   activateRunPanelTabInSnapshot,
-  appendPendingTerminalTabToSnapshot,
+  appendTerminalTabToSnapshot,
   activateTerminalSessionInSnapshot,
   buildSessionSnapshotMap,
   collectPaneIds,
   markRunPanelTabExitedInSnapshot,
-  realizePendingTerminalPaneInSnapshot,
   removePaneFromSnapshot,
   removeRunPanelSessionFromSnapshot,
   removeTerminalSessionFromSnapshot,
@@ -31,7 +25,7 @@ import {
   setRunPanelHeightInSnapshot,
   setRunPanelOpenInSnapshot,
   setFileExplorerShowHiddenInSnapshot,
-  splitPendingPaneInSnapshot,
+  splitTerminalSessionInSnapshot,
   syncRunPanelTabsInSnapshot,
   updateRightSidebarStateInSnapshot,
   updateLayoutNodeRatios,
@@ -50,7 +44,11 @@ import type { ProjectScript, ScriptParamField, SharedScriptEntry } from "../../m
 import { resolveRuntimeClientId } from "../../platform/runtime";
 import { gitIsRepo } from "../../services/gitManagement";
 import { listSharedScripts } from "../../services/sharedScripts";
-import { terminateTerminalSessions, writeTerminal } from "../../services/terminal";
+import { terminateTerminalSessions } from "../../services/terminal";
+import {
+  projectControlPlaneSurface,
+  projectControlPlaneWorkspace,
+} from "../../utils/controlPlaneProjection";
 import {
   listenTerminalLayoutChanged,
   loadTerminalLayout,
@@ -65,6 +63,7 @@ import {
 import {
   createDefaultLayoutSnapshot,
   createId,
+  normalizeLayoutSnapshotForShellPrimitives,
 } from "../../utils/terminalLayout";
 import { isInteractionLocked } from "../../utils/interactionLock";
 import { useQuickCommandDispatch } from "../../hooks/useQuickCommandDispatch";
@@ -73,7 +72,6 @@ import {
   useQuickCommandRuntime,
   type ScriptExecutionState,
 } from "../../hooks/useQuickCommandRuntime";
-import { usePaneAgentRuntime } from "../../hooks/usePaneAgentRuntime";
 import TerminalWorkspaceShell from "./TerminalWorkspaceShell";
 import { countVisibleTerminalPanes, shouldEnableTerminalWebgl } from "./terminalMemoryPolicy";
 import { buildTerminalWorkspaceShellModel } from "./terminalWorkspaceShellModel";
@@ -89,6 +87,7 @@ export type TerminalWorkspaceViewProps = {
   sharedScriptsRoot: string;
   terminalUseWebglRenderer: boolean;
   codexRunningCount?: number;
+  controlPlaneTree?: ControlPlaneWorkspaceTree | null;
   scripts?: ProjectScript[];
   onRegisterPersistWorkspace?: (projectId: string, persistWorkspace: (() => Promise<void>) | null) => void;
   onRegisterWorkspaceSessionIds?: (projectId: string, sessionIds: string[]) => void;
@@ -158,15 +157,6 @@ function getNextTerminalTitle(tabs: Array<Pick<TerminalLayoutTab, "title">>) {
   return `终端 ${next}`;
 }
 
-function getNextAgentTabTitle(
-  tabs: Array<Pick<TerminalLayoutTab, "title">>,
-  providerLabel: string,
-) {
-  const prefix = `${providerLabel} Agent`;
-  const matches = tabs.filter((tab) => tab.title === prefix || tab.title.startsWith(`${prefix} `)).length;
-  return matches === 0 ? prefix : `${prefix} ${matches + 1}`;
-}
-
 function touchLayoutSnapshot(snapshot: TerminalLayoutSnapshot): TerminalLayoutSnapshot {
   const now = Date.now();
   return {
@@ -185,26 +175,6 @@ function collectSessionIdsForLayoutTab(snapshot: TerminalLayoutSnapshot, tab: Te
     }
   });
   return sessionIds;
-}
-
-function findTerminalPaneBySessionId(
-  snapshot: TerminalLayoutSnapshot,
-  sessionId: string,
-): { paneId: string; tabId: string; mode: "shell" | "agent" } | null {
-  for (const tab of snapshot.tabs) {
-    for (const paneId of collectPaneIds(tab.root)) {
-      const pane = snapshot.panes[paneId];
-      if (pane?.kind !== "terminal" || pane.sessionId !== sessionId) {
-        continue;
-      }
-      return {
-        paneId,
-        tabId: tab.id,
-        mode: pane.mode ?? "shell",
-      };
-    }
-  }
-  return null;
 }
 
 function findLayoutTabBySessionId(
@@ -252,6 +222,9 @@ function areTerminalWorkspaceViewPropsEqual(
   if (prevProps.codexRunningCount !== nextProps.codexRunningCount) {
     return false;
   }
+  if (prevProps.controlPlaneTree !== nextProps.controlPlaneTree) {
+    return false;
+  }
   if (prevProps.scripts !== nextProps.scripts) {
     return false;
   }
@@ -290,6 +263,7 @@ function TerminalWorkspaceView({
   sharedScriptsRoot,
   terminalUseWebglRenderer,
   codexRunningCount = 0,
+  controlPlaneTree = null,
   scripts = [],
   onRegisterPersistWorkspace,
   onRegisterWorkspaceSessionIds,
@@ -358,6 +332,32 @@ function TerminalWorkspaceView({
   const previewFilePath = shellModel?.previewFilePath ?? null;
   const previewDirty = shellModel?.previewDirty ?? false;
   const gitSelected = shellModel?.gitSelected ?? null;
+  const controlPlaneProjection = useMemo(
+    () => projectControlPlaneWorkspace(controlPlaneTree),
+    [controlPlaneTree],
+  );
+  const activePaneControlProjection = useMemo(() => {
+    if (!shellModel?.activeWorkspaceTab || !controlPlaneTree) {
+      return null;
+    }
+    const activePaneId = shellModel.activeWorkspaceTab.activePaneId;
+    const activePane = shellModel.activePaneProjections[activePaneId];
+    const matchedSurface =
+      controlPlaneTree.surfaces.find((surface) => {
+        if (surface.paneId && surface.paneId === activePaneId) {
+          return true;
+        }
+        if (surface.surfaceId && surface.surfaceId === activePaneId) {
+          return true;
+        }
+        return Boolean(
+          activePane?.kind === "terminal" &&
+            surface.terminalSessionId &&
+            surface.terminalSessionId === activePane.sessionId,
+        );
+      }) ?? null;
+    return matchedSurface ? projectControlPlaneSurface(matchedSurface) : null;
+  }, [controlPlaneTree, shellModel]);
   const visibleTerminalPaneCount = useMemo(
     () =>
       countVisibleTerminalPanes({
@@ -413,7 +413,9 @@ function TerminalWorkspaceView({
           return;
         }
         const defaults = workspaceDefaultsRef.current;
-        const next = data ?? createDefaultLayoutSnapshot(projectPath, projectId, defaults);
+        const next = normalizeLayoutSnapshotForShellPrimitives(
+          data ?? createDefaultLayoutSnapshot(projectPath, projectId, defaults),
+        );
         layoutDirtyRef.current = false;
         layoutDirtyRevisionRef.current = 0;
         layoutSnapshotRef.current = next;
@@ -471,10 +473,11 @@ function TerminalWorkspaceView({
               if (cancelled || !snapshot) {
                 return;
               }
+              const normalizedSnapshot = normalizeLayoutSnapshotForShellPrimitives(snapshot);
               layoutDirtyRef.current = false;
               layoutDirtyRevisionRef.current = 0;
-              layoutSnapshotRef.current = snapshot;
-              setLayoutSnapshot(snapshot);
+              layoutSnapshotRef.current = normalizedSnapshot;
+              setLayoutSnapshot(normalizedSnapshot);
             })
             .catch((syncError) => {
               if (!cancelled) {
@@ -639,13 +642,12 @@ function TerminalWorkspaceView({
       updateLayoutSnapshot((currentSnapshot) =>
         removeTerminalSessionFromSnapshot(currentSnapshot, sessionId, {
           createFallbackTab: () => {
-            const nextSessionId = createId();
             return {
               tabId: createId(),
-              paneId: `pane:${nextSessionId}`,
-              sessionId: nextSessionId,
-              title: "终端 1",
+              paneId: `pane:${createId()}`,
+              sessionId: createId(),
               cwd: currentSnapshot.projectPath,
+              title: "终端 1",
             };
           },
         }),
@@ -704,14 +706,6 @@ function TerminalWorkspaceView({
     updateLayoutSnapshot,
     onRequestSessionClose: requestSessionClose,
   });
-
-  const {
-    requestStart: requestPaneAgentStart,
-    connectPty: connectPaneAgentPty,
-    handleOutput: handlePaneAgentOutput,
-    handleExit: handlePaneAgentExit,
-    disposeSession: disposePaneAgentSession,
-  } = usePaneAgentRuntime();
 
   useQuickCommandDispatch({
     projectId,
@@ -1172,77 +1166,19 @@ function TerminalWorkspaceView({
     [updateLayoutSnapshot],
   );
 
-  const createPaneAgentCommand = useCallback((provider: "codex" | "claude-code" | "iflow") => {
-    return buildPaneAgentLaunchCommand(provider, {
-      shellFamily: resolveAgentShellFamily(),
-    });
-  }, []);
-
   const handleNewTab = useCallback(() => {
     const paneId = `pane:${createId()}`;
+    const sessionId = createId();
     updateLayoutSnapshot((current) =>
-      appendPendingTerminalTabToSnapshot(current, {
+      appendTerminalTabToSnapshot(current, {
         tabId: createId(),
         paneId,
-        title: "新建 Pane",
+        sessionId,
+        title: getNextTerminalTitle(current.tabs),
+        cwd: current.projectPath,
       }),
     );
   }, [updateLayoutSnapshot]);
-
-  const resolvePaneMode = useCallback((sessionId: string) => {
-    const current = layoutSnapshotRef.current;
-    if (!current) {
-      return "shell" as const;
-    }
-    return findTerminalPaneBySessionId(current, sessionId)?.mode ?? "shell";
-  }, []);
-
-  const injectPaneAgentCommand = useCallback(
-    (sessionId: string, ptyId: string, command: string) => {
-      const payload = command.endsWith("\r") ? command : `${command}\r`;
-      void writeTerminal(ptyId, payload).catch((error) => {
-        console.error("Agent 启动命令下发失败。", error);
-        handlePaneAgentExit(sessionId, 1, "Agent 启动命令下发失败");
-        showPanelMessage("Agent 启动命令下发失败");
-      });
-    },
-    [handlePaneAgentExit, showPanelMessage],
-  );
-
-  const handleResolvePendingPane = useCallback(
-    (paneId: string, template: PaneCreationTemplate) => {
-      const current = layoutSnapshotRef.current;
-      const pane = current?.panes[paneId];
-      if (!current || !pane || pane.kind !== "pendingTerminal") {
-        return;
-      }
-      const owningTab =
-        current.tabs.find((tab) => collectPaneIds(tab.root).includes(paneId)) ?? null;
-
-      const sessionId = createId();
-      if (template.mode === "agent") {
-        requestPaneAgentStart(sessionId, createPaneAgentCommand(template.provider));
-      }
-
-      updateLayoutSnapshot((snapshot) =>
-        realizePendingTerminalPaneInSnapshot(snapshot, paneId, {
-          sessionId,
-          cwd: snapshot.projectPath,
-          mode: template.mode,
-          agent: template.mode === "agent" ? { provider: template.provider } : null,
-          tabTitle:
-            owningTab &&
-            owningTab.root.type === "leaf" &&
-            owningTab.root.paneId === paneId
-              ? template.mode === "shell"
-                ? getNextTerminalTitle(snapshot.tabs)
-                : getNextAgentTabTitle(snapshot.tabs, PANE_AGENT_PROVIDER_LABEL[template.provider])
-              : null,
-        }),
-      );
-    },
-    [createPaneAgentCommand, requestPaneAgentStart, updateLayoutSnapshot],
-  );
 
   const handleCloseTab = useCallback(
     (tabId: string) => {
@@ -1254,13 +1190,12 @@ function TerminalWorkspaceView({
       cleanupRuntimeBySessionIds(removedSessions);
 
       updateLayoutSnapshot((currentSnapshot) => {
-        const nextSessionId = createId();
         return removeTerminalTabFromSnapshot(currentSnapshot, tabId, {
           tabId: createId(),
-          paneId: `pane:${nextSessionId}`,
-          sessionId: nextSessionId,
-          title: "终端 1",
+          paneId: `pane:${createId()}`,
+          sessionId: createId(),
           cwd: currentSnapshot.projectPath,
+          title: "终端 1",
         });
       });
     },
@@ -1313,18 +1248,24 @@ function TerminalWorkspaceView({
         return;
       }
       const newPaneId = `pane:${createId()}`;
+      const newSessionId = createId();
 
       updateLayoutSnapshot((current) => {
         const activeTab = current.tabs.find((tab) => tab.id === targetEntry.tab.id) ?? null;
         if (!activeTab) {
           return current;
         }
-        return splitPendingPaneInSnapshot(current, {
+        const targetPane = current.panes[targetPaneId];
+        if (!targetPane || targetPane.kind !== "terminal") {
+          return current;
+        }
+        return splitTerminalSessionInSnapshot(current, {
           tabId: activeTab.id,
-          targetPaneId,
+          targetSessionId: targetPane.sessionId,
           direction,
           newPaneId,
-          title: "新建 Pane",
+          newSessionId,
+          cwd: current.projectPath,
         });
       });
     },
@@ -1353,10 +1294,6 @@ function TerminalWorkspaceView({
   const handleSessionExit = useCallback(
     (sessionId: string, code?: number | null) => {
       handleQuickCommandSessionExit(sessionId, code);
-      const paneMode = resolvePaneMode(sessionId);
-      if (paneMode === "agent") {
-        handlePaneAgentExit(sessionId, code ?? null);
-      }
       const current = layoutSnapshotRef.current;
       const runPanel = current?.ui?.runPanel ?? null;
       const runTab = runPanel?.tabs.find((tab) => tab.sessionId === sessionId) ?? null;
@@ -1370,15 +1307,11 @@ function TerminalWorkspaceView({
         );
         return;
       }
-      disposePaneAgentSession(sessionId);
       closeSessionLayout(sessionId);
     },
     [
       closeSessionLayout,
-      disposePaneAgentSession,
-      handlePaneAgentExit,
       handleQuickCommandSessionExit,
-      resolvePaneMode,
       updateLayoutSnapshot,
     ],
   );
@@ -1386,26 +1319,11 @@ function TerminalWorkspaceView({
   const handleWorkspacePtyReady = useCallback(
     (sessionId: string, ptyId: string) => {
       handlePtyReady(sessionId, ptyId);
-
-      const command = connectPaneAgentPty(sessionId, ptyId);
-      if (!command) {
-        return;
-      }
-
-      injectPaneAgentCommand(sessionId, ptyId, command);
     },
-    [connectPaneAgentPty, handlePtyReady, injectPaneAgentCommand],
+    [handlePtyReady],
   );
 
-  const handleSessionOutput = useCallback(
-    (sessionId: string, data: string) => {
-      if (resolvePaneMode(sessionId) !== "agent") {
-        return;
-      }
-      handlePaneAgentOutput(sessionId, data);
-    },
-    [handlePaneAgentOutput, resolvePaneMode],
-  );
+  const handleSessionOutput = useCallback((_sessionId: string, _data: string) => {}, []);
 
   const setFileExplorerShowHidden = useCallback(
     (showHidden: boolean) => {
@@ -1708,8 +1626,11 @@ function TerminalWorkspaceView({
     <>
       <TerminalWorkspaceShell
         projectName={projectName}
+        projectId={projectId}
         projectPath={projectPath}
         codexRunningCount={codexRunningCount}
+        controlPlaneProjection={controlPlaneProjection}
+        activePaneControlProjection={activePaneControlProjection}
         isGitRepo={isGitRepo}
         windowLabel={windowLabel}
         runtimeClientId={runtimeClientId}
@@ -1762,7 +1683,6 @@ function TerminalWorkspaceView({
         onPtyReady={handleWorkspacePtyReady}
         onSessionExit={handleSessionExit}
         onSessionOutput={handleSessionOutput}
-        onResolvePendingPane={handleResolvePendingPane}
         onSetRightSidebarWidth={setRightSidebarWidth}
         onToggleShowHidden={setFileExplorerShowHidden}
         onOpenPreview={(relativePath) => upsertPreviewPane(relativePath, false)}

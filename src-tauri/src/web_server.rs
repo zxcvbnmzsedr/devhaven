@@ -79,6 +79,23 @@ pub fn ensure_started(app: AppHandle, runtime: WebServerRuntime) {
     }
 }
 
+fn resolve_loopback_http_origin(bind_addr: &str) -> String {
+    if let Some((host, port)) = bind_addr.rsplit_once(':') {
+        let normalized_host = match host {
+            "0.0.0.0" | "::" | "[::]" => "127.0.0.1",
+            other => other.trim_matches(['[', ']']),
+        };
+        return format!("http://{}:{}", normalized_host, port);
+    }
+    format!("http://{}", bind_addr)
+}
+
+pub fn control_api_base_url(runtime: &WebServerRuntime) -> Option<String> {
+    let guard = runtime.inner.lock().ok()?;
+    let handle = guard.as_ref()?;
+    Some(resolve_loopback_http_origin(&handle.bind_addr))
+}
+
 pub fn apply_config(app: AppHandle, runtime: WebServerRuntime) -> Result<(), String> {
     let config = resolve_web_server_config(&app);
 
@@ -180,6 +197,27 @@ fn bind_listener(bind_addr: &str) -> Result<StdTcpListener, String> {
         .set_nonblocking(true)
         .map_err(|error| format!("设置 Web API 非阻塞失败 {}: {}", bind_addr, error))?;
     Ok(std_listener)
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_loopback_http_origin_prefers_localhost_for_wildcard_bindings() {
+        assert_eq!(
+            resolve_loopback_http_origin("0.0.0.0:3210"),
+            "http://127.0.0.1:3210"
+        );
+        assert_eq!(
+            resolve_loopback_http_origin("[::]:3210"),
+            "http://127.0.0.1:3210"
+        );
+        assert_eq!(
+            resolve_loopback_http_origin("127.0.0.1:3210"),
+            "http://127.0.0.1:3210"
+        );
+    }
 }
 
 fn resolve_web_server_config(app: &AppHandle) -> WebServerConfig {
