@@ -11,6 +11,13 @@ pub struct QuickCommandRegistry {
 }
 
 impl QuickCommandRegistry {
+    pub fn upsert_job(&mut self, record: QuickCommandRecord) -> QuickCommandRecord {
+        self.jobs.insert(record.job_id.clone(), record.clone());
+        self.prune_finished_jobs();
+        record
+    }
+
+    #[cfg(test)]
     pub fn start_job(
         &mut self,
         project_id: String,
@@ -19,7 +26,7 @@ impl QuickCommandRegistry {
         command: String,
     ) -> QuickCommandRecord {
         let now = now_millis();
-        let record = QuickCommandRecord {
+        self.upsert_job(QuickCommandRecord {
             job_id: JobId::new(),
             project_id,
             project_path,
@@ -30,10 +37,7 @@ impl QuickCommandRegistry {
             updated_at: now,
             exit_code: None,
             error: None,
-        };
-        self.jobs.insert(record.job_id.clone(), record.clone());
-        self.prune_finished_jobs();
-        record
+        })
     }
 
     pub fn set_state(
@@ -70,7 +74,11 @@ impl QuickCommandRegistry {
         let mut jobs: Vec<_> = self
             .jobs
             .values()
-            .filter(|job| project_path.map(|value| job.project_path == value).unwrap_or(true))
+            .filter(|job| {
+                project_path
+                    .map(|value| job.project_path == value)
+                    .unwrap_or(true)
+            })
             .cloned()
             .collect();
         jobs.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
@@ -89,7 +97,9 @@ impl QuickCommandRegistry {
             .filter(|(_, job)| {
                 matches!(
                     job.state,
-                    QuickCommandState::Exited | QuickCommandState::Failed | QuickCommandState::Cancelled
+                    QuickCommandState::Exited
+                        | QuickCommandState::Failed
+                        | QuickCommandState::Cancelled
                 )
             })
             .map(|(job_id, job)| (job_id.clone(), job.updated_at))
@@ -127,13 +137,8 @@ mod tests {
         assert_eq!(stopping.state, QuickCommandState::StoppingSoft);
 
         let finished = registry
-            .finish_job(
-                &job.job_id,
-                QuickCommandState::Exited,
-                Some(0),
-                None,
-        )
-        .unwrap();
+            .finish_job(&job.job_id, QuickCommandState::Exited, Some(0), None)
+            .unwrap();
         assert_eq!(finished.exit_code, Some(0));
     }
 
@@ -148,12 +153,7 @@ mod tests {
                 format!("script-{index}"),
                 "npm test".to_string(),
             );
-            registry.finish_job(
-                &job.job_id,
-                QuickCommandState::Exited,
-                Some(0),
-                None,
-            );
+            registry.finish_job(&job.job_id, QuickCommandState::Exited, Some(0), None);
         }
 
         let running = registry.start_job(

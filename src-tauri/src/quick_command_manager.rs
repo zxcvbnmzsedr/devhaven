@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
+use crate::terminal_runtime::types::QuickCommandRecord as RuntimeQuickCommandRecord;
 use crate::terminal_runtime::{
-    QUICK_COMMAND_STATE_CHANGED_EVENT, QuickCommandStateChangedPayload, shared_runtime,
-    JobId as RuntimeJobId, QuickCommandState as RuntimeQuickCommandState,
+    JobId as RuntimeJobId, QUICK_COMMAND_STATE_CHANGED_EVENT,
+    QuickCommandState as RuntimeQuickCommandState, QuickCommandStateChangedPayload, shared_runtime,
 };
 use crate::web_event_bus;
 
@@ -98,12 +99,7 @@ pub fn quick_command_start(
     };
 
     state.upsert_job(job.clone());
-    let _ = shared_runtime().start_quick_command(
-        job.project_id.clone(),
-        job.project_path.clone(),
-        job.script_id.clone(),
-        job.command.clone(),
-    );
+    let _ = sync_runtime_job_start(&job);
 
     emit_quick_command_state_changed(
         &app,
@@ -370,4 +366,79 @@ fn now_millis() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal_runtime::{QuickCommandState as RuntimeQuickCommandState, shared_runtime};
+    use uuid::Uuid;
+
+    #[test]
+    fn sync_runtime_job_start_keeps_runtime_job_id_in_sync() {
+        let project_path = format!("/tmp/devhaven-quick-command-sync-{}", Uuid::new_v4());
+        let script_id = format!("script-{}", Uuid::new_v4());
+        let command = "echo hello".to_string();
+        let now = now_millis();
+        let job = QuickCommandJob {
+            job_id: format!("job-{}", Uuid::new_v4()),
+            project_id: "project-1".to_string(),
+            project_path: project_path.clone(),
+            script_id: script_id.clone(),
+            command: command.clone(),
+            window_label: None,
+            state: QuickCommandState::Running,
+            created_at: now,
+            updated_at: now,
+            exit_code: None,
+            error: None,
+        };
+
+        sync_runtime_job_start(&job).expect("runtime start should succeed");
+
+        let runtime_jobs = shared_runtime()
+            .list_quick_commands(Some(&project_path))
+            .expect("runtime quick commands should be queryable");
+        assert_eq!(runtime_jobs.len(), 1);
+        assert_eq!(runtime_jobs[0].job_id.as_str(), job.job_id);
+        assert_eq!(runtime_jobs[0].script_id, script_id);
+        assert_eq!(runtime_jobs[0].command, command);
+
+        let finished = shared_runtime()
+            .finish_quick_command(
+                &RuntimeJobId::from_string(job.job_id.clone()),
+                RuntimeQuickCommandState::Exited,
+                Some(0),
+                None,
+            )
+            .expect("runtime finish should succeed");
+        let finished = finished.expect("runtime job should exist by the manager job id");
+        assert_eq!(finished.job_id.as_str(), job.job_id);
+        assert_eq!(finished.state, RuntimeQuickCommandState::Exited);
+
+        let runtime_jobs = shared_runtime()
+            .list_quick_commands(Some(&project_path))
+            .expect("runtime quick commands should still be queryable after finish");
+        assert_eq!(runtime_jobs.len(), 1);
+        assert_eq!(runtime_jobs[0].job_id.as_str(), job.job_id);
+        assert_eq!(runtime_jobs[0].state, RuntimeQuickCommandState::Exited);
+        assert_eq!(runtime_jobs[0].exit_code, Some(0));
+    }
+}
+
+fn sync_runtime_job_start(job: &QuickCommandJob) -> Result<(), String> {
+    shared_runtime()
+        .start_quick_command(RuntimeQuickCommandRecord {
+            job_id: RuntimeJobId::from_string(job.job_id.clone()),
+            project_id: job.project_id.clone(),
+            project_path: job.project_path.clone(),
+            script_id: job.script_id.clone(),
+            command: job.command.clone(),
+            state: RuntimeQuickCommandState::Running,
+            created_at: job.created_at,
+            updated_at: job.updated_at,
+            exit_code: job.exit_code,
+            error: job.error.clone(),
+        })
+        .map(|_| ())
 }

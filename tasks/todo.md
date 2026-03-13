@@ -40,3 +40,16 @@
 - 本轮新增 `src/components/terminal/terminalReplayModePolicy.ts` 与对应测试，把当前策略明确固化为：**项目切换 preserve unmount 默认不降级 replay**；仅在未来显式启用时才切到 `parked`。
 - `src/components/terminal/TerminalPane.tsx` 已改为通过策略函数决定是否调用 `setTerminalReplayMode`，当前默认返回 `null`，因此切项目不会再主动把后台 PTY 历史预算降到 parked。
 - 本轮验证通过：`node --test src/components/terminal/terminalReplayModePolicy.test.mjs src/utils/codexMonitorActivation.test.mjs src/components/terminal/terminalMemoryPolicy.test.mjs`、`pnpm exec tsc --noEmit`、`pnpm build`。
+
+## 快捷命令状态同步修复（2026-03-13）
+
+- [x] 为“快捷命令结束后 Header / Run 面板状态分叉”补失败用例
+- [x] 修复 quick command manager / terminal runtime 的 jobId 与结束态同步
+- [x] 运行定向验证并补充审查记录
+
+## Review（快捷命令状态同步修复）
+
+- 根因已定位为 **quick command manager 与 terminal runtime registry 双写但 jobId 不一致**：`quick_command_start` 在 manager 中生成一份 jobId，而 runtime registry 又自行新建另一份 jobId，导致后续 `quick_command_stop/finish` 更新的是 manager job，`quick_command_runtime_snapshot` 读到的却仍是 runtime 里那条旧 running job。
+- 这会直接造成你看到的现象：顶部 Header 基于 `quick_command_runtime_snapshot` 的 script 级 active job 继续显示“可停止/不可重新运行”，而底部 Run 面板已经依据 `markRunPanelTabExitedInSnapshot` 写入的 `endedAt/exitCode` 显示“已完成”。
+- 本轮修复把 runtime start 改为 **以 manager 生成的 jobId 原样 upsert 到 runtime registry**，确保 start / stop / finish / snapshot 全部围绕同一条 job 记录收敛；同时补了回归测试 `sync_runtime_job_start_keeps_runtime_job_id_in_sync` 防止以后再次漂移。
+- 本轮验证通过：`cargo test sync_runtime_job_start_keeps_runtime_job_id_in_sync --manifest-path src-tauri/Cargo.toml`、`cargo test quick_command_ --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml`。

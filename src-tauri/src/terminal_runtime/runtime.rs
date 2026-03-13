@@ -1,9 +1,9 @@
-use crate::models::TerminalLayoutSnapshot;
-#[cfg(test)]
-use crate::models::TerminalLayoutSnapshotSummary;
 use super::quick_command_registry::QuickCommandRegistry;
 use super::session_registry::SessionRegistry;
 use super::types::{JobId, QuickCommandRecord, QuickCommandState, SessionId, SessionRecord};
+use crate::models::TerminalLayoutSnapshot;
+#[cfg(test)]
+use crate::models::TerminalLayoutSnapshotSummary;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -54,13 +54,7 @@ impl TerminalRuntime {
             .sessions
             .lock()
             .map_err(|_| "terminal runtime session 锁已损坏".to_string())?;
-        Ok(sessions.register_session(
-            session_id,
-            project_path,
-            cwd,
-            launch_command,
-            shell,
-        ))
+        Ok(sessions.register_session(session_id, project_path, cwd, launch_command, shell))
     }
 
     pub fn attach_session_client(
@@ -121,21 +115,13 @@ impl TerminalRuntime {
 
     pub fn start_quick_command(
         &self,
-        project_id: String,
-        project_path: String,
-        script_id: String,
-        command: String,
+        record: QuickCommandRecord,
     ) -> Result<QuickCommandRecord, String> {
         let mut jobs = self
             .quick_commands
             .lock()
             .map_err(|_| "terminal runtime quick-command 锁已损坏".to_string())?;
-        Ok(jobs.start_job(
-            project_id,
-            project_path,
-            script_id,
-            command,
-        ))
+        Ok(jobs.upsert_job(record))
     }
 
     pub fn update_quick_command_state(
@@ -165,10 +151,7 @@ impl TerminalRuntime {
     }
 
     #[cfg(test)]
-    pub fn load_session(
-        &self,
-        session_id: &SessionId,
-    ) -> Result<Option<SessionRecord>, String> {
+    pub fn load_session(&self, session_id: &SessionId) -> Result<Option<SessionRecord>, String> {
         let sessions = self
             .sessions
             .lock()
@@ -280,7 +263,9 @@ mod tests {
             .unwrap();
         let loaded = runtime.load_session(&session_id).unwrap().unwrap();
         assert_eq!(loaded.client_ids, vec!["client-1".to_string()]);
-        runtime.detach_session_client(&session_id, "client-1").unwrap();
+        runtime
+            .detach_session_client(&session_id, "client-1")
+            .unwrap();
     }
 
     #[test]
@@ -316,9 +301,11 @@ mod tests {
 
         let deleted = runtime.delete_layout_snapshot("/tmp/project-a").unwrap();
         assert_eq!(deleted, Some(snapshot));
-        assert!(runtime
-            .load_layout_snapshot_by_project_path("/tmp/project-a")
-            .unwrap()
-            .is_none());
+        assert!(
+            runtime
+                .load_layout_snapshot_by_project_path("/tmp/project-a")
+                .unwrap()
+                .is_none()
+        );
     }
 }
