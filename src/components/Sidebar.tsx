@@ -6,6 +6,7 @@ import { HEATMAP_CONFIG } from "../models/heatmap";
 import type { AppStateFile, Project, TagData } from "../models/types";
 import { pickDirectoriesRuntime } from "../platform/runtime";
 import { colorDataToHex } from "../utils/colors";
+import { resolveCodexMonitorEmptyText } from "../utils/codexMonitorActivation";
 import { formatPathWithTilde } from "../utils/pathDisplay";
 import CodexSessionSection from "./CodexSessionSection";
 import Heatmap from "./Heatmap";
@@ -44,6 +45,8 @@ export type SidebarProps = {
   onRefresh: () => Promise<void>;
   onAddProjects: (paths: string[]) => Promise<void>;
   isHeatmapLoading: boolean;
+  codexMonitorEnabled: boolean;
+  onEnableCodexMonitor: () => void;
   codexSessions: CodexSessionView[];
   codexSessionsLoading: boolean;
   codexSessionsError: string | null;
@@ -75,6 +78,8 @@ function Sidebar({
   onRefresh,
   onAddProjects,
   isHeatmapLoading,
+  codexMonitorEnabled,
+  onEnableCodexMonitor,
   codexSessions,
   codexSessionsLoading,
   codexSessionsError,
@@ -261,8 +266,21 @@ function Sidebar({
 
         <CodexSessionSection
           sessions={codexSessions}
-          isLoading={codexSessionsLoading}
-          error={codexSessionsError}
+          isLoading={codexMonitorEnabled ? codexSessionsLoading : false}
+          error={codexMonitorEnabled ? codexSessionsError : null}
+          emptyText={resolveCodexMonitorEmptyText(codexMonitorEnabled)}
+          headerStatusText={codexMonitorEnabled ? undefined : "未启用"}
+          headerRightSlot={
+            codexMonitorEnabled ? null : (
+              <button
+                type="button"
+                className="rounded-md border border-sidebar-border px-2 py-0.5 text-[11px] text-sidebar-secondary transition-colors duration-150 hover:bg-sidebar-hover hover:text-sidebar-title"
+                onClick={onEnableCodexMonitor}
+              >
+                启用
+              </button>
+            )
+          }
           onOpenSession={onOpenCodexSession}
         />
 

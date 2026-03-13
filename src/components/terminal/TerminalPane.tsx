@@ -14,12 +14,14 @@ import {
   listenTerminalOutput,
   releaseTerminalPtySession,
   resizeTerminal,
+  setTerminalReplayMode,
   retainTerminalPtySession,
   writeTerminal,
 } from "../../services/terminal";
 import { openPathRuntime, openUrlRuntime } from "../../platform/runtime";
 import { APP_RESUME_EVENT } from "../../utils/appResume";
 import { trimTerminalOutputTail } from "./terminalEscapeTrim";
+import { resolveReplayModeOnUnmount } from "./terminalReplayModePolicy";
 import { buildTerminalReplayRestorePlan } from "./terminalReplayRestore";
 import { clampRowsToViewport } from "./terminalViewportFit";
 
@@ -860,6 +862,15 @@ export default function TerminalPane({
       syncPtySizeRef.current = () => undefined;
       lastResizeSignatureRef.current = null;
       hydrationReadyRef.current = false;
+      const currentPtyId = ptyIdRef.current;
+      const replayMode = resolveReplayModeOnUnmount({
+        preserveSessionOnUnmount,
+      });
+      if (currentPtyId && replayMode) {
+        void setTerminalReplayMode(currentPtyId, replayMode).catch((error) => {
+          console.warn("切换终端 replay 缓冲模式失败。", error);
+        });
+      }
       ptyIdRef.current = null;
       unlistenOutput?.();
       unlistenExit?.();

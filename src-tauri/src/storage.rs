@@ -12,10 +12,9 @@ use serde_json::{Map, Value as JsonValue, json};
 use tauri::{AppHandle, Manager};
 
 use crate::models::{
-    AppStateFile, HeatmapCacheFile, Project, TerminalLayoutSnapshot, TerminalWorkspacesFile,
+    AppStateFile, HeatmapCacheFile, Project, TerminalLayoutSnapshot,
+    TerminalLayoutSnapshotSummary, TerminalWorkspacesFile,
 };
-#[cfg(test)]
-use crate::models::TerminalLayoutSnapshotSummary;
 
 // 终端工作区的 read-modify-write 需要串行化，避免并发覆盖。
 fn terminal_workspace_rmw_mutex() -> &'static Mutex<()> {
@@ -132,7 +131,6 @@ impl TerminalWorkspaceStoreState {
         Ok(Some(normalized))
     }
 
-    #[cfg(test)]
     fn list_layout_summaries(&mut self) -> Result<Vec<TerminalLayoutSnapshotSummary>, String> {
         let keys: Vec<String> = self.workspaces.workspaces.keys().cloned().collect();
         let mut snapshots = Vec::new();
@@ -349,7 +347,6 @@ fn normalize_terminal_workspaces_file(
     Ok((normalized_workspaces, changed))
 }
 
-#[cfg(test)]
 fn build_terminal_layout_snapshot_summaries(
     snapshots: &[(String, TerminalLayoutSnapshot)],
 ) -> Vec<TerminalLayoutSnapshotSummary> {
@@ -729,6 +726,24 @@ pub fn load_all_terminal_layout_snapshots(
         schedule_terminal_workspace_flush(app.clone());
     }
     Ok(snapshots)
+}
+
+pub fn list_terminal_layout_snapshot_summaries(
+    app: &AppHandle,
+) -> Result<Vec<TerminalLayoutSnapshotSummary>, String> {
+    let (summaries, should_schedule) = {
+        let mut store = terminal_workspace_store()
+            .lock()
+            .map_err(|_| "终端工作区缓存锁已损坏".to_string())?;
+        store.ensure_loaded_with(|| load_terminal_workspaces_from_disk(app))?;
+        let summaries = store.list_layout_summaries()?;
+        let should_schedule = store.try_start_flush_worker_if_dirty();
+        (summaries, should_schedule)
+    };
+    if should_schedule {
+        schedule_terminal_workspace_flush(app.clone());
+    }
+    Ok(summaries)
 }
 
 pub fn normalize_terminal_layout_snapshot_for_store(

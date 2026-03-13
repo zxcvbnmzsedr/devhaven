@@ -89,6 +89,7 @@ macro_rules! devhaven_for_each_command {
             { terminal_create_session, web_terminal_create_session }
             { terminal_write, web_terminal_write }
             { terminal_resize, web_terminal_resize }
+            { terminal_set_replay_mode, web_terminal_set_replay_mode }
             { terminal_kill, web_terminal_kill }
         }
     };
@@ -876,6 +877,13 @@ fn web_terminal_resize(app: &AppHandle, _guard: &PathGuard, payload: &Value) -> 
     let cols = required::<u16>(payload, &["cols"])?;
     let rows = required::<u16>(payload, &["rows"])?;
     serialize_result(crate::terminal::terminal_resize(state, pty_id, cols, rows))
+}
+
+fn web_terminal_set_replay_mode(app: &AppHandle, _guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let state = app.state::<TerminalState>();
+    let pty_id = required::<String>(payload, &["ptyId", "pty_id"])?;
+    let mode = required::<crate::terminal::TerminalReplayMode>(payload, &["mode"])?;
+    serialize_result(crate::terminal::terminal_set_replay_mode(state, pty_id, mode))
 }
 
 fn web_terminal_kill(app: &AppHandle, _guard: &PathGuard, payload: &Value) -> WebCommandResult {

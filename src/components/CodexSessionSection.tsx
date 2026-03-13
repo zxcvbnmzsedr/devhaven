@@ -9,6 +9,7 @@ export type CodexSessionSectionProps = {
   title?: string;
   emptyText?: string;
   showHeader?: boolean;
+  headerStatusText?: string;
   headerRightSlot?: ReactNode;
   variant?: "sidebar" | "monitor";
 };
@@ -22,11 +23,13 @@ export default function CodexSessionSection({
   title = "CLI 会话",
   emptyText = "未发现 Codex 会话",
   showHeader = true,
+  headerStatusText,
   headerRightSlot,
   variant = "sidebar",
 }: CodexSessionSectionProps) {
   const grouped = groupSessionsByProject(sessions);
-  const headerStatus = isLoading ? "同步中..." : grouped.length > 0 ? `${grouped.length} 个` : "暂无";
+  const headerStatus =
+    headerStatusText ?? (isLoading ? "同步中..." : grouped.length > 0 ? `${grouped.length} 个` : "暂无");
   const shouldShowHeader = showHeader;
   const resolvedEmptyText = emptyText;
   const isMonitor = variant === "monitor";

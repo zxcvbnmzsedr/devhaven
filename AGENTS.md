@@ -126,8 +126,8 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - 终端高级能力（仅当前 Pane 搜索 + 修饰键点击链接）：`src/components/terminal/TerminalPane.tsx`（Search/WebLinks addons，mac `⌘F`、Win/Linux `Ctrl+Shift+F` 打开搜索，`Enter/Shift+Enter/Esc` 导航/关闭；链接需 `Cmd/Ctrl+点击`，支持 `http/https/mailto` 与本地路径 `/Users/...`、`Users/...`、`~/...`）→ URL 用 `@tauri-apps/plugin-opener` 的 `openUrl`，本地路径优先走 `src/services/system.ts` 的 `openInFinder`（失败回退 `openPath`）↔ `src-tauri/capabilities/terminal.json`（`opener:default` 权限）
 - 终端尺寸收口（避免 viewport/rows 轻微失配导致“已滚到底但最后几行仍被裁掉”）：`src/components/terminal/TerminalPane.tsx`（`fitAddon.fit()` 后按真实 viewport 高度二次 clamp rows）+ `src/components/terminal/terminalViewportFit.ts` / `src/components/terminal/terminalViewportFit.test.mjs`
 - 终端连接期输出缓冲裁剪（避免切换项目恢复时把 `CSI/OSC` 控制序列从中间截断并显示成裸文本）：`src/components/terminal/terminalEscapeTrim.ts`（前端 escape-aware tail trim helper） + `src/components/terminal/TerminalPane.tsx`（`bufferedOutput` 超限裁剪） + `src/components/terminal/terminalEscapeTrim.test.mjs`（Node 内建 test 覆盖 plain text / OSC / CSI）
-- 终端内存优化（Ghostty 风格轻量休眠）：前端移除 `SerializeAddon`/`cachedState` 双缓存，仅保留 Rust replay；Rust 侧 `src-tauri/src/terminal.rs` 现使用 16KB x 320 chunks 的 replay ring buffer（总预算 5MiB/PTY），前端 `src/components/terminal/TerminalPane.tsx` 将 xterm `scrollback` 收口到 1000 行、连接期缓冲收口到 128KB；`src/components/terminal/terminalMemoryPolicy.ts` + `src/components/terminal/TerminalWorkspaceView.tsx` 负责“仅单一可见 terminal/run pane 启用 WebGL”，`src/components/terminal/TerminalRunPanel.tsx` 仅挂载活动 run tab，降低多开终端时的常驻内存。
-- 终端 runtime 已收口到 mux-lite 主路径：Rust 侧 `src-tauri/src/terminal_runtime/*` 当前保留 `runtime/session_registry/quick_command_registry/events/types`，负责 session 生命周期、quick command 状态与 JSON layout snapshot registry；早期未接线的 typed layout registry 骨架已移除，主路径不再分裂成两套 layout 真相源。
+- 终端内存优化（Ghostty 风格轻量休眠）：前端移除 `SerializeAddon`/`cachedState` 双缓存，仅保留 Rust replay；Rust 侧 `src-tauri/src/terminal.rs` 现使用**有界输出队列** + 分层 replay 缓冲（活跃 PTY 约 2MiB、后台保活 PTY 约 256KiB，`terminal_set_replay_mode` 能切到 parked，但**项目切换 preserve unmount 默认不主动降级**，避免切回项目时历史输出被过早回收）；前端 `src/components/terminal/TerminalPane.tsx` 将 xterm `scrollback` 收口到 1000 行、连接期缓冲收口到 128KB；`src/components/terminal/terminalMemoryPolicy.ts` + `src/components/terminal/TerminalWorkspaceView.tsx` 负责“仅单一可见 terminal/run pane 启用 WebGL”，`src/components/terminal/TerminalRunPanel.tsx` 仅挂载活动 run tab，降低多开终端时的常驻内存。
+- 终端 runtime 已收口到 mux-lite 主路径：Rust 侧 `src-tauri/src/terminal_runtime/*` 当前保留 `runtime/session_registry/quick_command_registry/events/types`，负责 session 生命周期、quick command 状态与 JSON layout snapshot registry；其中 `session_registry` / `quick_command_registry` 已加容量上限与 finished/exited 记录回收，避免长时间运行后 registry 只增不减；早期未接线的 typed layout registry 骨架已移除，主路径不再分裂成两套 layout 真相源。
 - 会话/PTY 通信：
   - macOS shell 启动链路：`src-tauri/src/terminal.rs` 中 `terminal_create_session` 使用 login shell 风格启动（`/usr/bin/login -flp <user> /bin/bash --noprofile --norc -c "exec -l <shell>"`），以对齐 Ghostty 并加载用户 login 环境（例如 `~/.zprofile` 的 PATH）。
   - 跨端会话复用：后端按 `sessionId` 复用已有 PTY；前端附带 `clientId` 进行附着，`terminal_kill` 在默认模式下按客户端引用释放，仅最后一个附着客户端离开时才真正结束 PTY（`force=true` 可强制结束）。
@@ -139,7 +139,7 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
   - 前端：`src/services/terminalWorkspace.ts` + `src/terminal-runtime-client/{runtimeClient,selectors,subscriptions}.ts`，统一走 `load/save/delete/listTerminalLayoutSnapshot*` 新接口，不再回退 legacy workspace command；窗口/Tab/Pane projection 统一复用 `src/models/terminal.ts` 与 `src/terminal-runtime-client/selectors.ts`。
   - 前端模型：`src/models/terminal.ts` 已收敛到 `TerminalLayoutSnapshot/TerminalPaneDescriptor/TerminalWindowProjection` 主模型；旧 `TerminalWorkspace/SplitNode` 前端类型已移除。
   - 前端清理：未使用的 legacy hook `src/hooks/useQuickCommandPanel.ts` 已移除；`quickCommandsPanel` 目前仅作为兼容字段保留在模型/存储层，不再有独立交互入口。
-  - 后端：`src-tauri/src/storage.rs` 已把 `terminal_workspaces.json` 的主语义切到 **LayoutSnapshot JSON**；旧 `load/save/list_terminal_workspace*` API 已删除，legacy 记录只在首次读盘时做一次性归一化导入并异步回写；当前 `load/save/delete/list_terminal_layout_snapshot*` 命令读写先走 `src-tauri/src/terminal_runtime/runtime.rs` 的 snapshot registry，再由 storage 负责持久化。
+  - 后端：`src-tauri/src/storage.rs` 已把 `terminal_workspaces.json` 的主语义切到 **LayoutSnapshot JSON**；旧 `load/save/list_terminal_workspace*` API 已删除，legacy 记录只在首次读盘时做一次性归一化导入并异步回写；当前 `load/save/delete_terminal_layout_snapshot*` 命令读写先走 `src-tauri/src/terminal_runtime/runtime.rs` 的 snapshot registry，再由 storage 负责持久化；**但 `list_terminal_layout_snapshot_summaries` 已改为 storage 直出 summary，不再因为启动期恢复“已打开项目”而把全部 snapshot 导入 runtime。**
   - 新 Command：`src-tauri/src/lib.rs` / `src-tauri/src/command_catalog.rs`（`load_terminal_layout_snapshot/save_terminal_layout_snapshot/delete_terminal_layout_snapshot/list_terminal_layout_snapshot_summaries`、`quick_command_runtime_snapshot`）。
   - 新事件：`terminal-window-layout-changed`、`terminal-workspace-restored`、`quick-command-state-changed`；WebSocket 侧由 `src-tauri/src/web_server.rs` 仅向显式订阅的事件名推送。
 
@@ -148,11 +148,13 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - CLI 会话状态监控仍保留在主界面（见下一节 I）。
 
 ### I. Codex CLI 监控集成（监听 ~/.codex/sessions）
-- 前端：`src/hooks/useCodexMonitor.ts`、`src/hooks/useCodexIntegration.ts`、`src/services/codex.ts`、`src/components/CodexSessionSection.tsx`、`src/App.tsx`
+- 前端：`src/hooks/useCodexMonitor.ts`、`src/hooks/useCodexIntegration.ts`、`src/services/codex.ts`、`src/components/CodexSessionSection.tsx`、`src/App.tsx`、`src/utils/codexMonitorActivation.ts`
 - 后端：`src-tauri/src/codex_monitor.rs`（文件监听 + 进程轮询 + 状态机 + 事件流）
 - Tauri Command：`src-tauri/src/lib.rs`（`get_codex_monitor_snapshot`）
 - 会话字段：`CodexMonitorSession` 额外包含 `model/effort`（来自 rollout `turn_context`）
 - 事件：`codex-monitor-snapshot`（快照）、`codex-monitor-agent-event`（`agent-active/task-complete/task-error/needs-attention/...`）
+- 启动策略：Codex monitor 不再在 app setup 阶段直接拉起；前端默认按需启用（用户手动点亮侧栏会话区，或进入终端工作区时自动启用），从而把 watcher/轮询/rollout 扫描成本从冷启动路径挪走。
+- 监控收口：Codex monitor 现在会限制一次监控的 rollout 文件数量，并把快照去重状态收口为轻量 digest，减少历史会话很多时的扫描/常驻内存成本；进程探测会复用 `sysinfo::System`，避免每轮轮询重新分配进程表对象。
 
 ### J. 更新检查
 - GitHub Releases latest 检查：`src/services/update.ts`

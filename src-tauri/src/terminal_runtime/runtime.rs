@@ -1,4 +1,6 @@
-use crate::models::{TerminalLayoutSnapshot, TerminalLayoutSnapshotSummary};
+use crate::models::TerminalLayoutSnapshot;
+#[cfg(test)]
+use crate::models::TerminalLayoutSnapshotSummary;
 use super::quick_command_registry::QuickCommandRegistry;
 use super::session_registry::SessionRegistry;
 use super::types::{JobId, QuickCommandRecord, QuickCommandState, SessionId, SessionRecord};
@@ -18,6 +20,7 @@ pub struct TerminalRuntime {
     layout_snapshots: Arc<Mutex<HashMap<String, TerminalLayoutSnapshot>>>,
 }
 
+#[cfg(test)]
 fn build_layout_snapshot_summary(
     project_path: &str,
     snapshot: &TerminalLayoutSnapshot,
@@ -232,6 +235,7 @@ impl TerminalRuntime {
         Ok(layout_snapshots.remove(project_path))
     }
 
+    #[cfg(test)]
     pub fn list_layout_snapshot_summaries(
         &self,
     ) -> Result<Vec<TerminalLayoutSnapshotSummary>, String> {

@@ -51,7 +51,8 @@ use crate::quick_command_manager::{
 };
 use crate::system::EditorOpenParams;
 use crate::terminal::{
-    TerminalState, terminal_create_session, terminal_kill, terminal_resize, terminal_write,
+    TerminalState, terminal_create_session, terminal_kill, terminal_resize,
+    terminal_set_replay_mode, terminal_write,
 };
 
 const INTERACTION_LOCK_REASON_WORKTREE_CREATE: &str = "worktree-create";
@@ -915,8 +916,7 @@ fn list_terminal_layout_snapshot_summaries(
     app: AppHandle,
 ) -> Result<Vec<TerminalLayoutSnapshotSummary>, String> {
     log_command_result("list_terminal_layout_snapshot_summaries", || {
-        ensure_terminal_layout_runtime_loaded(&app)?;
-        crate::terminal_runtime::shared_runtime().list_layout_snapshot_summaries()
+        storage::list_terminal_layout_snapshot_summaries(&app)
     })
 }
 
@@ -1009,9 +1009,6 @@ pub fn run() {
                 log::info!("log dir={}", path.display());
             }
             let app_handle = app.handle();
-            if let Err(error) = codex_monitor::ensure_monitoring_started(&app_handle) {
-                log::warn!("启动 Codex 监控失败: {}", error);
-            }
             let web_runtime = app_handle
                 .state::<web_server::WebServerRuntime>()
                 .inner()

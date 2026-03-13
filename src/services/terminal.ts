@@ -48,6 +48,8 @@ export type TerminalPaneExitPayload = {
   code?: number | null;
 };
 
+export type TerminalReplayMode = "active" | "parked";
+
 type TerminalPtyRegistryEntry = {
   ptyId: string | null;
   refs: number;
@@ -255,6 +257,10 @@ export async function writeTerminal(ptyId: string, data: string): Promise<void> 
 
 export async function resizeTerminal(ptyId: string, cols: number, rows: number): Promise<void> {
   await invokeCommand("terminal_resize", { ptyId, cols, rows });
+}
+
+export async function setTerminalReplayMode(ptyId: string, mode: TerminalReplayMode): Promise<void> {
+  await invokeCommand("terminal_set_replay_mode", { ptyId, mode });
 }
 
 export async function killTerminal(

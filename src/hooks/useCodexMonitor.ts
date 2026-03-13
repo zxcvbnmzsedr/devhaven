@@ -24,8 +24,11 @@ export type CodexMonitorStore = {
   error: string | null;
 };
 
+const EMPTY_AGENT_EVENTS: CodexAgentEvent[] = [];
+const EMPTY_SESSIONS: CodexMonitorSession[] = [];
+
 /** 监听 Codex 监控快照和状态事件，并保留低频轮询兜底。 */
-export function useCodexMonitor(): CodexMonitorStore {
+export function useCodexMonitor(enabled = true): CodexMonitorStore {
   const [snapshot, setSnapshot] = useState<CodexMonitorSnapshot | null>(null);
   const [sessions, setSessions] = useState<CodexMonitorSession[]>([]);
   const [isCodexRunning, setIsCodexRunning] = useState(false);
@@ -35,6 +38,20 @@ export function useCodexMonitor(): CodexMonitorStore {
   const snapshotSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!enabled) {
+      snapshotSignatureRef.current = null;
+      setSnapshot(null);
+      setSessions(EMPTY_SESSIONS);
+      setIsCodexRunning(false);
+      setAgentEvents(EMPTY_AGENT_EVENTS);
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
     let canceled = false;
     let stopSnapshotListen: (() => void) | null = null;
     let stopEventListen: (() => void) | null = null;
@@ -165,7 +182,18 @@ export function useCodexMonitor(): CodexMonitorStore {
       stopSnapshotListen?.();
       stopEventListen?.();
     };
-  }, []);
+  }, [enabled]);
+
+  if (!enabled) {
+    return {
+      snapshot: null,
+      sessions: EMPTY_SESSIONS,
+      isCodexRunning: false,
+      agentEvents: EMPTY_AGENT_EVENTS,
+      isLoading: false,
+      error: null,
+    };
+  }
 
   return {
     snapshot,

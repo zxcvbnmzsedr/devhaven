@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use super::types::{SessionId, SessionRecord, SessionStatus, now_millis};
 
+const MAX_SESSION_RECORDS: usize = 256;
+const SESSION_PRUNE_TARGET: usize = 192;
+
 #[derive(Debug, Default)]
 pub struct SessionRegistry {
     sessions: HashMap<SessionId, SessionRecord>,
@@ -45,6 +48,7 @@ impl SessionRegistry {
             exit_code: None,
         };
         self.sessions.insert(session_id, record.clone());
+        self.prune_exited_sessions();
         record
     }
 
@@ -69,7 +73,9 @@ impl SessionRegistry {
         let session = self.sessions.get_mut(session_id)?;
         session.client_ids.retain(|value| value != client_id);
         session.updated_at = now_millis();
-        Some(session.clone())
+        let session = session.clone();
+        self.prune_exited_sessions();
+        Some(session)
     }
 
     pub fn note_output(&mut self, session_id: &SessionId) -> Option<u64> {
@@ -84,7 +90,35 @@ impl SessionRegistry {
         session.status = SessionStatus::Exited;
         session.exit_code = exit_code;
         session.updated_at = now_millis();
-        Some(session.clone())
+        let session = session.clone();
+        self.prune_exited_sessions();
+        Some(session)
+    }
+
+    fn prune_exited_sessions(&mut self) {
+        if self.sessions.len() <= MAX_SESSION_RECORDS {
+            return;
+        }
+
+        let removable_count = self.sessions.len().saturating_sub(SESSION_PRUNE_TARGET);
+        let mut removable: Vec<(SessionId, i64)> = self
+            .sessions
+            .iter()
+            .filter(|(_, record)| {
+                matches!(record.status, SessionStatus::Exited) && record.client_ids.is_empty()
+            })
+            .map(|(session_id, record)| (session_id.clone(), record.updated_at))
+            .collect();
+        removable.sort_by_key(|(_, updated_at)| *updated_at);
+        let removable_ids: Vec<SessionId> = removable
+            .into_iter()
+            .map(|(session_id, _)| session_id)
+            .take(removable_count)
+            .collect();
+
+        for session_id in removable_ids {
+            self.sessions.remove(&session_id);
+        }
     }
 
     #[cfg(test)]
@@ -115,5 +149,33 @@ mod tests {
         let exited = registry.mark_exited(&session_id, Some(0)).unwrap();
         assert_eq!(exited.status, SessionStatus::Exited);
         assert_eq!(exited.exit_code, Some(0));
+    }
+
+    #[test]
+    fn session_registry_prunes_old_exited_sessions_when_over_capacity() {
+        let mut registry = SessionRegistry::default();
+        for index in 0..(MAX_SESSION_RECORDS + 24) {
+            let session_id = SessionId::from_string(format!("session-{index}"));
+            registry.register_session(
+                session_id.clone(),
+                "/tmp/project".to_string(),
+                "/tmp/project".to_string(),
+                None,
+                Some("/bin/zsh".to_string()),
+            );
+            registry.mark_exited(&session_id, Some(0));
+        }
+
+        let active_id = SessionId::from_string("session-active");
+        registry.register_session(
+            active_id.clone(),
+            "/tmp/project".to_string(),
+            "/tmp/project".to_string(),
+            None,
+            Some("/bin/zsh".to_string()),
+        );
+
+        assert!(registry.sessions.len() <= MAX_SESSION_RECORDS);
+        assert!(registry.get(&active_id).is_some());
     }
 }

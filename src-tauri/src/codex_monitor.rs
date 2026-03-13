@@ -39,6 +39,7 @@ const PROCESS_POLL_ACTIVE_INTERVAL_MS: u64 = 3_000;
 const PROCESS_POLL_IDLE_INTERVAL_MS: u64 = 12_000;
 const LSOF_RESULT_CACHE_TTL_MS: i64 = 8_000;
 const CANDIDATE_DAYS: usize = 2;
+const MAX_MONITORED_ROLLOUT_FILES: usize = 64;
 
 pub const CODEX_MONITOR_SNAPSHOT_EVENT: &str = "codex-monitor-snapshot";
 pub const CODEX_MONITOR_AGENT_EVENT: &str = "codex-monitor-agent-event";
@@ -76,12 +77,26 @@ struct MonitorRuntime {
     previous_process_running: bool,
     has_bootstrapped: bool,
     last_snapshot_state: Option<MonitorSnapshotState>,
+    system: System,
 }
 
 #[derive(Clone, PartialEq, Eq)]
 struct MonitorSnapshotState {
-    sessions: Vec<CodexMonitorSession>,
+    sessions: Vec<MonitorSessionDigest>,
     is_codex_running: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct MonitorSessionDigest {
+    id: String,
+    cwd: String,
+    model: Option<String>,
+    effort: Option<String>,
+    last_activity_at: i64,
+    state: CodexMonitorState,
+    is_running: bool,
+    session_title: Option<String>,
+    details: Option<String>,
 }
 
 #[derive(Default)]
@@ -259,7 +274,13 @@ fn refresh_monitoring(
         .join(CODEX_SESSIONS_DIR);
 
     let now_ms = Utc::now().timestamp_millis();
-    let process_running = any_codex_process_running();
+    let process_running = {
+        let runtime = CODEX_MONITOR_RUNTIME.get_or_init(|| Mutex::new(MonitorRuntime::default()));
+        let mut runtime = runtime
+            .lock()
+            .map_err(|_| "Codex 监控状态锁异常".to_string())?;
+        any_codex_process_running(&mut runtime.system)
+    };
     let recent_threshold = now_ms - RECENT_FILE_WINDOW_MS;
     let mut files = Vec::new();
     if base_dir.exists() {
@@ -414,7 +435,21 @@ fn refresh_monitoring(
 
 fn record_snapshot_state(runtime: &mut MonitorRuntime, snapshot: &CodexMonitorSnapshot) -> bool {
     let next_state = MonitorSnapshotState {
-        sessions: snapshot.sessions.clone(),
+        sessions: snapshot
+            .sessions
+            .iter()
+            .map(|session| MonitorSessionDigest {
+                id: session.id.clone(),
+                cwd: session.cwd.clone(),
+                model: session.model.clone(),
+                effort: session.effort.clone(),
+                last_activity_at: session.last_activity_at,
+                state: session.state.clone(),
+                is_running: session.is_running,
+                session_title: session.session_title.clone(),
+                details: session.details.clone(),
+            })
+            .collect(),
         is_codex_running: snapshot.is_codex_running,
     };
     let changed = runtime.last_snapshot_state.as_ref() != Some(&next_state);
@@ -582,6 +617,14 @@ fn collect_rollout_files(base_dir: &Path) -> Result<Vec<PathBuf>, String> {
             collect_rollout_files_shallow(&dir, &mut files)?;
         }
     }
+    files.sort_by(|left, right| {
+        let right_modified = file_modified_millis(right).unwrap_or_default();
+        let left_modified = file_modified_millis(left).unwrap_or_default();
+        right_modified
+            .cmp(&left_modified)
+            .then_with(|| left.cmp(right))
+    });
+    files.truncate(MAX_MONITORED_ROLLOUT_FILES);
     Ok(files)
 }
 
@@ -1060,22 +1103,46 @@ fn entry_indicates_error(value: &Value) -> bool {
 }
 
 fn classify_entry(value: &Value) -> EntryClassification {
-    let text = value.to_string().to_ascii_lowercase();
+    let indicates_error_by_text = contains_case_insensitive_text(
+        value,
+        &["error", "failed", "exception", "traceback"],
+    );
+    let indicates_needs_attention = contains_case_insensitive_text(
+        value,
+        &[
+            "request_user_input",
+            "needs_attention",
+            "awaiting_user_input",
+            "requires_confirmation",
+            "approval",
+        ],
+    );
     EntryClassification {
         indicates_error: value
             .get("is_error")
             .and_then(|item| item.as_bool())
             .unwrap_or(false)
-            || text.contains("\"error\"")
-            || text.contains("failed")
-            || text.contains("exception")
-            || text.contains("traceback"),
-        indicates_needs_attention: text.contains("request_user_input")
-            || text.contains("needs_attention")
-            || text.contains("awaiting_user_input")
-            || text.contains("requires_confirmation")
-            || text.contains("approval"),
+            || indicates_error_by_text,
+        indicates_needs_attention,
     }
+}
+
+fn contains_case_insensitive_text(value: &Value, needles: &[&str]) -> bool {
+    match value {
+        Value::String(text) => contains_any_keyword(text, needles),
+        Value::Array(items) => items
+            .iter()
+            .any(|item| contains_case_insensitive_text(item, needles)),
+        Value::Object(map) => map.iter().any(|(key, item)| {
+            contains_any_keyword(key, needles) || contains_case_insensitive_text(item, needles)
+        }),
+        _ => false,
+    }
+}
+
+fn contains_any_keyword(text: &str, needles: &[&str]) -> bool {
+    let lower = text.to_ascii_lowercase();
+    needles.iter().any(|needle| lower.contains(needle))
 }
 
 fn truncate_text(input: &str, max_chars: usize) -> String {
@@ -1302,8 +1369,7 @@ fn run_lsof_output_with_fallback(args: &[&str], path: &Path) -> Option<std::proc
     }
 }
 
-fn any_codex_process_running() -> bool {
-    let mut system = System::new();
+fn any_codex_process_running(system: &mut System) -> bool {
     system.refresh_processes();
     system.processes().values().any(|process| {
         let name = process.name().to_ascii_lowercase();
@@ -1479,5 +1545,22 @@ mod tests {
         changed_state.sessions[0].state = CodexMonitorState::Completed;
         changed_state.sessions[0].is_running = false;
         assert!(record_snapshot_state(&mut runtime, &changed_state));
+    }
+
+    #[test]
+    fn collect_rollout_files_caps_recent_results() {
+        let base_dir = std::env::temp_dir().join(format!("devhaven-codex-monitor-{}", Uuid::new_v4()));
+        let day_dir = build_date_dir(&base_dir, Local::now().date_naive());
+        fs::create_dir_all(&day_dir).expect("create day dir");
+
+        for index in 0..(MAX_MONITORED_ROLLOUT_FILES + 12) {
+            let path = day_dir.join(format!("rollout-{index}.jsonl"));
+            fs::write(path, b"{\"type\":\"session_meta\"}\n").expect("write rollout file");
+        }
+
+        let files = collect_rollout_files(&base_dir).expect("collect rollout files");
+        assert_eq!(files.len(), MAX_MONITORED_ROLLOUT_FILES);
+
+        let _ = fs::remove_dir_all(&base_dir);
     }
 }
