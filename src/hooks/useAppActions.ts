@@ -3,6 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, type Dispatch, type SetStateAc
 import type { AppStateFile, ColorData, Project, ProjectListViewMode, TagData } from "../models/types";
 import { colorDataToHex } from "../utils/colors";
 import { buildGitIdentitySignature } from "../utils/gitIdentity";
+import type { GitDailyRefreshRequest } from "../utils/gitDailyRefreshPolicy";
+import {
+  buildGitDailyAutoRefreshAttemptKey,
+  pickGitDailyAutoRefreshPaths,
+  shouldKeepActiveGitDailyRefreshJob,
+} from "../utils/gitDailyRefreshPolicy";
 import { pickColorForTag } from "../utils/tagColors";
 import { copyToClipboard } from "../services/system";
 
@@ -76,14 +82,16 @@ export function useAppActions({
   updateSettings,
   showToast,
 }: UseAppActionsParams): UseAppActionsReturn {
-  const gitDailyRefreshRef = useRef<string | null>(null);
+  const gitDailyActiveRequestRef = useRef<GitDailyRefreshRequest | null>(null);
+  const gitDailyQueuedRequestRef = useRef<GitDailyRefreshRequest | null>(null);
   const gitDailyUpdatingRef = useRef(false);
   const gitDailyJobIdRef = useRef(0);
   const gitIdentitySignatureRef = useRef<string | null>(null);
+  const gitDailyAutoAttemptedRef = useRef<Set<string>>(new Set());
 
   const refreshGitDailyInBatches = useCallback(
-    async (paths: string[], signature: string) => {
-      if (paths.length === 0) {
+    async (request: GitDailyRefreshRequest) => {
+      if (request.paths.length === 0) {
         gitDailyUpdatingRef.current = false;
         return;
       }
@@ -91,12 +99,15 @@ export function useAppActions({
       const jobId = ++gitDailyJobIdRef.current;
       gitDailyUpdatingRef.current = true;
       try {
-        for (let index = 0; index < paths.length; index += GIT_DAILY_BATCH_SIZE) {
-          if (gitDailyJobIdRef.current !== jobId || gitDailyRefreshRef.current !== signature) {
+        for (let index = 0; index < request.paths.length; index += GIT_DAILY_BATCH_SIZE) {
+          if (
+            gitDailyJobIdRef.current !== jobId
+            || gitDailyActiveRequestRef.current?.signature !== request.signature
+          ) {
             return;
           }
-          await updateGitDaily(paths.slice(index, index + GIT_DAILY_BATCH_SIZE));
-          if (index + GIT_DAILY_BATCH_SIZE < paths.length) {
+          await updateGitDaily(request.paths.slice(index, index + GIT_DAILY_BATCH_SIZE));
+          if (index + GIT_DAILY_BATCH_SIZE < request.paths.length) {
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, GIT_DAILY_BATCH_PAUSE_MS);
             });
@@ -105,6 +116,16 @@ export function useAppActions({
       } finally {
         if (gitDailyJobIdRef.current === jobId) {
           gitDailyUpdatingRef.current = false;
+          const queuedRequest = gitDailyQueuedRequestRef.current;
+          gitDailyQueuedRequestRef.current = null;
+          if (queuedRequest) {
+            gitDailyActiveRequestRef.current = queuedRequest;
+            void refreshGitDailyInBatches(queuedRequest);
+            return;
+          }
+          if (gitDailyActiveRequestRef.current?.signature === request.signature) {
+            gitDailyActiveRequestRef.current = null;
+          }
         }
       }
     },
@@ -112,18 +133,29 @@ export function useAppActions({
   );
 
   const scheduleGitDailyRefresh = useCallback(
-    (paths: string[], signature: string) => {
-      if (paths.length === 0) {
-        gitDailyRefreshRef.current = null;
+    (request: GitDailyRefreshRequest | null) => {
+      const currentRequest = gitDailyQueuedRequestRef.current ?? gitDailyActiveRequestRef.current;
+      if (shouldKeepActiveGitDailyRefreshJob(currentRequest, request)) {
+        return;
+      }
+
+      if (!request || request.paths.length === 0) {
+        gitDailyActiveRequestRef.current = null;
+        gitDailyQueuedRequestRef.current = null;
         gitDailyJobIdRef.current += 1;
         gitDailyUpdatingRef.current = false;
         return;
       }
-      if (gitDailyUpdatingRef.current && gitDailyRefreshRef.current === signature) {
+
+      if (gitDailyUpdatingRef.current) {
+        gitDailyQueuedRequestRef.current = request;
+        gitDailyActiveRequestRef.current = request;
         return;
       }
-      gitDailyRefreshRef.current = signature;
-      void refreshGitDailyInBatches(paths, signature);
+
+      gitDailyQueuedRequestRef.current = null;
+      gitDailyActiveRequestRef.current = request;
+      void refreshGitDailyInBatches(request);
     },
     [refreshGitDailyInBatches],
   );
@@ -288,29 +320,37 @@ export function useAppActions({
     [restoreProjectFromRecycleBin, showToast],
   );
 
+  const gitIdentitySignature = useMemo(
+    () => buildGitIdentitySignature(appState.settings.gitIdentities),
+    [appState.settings.gitIdentities],
+  );
+
   useEffect(() => {
     if (isLoading) {
       return;
     }
     const missingDaily = visibleProjects.filter((project) => project.git_commits > 0 && !project.git_daily);
     if (missingDaily.length === 0) {
-      scheduleGitDailyRefresh([], "");
+      scheduleGitDailyRefresh(null);
       return;
     }
-    const signature = missingDaily
-      .map((project) => project.path)
-      .sort()
-      .join("|");
-    scheduleGitDailyRefresh(
-      missingDaily.map((project) => project.path),
-      signature,
+    const paths = pickGitDailyAutoRefreshPaths(
+      visibleProjects,
+      gitIdentitySignature,
+      gitDailyAutoAttemptedRef.current,
     );
-  }, [isLoading, scheduleGitDailyRefresh, visibleProjects]);
-
-  const gitIdentitySignature = useMemo(
-    () => buildGitIdentitySignature(appState.settings.gitIdentities),
-    [appState.settings.gitIdentities],
-  );
+    if (paths.length === 0) {
+      return;
+    }
+    paths.forEach((path) => {
+      gitDailyAutoAttemptedRef.current.add(buildGitDailyAutoRefreshAttemptKey(path, gitIdentitySignature));
+    });
+    scheduleGitDailyRefresh({
+      reason: "missing",
+      paths,
+      signature: `missing:${paths.join("|")}`,
+    });
+  }, [gitIdentitySignature, isLoading, scheduleGitDailyRefresh, visibleProjects]);
 
   useEffect(() => {
     if (isLoading) {
@@ -328,7 +368,14 @@ export function useAppActions({
     if (gitPaths.length === 0) {
       return;
     }
-    scheduleGitDailyRefresh(gitPaths, `identity:${gitIdentitySignature}`);
+    gitPaths.forEach((path) => {
+      gitDailyAutoAttemptedRef.current.add(buildGitDailyAutoRefreshAttemptKey(path, gitIdentitySignature));
+    });
+    scheduleGitDailyRefresh({
+      reason: "identity",
+      paths: [...gitPaths].sort(),
+      signature: `identity:${gitIdentitySignature}`,
+    });
   }, [gitIdentitySignature, isLoading, scheduleGitDailyRefresh, visibleProjects]);
 
   const handleTagSubmit = useCallback(

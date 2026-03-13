@@ -812,10 +812,7 @@ fn write_project_file(path: String, relative_path: String, content: String) -> F
 
 #[tauri::command]
 fn collect_git_daily(paths: Vec<String>, identities: Vec<GitIdentity>) -> Vec<GitDailyResult> {
-    log_command("collect_git_daily", || {
-        log::info!("collect_git_daily paths={}", paths.len());
-        git_daily::collect_git_daily(&paths, &identities)
-    })
+    log_command("collect_git_daily", || git_daily::collect_git_daily(&paths, &identities))
 }
 
 #[tauri::command]
@@ -1038,9 +1035,13 @@ pub fn run() {
 
 fn log_command<T, F: FnOnce() -> T>(name: &str, action: F) -> T {
     let start = Instant::now();
-    log::info!("command {} start", name);
+    if should_log_command(name) {
+        log::info!("command {} start", name);
+    }
     let result = action();
-    log::info!("command {} done {}ms", name, start.elapsed().as_millis());
+    if should_log_command(name) {
+        log::info!("command {} done {}ms", name, start.elapsed().as_millis());
+    }
     result
 }
 
@@ -1049,16 +1050,23 @@ fn log_command_result<T, E: std::fmt::Display, F: FnOnce() -> Result<T, E>>(
     action: F,
 ) -> Result<T, E> {
     let start = Instant::now();
-    log::info!("command {} start", name);
+    if should_log_command(name) {
+        log::info!("command {} start", name);
+    }
     let result = action();
-    match &result {
-        Ok(_) => log::info!("command {} ok {}ms", name, start.elapsed().as_millis()),
-        Err(err) => log::error!(
+    match (&result, should_log_command(name)) {
+        (Ok(_), true) => log::info!("command {} ok {}ms", name, start.elapsed().as_millis()),
+        (Err(err), true) => log::error!(
             "command {} failed {}ms: {}",
             name,
             start.elapsed().as_millis(),
             err
         ),
+        _ => {}
     }
     result
+}
+
+fn should_log_command(name: &str) -> bool {
+    !matches!(name, "collect_git_daily")
 }
