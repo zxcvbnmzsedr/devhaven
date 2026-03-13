@@ -110,6 +110,8 @@ export function createDefaultLayoutSnapshot(
         placement: "tree",
         sessionId,
         cwd: projectPath,
+        mode: "shell",
+        agent: null,
         restoreAnchor: {
           cwd: projectPath,
           savedState: null,

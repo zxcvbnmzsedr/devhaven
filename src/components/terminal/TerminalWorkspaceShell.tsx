@@ -2,6 +2,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import type { ITheme } from "xterm";
 
 import type { ScriptExecutionState, ScriptLocalPhase, ScriptRuntime } from "../../hooks/useQuickCommandRuntime";
+import type { PaneCreationTemplate } from "../../models/agent";
 import type { QuickCommandJob } from "../../models/quickCommands";
 import type {
   RunPanelTab,
@@ -74,6 +75,8 @@ export type TerminalWorkspaceShellProps = {
   onActivateSession: (tabId: string, sessionId: string) => void;
   onPtyReady: (sessionId: string, ptyId: string) => void;
   onSessionExit: (sessionId: string, code?: number | null) => void;
+  onSessionOutput: (sessionId: string, data: string) => void;
+  onResolvePendingPane: (paneId: string, template: PaneCreationTemplate) => void;
   onSetRightSidebarWidth: (width: number) => void;
   onToggleShowHidden: (next: boolean) => void;
   onOpenPreview: (relativePath: string) => void;
@@ -140,6 +143,8 @@ export default function TerminalWorkspaceShell({
   onActivateSession,
   onPtyReady,
   onSessionExit,
+  onSessionOutput,
+  onResolvePendingPane,
   onSetRightSidebarWidth,
   onToggleShowHidden,
   onOpenPreview,
@@ -211,7 +216,16 @@ export default function TerminalWorkspaceShell({
                           onActivate={(nextSessionId) => onActivateSession(activeWorkspaceTab.id, nextSessionId)}
                           onPtyReady={onPtyReady}
                           onExit={onSessionExit}
+                          onOutput={onSessionOutput}
                           preserveSessionOnUnmount
+                        />
+                      );
+                    }
+                    if (pane.kind === "pendingTerminal") {
+                      return (
+                        <PaneHost
+                          kind="pendingTerminal"
+                          onSelectTemplate={(template) => onResolvePendingPane(pane.id, template)}
                         />
                       );
                     }

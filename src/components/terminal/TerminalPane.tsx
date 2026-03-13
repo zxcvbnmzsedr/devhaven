@@ -277,6 +277,7 @@ export type TerminalPaneProps = {
   isActive: boolean;
   onActivate: (sessionId: string) => void;
   onExit: (sessionId: string, code?: number | null) => void;
+  onOutput?: (sessionId: string, data: string) => void;
   onPtyReady?: (sessionId: string, ptyId: string) => void;
   preserveSessionOnUnmount?: boolean;
 };
@@ -292,6 +293,7 @@ export default function TerminalPane({
   isActive,
   onActivate,
   onExit,
+  onOutput,
   onPtyReady,
   preserveSessionOnUnmount = false,
 }: TerminalPaneProps) {
@@ -745,6 +747,7 @@ export default function TerminalPane({
           if (!chunk) {
             return;
           }
+          onOutput?.(sessionId, chunk);
 
           if (!hydrated) {
             bufferedOutput += chunk;
@@ -957,7 +960,10 @@ export default function TerminalPane({
       }`}
       onMouseDownCapture={(event) => {
         const target = event.target;
-        if (target instanceof Element && target.closest("[data-terminal-search-overlay=true]")) {
+        if (
+          target instanceof Element &&
+          target.closest("[data-terminal-search-overlay=true], [data-terminal-agent-overlay=true]")
+        ) {
           return;
         }
         onActivate(sessionId);

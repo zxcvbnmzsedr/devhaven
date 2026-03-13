@@ -1,5 +1,24 @@
 # 本次任务清单
 
+## DevHaven Agent MVP（2026-03-13）
+
+- [x] 读取实现前必须遵循的技能与当前仓库约束
+- [x] 确定「pane 级 shell|agent 双态」MVP 的范围与接入点
+- [x] 写入设计文档与实施计划
+- [x] 先补前端 helper / 状态流测试，再实现 pane 级 Agent 状态流
+- [x] 将 Agent 入口收回到 pane-local overlay，并完成本地验证
+- [x] 按用户新反馈回滚错误方向，并重做“pane 本身就是 agent”的方案
+- [x] 将 pane 级 agent 实现升级为多 provider adapter（Claude Code / Codex / iFlow）
+- [x] 将“创建后切换”改为“创建 pane 时先选 shell/agent 身份”
+- [x] 将“创建前选类型”重做为“pane 先出现，再在 pane 内选择 shell/agent”
+
+## OpenCove Agent 代理探索（2026-03-13）
+
+- [x] 读取会话技能、经验与 opencove 项目约束
+- [x] 扫描 opencove 中 agent 代理相关入口、核心模块与调用链
+- [ ] 提炼 agent 代理的架构模式、状态模型与运行机制
+- [ ] 结合当前项目给出可迁移实现方案与风险建议
+
 ## 内存优化第一轮实施（2026-03-13）
 
 - [x] 为 Codex monitor 按需启动补失败用例并完成实现
@@ -53,3 +72,32 @@
 - 这会直接造成你看到的现象：顶部 Header 基于 `quick_command_runtime_snapshot` 的 script 级 active job 继续显示“可停止/不可重新运行”，而底部 Run 面板已经依据 `markRunPanelTabExitedInSnapshot` 写入的 `endedAt/exitCode` 显示“已完成”。
 - 本轮修复把 runtime start 改为 **以 manager 生成的 jobId 原样 upsert 到 runtime registry**，确保 start / stop / finish / snapshot 全部围绕同一条 job 记录收敛；同时补了回归测试 `sync_runtime_job_start_keeps_runtime_job_id_in_sync` 防止以后再次漂移。
 - 本轮验证通过：`cargo test sync_runtime_job_start_keeps_runtime_job_id_in_sync --manifest-path src-tauri/Cargo.toml`、`cargo test quick_command_ --manifest-path src-tauri/Cargo.toml`、`cargo check --manifest-path src-tauri/Cargo.toml`。
+
+## Review（DevHaven Agent MVP）
+
+- 已按 **pane 级 shell|agent 双态** 路线重写设计与计划：`docs/plans/2026-03-13-devhaven-agent-pane-command-design.md`、`docs/plans/2026-03-13-devhaven-agent-pane-command-mvp.md` 不再把 Agent 作为工作区级入口，而是把控制权收回到 pane 本身。
+- 已重写 `src/models/agent.ts` 与 `src/models/agent.test.mjs`：当前模型改为 pane 级 agent runtime map，支持带 marker 的 Codex 启动命令包装、输出 marker 解析，以及 `starting -> running -> stopped/failed` 状态迁移。
+- 已将运行态 hook 改为 `src/hooks/usePaneAgentRuntime.ts`，不再维护“项目级唯一 Agent”，而是按 `sessionId -> runtime` 跟踪每个 terminal pane 的 agent 状态、pending command 与 pty 绑定。
+- 已在 `src/models/terminal.ts` / `src/utils/terminalLayout.ts` 为 terminal 工作区引入 `pendingTerminal` 模型与对应 helper；新建 tab / split pane 不再直接变成 shell 或 agent，而是先出现 pending pane，再在 pane 内完成类型选择。
+- 已回滚“创建前选类型”和已定型 pane 右上角状态 UI：`src/components/terminal/TerminalWorkspaceHeader.tsx` 恢复为纯终端头部；`src/components/terminal/TerminalTabs.tsx` 的 “+” 重新只负责创建 pending tab；`src/components/terminal/TerminalPane.tsx` 只保留“新建 Pane”菜单，不再常驻显示 agent provider / 状态 / 停止按钮；新增 `src/components/terminal/TerminalPendingPane.tsx` 承载 `Shell / Codex / Claude Code / iFlow` 选择。
+- 已继续把 pane 级模型升级为 **多 provider adapter**：新增 `src/agents/registry.ts` 与 `src/agents/adapters/{codex,claudeCode,iflow}.ts`，当前支持 `Codex / Claude Code / iFlow` 三个 provider；provider-specific 命令由 adapter 生成，并统一走 `src/agents/shellWrapper.ts` 的 marker 包裹。
+- 已把交互重做为 **pending pane**：`src/models/terminal.ts` 新增 `pendingTerminal` pane descriptor、`appendPendingTerminalTabToSnapshot`、`realizePendingTerminalPaneInSnapshot`、`splitPendingPaneInSnapshot`；`src/components/terminal/TerminalTabs.tsx` 的 “+” 与 `src/components/terminal/TerminalPane.tsx` 的 “新建 Pane” 现在都只创建 pending pane，再由 `src/components/terminal/TerminalPendingPane.tsx` 在 pane 内部完成 `Shell / Codex / Claude Code / iFlow` 选择。
+- 已继续收口视觉：`src/components/terminal/TerminalPendingPane.tsx` 改成更明显的占位卡片样式，并支持**默认聚焦 Shell、上下键切换、Enter 确认**；已定型 `TerminalPane` 不再在右上角常驻显示 provider/状态/停止等 Agent 控件，同时去掉了 settled pane 的“新建 Pane”按钮，避免与终端内容抢视觉注意力。
+- 当前限制：运行态仍是前端投影、不支持重启自动恢复/多 provider task 绑定；但这版已经符合“pane 先出现，再在 pane 里决定它是 shell 还是哪个 provider 的 agent”的交互模型。
+- 本轮验证通过：`node --test src/models/agent.test.mjs src/models/terminal.snapshot.test.mjs`、`pnpm exec tsc --noEmit`、`pnpm build`。
+
+
+## collect_git_daily 日志收口（2026-03-13）
+
+- [x] 定位 collect_git_daily 高频日志与自动统计触发链路
+- [x] 为 Git Daily 自动刷新策略补失败测试
+- [x] 收口自动刷新调度并移除 collect_git_daily 高频 Info 日志
+- [x] 运行定向验证并追加 Review
+
+## Review（collect_git_daily 日志收口）
+
+- 直接原因：`src-tauri/src/lib.rs` 的通用 `log_command` / `log_command_result` 会为 `collect_git_daily` 打印 `command start/done`，同时 `collect_git_daily` 自身又额外打印 `paths=`，而前端 `useAppActions` 会在缺失 `git_daily` 时自动分批触发统计，导致日志里反复出现高频 Info。
+- 设计层诱因：存在状态建模过粗的问题。前端一直用 `!project.git_daily` 同时表示“未加载 / 空结果 / 失败未写入”，自动补齐流程难以区分“已尝试但为空”和“真的还没统计”。
+- 当前修复方案：新增 `src/utils/gitDailyRefreshPolicy.ts`，把 Git Daily 自动调度策略收口为可测试 helper；自动补齐现在会按“路径 + identity 签名”记录本轮已尝试项目，只在启动后/身份变化后对同一项目自动统计一次，避免空结果项目持续重复拉取；同时在 Rust 侧对白名单命令 `collect_git_daily` 关闭高频 Info 命令日志。
+- 长期改进建议：将 `Project.git_daily` 的“值”和“加载状态”拆开，例如新增 `gitDailyStatus/gitDailyUpdatedAt/gitDailyError`，从根上区分 idle / loaded / empty / error，届时自动刷新策略就能更精确地决定何时重试。
+- 验证证据：`node --test src/utils/gitDailyRefreshPolicy.test.mjs`；`pnpm exec tsc --noEmit`；`cargo check --manifest-path src-tauri/Cargo.toml`。

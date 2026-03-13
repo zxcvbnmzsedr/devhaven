@@ -1,3 +1,5 @@
+import type { PaneAgentDescriptor, PaneAgentMode } from "./agent";
+
 export type SplitOrientation = "h" | "v";
 export type SplitDirection = "r" | "b" | "l" | "t";
 
@@ -70,7 +72,7 @@ export type TerminalPaneId = string;
 export type TerminalSessionId = string;
 export type TerminalLayoutRevision = number;
 
-export type TerminalPaneKind = "terminal" | "run" | "filePreview" | "gitDiff" | "overlay";
+export type TerminalPaneKind = "terminal" | "pendingTerminal" | "run" | "filePreview" | "gitDiff" | "overlay";
 export type TerminalPanePlacement = "tree" | "runPanel" | "rightSidebar" | "overlay";
 
 export type TerminalRestoreAnchor = {
@@ -92,7 +94,14 @@ export type TerminalShellPaneDescriptor = TerminalPaneDescriptorBase & {
   kind: "terminal";
   sessionId: TerminalSessionId;
   cwd: string;
+  mode?: PaneAgentMode;
+  agent?: PaneAgentDescriptor | null;
   restoreAnchor?: TerminalRestoreAnchor | null;
+};
+
+export type TerminalPendingPaneDescriptor = TerminalPaneDescriptorBase & {
+  kind: "pendingTerminal";
+  title?: string | null;
 };
 
 export type TerminalRunPaneDescriptor = TerminalPaneDescriptorBase & {
@@ -125,6 +134,7 @@ export type TerminalOverlayPaneDescriptor = TerminalPaneDescriptorBase & {
 
 export type TerminalPaneDescriptor =
   | TerminalShellPaneDescriptor
+  | TerminalPendingPaneDescriptor
   | TerminalRunPaneDescriptor
   | TerminalFilePreviewPaneDescriptor
   | TerminalGitDiffPaneDescriptor
@@ -405,6 +415,8 @@ function createFallbackTabAndPane(
       placement: "tree",
       sessionId: options.sessionId,
       cwd: options.cwd,
+      mode: "shell",
+      agent: null,
       restoreAnchor: {
         cwd: options.cwd,
         savedState: null,
@@ -476,6 +488,85 @@ export function appendTerminalTabToSnapshot(
         placement: "tree",
         sessionId: options.sessionId,
         cwd: options.cwd,
+        mode: "shell",
+        agent: null,
+        restoreAnchor: {
+          cwd: options.cwd,
+          savedState: null,
+        },
+      },
+    },
+  };
+}
+
+export function appendPendingTerminalTabToSnapshot(
+  snapshot: TerminalLayoutSnapshot,
+  options: {
+    tabId: TerminalTabId;
+    paneId: TerminalPaneId;
+    title: string;
+  },
+): TerminalLayoutSnapshot {
+  const nextTab: TerminalLayoutTab = {
+    id: options.tabId,
+    title: options.title,
+    root: { type: "leaf", paneId: options.paneId },
+    activePaneId: options.paneId,
+    zoomedPaneId: null,
+  };
+
+  return {
+    ...snapshot,
+    activeTabId: nextTab.id,
+    tabs: [...snapshot.tabs, nextTab],
+    panes: {
+      ...snapshot.panes,
+      [options.paneId]: {
+        id: options.paneId,
+        kind: "pendingTerminal",
+        placement: "tree",
+        title: options.title,
+      },
+    },
+  };
+}
+
+export function realizePendingTerminalPaneInSnapshot(
+  snapshot: TerminalLayoutSnapshot,
+  paneId: TerminalPaneId,
+  options: {
+    sessionId: TerminalSessionId;
+    cwd: string;
+    mode: PaneAgentMode;
+    agent?: PaneAgentDescriptor | null;
+    tabTitle?: string | null;
+  },
+): TerminalLayoutSnapshot {
+  const pane = snapshot.panes[paneId];
+  if (!pane || pane.kind !== "pendingTerminal") {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    tabs: snapshot.tabs.map((tab) =>
+      collectPaneIds(tab.root).includes(paneId)
+        ? {
+            ...tab,
+            title: typeof options.tabTitle === "string" && options.tabTitle.length > 0 ? options.tabTitle : tab.title,
+          }
+        : tab,
+    ),
+    panes: {
+      ...snapshot.panes,
+      [paneId]: {
+        id: paneId,
+        kind: "terminal",
+        placement: "tree",
+        sessionId: options.sessionId,
+        cwd: options.cwd,
+        mode: options.mode,
+        agent: options.mode === "agent" ? options.agent ?? { provider: "codex" } : null,
         restoreAnchor: {
           cwd: options.cwd,
           savedState: null,
@@ -1035,9 +1126,160 @@ export function splitTerminalSessionInSnapshot(
         placement: "tree",
         sessionId: options.newSessionId,
         cwd: options.cwd,
+        mode: "shell",
+        agent: null,
         restoreAnchor: {
           cwd: options.cwd,
           savedState: null,
+        },
+      },
+    },
+  };
+}
+
+export function splitPendingPaneInSnapshot(
+  snapshot: TerminalLayoutSnapshot,
+  options: {
+    tabId: TerminalTabId;
+    targetPaneId: TerminalPaneId;
+    direction: SplitDirection;
+    newPaneId: TerminalPaneId;
+    title?: string | null;
+  },
+): TerminalLayoutSnapshot {
+  const tabIndex = snapshot.tabs.findIndex((tab) => tab.id === options.tabId);
+  if (tabIndex < 0) {
+    return snapshot;
+  }
+  const tab = snapshot.tabs[tabIndex];
+  const targetPath = findLayoutPanePath(tab.root, options.targetPaneId);
+  if (!targetPath) {
+    return snapshot;
+  }
+
+  const orientation = splitOrientationForDirection(options.direction);
+  const newLeaf: TerminalPaneNode = { type: "leaf", paneId: options.newPaneId };
+  let nextRoot: TerminalPaneNode;
+
+  if (targetPath.length === 0) {
+    nextRoot = createSplitLayoutNode(tab.root, newLeaf, orientation, options.direction);
+  } else {
+    const parentPath = targetPath.slice(0, -1);
+    const targetIndex = targetPath[targetPath.length - 1];
+    const parentNode = getLayoutNodeAtPath(tab.root, parentPath);
+    if (!parentNode || parentNode.type !== "split") {
+      return snapshot;
+    }
+    if (parentNode.orientation === orientation) {
+      const insertBefore = options.direction === "l" || options.direction === "t";
+      const insertIndex = insertBefore ? targetIndex : targetIndex + 1;
+      const nextChildren = [...parentNode.children];
+      nextChildren.splice(insertIndex, 0, newLeaf);
+      const nextRatios = [...parentNode.ratios];
+      const baseRatio = nextRatios[targetIndex] ?? 1 / parentNode.children.length;
+      const half = baseRatio / 2;
+      if (insertBefore) {
+        nextRatios.splice(insertIndex, 0, half);
+        nextRatios[targetIndex + 1] = half;
+      } else {
+        nextRatios[targetIndex] = half;
+        nextRatios.splice(insertIndex, 0, half);
+      }
+      nextRoot = updateLayoutNodeAtPath(tab.root, parentPath, {
+        ...parentNode,
+        children: nextChildren,
+        ratios: normalizeLayoutRatios(nextRatios, nextChildren.length),
+      });
+    } else {
+      const targetNode = getLayoutNodeAtPath(tab.root, targetPath);
+      if (!targetNode) {
+        return snapshot;
+      }
+      nextRoot = updateLayoutNodeAtPath(
+        tab.root,
+        targetPath,
+        createSplitLayoutNode(targetNode, newLeaf, orientation, options.direction),
+      );
+    }
+  }
+
+  const nextTab: TerminalLayoutTab = {
+    ...tab,
+    root: nextRoot,
+    activePaneId: options.newPaneId,
+  };
+
+  return {
+    ...snapshot,
+    tabs: snapshot.tabs.map((item, index) => (index === tabIndex ? nextTab : item)),
+    panes: {
+      ...snapshot.panes,
+      [options.newPaneId]: {
+        id: options.newPaneId,
+        kind: "pendingTerminal",
+        placement: "tree",
+        title: options.title ?? "新建 Pane",
+      },
+    },
+  };
+}
+
+export function setTerminalPaneAgentMode(
+  snapshot: TerminalLayoutSnapshot,
+  paneId: TerminalPaneId,
+  options: {
+    mode: PaneAgentMode;
+    agent?: PaneAgentDescriptor | null;
+  },
+): TerminalLayoutSnapshot {
+  const pane = snapshot.panes[paneId];
+  if (!pane || pane.kind !== "terminal") {
+    return snapshot;
+  }
+
+  const nextAgent = options.agent ?? pane.agent ?? { provider: "codex" };
+  const nextMode: PaneAgentMode = options.mode;
+
+  if (pane.mode === nextMode && (pane.agent?.provider ?? null) === (nextAgent?.provider ?? null)) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    panes: {
+      ...snapshot.panes,
+      [paneId]: {
+        ...pane,
+        mode: nextMode,
+        agent: nextAgent,
+      },
+    },
+  };
+}
+
+export function setTerminalPaneAgentProvider(
+  snapshot: TerminalLayoutSnapshot,
+  paneId: TerminalPaneId,
+  provider: PaneAgentDescriptor["provider"],
+): TerminalLayoutSnapshot {
+  const pane = snapshot.panes[paneId];
+  if (!pane || pane.kind !== "terminal") {
+    return snapshot;
+  }
+
+  if (pane.agent?.provider === provider) {
+    return snapshot;
+  }
+
+  return {
+    ...snapshot,
+    panes: {
+      ...snapshot.panes,
+      [paneId]: {
+        ...pane,
+        agent: {
+          ...(pane.agent ?? {}),
+          provider,
         },
       },
     },

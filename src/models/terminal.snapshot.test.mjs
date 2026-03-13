@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 
 import {
   activateTerminalSessionInSnapshot,
+  appendPendingTerminalTabToSnapshot,
   appendTerminalTabToSnapshot,
   collectPaneIds,
   markRunPanelTabExitedInSnapshot,
+  realizePendingTerminalPaneInSnapshot,
   removePaneFromSnapshot,
   removeTerminalSessionFromSnapshot,
   removeTerminalTabFromSnapshot,
@@ -71,6 +73,40 @@ test("appendTerminalTabToSnapshot adds a new active terminal tab", () => {
   assert.equal(snapshot.tabs.length, 2);
   assert.equal(snapshot.tabs[1]?.activePaneId, "pane-2");
   assert.equal(snapshot.panes["pane-2"]?.kind, "terminal");
+});
+
+test("appendPendingTerminalTabToSnapshot adds a pending tab without session", () => {
+  const snapshot = appendPendingTerminalTabToSnapshot(createSnapshot(), {
+    tabId: "tab-2",
+    paneId: "pane-pending",
+    title: "新建 Pane",
+  });
+
+  assert.equal(snapshot.activeTabId, "tab-2");
+  assert.equal(snapshot.tabs[1]?.activePaneId, "pane-pending");
+  assert.equal(snapshot.panes["pane-pending"]?.kind, "pendingTerminal");
+});
+
+test("realizePendingTerminalPaneInSnapshot converts pending pane into agent terminal pane", () => {
+  const pending = appendPendingTerminalTabToSnapshot(createSnapshot(), {
+    tabId: "tab-2",
+    paneId: "pane-pending",
+    title: "新建 Pane",
+  });
+
+  const snapshot = realizePendingTerminalPaneInSnapshot(pending, "pane-pending", {
+    sessionId: "session-agent",
+    cwd: "/repo",
+    mode: "agent",
+    agent: { provider: "codex" },
+    tabTitle: "Codex Agent",
+  });
+
+  assert.equal(snapshot.tabs[1]?.title, "Codex Agent");
+  assert.equal(snapshot.panes["pane-pending"]?.kind, "terminal");
+  assert.equal(snapshot.panes["pane-pending"]?.sessionId, "session-agent");
+  assert.equal(snapshot.panes["pane-pending"]?.mode, "agent");
+  assert.equal(snapshot.panes["pane-pending"]?.agent?.provider, "codex");
 });
 
 test("activateTerminalSessionInSnapshot updates the active pane of a tab", () => {
