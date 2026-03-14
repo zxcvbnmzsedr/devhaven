@@ -470,3 +470,42 @@
   - `cargo test parse_session_file_ignores_error_keywords_inside_session_meta --manifest-path src-tauri/Cargo.toml`
   - `cargo test codex_monitor --manifest-path src-tauri/Cargo.toml`
   - `cargo check --manifest-path src-tauri/Cargo.toml`
+
+## Codex 文件扫描收口（2026-03-14）
+
+- [x] 定位 Codex 文件频繁扫描的直接触发链路，并确认 adapter/control plane 已覆盖的状态来源
+- [x] 先补回归测试，覆盖“终端工作区不再自动启用 Codex 文件监控”与“终端 Codex 运行态可由 control plane 派生”
+- [x] 按最少修改原则收口自动启用链路，并把终端 Codex 状态改走 control plane
+- [x] 运行定向验证、更新文档，并追加 Review 结论
+
+## Review（Codex 文件扫描收口）
+
+- 直接原因：`src/App.tsx` 里 `resolveCodexMonitorEnabled` 只要检测到 `terminal.showTerminalWorkspace=true` 就会启用 `useCodexMonitor`；而 `useCodexMonitor` 一旦启用就会立即调用 `get_codex_monitor_snapshot`，该命令在 `src-tauri/src/lib.rs` 中会先执行 `codex_monitor::ensure_monitoring_started`，从而拉起 `src-tauri/src/codex_monitor.rs` 的目录 watcher 与进程轮询线程，并持续扫描 `~/.codex/sessions`。
+- 设计层诱因：存在**状态真相源分裂**。终端区“Codex 是否在运行”本来已经可以由 adapter 写入的 control plane 直接投影，但此前 UI 仍同时依赖 monitor 文件扫描产出的 `codexProjectStatusById`，导致“进入终端工作区”这种纯 UI 行为误触发了后台文件扫描链路。
+- 当前修复方案：1）把 `src/utils/codexMonitorActivation.ts` 收口为**仅手动启用侧栏会话区时才开启 monitor**；2）给 `src/utils/controlPlaneProjection.ts` 新增 `countRunningProviderSessions`，让 `src/components/terminal/TerminalWorkspaceWindow.tsx` 的项目/worktree/终端头部 Codex 运行态全部直接从 control plane 中按 provider=`codex` 派生，不再依赖 monitor 文件扫描。
+- 长期改进建议：如果后续确定 adapter/control plane 已覆盖侧栏“CLI 会话”所需信息，可以继续把 `useCodexIntegration` 里仅服务于 monitor 的聚合逻辑逐步迁出或降级为兼容层，最终让 `src-tauri/src/codex_monitor.rs` 只保留显式调试/兼容入口，而不是常态状态源。
+- 验证证据：`node --test src/utils/codexMonitorActivation.test.mjs src/utils/controlPlaneProjection.test.mjs`、`pnpm exec tsc --noEmit`、`pnpm build`。
+
+## Codex monitor 全链路移除（2026-03-14）
+
+- [x] 补删除导向的回归测试，并锁定需要移除的前后端入口
+- [x] 清理前端 Codex monitor 入口、Sidebar 会话区块及相关类型/helper
+- [x] 删除 Rust 侧 codex_monitor 模块、命令注册与监控模型，并同步 AGENTS 文档
+- [x] 运行定向测试、类型检查、构建与 Rust 校验，追加 Review 结论
+
+## Review（Codex monitor 全链路移除）
+
+- 直接原因：即使上一轮已经把“进入终端工作区自动启用 monitor”收口掉，仓库里仍保留完整的 `Codex monitor -> App -> Sidebar -> Rust codex_monitor.rs` 兼容链路；这会继续制造两套状态心智，并让未来任何人都有机会再次把 `~/.codex/sessions` 扫描接回主路径。
+- 设计层诱因：存在明显的**兼容路径滞留**问题。系统主路径已经切到 adapter/control plane，但 monitor 的前端 hook、会话视图、Rust 命令、模型和依赖仍完整留存，属于职责边界没有彻底收口；除此之外，未发现新的系统设计缺陷。
+- 当前修复方案：
+  1. 前端删除 `useCodexMonitor`、`src/services/codex.ts`、`src/components/CodexSessionSection.tsx`、`src/utils/codexMonitorActivation.ts`、`src/models/codex.ts`、`src/utils/codexControlPlaneBridge.ts`，`Sidebar` 不再展示基于文件扫描的 CLI 会话区块。
+  2. `src/hooks/useCodexIntegration.ts` 已收口为**仅监听 control plane 中的 Codex 通知**，不再桥接 monitor 事件，也不再维护 monitor session 到 project 的映射。
+  3. Rust 侧删除 `src-tauri/src/codex_monitor.rs`、`get_codex_monitor_snapshot` 命令、`command_catalog` 对应 Web 入口以及只服务 monitor 的模型；`Cargo.toml` 同步移除 `notify` / `sysinfo` 依赖。
+  4. 终端区的 Codex 运行态继续直接走 `src/utils/controlPlaneProjection.ts::countRunningProviderSessions`，不回退到 monitor。
+- 长期改进建议：如果未来需要“应用重启后恢复 agent 会话列表”这类能力，应该在 control plane / agent registry 层补持久化或快照恢复，而不是重新引入 `~/.codex/sessions` 轮询。
+- 验证证据：
+  - `node --test src/utils/controlPlaneProjection.test.mjs`
+  - `cargo test command_catalog_keeps_web_subset_of_tauri --manifest-path src-tauri/Cargo.toml`
+  - `pnpm exec tsc --noEmit`
+  - `pnpm build`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`

@@ -1,6 +1,5 @@
 mod agent_control;
 mod command_catalog;
-mod codex_monitor;
 mod filesystem;
 mod git_daily;
 mod git_ops;
@@ -36,8 +35,8 @@ use tauri::State;
 use tauri_plugin_log::{Target, TargetKind};
 
 use crate::models::{
-    AppStateFile, BranchListItem, CodexMonitorSnapshot, FsListResponse, FsReadResponse,
-    FsWriteResponse, GitDailyResult, GitDiffContents, GitIdentity, GitRepoStatus,
+    AppStateFile, BranchListItem, FsListResponse, FsReadResponse, FsWriteResponse, GitDailyResult,
+    GitDiffContents, GitIdentity, GitRepoStatus,
     GitWorktreeAddResult, GitWorktreeListItem, GlobalSkillInstallRequest, GlobalSkillInstallResult,
     GlobalSkillUninstallRequest, GlobalSkillsSnapshot, HeatmapCacheFile, InteractionLockPayload,
     MarkdownFileEntry, Project, ProjectNotesPreview, SharedScriptEntry, SharedScriptManifestScript,
@@ -956,16 +955,6 @@ fn quick_command_runtime_snapshot(project_path: Option<String>) -> JsonValue {
             })
         }).collect::<Vec<_>>(),
         "updatedAt": updated_at,
-    })
-}
-
-#[tauri::command]
-fn get_codex_monitor_snapshot(app: AppHandle) -> Result<CodexMonitorSnapshot, String> {
-    log_command_result("get_codex_monitor_snapshot", || {
-        if let Err(error) = codex_monitor::ensure_monitoring_started(&app) {
-            log::warn!("启动 Codex 监控失败: {}", error);
-        }
-        codex_monitor::get_snapshot(&app)
     })
 }
 

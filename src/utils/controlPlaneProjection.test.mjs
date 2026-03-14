@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildPaneAttentionMap,
   buildWorkspaceAttentionProjection,
+  countRunningProviderSessions,
   deriveAttentionTone,
   resolveDisplayedControlPlaneMessage,
 } from "./controlPlaneProjection.ts";
@@ -119,5 +120,57 @@ test("resolveDisplayedControlPlaneMessage falls back to workspace latest message
       },
     ),
     "Codex 已完成：DevHaven",
+  );
+});
+
+test("countRunningProviderSessions only counts running sessions for the target provider", () => {
+  assert.equal(
+    countRunningProviderSessions(
+      createTree({
+        panes: [
+          {
+            paneId: "pane-1",
+            surfaceId: "pane-1",
+            terminalSessionId: "session-1",
+            unreadCount: 0,
+            agentSession: {
+              agentSessionId: "agent-1",
+              provider: "codex",
+              status: "running",
+              message: "处理中",
+              updatedAt: 10,
+            },
+          },
+          {
+            paneId: "pane-2",
+            surfaceId: "pane-2",
+            terminalSessionId: "session-2",
+            unreadCount: 0,
+            agentSession: {
+              agentSessionId: "agent-2",
+              provider: "codex",
+              status: "waiting",
+              message: "等待确认",
+              updatedAt: 11,
+            },
+          },
+          {
+            paneId: "pane-3",
+            surfaceId: "pane-3",
+            terminalSessionId: "session-3",
+            unreadCount: 0,
+            agentSession: {
+              agentSessionId: "agent-3",
+              provider: "claude-code",
+              status: "running",
+              message: "处理中",
+              updatedAt: 12,
+            },
+          },
+        ],
+      }),
+      "codex",
+    ),
+    1,
   );
 });

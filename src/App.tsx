@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo } from "react";
 import Sidebar from "./components/Sidebar";
 import MainContent from "./components/MainContent";
 import DetailPanel from "./components/DetailPanel";
@@ -10,7 +10,6 @@ import RecycleBinModal from "./components/RecycleBinModal";
 import InteractionLockOverlay from "./components/InteractionLockOverlay";
 import CommandPalette from "./components/CommandPalette";
 import WorktreeCreateDialog from "./components/terminal/WorktreeCreateDialog";
-import { useCodexMonitor } from "./hooks/useCodexMonitor";
 import { useCodexIntegration } from "./hooks/useCodexIntegration";
 import { useCommandPalette } from "./hooks/useCommandPalette";
 import { useDisableInputCorrections } from "./hooks/useDisableInputCorrections";
@@ -25,7 +24,6 @@ import { HEATMAP_CONFIG } from "./models/heatmap";
 import { isTauriRuntime } from "./platform/runtime";
 import type { ProjectListViewMode } from "./models/types";
 import { APP_RESUME_MIN_INACTIVE_MS, dispatchAppResumeEvent } from "./utils/appResume";
-import { resolveCodexMonitorEnabled } from "./utils/codexMonitorActivation";
 import { MAIN_WINDOW_LABEL, shouldBlockReloadShortcut } from "./utils/worktreeHelpers";
 import { DevHavenProvider, useDevHavenActions, useDevHavenState } from "./state/DevHavenContext";
 import { useHeatmapData } from "./state/useHeatmapData";
@@ -48,8 +46,6 @@ function AppLayout() {
 
   const { toast, showToast } = useToast();
   const viewState = useAppViewState({ appState, projects });
-  const [codexMonitorRequested, setCodexMonitorRequested] = useState(false);
-
   const selection = useProjectSelection({ projectMap, recycleBinSet: viewState.recycleBinSet });
   const filter = useProjectFilter({
     visibleProjects: viewState.visibleProjects,
@@ -85,20 +81,7 @@ function AppLayout() {
     terminalOpenProjectsRef: terminal.terminalOpenProjectsRef,
   });
 
-  const codexMonitorEnabled = resolveCodexMonitorEnabled({
-    manualEnabled: codexMonitorRequested,
-    terminalWorkspaceVisible: terminal.showTerminalWorkspace,
-  });
-
-  const codexMonitorStore = useCodexMonitor(codexMonitorEnabled);
-  const codex = useCodexIntegration({
-    projects,
-    projectMap,
-    terminalOpenProjects: terminal.terminalOpenProjects,
-    codexMonitorStore,
-    showToast,
-    openTerminalWorkspace: terminal.openTerminalWorkspace,
-  });
+  useCodexIntegration({ showToast });
 
   const commandPalette = useCommandPalette({
     showTerminalWorkspace: terminal.showTerminalWorkspace,
@@ -377,12 +360,6 @@ function AppLayout() {
           onRefresh={refresh}
           onAddProjects={addProjects}
           isHeatmapLoading={heatmapStore.isLoading}
-          codexMonitorEnabled={codexMonitorEnabled}
-          onEnableCodexMonitor={() => setCodexMonitorRequested(true)}
-          codexSessions={codex.codexSessionViews}
-          codexSessionsLoading={codexMonitorStore.isLoading}
-          codexSessionsError={codexMonitorStore.error}
-          onOpenCodexSession={codex.handleOpenCodexSession}
         />
         <MainContent
           projects={viewState.visibleProjects}
@@ -537,7 +514,6 @@ function AppLayout() {
               terminalTheme={appState.settings.terminalTheme}
               sharedScriptsRoot={appState.settings.sharedScriptsRoot}
               terminalUseWebglRenderer={appState.settings.terminalUseWebglRenderer}
-              codexProjectStatusById={codex.codexProjectStatusById}
               gitWorktreesByProjectId={terminal.terminalGitWorktreesByProjectId}
             />
           </Suspense>

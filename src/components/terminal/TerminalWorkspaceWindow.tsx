@@ -11,13 +11,15 @@ import {
   getTerminalThemePresetByName,
   resolveTerminalThemeName,
 } from "../../themes/terminalThemes";
-import type { CodexProjectStatus } from "../../utils/codexProjectStatus";
 import type { ControlPlaneWorkspaceTree } from "../../models/controlPlane";
 import {
   listenControlPlaneChanged,
   loadControlPlaneTree,
 } from "../../services/controlPlane";
-import { projectControlPlaneWorkspace } from "../../utils/controlPlaneProjection";
+import {
+  countRunningProviderSessions,
+  projectControlPlaneWorkspace,
+} from "../../utils/controlPlaneProjection";
 import { buildMountedWorkspaceEntries } from "./terminalWorkspaceMountModel";
 import TerminalWorkspaceView from "./TerminalWorkspaceView";
 
@@ -53,7 +55,6 @@ export type TerminalWorkspaceWindowProps = {
   terminalTheme: string;
   sharedScriptsRoot: string;
   terminalUseWebglRenderer: boolean;
-  codexProjectStatusById: Record<string, CodexProjectStatus>;
   gitWorktreesByProjectId: Record<string, GitWorktreeListItem[] | undefined>;
 };
 
@@ -162,7 +163,6 @@ function TerminalWorkspaceWindow({
   terminalTheme,
   sharedScriptsRoot,
   terminalUseWebglRenderer,
-  codexProjectStatusById,
   gitWorktreesByProjectId,
 }: TerminalWorkspaceWindowProps) {
   const workspaceSessionIdsRef = useRef(new Map<string, string[]>());
@@ -367,11 +367,9 @@ function TerminalWorkspaceWindow({
         <div className="flex flex-col gap-1 p-2">
           {rootProjects.map((project) => {
             const isActive = (activeProject?.id ?? "") === project.id;
-            const codexStatus = codexProjectStatusById[project.id] ?? null;
-            const codexRunningCount = codexStatus?.runningCount ?? 0;
-            const controlPlaneProjection = projectControlPlaneWorkspace(
-              controlPlaneTreeByProjectId[project.id] ?? null,
-            );
+            const projectControlPlaneTree = controlPlaneTreeByProjectId[project.id] ?? null;
+            const codexRunningCount = countRunningProviderSessions(projectControlPlaneTree, "codex");
+            const controlPlaneProjection = projectControlPlaneWorkspace(projectControlPlaneTree);
             const trackedWorktrees = project.worktrees ?? [];
             const gitWorktrees = gitWorktreesByProjectId[project.id];
             const worktreesToRender = mergeWorktreesToRender(trackedWorktrees, gitWorktrees);
@@ -477,9 +475,10 @@ function TerminalWorkspaceWindow({
                   <div className="flex flex-col gap-1 pl-3">
                     {worktreesToRender.map((worktree) => {
                       const openedProject = openProjectsByPath.get(worktree.path);
-                      const codexWorktreeStatus =
-                        openedProject ? codexProjectStatusById[`worktree:${worktree.path}`] ?? null : null;
-                      const codexWorktreeRunningCount = codexWorktreeStatus?.runningCount ?? 0;
+                      const codexWorktreeRunningCount = countRunningProviderSessions(
+                        openedProject ? controlPlaneTreeByProjectId[openedProject.id] ?? null : null,
+                        "codex",
+                      );
                       const isWorktreeActive = activeProject?.path === worktree.path;
                       const isCreating = worktree.status === "creating";
                       const isFailed = worktree.status === "failed";
@@ -592,7 +591,10 @@ function TerminalWorkspaceWindow({
               xtermTheme={terminalThemePreset.xterm}
               sharedScriptsRoot={sharedScriptsRoot}
               terminalUseWebglRenderer={terminalUseWebglRenderer}
-              codexRunningCount={codexProjectStatusById[project.id]?.runningCount ?? 0}
+              codexRunningCount={countRunningProviderSessions(
+                controlPlaneTreeByProjectId[project.id] ?? null,
+                "codex",
+              )}
               controlPlaneTree={controlPlaneTreeByProjectId[project.id] ?? null}
               scripts={project.scripts ?? EMPTY_PROJECT_SCRIPTS}
               onRegisterPersistWorkspace={onRegisterPersistWorkspace}

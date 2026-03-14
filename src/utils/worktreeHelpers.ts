@@ -1,5 +1,4 @@
 import type { CommandPaletteItem } from "../components/CommandPalette";
-import type { CodexMonitorSession, CodexSessionView } from "../models/codex";
 import type { Project, ProjectWorktree } from "../models/types";
 import { jsDateToSwiftDate } from "../models/types";
 import { resolveRuntimeWindowLabel } from "../platform/runtime";
@@ -18,13 +17,6 @@ export function createWorktreeProjectId(path: string): string {
 
 export function isWorktreeProject(project: Project): boolean {
   return project.id.startsWith("worktree:");
-}
-
-export function parseWorktreePathFromProjectId(projectId: string): string | null {
-  if (!projectId.startsWith("worktree:")) {
-    return null;
-  }
-  return projectId.slice("worktree:".length);
 }
 
 export function resolveNameFromPath(path: string): string {
@@ -78,33 +70,6 @@ export function resolveWorktreeSourceProjectByPath(projects: Project[], worktree
   return null;
 }
 
-export function buildCodexProjectMatchCandidates(
-  projects: Project[],
-  terminalOpenProjects: Project[],
-): Project[] {
-  const byId = new Map<string, Project>();
-
-  for (const project of projects) {
-    byId.set(project.id, project);
-  }
-
-  for (const project of projects) {
-    if (isWorktreeProject(project)) {
-      continue;
-    }
-    for (const worktree of project.worktrees ?? []) {
-      const virtualProject = buildWorktreeVirtualProject(project, worktree);
-      byId.set(virtualProject.id, virtualProject);
-    }
-  }
-
-  for (const project of terminalOpenProjects) {
-    byId.set(project.id, project);
-  }
-
-  return Array.from(byId.values());
-}
-
 export function buildReadyWorktree(path: string, branch: string, now: number): ProjectWorktree {
   return {
     id: createWorktreeProjectId(path),
@@ -152,33 +117,6 @@ export function buildWorktreeVirtualProject(sourceProject: Project, worktree: Pr
     created: worktree.created || now,
     checked: now,
   };
-}
-
-export function matchProjectByCwd(cwd: string, projects: Project[]): Project | null {
-  if (!cwd) {
-    return null;
-  }
-  let bestMatch: Project | null = null;
-  let bestLength = -1;
-  for (const project of projects) {
-    if (cwd.startsWith(project.path) && project.path.length > bestLength) {
-      bestMatch = project;
-      bestLength = project.path.length;
-    }
-  }
-  return bestMatch;
-}
-
-export function buildCodexSessionViews(sessions: CodexMonitorSession[], projects: Project[]): CodexSessionView[] {
-  return sessions.map((session) => {
-    const project = matchProjectByCwd(session.cwd, projects);
-    return {
-      ...session,
-      projectId: project?.id ?? null,
-      projectName: project?.name ?? null,
-      projectPath: project?.path ?? null,
-    };
-  });
 }
 
 export function shouldBlockReloadShortcut(event: KeyboardEvent): boolean {

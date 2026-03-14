@@ -1,14 +1,11 @@
 import { memo, useMemo } from "react";
 
 import type { HeatmapData } from "../models/heatmap";
-import type { CodexSessionView } from "../models/codex";
 import { HEATMAP_CONFIG } from "../models/heatmap";
 import type { AppStateFile, Project, TagData } from "../models/types";
 import { pickDirectoriesRuntime } from "../platform/runtime";
 import { colorDataToHex } from "../utils/colors";
-import { resolveCodexMonitorEmptyText } from "../utils/codexMonitorActivation";
 import { formatPathWithTilde } from "../utils/pathDisplay";
-import CodexSessionSection from "./CodexSessionSection";
 import Heatmap from "./Heatmap";
 import DropdownMenu from "./DropdownMenu";
 import { IconEye, IconEyeOff, IconMoreHorizontal, IconPlusCircle, IconTrash } from "./Icons";
@@ -45,12 +42,6 @@ export type SidebarProps = {
   onRefresh: () => Promise<void>;
   onAddProjects: (paths: string[]) => Promise<void>;
   isHeatmapLoading: boolean;
-  codexMonitorEnabled: boolean;
-  onEnableCodexMonitor: () => void;
-  codexSessions: CodexSessionView[];
-  codexSessionsLoading: boolean;
-  codexSessionsError: string | null;
-  onOpenCodexSession: (session: CodexSessionView) => void;
 };
 
 /** 左侧边栏，负责目录、标签与筛选入口。 */
@@ -78,12 +69,6 @@ function Sidebar({
   onRefresh,
   onAddProjects,
   isHeatmapLoading,
-  codexMonitorEnabled,
-  onEnableCodexMonitor,
-  codexSessions,
-  codexSessionsLoading,
-  codexSessionsError,
-  onOpenCodexSession,
 }: SidebarProps) {
   const directoryCounts = useMemo(() => {
     const directories = appState.directories;
@@ -261,28 +246,6 @@ function Sidebar({
             </div>
           ) : null}
         </section>
-
-        <div className="my-2 h-px bg-divider" />
-
-        <CodexSessionSection
-          sessions={codexSessions}
-          isLoading={codexMonitorEnabled ? codexSessionsLoading : false}
-          error={codexMonitorEnabled ? codexSessionsError : null}
-          emptyText={resolveCodexMonitorEmptyText(codexMonitorEnabled)}
-          headerStatusText={codexMonitorEnabled ? undefined : "未启用"}
-          headerRightSlot={
-            codexMonitorEnabled ? null : (
-              <button
-                type="button"
-                className="rounded-md border border-sidebar-border px-2 py-0.5 text-[11px] text-sidebar-secondary transition-colors duration-150 hover:bg-sidebar-hover hover:text-sidebar-title"
-                onClick={onEnableCodexMonitor}
-              >
-                启用
-              </button>
-            )
-          }
-          onOpenSession={onOpenCodexSession}
-        />
 
         <div className="my-2 h-px bg-divider" />
 

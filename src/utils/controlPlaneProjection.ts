@@ -177,6 +177,23 @@ export function projectControlPlaneWorkspace(
   };
 }
 
+export function countRunningProviderSessions(
+  tree: ControlPlaneWorkspaceTree | ControlPlaneTree | null | undefined,
+  provider: string,
+): number {
+  if (!tree) {
+    return 0;
+  }
+  const surfaces = "surfaces" in tree ? tree.surfaces : tree.panes;
+  return surfaces.reduce((count, surface) => {
+    const session = surface.agentSession;
+    if (!session) {
+      return count;
+    }
+    return count + (session.provider === provider && session.status === "running" ? 1 : 0);
+  }, 0);
+}
+
 export function resolveDisplayedControlPlaneMessage(
   surface: ControlPlaneSurfaceProjection | null | undefined,
   workspace: ControlPlaneWorkspaceProjection | null | undefined,

@@ -81,7 +81,6 @@ macro_rules! devhaven_for_each_command {
             { save_terminal_layout_snapshot, web_save_terminal_layout_snapshot }
             { delete_terminal_layout_snapshot, web_delete_terminal_layout_snapshot }
             { list_terminal_layout_snapshot_summaries, web_list_terminal_layout_snapshot_summaries }
-            { get_codex_monitor_snapshot, web_get_codex_monitor_snapshot }
             { apply_web_server_config, web_apply_web_server_config }
             { quick_command_start, web_quick_command_start }
             { quick_command_stop, web_quick_command_stop }
@@ -794,10 +793,6 @@ fn web_list_terminal_layout_snapshot_summaries(app: &AppHandle, _guard: &PathGua
     serialize_result(crate::list_terminal_layout_snapshot_summaries(app.clone()))
 }
 
-fn web_get_codex_monitor_snapshot(app: &AppHandle, _guard: &PathGuard, _payload: &Value) -> WebCommandResult {
-    serialize_result(crate::get_codex_monitor_snapshot(app.clone()))
-}
-
 fn web_apply_web_server_config(app: &AppHandle, _guard: &PathGuard, _payload: &Value) -> WebCommandResult {
     let runtime = app.state::<WebServerRuntime>();
     serialize_result(crate::apply_web_server_config(app.clone(), runtime))
@@ -1024,6 +1019,8 @@ mod tests {
         assert!(web_set.contains("devhaven_identify"));
         assert!(web_set.contains("devhaven_tree"));
         assert!(web_set.contains("devhaven_notify"));
+        assert!(!all_set.contains("get_codex_monitor_snapshot"));
+        assert!(!web_set.contains("get_codex_monitor_snapshot"));
         assert!(web_set.is_subset(&all_set));
     }
 

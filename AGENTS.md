@@ -147,18 +147,15 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 
 ### H. 悬浮监控窗（Monitor，已移除）
 - 该功能已下线，不再创建 `cli-monitor` 子窗口，也不再提供 `set_window_fullscreen_auxiliary` 相关能力。
-- CLI 会话状态监控仍保留在主界面（见下一节 I）。
+- Codex 运行态与通知仍保留在主界面/终端控制面（见下一节 I）。
 
-### I. Codex CLI 监控集成（监听 ~/.codex/sessions）
-- 前端：`src/hooks/useCodexMonitor.ts`、`src/hooks/useCodexIntegration.ts`、`src/services/codex.ts`、`src/components/CodexSessionSection.tsx`、`src/App.tsx`、`src/utils/codexMonitorActivation.ts`
-- 当前 `useCodexIntegration.ts` 已把真实 Codex monitor 事件桥接进 control plane：`task-complete/task-error/needs-attention/agent-active/agent-idle` 会同步调用 `src/services/controlPlane.ts`；同时它也会消费 control plane 的 Codex notification 来触发 toast / 系统通知，因此 monitor 桥接与 wrapper 直写 control plane 现在共享同一条前端提示链。`TerminalWorkspaceHeader.tsx` 的最新消息展示优先读 active pane，缺省回退 workspace 级 latest message。
+### I. Codex 控制面集成（已移除 ~/.codex/sessions 监控）
+- 前端：`src/hooks/useCodexIntegration.ts`、`src/App.tsx`、`src/components/terminal/TerminalWorkspaceWindow.tsx`、`src/components/terminal/TerminalWorkspaceView.tsx`、`src/components/terminal/TerminalWorkspaceHeader.tsx`、`src/utils/controlPlaneProjection.ts`
+- 当前 Codex 状态源已统一为 **adapter / wrapper 直写 control plane**：终端项目列表、工作区头部与 pane attention 只读取 control plane；`useCodexIntegration.ts` 仅负责消费 control plane 中的 Codex 通知，并转发为 toast / 系统通知。
 - 当前系统通知策略：`src/services/system.ts` 在 Tauri 运行时优先调用后端 `send_system_notification`（macOS 通过 `osascript display notification` 发送原生通知），仅 Web/失败回退时再尝试浏览器 `Notification` API；Toast 仍由 `src/App.tsx` 顶层统一渲染，但样式已调整为右上角高对比提示卡，确保终端工作区内更容易观察。
-- 后端：`src-tauri/src/codex_monitor.rs`（文件监听 + 进程轮询 + 状态机 + 事件流）
-- Tauri Command：`src-tauri/src/lib.rs`（`get_codex_monitor_snapshot`）
-- 会话字段：`CodexMonitorSession` 额外包含 `model/effort`（来自 rollout `turn_context`）
-- 事件：`codex-monitor-snapshot`（快照）、`codex-monitor-agent-event`（`agent-active/task-complete/task-error/needs-attention/...`）
-- 启动策略：Codex monitor 不再在 app setup 阶段直接拉起；前端默认按需启用（用户手动点亮侧栏会话区，或进入终端工作区时自动启用），从而把 watcher/轮询/rollout 扫描成本从冷启动路径挪走。
-- 监控收口：Codex monitor 现在会限制一次监控的 rollout 文件数量，并把快照去重状态收口为轻量 digest，减少历史会话很多时的扫描/常驻内存成本；进程探测会复用 `sysinfo::System`，避免每轮轮询重新分配进程表对象。
+- 后端：`src-tauri/src/agent_control.rs` + `src-tauri/src/web_event_bus.rs` + `scripts/devhaven-codex-hook.mjs`
+- Tauri / Web Command：`src-tauri/src/lib.rs` / `src-tauri/src/command_catalog.rs` 中的 `devhaven_tree`、`devhaven_notify`、`devhaven_agent_session_event`
+- 删除说明：仓库内已不再保留 `codex_monitor.rs`、`get_codex_monitor_snapshot`、`useCodexMonitor`、`CodexSessionSection` 等基于文件扫描的兼容链路；若未来需要恢复离线会话发现能力，必须重新设计为 control plane 持久化，而不是重新接回 `~/.codex/sessions` 轮询。
 
 ### J. 更新检查
 - GitHub Releases latest 检查：`src/services/update.ts`
@@ -192,7 +189,7 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - Rust Web 服务入口：`src-tauri/src/web_server.rs`（`/api/health`、`/api/cmd/{command}`、`/api/ws` + 前端静态资源路由 `/`、`/{*path}`）
 - 开发态单端口体感：`vite.config.ts` 配置 `/api` 代理到 Web API（优先 `DEVHAVEN_WEB_API_TARGET`，默认 `http://127.0.0.1:3210`），并从 `~/.devhaven/app_state.json` 读取 `settings.viteDevPort` 作为 Vite 端口（可由 `DEVHAVEN_VITE_PORT` 覆盖，需重启 Vite 生效）；`src/platform/runtime.ts` 在 `import.meta.env.DEV` 下走 `window.location.origin`
 - WebSocket 事件分发：浏览器端通过 `src/platform/eventClient.ts` 先声明订阅事件集合，`src-tauri/src/web_server.rs` 仅按已订阅事件名推送；终端/快捷命令已不再广播 legacy `terminal-output` / `terminal-exit` / `quick-command-event`。
-- 事件镜像：`src-tauri/src/web_event_bus.rs` + `src-tauri/src/{terminal.rs,quick_command_manager.rs,worktree_init.rs,interaction_lock.rs,codex_monitor.rs}`
+- 事件镜像：`src-tauri/src/web_event_bus.rs` + `src-tauri/src/{terminal.rs,quick_command_manager.rs,worktree_init.rs,interaction_lock.rs,agent_control.rs}`
 - 新增 command：`resolve_home_dir`（`src-tauri/src/lib.rs`），供 Web 模式路径展开使用
 
 ## 3) 回写（维护）AGENTS.md 的逻辑
