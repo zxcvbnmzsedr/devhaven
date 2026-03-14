@@ -16,3 +16,4 @@
 - 对“只挂载当前 active workspace”的性能优化要特别谨慎：终端 PTY 虽然能靠 `preserveSessionOnUnmount` 保活，但项目级 `useQuickCommandRuntime` / pane agent 等 React 运行态仍会随着 workspace 卸载而被误判结束；只要用户需要后台继续跑任务，就应优先保持 workspace 挂载，仅把非激活项隐藏/降交互。
 - 当产品方向切到 cmux 式 primitive + control plane 时，不能继续把 provider 选择、运行态和 notification 绑在前端 pane mode 里；应优先把 terminal binding / agent session / notification 真相收口到后端 registry，再让前端只做 projection。
 - 当旧架构已经不再是主路径时，不要长期保留“兼容但无人使用”的 UI/Hook/adapter 壳层；最好在控制面和默认路径稳定后立刻做一次第三轮清场，把死代码删除，并用加载时归一化兼容历史快照。
+- 当系统里同时存在 monitor 事件流和 control plane 事件流时，不能只做 toast/系统通知；必须明确把真实事件桥接进 control plane，否则用户会看到“状态在跑、控制面却没通知”的割裂体验。通知模型也必须尽早补上消费策略（至少 workspace 级自动已读）。

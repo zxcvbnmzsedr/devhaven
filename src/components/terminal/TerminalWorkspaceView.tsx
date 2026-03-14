@@ -45,6 +45,8 @@ import { resolveRuntimeClientId } from "../../platform/runtime";
 import { gitIsRepo } from "../../services/gitManagement";
 import { listSharedScripts } from "../../services/sharedScripts";
 import { terminateTerminalSessions } from "../../services/terminal";
+import { markControlPlaneNotificationRead } from "../../services/controlPlane";
+import { collectNotificationIdsToMarkRead } from "../../utils/controlPlaneAutoRead";
 import {
   projectControlPlaneSurface,
   projectControlPlaneWorkspace,
@@ -358,6 +360,11 @@ function TerminalWorkspaceView({
       }) ?? null;
     return matchedSurface ? projectControlPlaneSurface(matchedSurface) : null;
   }, [controlPlaneTree, shellModel]);
+  const autoReadNotificationIds = useMemo(
+    () => collectNotificationIdsToMarkRead(controlPlaneTree, { isActive }),
+    [controlPlaneTree, isActive],
+  );
+  const autoReadSignatureRef = useRef<string>("");
   const visibleTerminalPaneCount = useMemo(
     () =>
       countVisibleTerminalPanes({
@@ -568,6 +575,26 @@ function TerminalWorkspaceView({
     }
     onRegisterWorkspaceSessionIds(projectId, Object.keys(sessionSnapshots));
   }, [activeSnapshot, onRegisterWorkspaceSessionIds, projectId, sessionSnapshots]);
+
+  useEffect(() => {
+    const signature = autoReadNotificationIds.join("|");
+    if (!signature) {
+      autoReadSignatureRef.current = "";
+      return;
+    }
+    if (autoReadSignatureRef.current === signature) {
+      return;
+    }
+    autoReadSignatureRef.current = signature;
+    void Promise.all(
+      autoReadNotificationIds.map((notificationId) =>
+        markControlPlaneNotificationRead(notificationId),
+      ),
+    ).catch((error) => {
+      console.warn("自动标记控制面通知已读失败。", error);
+      autoReadSignatureRef.current = "";
+    });
+  }, [autoReadNotificationIds]);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
