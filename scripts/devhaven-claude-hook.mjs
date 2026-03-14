@@ -33,7 +33,7 @@ function firstText(...values) {
 async function runCli() {
   const hook = process.argv[2];
   if (!hook) {
-    throw new Error("用法：node scripts/devhaven-claude-hook.mjs <session-start|active|stop|idle|notification|notify|prompt-submit>");
+    throw new Error("用法：node scripts/devhaven-claude-hook.mjs <session-start|active|stop|idle|session-end|notification|notify|prompt-submit|pre-tool-use>");
   }
   const payload = await readJsonFromStdin();
   const agentSessionId = firstText(
@@ -54,11 +54,22 @@ async function runCli() {
     return;
   }
 
-  if (hook === "stop" || hook === "idle") {
+  if (hook === "stop" || hook === "idle" || hook === "session-end") {
     await sendAgentSessionEvent({
       provider: "claude-code",
       status: "stopped",
       message: firstText(payload.message, "Claude 会话已停止"),
+      agentSessionId,
+      cwd: firstText(payload.cwd, process.cwd()),
+    });
+    return;
+  }
+
+  if (hook === "pre-tool-use") {
+    await sendAgentSessionEvent({
+      provider: "claude-code",
+      status: "running",
+      message: firstText(payload.message, payload.tool_name, "Claude 正在执行工具"),
       agentSessionId,
       cwd: firstText(payload.cwd, process.cwd()),
     });

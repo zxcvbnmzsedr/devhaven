@@ -1,4 +1,5 @@
 mod agent_control;
+mod agent_launcher;
 mod command_catalog;
 mod filesystem;
 mod git_daily;
@@ -50,6 +51,7 @@ use crate::agent_control::{
     DevHavenAgentSessionEventRequest, DevHavenIdentifyRequest, DevHavenNotifyRequest,
     DevHavenTreeRequest, NotificationMutationRequest,
 };
+use crate::agent_launcher::{AgentLauncherState, AgentRuntimeDiagnoseResult, AgentSpawnResult};
 use crate::quick_command_manager::{
     QuickCommandManager, quick_command_finish, quick_command_list, quick_command_start,
     quick_command_stop,
@@ -1011,9 +1013,9 @@ fn devhaven_notify(
     level: Option<String>,
 ) -> Result<agent_control::NotificationRecord, String> {
     log_command_result("devhaven_notify", || {
-        agent_control::notify_control_plane(
+        let record = agent_control::notify_control_plane(
             &app,
-            state,
+            state.clone(),
             DevHavenNotifyRequest {
                 terminal_session_id,
                 workspace_id,
@@ -1025,7 +1027,10 @@ fn devhaven_notify(
                 message,
                 level,
             },
-        )
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)?;
+        Ok(record)
     })
 }
 
@@ -1045,9 +1050,9 @@ fn devhaven_agent_session_event(
     message: Option<String>,
 ) -> Result<agent_control::AgentSessionRecord, String> {
     log_command_result("devhaven_agent_session_event", || {
-        agent_control::upsert_agent_session_event(
+        let record = agent_control::upsert_agent_session_event(
             &app,
-            state,
+            state.clone(),
             DevHavenAgentSessionEventRequest {
                 agent_session_id,
                 terminal_session_id,
@@ -1060,7 +1065,10 @@ fn devhaven_agent_session_event(
                 cwd,
                 message,
             },
-        )
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)?;
+        Ok(record)
     })
 }
 
@@ -1073,10 +1081,12 @@ fn devhaven_mark_notification_read(
     log_command_result("devhaven_mark_notification_read", || {
         agent_control::mark_notification_read_state(
             &app,
-            state,
+            state.clone(),
             NotificationMutationRequest { notification_id },
             true,
-        )
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)
     })
 }
 
@@ -1089,10 +1099,77 @@ fn devhaven_mark_notification_unread(
     log_command_result("devhaven_mark_notification_unread", || {
         agent_control::mark_notification_read_state(
             &app,
-            state,
+            state.clone(),
             NotificationMutationRequest { notification_id },
             false,
-        )
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)
+    })
+}
+
+#[tauri::command]
+fn agent_spawn(
+    app: AppHandle,
+    launcher: State<AgentLauncherState>,
+    control_state: State<AgentControlState>,
+    provider: String,
+    project_path: String,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+    terminal_session_id: Option<String>,
+    cwd: Option<String>,
+) -> Result<AgentSpawnResult, String> {
+    log_command_result("agent_spawn", || {
+        let result = crate::agent_launcher::spawn_agent_command(
+            &app,
+            &launcher,
+            &control_state,
+            crate::agent_launcher::AgentSpawnInput {
+                provider,
+                project_path,
+                workspace_id,
+                pane_id,
+                surface_id,
+                terminal_session_id,
+                cwd,
+            },
+        )?;
+        let snapshot = control_state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)?;
+        Ok(result)
+    })
+}
+
+#[tauri::command]
+fn agent_stop(
+    app: AppHandle,
+    launcher: State<AgentLauncherState>,
+    control_state: State<AgentControlState>,
+    agent_session_id: String,
+    force: Option<bool>,
+) -> Result<(), String> {
+    log_command_result("agent_stop", || {
+        crate::agent_launcher::stop_agent_command(
+            &app,
+            &launcher,
+            &control_state,
+            agent_session_id,
+            force.unwrap_or(false),
+        )?;
+        let snapshot = control_state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)
+    })
+}
+
+#[tauri::command]
+fn agent_runtime_diagnose(
+    launcher: State<AgentLauncherState>,
+    control_state: State<AgentControlState>,
+) -> Result<AgentRuntimeDiagnoseResult, String> {
+    log_command_result("agent_runtime_diagnose", || {
+        crate::agent_launcher::diagnose_agent_runtime_command(launcher, control_state)
     })
 }
 
@@ -1123,6 +1200,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(AgentControlState::default())
+        .manage(AgentLauncherState::default())
         .manage(TerminalState::default())
         .manage(QuickCommandManager::default())
         .manage(worktree_init::WorktreeInitState::default())
@@ -1149,6 +1227,10 @@ pub fn run() {
                 log::info!("log dir={}", path.display());
             }
             let app_handle = app.handle();
+            let control_plane = storage::load_agent_control_plane_store(&app_handle)?;
+            app_handle
+                .state::<AgentControlState>()
+                .replace_from_control_plane_file(control_plane)?;
             let web_runtime = app_handle
                 .state::<web_server::WebServerRuntime>()
                 .inner()
@@ -1171,6 +1253,22 @@ pub fn run() {
             }
             if let Err(error) = storage::flush_terminal_workspace_store(app_handle) {
                 log::warn!("退出前刷盘终端工作区失败: {}", error);
+            }
+            let control_state = app_handle.state::<AgentControlState>();
+            match control_state.export_control_plane_file() {
+                Ok(snapshot) => {
+                    if let Err(error) =
+                        storage::save_agent_control_plane_store(app_handle, snapshot)
+                    {
+                        log::warn!("退出前同步 agent control plane 失败: {}", error);
+                    }
+                }
+                Err(error) => {
+                    log::warn!("退出前导出 agent control plane 失败: {}", error);
+                }
+            }
+            if let Err(error) = storage::flush_agent_control_plane_store(app_handle) {
+                log::warn!("退出前刷盘 agent control plane 失败: {}", error);
             }
         }
     });

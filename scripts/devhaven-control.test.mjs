@@ -1,12 +1,32 @@
 import assert from "node:assert/strict";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import process from "node:process";
 import test from "node:test";
 
+import {
+  buildClaudeHooksSettings,
+  resolveRealCommand as resolveRealClaudeCommand,
+  resolveWrapperCleanPath as resolveClaudeWrapperCleanPath,
+  buildWrappedClaudeSpawn,
+  runWrappedClaude,
+} from "./devhaven-claude-wrapper.mjs";
+import {
+  summarizeNotifyPayload,
+} from "./devhaven-codex-hook.mjs";
 import {
   buildCommandUrl,
   postDevHavenCommand,
   resolveControlEndpoint,
 } from "./devhaven-control.mjs";
 import { buildHookContext } from "./devhaven-agent-hook.mjs";
+import {
+  buildWrappedCodexSpawn,
+  resolveRealCommand as resolveRealCodexCommand,
+  resolveWrapperCleanPath as resolveCodexWrapperCleanPath,
+  runWrappedCodex,
+} from "./devhaven-codex-wrapper.mjs";
 
 test("resolveControlEndpoint prefers explicit value then env then default", () => {
   assert.equal(
@@ -70,4 +90,186 @@ test("buildHookContext reads DEVHAVEN context ids from environment", () => {
       terminalSessionId: "session-1",
     },
   );
+});
+
+test("buildWrappedCodexSpawn prefers explicit real codex bin and forwards args", () => {
+  const result = buildWrappedCodexSpawn(["exec", "实现需求"], {
+      DEVHAVEN_REAL_CODEX_BIN: "/opt/bin/codex-real",
+      DEVHAVEN_NODE_BIN: "/opt/bin/node",
+      DEVHAVEN_CODEX_HOOK_PATH: "/repo/scripts/devhaven-codex-hook.mjs",
+    });
+  assert.equal(result.command, "/opt/bin/codex-real");
+  assert.deepEqual(result.args.slice(-2), ["exec", "实现需求"]);
+  assert.match(result.args[1], /^notify=\[/);
+});
+
+test("resolveWrapperCleanPath removes wrapper shim dir before command lookup", () => {
+  const env = {
+    PATH: "/shim/bin:/usr/local/bin:/usr/bin",
+    DEVHAVEN_WRAPPER_BIN_PATH: "/shim/bin",
+  };
+  assert.equal(resolveCodexWrapperCleanPath(env), "/usr/local/bin:/usr/bin");
+  assert.equal(resolveClaudeWrapperCleanPath(env), "/usr/local/bin:/usr/bin");
+});
+
+test("buildWrappedCodexSpawn resolves real binary from PATH when explicit env missing", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "devhaven-real-codex-"));
+  const wrapperBin = join(tempRoot, "wrapper-bin");
+  const realBin = join(tempRoot, "real-bin");
+  mkdirSync(wrapperBin, { recursive: true });
+  mkdirSync(realBin, { recursive: true });
+  writeFileSync(join(wrapperBin, "codex"), "#!/bin/sh\nexit 1\n");
+  writeFileSync(join(realBin, "codex"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(wrapperBin, "codex"), 0o755);
+  chmodSync(join(realBin, "codex"), 0o755);
+
+  try {
+    const env = {
+      PATH: `${wrapperBin}:${realBin}:/usr/bin:/bin`,
+      DEVHAVEN_WRAPPER_BIN_PATH: wrapperBin,
+      DEVHAVEN_NODE_BIN: "/opt/bin/node",
+      DEVHAVEN_CODEX_HOOK_PATH: "/repo/scripts/devhaven-codex-hook.mjs",
+    };
+    assert.equal(resolveRealCodexCommand(env, "codex"), join(realBin, "codex"));
+    const result = buildWrappedCodexSpawn(["--version"], env);
+    assert.equal(result.command, join(realBin, "codex"));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildWrappedClaudeSpawn injects hooks settings and session id", () => {
+  const result = buildWrappedClaudeSpawn(["--model", "sonnet"], {
+    DEVHAVEN_REAL_CLAUDE_BIN: "/opt/bin/claude-real",
+    DEVHAVEN_NODE_BIN: "/opt/bin/node",
+    DEVHAVEN_CLAUDE_HOOK_PATH: "/repo/scripts/devhaven-claude-hook.mjs",
+  });
+  assert.equal(result.command, "/opt/bin/claude-real");
+  assert.equal(result.args[0], "--settings");
+  assert.equal(result.args[2], "--session-id");
+  assert.equal(result.args[4], "--model");
+  const settings = JSON.parse(result.args[1]);
+  assert.ok(settings.hooks.SessionStart);
+  assert.ok(settings.hooks.Notification);
+});
+
+test("buildWrappedClaudeSpawn resolves real binary from PATH when explicit env missing", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "devhaven-real-claude-"));
+  const wrapperBin = join(tempRoot, "wrapper-bin");
+  const realBin = join(tempRoot, "real-bin");
+  mkdirSync(wrapperBin, { recursive: true });
+  mkdirSync(realBin, { recursive: true });
+  writeFileSync(join(wrapperBin, "claude"), "#!/bin/sh\nexit 1\n");
+  writeFileSync(join(realBin, "claude"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(wrapperBin, "claude"), 0o755);
+  chmodSync(join(realBin, "claude"), 0o755);
+
+  try {
+    const env = {
+      PATH: `${wrapperBin}:${realBin}:/usr/bin:/bin`,
+      DEVHAVEN_WRAPPER_BIN_PATH: wrapperBin,
+      DEVHAVEN_NODE_BIN: "/opt/bin/node",
+      DEVHAVEN_CLAUDE_HOOK_PATH: "/repo/scripts/devhaven-claude-hook.mjs",
+    };
+    assert.equal(resolveRealClaudeCommand(env, "claude"), join(realBin, "claude"));
+    const result = buildWrappedClaudeSpawn(["--model", "sonnet"], env);
+    assert.equal(result.command, join(realBin, "claude"));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("buildClaudeHooksSettings returns null when hook path missing", () => {
+  assert.equal(buildClaudeHooksSettings({ DEVHAVEN_NODE_BIN: "/opt/bin/node" }), null);
+});
+
+test("summarizeNotifyPayload maps completion notifications to completed state", () => {
+  assert.deepEqual(
+    summarizeNotifyPayload({
+      type: "task_complete",
+      message: "任务已完成",
+      title: "Codex",
+    }),
+    {
+      title: "Codex",
+      message: "任务已完成",
+      level: "info",
+      status: "completed",
+    },
+  );
+});
+
+test("runWrappedCodex preserves current shell cwd and still spawns when control plane is unavailable", async () => {
+  const originalCwd = process.cwd();
+  const tempRoot = mkdtempSync(join(tmpdir(), "devhaven-codex-cwd-"));
+  const calls = [];
+  const child = {
+    once(event, handler) {
+      if (event === "exit") {
+        setTimeout(() => handler(0, null), 0);
+      }
+      return child;
+    },
+  };
+
+  try {
+    process.chdir(tempRoot);
+    const shellCwd = process.cwd();
+    await runWrappedCodex({
+      argv: ["--version"],
+      env: {
+        DEVHAVEN_REAL_CODEX_BIN: "/opt/bin/codex-real",
+        DEVHAVEN_PROJECT_PATH: "/repo-root",
+        DEVHAVEN_CONTROL_ENDPOINT: "http://127.0.0.1:1/api/cmd",
+      },
+      spawnImpl(command, args, options) {
+        calls.push({ command, args, options });
+        return child;
+      },
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].command, "/opt/bin/codex-real");
+    assert.equal(calls[0].options.cwd, shellCwd);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("runWrappedClaude preserves current shell cwd", async () => {
+  const originalCwd = process.cwd();
+  const tempRoot = mkdtempSync(join(tmpdir(), "devhaven-claude-cwd-"));
+  const calls = [];
+  const child = {
+    once(event, handler) {
+      if (event === "exit") {
+        setTimeout(() => handler(0, null), 0);
+      }
+      return child;
+    },
+  };
+
+  try {
+    process.chdir(tempRoot);
+    const shellCwd = process.cwd();
+    await runWrappedClaude({
+      argv: ["--version"],
+      env: {
+        DEVHAVEN_REAL_CLAUDE_BIN: "/opt/bin/claude-real",
+        DEVHAVEN_PROJECT_PATH: "/repo-root",
+      },
+      spawnImpl(command, args, options) {
+        calls.push({ command, args, options });
+        return child;
+      },
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].command, "/opt/bin/claude-real");
+    assert.equal(calls[0].options.cwd, shellCwd);
+  } finally {
+    process.chdir(originalCwd);
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
 });

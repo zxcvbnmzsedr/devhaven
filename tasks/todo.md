@@ -509,3 +509,45 @@
   - `pnpm exec tsc --noEmit`
   - `pnpm build`
   - `cargo check --manifest-path src-tauri/Cargo.toml`
+
+## Agent 包装通知 / 运行态可见性修复方案（2026-03-14）
+
+- [x] 继续收口交互式主路径为 cmux 风格单线模型，前端不再暴露显式命令面接口
+- [x] 建立隔离 worktree 并完成基线检查（`~/.config/superpowers/worktrees/DevHaven/agent-runtime-control-plane`）
+- [x] 用户确认 Codex/Claude 都要做透明 wrapper，且 Codex 必须保持交互式主路径
+- [x] 完成第一批实现基础：Task 1、Task 2 已落地，Task 3 已补 Codex/Claude wrapper、scripts/bin shim、terminal PATH/env 注入基础链路
+- [x] 修复 zsh login shell 在用户 `.zshenv/.zprofile/.zshrc/.zlogin` 覆盖 PATH 后，wrapper bin 不能保持首位的问题
+- [x] 用户已选择 Parallel Session（单独会话按 implementation plan 执行）
+- [x] 写设计稿 `docs/plans/2026-03-14-devhaven-agent-runtime-control-plane-design.md`
+- [x] 写实施计划 `docs/plans/2026-03-14-devhaven-agent-runtime-control-plane-implementation.md`
+- [x] 读取当前 agent 包装、control plane、通知消费链路与最近变更
+- [x] 复现并定位“无通知 / 无法判断 Codex 是否在运行”的直接原因
+- [x] 评估 monitor 删除后的影响，给出 2-3 个可行修复方案与推荐方案
+- [x] 在获批方案内完成最小实现、文档同步与任务记录更新
+- [x] 运行验证并补充 Review 证据
+
+## Review（Agent 包装通知 / 运行态可见性修复方案）
+
+- 直接原因：透明 wrapper 本体和 control plane 通知链路都能工作，但 DevHaven login shell 启动后，用户 `.zshenv/.zprofile/.zshrc/.zlogin` 会重建 PATH，把 `scripts/bin` 顶掉，导致 `codex` / `claude` 最终命中系统原始二进制，而不是 shim。
+- 设计层诱因：交互式主路径和显式命令面曾同时出现在实现与文档心智中，容易让维护者误以为 `agent_spawn` 也是交互式 Claude/Codex 的主入口；同时 PATH 真相最初放在 `terminal.rs` 启动前注入层，离 shell 最终态太远。
+- 当前修复方案：
+  1. 保留 control plane 真相层与后端显式命令面，但将交互式 Claude/Codex 主路径明确收口为 `shell integration -> scripts/bin shim -> provider wrapper -> hook/notify -> control plane`。
+  2. 新增/完善 `scripts/bin/{codex,claude}`、`scripts/devhaven-{codex,claude}-wrapper.mjs`、`scripts/devhaven-{codex,claude}-hook.mjs`，让终端内直接输入 provider 命令即可进入受管运行时。
+  3. 新增 `scripts/shell-integration/*`，并在 zsh/bash 启动后重新夺回 PATH 首位，确保 `DEVHAVEN_WRAPPER_BIN_PATH` 永远排在第一位。
+  4. 从前端移除未使用的 `agentSpawn/agentStop/agentRuntimeDiagnose` 接口和类型，避免继续污染交互式主路径心智；显式命令面保留在后端工具层。
+- 本轮本地 code review 结论：
+  1. 已修正一个重要逻辑问题：`devhaven-codex-hook.mjs` 里 `task_complete` 原先被错误映射为 `waiting`，现已改为 `completed`，避免完成态看起来像“还在等待输入”。
+  2. 已继续收口 `terminal.rs` 中 shell integration helper 的职责，删除未使用参数，使“注入上下文”和“shell 最终态收口”边界更清晰。
+  3. 当前未再发现必须立刻修复的 Critical 问题；后续若继续对齐商业化 cmux，可再弱化 `agent_launcher` 在交互式路径中的存在感，并补一条“新 terminal 启动后 which codex/claude 命中 shim”的自动化回归测试。
+- 长期改进建议：
+  1. 继续让交互式 provider 只保留单线主路径，后端 `agent_spawn/stop/diagnose` 明确限定为显式命令面/诊断工具。
+  2. 补一条真正的运行时回归测试：新 terminal 启动后 `which codex` / `which claude` 必须命中 shim。
+  3. 后续若需要全局 Agent 状态卡，再基于现有 control plane projection 增量实现，不要重新引入第二套状态源。
+- 验证证据：
+  - `node --test scripts/devhaven-shell-integration.test.mjs scripts/devhaven-control.test.mjs`
+  - `pnpm exec tsc --noEmit`
+  - `cargo test apply_terminal_shell_integration_env_sets_zdotdir_wrapper --manifest-path src-tauri/Cargo.toml`
+  - `cargo test apply_terminal_shell_integration_env_sets_bash_prompt_bootstrap --manifest-path src-tauri/Cargo.toml`
+  - `cargo test apply_terminal_control_env_includes_http_command_endpoint --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+

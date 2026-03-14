@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value as JsonValue, json};
 use tauri::{AppHandle, Manager};
 
+use crate::agent_control::AgentControlPlaneFile;
 use crate::models::{
     AppStateFile, HeatmapCacheFile, Project, TerminalLayoutSnapshot,
     TerminalLayoutSnapshotSummary, TerminalWorkspacesFile,
@@ -23,6 +24,7 @@ fn terminal_workspace_rmw_mutex() -> &'static Mutex<()> {
 }
 
 const TERMINAL_WORKSPACE_FLUSH_DEBOUNCE_MS: u64 = 250;
+const AGENT_CONTROL_PLANE_FLUSH_DEBOUNCE_MS: u64 = 250;
 
 fn now_millis() -> i64 {
     SystemTime::now()
@@ -35,6 +37,13 @@ fn terminal_workspace_store() -> &'static Mutex<TerminalWorkspaceStoreState> {
     static TERMINAL_WORKSPACE_STORE: OnceLock<Mutex<TerminalWorkspaceStoreState>> =
         OnceLock::new();
     TERMINAL_WORKSPACE_STORE.get_or_init(|| Mutex::new(TerminalWorkspaceStoreState::default()))
+}
+
+fn agent_control_plane_store() -> &'static Mutex<AgentControlPlaneStoreState> {
+    static AGENT_CONTROL_PLANE_STORE: OnceLock<Mutex<AgentControlPlaneStoreState>> =
+        OnceLock::new();
+    AGENT_CONTROL_PLANE_STORE
+        .get_or_init(|| Mutex::new(AgentControlPlaneStoreState::default()))
 }
 
 #[derive(Debug, Clone)]
@@ -52,11 +61,38 @@ struct TerminalWorkspaceStoreState {
     flush_worker_running: bool,
 }
 
+#[derive(Debug, Clone)]
+struct AgentControlPlaneFlushSnapshot {
+    revision: u64,
+    control_plane: AgentControlPlaneFile,
+}
+
+#[derive(Debug, Clone)]
+struct AgentControlPlaneStoreState {
+    loaded: bool,
+    control_plane: AgentControlPlaneFile,
+    dirty_revision: u64,
+    flushed_revision: u64,
+    flush_worker_running: bool,
+}
+
 impl Default for TerminalWorkspaceStoreState {
     fn default() -> Self {
         Self {
             loaded: false,
             workspaces: TerminalWorkspacesFile::default(),
+            dirty_revision: 0,
+            flushed_revision: 0,
+            flush_worker_running: false,
+        }
+    }
+}
+
+impl Default for AgentControlPlaneStoreState {
+    fn default() -> Self {
+        Self {
+            loaded: false,
+            control_plane: AgentControlPlaneFile::default(),
             dirty_revision: 0,
             flushed_revision: 0,
             flush_worker_running: false,
@@ -178,6 +214,71 @@ impl TerminalWorkspaceStoreState {
     }
 }
 
+impl AgentControlPlaneStoreState {
+    fn replace_loaded(&mut self, control_plane: AgentControlPlaneFile, dirty: bool) {
+        self.loaded = true;
+        self.control_plane = control_plane;
+        self.dirty_revision = if dirty { 1 } else { 0 };
+        self.flushed_revision = 0;
+        self.flush_worker_running = false;
+    }
+
+    fn ensure_loaded_with<F>(&mut self, loader: F) -> Result<(), String>
+    where
+        F: FnOnce() -> Result<AgentControlPlaneFile, String>,
+    {
+        if self.loaded {
+            return Ok(());
+        }
+        self.replace_loaded(loader()?, false);
+        Ok(())
+    }
+
+    fn replace_control_plane(&mut self, control_plane: AgentControlPlaneFile) -> bool {
+        let changed = self.control_plane != control_plane;
+        if changed {
+            self.control_plane = control_plane;
+            self.dirty_revision += 1;
+        }
+        changed
+    }
+
+    fn current_control_plane(&self) -> AgentControlPlaneFile {
+        self.control_plane.clone()
+    }
+
+    fn flush_snapshot(&self) -> Option<AgentControlPlaneFlushSnapshot> {
+        if self.dirty_revision <= self.flushed_revision {
+            return None;
+        }
+        Some(AgentControlPlaneFlushSnapshot {
+            revision: self.dirty_revision,
+            control_plane: self.control_plane.clone(),
+        })
+    }
+
+    fn try_start_flush_worker(&mut self) -> bool {
+        if self.flush_worker_running {
+            return false;
+        }
+        self.flush_worker_running = true;
+        true
+    }
+
+    fn mark_flush_complete(&mut self, revision: u64) -> bool {
+        self.flushed_revision = self.flushed_revision.max(revision);
+        if self.flushed_revision >= self.dirty_revision {
+            self.flush_worker_running = false;
+            return false;
+        }
+        true
+    }
+
+    fn mark_flush_failed(&mut self) {
+        self.flush_worker_running = false;
+    }
+}
+
 // 获取应用数据目录。
 fn app_support_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let home_dir = app
@@ -264,6 +365,44 @@ fn load_terminal_workspaces_from_disk(app: &AppHandle) -> Result<TerminalWorkspa
         return Ok(TerminalWorkspacesFile::default());
     }
     read_json(&file_path)
+}
+
+fn agent_control_plane_file_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app_support_dir(app)?;
+    ensure_dir(&dir)?;
+    Ok(dir.join("agent_control_plane.json"))
+}
+
+fn read_agent_control_plane_file_from_path(path: &PathBuf) -> Result<AgentControlPlaneFile, String> {
+    if !path.exists() {
+        return Ok(AgentControlPlaneFile::default());
+    }
+    read_json(path)
+}
+
+fn write_agent_control_plane_file_to_path(
+    path: &PathBuf,
+    control_plane: &AgentControlPlaneFile,
+) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("目标文件缺少父目录: {}", path.display()))?
+        .to_path_buf();
+    ensure_dir(&parent)?;
+    write_json_pretty(path, control_plane)
+}
+
+fn load_agent_control_plane_from_disk(app: &AppHandle) -> Result<AgentControlPlaneFile, String> {
+    let path = agent_control_plane_file_path(app)?;
+    read_agent_control_plane_file_from_path(&path)
+}
+
+fn save_agent_control_plane_to_disk(
+    app: &AppHandle,
+    control_plane: &AgentControlPlaneFile,
+) -> Result<(), String> {
+    let path = agent_control_plane_file_path(app)?;
+    write_agent_control_plane_file_to_path(&path, control_plane)
 }
 
 fn save_terminal_workspaces_to_disk(
@@ -426,6 +565,58 @@ fn schedule_terminal_workspace_flush(app: AppHandle) {
     });
 }
 
+fn schedule_agent_control_plane_flush(app: AppHandle) {
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(
+                AGENT_CONTROL_PLANE_FLUSH_DEBOUNCE_MS,
+            ));
+
+            let snapshot = {
+                let store = agent_control_plane_store()
+                    .lock()
+                    .map_err(|_| "agent control plane 缓存锁已损坏".to_string());
+                let Ok(store) = store else {
+                    log::warn!("agent control plane 缓存锁已损坏，跳过异步刷盘");
+                    return;
+                };
+                store.flush_snapshot()
+            };
+
+            let Some(snapshot) = snapshot else {
+                let mut store = match agent_control_plane_store().lock() {
+                    Ok(store) => store,
+                    Err(_) => {
+                        log::warn!("agent control plane 缓存锁已损坏，无法结束刷盘线程");
+                        return;
+                    }
+                };
+                store.flush_worker_running = false;
+                return;
+            };
+
+            if let Err(error) = save_agent_control_plane_to_disk(&app, &snapshot.control_plane) {
+                log::warn!("agent control plane 异步刷盘失败: {}", error);
+                if let Ok(mut store) = agent_control_plane_store().lock() {
+                    store.mark_flush_failed();
+                }
+                return;
+            }
+
+            let should_continue = match agent_control_plane_store().lock() {
+                Ok(mut store) => store.mark_flush_complete(snapshot.revision),
+                Err(_) => {
+                    log::warn!("agent control plane 缓存锁已损坏，无法更新刷盘状态");
+                    return;
+                }
+            };
+            if !should_continue {
+                return;
+            }
+        }
+    });
+}
+
 pub fn flush_terminal_workspace_store(app: &AppHandle) -> Result<(), String> {
     loop {
         let snapshot = {
@@ -446,6 +637,60 @@ pub fn flush_terminal_workspace_store(app: &AppHandle) -> Result<(), String> {
             let mut store = terminal_workspace_store()
                 .lock()
                 .map_err(|_| "终端工作区缓存锁已损坏".to_string())?;
+            store.mark_flush_complete(snapshot.revision)
+        };
+        if !should_continue {
+            return Ok(());
+        }
+    }
+}
+
+pub fn load_agent_control_plane_store(app: &AppHandle) -> Result<AgentControlPlaneFile, String> {
+    let mut store = agent_control_plane_store()
+        .lock()
+        .map_err(|_| "agent control plane 缓存锁已损坏".to_string())?;
+    store.ensure_loaded_with(|| load_agent_control_plane_from_disk(app))?;
+    Ok(store.current_control_plane())
+}
+
+pub fn save_agent_control_plane_store(
+    app: &AppHandle,
+    control_plane: AgentControlPlaneFile,
+) -> Result<(), String> {
+    let should_schedule = {
+        let mut store = agent_control_plane_store()
+            .lock()
+            .map_err(|_| "agent control plane 缓存锁已损坏".to_string())?;
+        store.ensure_loaded_with(|| load_agent_control_plane_from_disk(app))?;
+        let changed = store.replace_control_plane(control_plane);
+        changed && store.try_start_flush_worker()
+    };
+    if should_schedule {
+        schedule_agent_control_plane_flush(app.clone());
+    }
+    Ok(())
+}
+
+pub fn flush_agent_control_plane_store(app: &AppHandle) -> Result<(), String> {
+    loop {
+        let snapshot = {
+            let mut store = agent_control_plane_store()
+                .lock()
+                .map_err(|_| "agent control plane 缓存锁已损坏".to_string())?;
+            store.ensure_loaded_with(|| load_agent_control_plane_from_disk(app))?;
+            store.flush_snapshot()
+        };
+
+        let Some(snapshot) = snapshot else {
+            return Ok(());
+        };
+
+        save_agent_control_plane_to_disk(app, &snapshot.control_plane)?;
+
+        let should_continue = {
+            let mut store = agent_control_plane_store()
+                .lock()
+                .map_err(|_| "agent control plane 缓存锁已损坏".to_string())?;
             store.mark_flush_complete(snapshot.revision)
         };
         if !should_continue {
@@ -790,11 +1035,14 @@ pub fn delete_terminal_layout_snapshot(app: &AppHandle, project_path: &str) -> R
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use serde_json::json;
 
     use super::{
         legacy_workspace_to_layout_snapshot, TerminalWorkspaceStoreState, TerminalWorkspacesFile,
     };
+    use crate::agent_control::AgentControlPlaneFile;
 
     #[test]
     fn terminal_workspace_store_batches_multiple_updates_before_flush() {
@@ -998,6 +1246,26 @@ mod tests {
             json!(true)
         );
         assert!(store.flush_snapshot().is_some());
+    }
+
+    #[test]
+    fn agent_control_plane_file_round_trips_through_disk_helpers() {
+        let dir = std::env::temp_dir().join(format!(
+            "devhaven-agent-control-plane-test-{}",
+            super::now_millis()
+        ));
+        fs::create_dir_all(&dir).expect("temp dir should exist");
+        let path = dir.join("agent_control_plane.json");
+        let expected = AgentControlPlaneFile::default();
+
+        super::write_agent_control_plane_file_to_path(&path, &expected)
+            .expect("write should work");
+        let actual = super::read_agent_control_plane_file_from_path(&path)
+            .expect("read should work");
+
+        assert_eq!(actual, expected);
+
+        let _ = fs::remove_dir_all(dir);
     }
 
 }
