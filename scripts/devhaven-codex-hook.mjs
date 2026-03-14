@@ -14,6 +14,83 @@ function normalizeOptional(value) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function parseMaybeJson(value) {
+  const trimmed = normalizeOptional(value);
+  if (!trimmed) {
+    return null;
+  }
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) {
+    return null;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
+function firstText(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+export function summarizeNotifyPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return {
+      title: "Codex",
+      message: "Codex 需要你的关注",
+      level: "attention",
+      status: "waiting",
+    };
+  }
+
+  const type = firstText(payload.type, payload.event, payload.kind)?.toLowerCase() ?? "";
+  const title = firstText(payload.title, "Codex");
+  const message =
+    firstText(
+      payload.message,
+      payload.summary,
+      payload.body,
+      payload.text,
+      payload.last_assistant_message,
+      payload.lastAssistantMessage,
+    ) ??
+    (type.includes("complete")
+      ? "Codex 已完成一轮处理"
+      : type.includes("error") || type.includes("fail")
+        ? "Codex 执行失败"
+        : "Codex 需要你的关注");
+
+  if (type.includes("error") || type.includes("fail")) {
+    return {
+      title,
+      message,
+      level: "error",
+      status: "failed",
+    };
+  }
+
+  if (type.includes("complete")) {
+    return {
+      title,
+      message,
+      level: "info",
+      status: "completed",
+    };
+  }
+
+  return {
+    title,
+    message,
+    level: "attention",
+    status: "waiting",
+  };
+}
+
 async function runCli() {
   const mode = process.argv[2];
   if (!mode) {
@@ -35,12 +112,24 @@ async function runCli() {
     return;
   }
   if (mode === "notify") {
-    const message = normalizeOptional(process.argv[3]) ?? "Codex 需要你的关注";
+    const payload = parseMaybeJson(process.argv[3]);
+    const summary = summarizeNotifyPayload(payload);
+    const agentSessionId =
+      normalizeOptional(process.env.CODEX_SESSION_ID) ??
+      normalizeOptional(payload?.session_id) ??
+      normalizeOptional(payload?.sessionId);
     await sendAgentNotification({
-      title: "Codex",
-      message,
-      level: "attention",
-      agentSessionId: normalizeOptional(process.env.CODEX_SESSION_ID),
+      title: summary.title,
+      message: summary.message,
+      level: summary.level,
+      agentSessionId,
+    });
+    await sendAgentSessionEvent({
+      provider: "codex",
+      status: summary.status,
+      message: summary.message,
+      agentSessionId,
+      cwd: process.cwd(),
     });
     return;
   }

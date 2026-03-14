@@ -203,7 +203,29 @@ pub struct ControlPlaneChangedPayload {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Default)]
+pub const AGENT_CONTROL_PLANE_FILE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentControlPlaneFile {
+    pub version: u32,
+    pub bindings: HashMap<String, TerminalBindingRecord>,
+    pub agent_sessions: HashMap<String, AgentSessionRecord>,
+    pub notifications: HashMap<String, NotificationRecord>,
+}
+
+impl Default for AgentControlPlaneFile {
+    fn default() -> Self {
+        Self {
+            version: AGENT_CONTROL_PLANE_FILE_VERSION,
+            bindings: HashMap::new(),
+            agent_sessions: HashMap::new(),
+            notifications: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ControlPlaneRegistry {
     terminal_bindings: HashMap<String, TerminalBindingRecord>,
     agent_sessions: HashMap<String, AgentSessionRecord>,
@@ -246,6 +268,26 @@ impl AgentControlState {
     pub fn mark_notification_read(&self, notification_id: &str, read: bool) -> Result<NotificationRecord, String> {
         let mut registry = self.inner.lock().map_err(|_| "control plane 锁已损坏".to_string())?;
         registry.mark_notification_read(notification_id, read)
+    }
+
+    pub fn export_control_plane_file(&self) -> Result<AgentControlPlaneFile, String> {
+        let registry = self
+            .inner
+            .lock()
+            .map_err(|_| "control plane 锁已损坏".to_string())?;
+        Ok(registry.to_file())
+    }
+
+    pub fn replace_from_control_plane_file(
+        &self,
+        file: AgentControlPlaneFile,
+    ) -> Result<(), String> {
+        let mut registry = self
+            .inner
+            .lock()
+            .map_err(|_| "control plane 锁已损坏".to_string())?;
+        *registry = ControlPlaneRegistry::from_file(file);
+        Ok(())
     }
 
 }
@@ -361,6 +403,23 @@ pub fn mark_notification_read_state(
 }
 
 impl ControlPlaneRegistry {
+    pub fn to_file(&self) -> AgentControlPlaneFile {
+        AgentControlPlaneFile {
+            version: AGENT_CONTROL_PLANE_FILE_VERSION,
+            bindings: self.terminal_bindings.clone(),
+            agent_sessions: self.agent_sessions.clone(),
+            notifications: self.notifications.clone(),
+        }
+    }
+
+    pub fn from_file(file: AgentControlPlaneFile) -> Self {
+        Self {
+            terminal_bindings: file.bindings,
+            agent_sessions: file.agent_sessions,
+            notifications: file.notifications,
+        }
+    }
+
     pub fn register_terminal_binding(&mut self, mut binding: TerminalBindingRecord) {
         binding.updated_at = now_millis();
         binding.exited = false;
@@ -906,5 +965,66 @@ mod tests {
             env.get("DEVHAVEN_SURFACE_ID").map(String::as_str),
             Some("pane-1")
         );
+    }
+
+    #[test]
+    fn agent_control_state_round_trips_via_persisted_file() {
+        let state = AgentControlState::default();
+        state
+            .register_terminal_binding(binding("session-1"))
+            .expect("register binding should work");
+        state
+            .upsert_agent_session_event(AgentSessionEventInput {
+                agent_session_id: Some("agent-1".to_string()),
+                provider: "codex".to_string(),
+                status: "running".to_string(),
+                message: Some("执行中".to_string()),
+                terminal_session_id: Some("session-1".to_string()),
+                project_path: None,
+                workspace_id: None,
+                pane_id: None,
+                surface_id: None,
+                cwd: None,
+            })
+            .expect("upsert agent session should work");
+        let notification = state
+            .push_notification(NotificationInput {
+                message: "需要确认".to_string(),
+                terminal_session_id: Some("session-1".to_string()),
+                agent_session_id: Some("agent-1".to_string()),
+                project_path: None,
+                workspace_id: None,
+                pane_id: None,
+                surface_id: None,
+            })
+            .expect("push notification should work");
+        state
+            .mark_notification_read(&notification.id, true)
+            .expect("mark read should work");
+
+        let persisted = state.export_control_plane_file().expect("export should work");
+
+        let restored = AgentControlState::default();
+        restored
+            .replace_from_control_plane_file(persisted)
+            .expect("import should work");
+
+        let tree = restored
+            .inner
+            .lock()
+            .expect("lock should work")
+            .tree("/repo", Some("project-1"))
+            .expect("tree should build")
+            .expect("tree should exist");
+        assert_eq!(tree.panes.len(), 1);
+        assert_eq!(
+            tree.panes[0]
+                .agent_session
+                .as_ref()
+                .map(|session| session.provider.as_str()),
+            Some("codex")
+        );
+        assert_eq!(tree.notifications.len(), 1);
+        assert!(tree.notifications[0].read);
     }
 }

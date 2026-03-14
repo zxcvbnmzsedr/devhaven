@@ -16,6 +16,7 @@ use crate::models::{
     WorktreeInitStatusQuery,
 };
 use crate::agent_control::AgentControlState;
+use crate::agent_launcher::AgentLauncherState;
 use crate::quick_command_manager::QuickCommandManager;
 use crate::terminal::TerminalState;
 use crate::web_server::WebServerRuntime;
@@ -93,6 +94,9 @@ macro_rules! devhaven_for_each_command {
             { devhaven_agent_session_event, web_devhaven_agent_session_event }
             { devhaven_mark_notification_read, web_devhaven_mark_notification_read }
             { devhaven_mark_notification_unread, web_devhaven_mark_notification_unread }
+            { agent_spawn, web_agent_spawn }
+            { agent_stop, web_agent_stop }
+            { agent_runtime_diagnose, web_agent_runtime_diagnose }
             { terminal_create_session, web_terminal_create_session }
             { terminal_write, web_terminal_write }
             { terminal_resize, web_terminal_resize }
@@ -931,6 +935,43 @@ fn web_devhaven_mark_notification_unread(app: &AppHandle, _guard: &PathGuard, pa
     ))
 }
 
+fn web_agent_spawn(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let launcher = app.state::<AgentLauncherState>();
+    let control_state = app.state::<AgentControlState>();
+    let project_path = required::<String>(payload, &["projectPath", "project_path"])?;
+    guard.ensure_allowed_path(&project_path, "projectPath")?;
+    serialize_result(crate::agent_spawn(
+        app.clone(),
+        launcher,
+        control_state,
+        required::<String>(payload, &["provider"])?,
+        project_path,
+        optional::<String>(payload, &["workspaceId", "workspace_id"])?,
+        optional::<String>(payload, &["paneId", "pane_id"])?,
+        optional::<String>(payload, &["surfaceId", "surface_id"])?,
+        optional::<String>(payload, &["terminalSessionId", "terminal_session_id"])?,
+        optional::<String>(payload, &["cwd"])?,
+    ))
+}
+
+fn web_agent_stop(app: &AppHandle, _guard: &PathGuard, payload: &Value) -> WebCommandResult {
+    let launcher = app.state::<AgentLauncherState>();
+    let control_state = app.state::<AgentControlState>();
+    serialize_result(crate::agent_stop(
+        app.clone(),
+        launcher,
+        control_state,
+        required::<String>(payload, &["agentSessionId", "agent_session_id"])?,
+        optional::<bool>(payload, &["force"])?,
+    ))
+}
+
+fn web_agent_runtime_diagnose(app: &AppHandle, _guard: &PathGuard, _payload: &Value) -> WebCommandResult {
+    let launcher = app.state::<AgentLauncherState>();
+    let control_state = app.state::<AgentControlState>();
+    serialize_result(crate::agent_runtime_diagnose(launcher, control_state))
+}
+
 fn web_terminal_create_session(app: &AppHandle, guard: &PathGuard, payload: &Value) -> WebCommandResult {
     let state = app.state::<TerminalState>();
     let control_state = app.state::<AgentControlState>();
@@ -1016,9 +1057,15 @@ mod tests {
         assert!(all_set.contains("devhaven_agent_session_event"));
         assert!(all_set.contains("devhaven_mark_notification_read"));
         assert!(all_set.contains("devhaven_mark_notification_unread"));
+        assert!(all_set.contains("agent_spawn"));
+        assert!(all_set.contains("agent_stop"));
+        assert!(all_set.contains("agent_runtime_diagnose"));
         assert!(web_set.contains("devhaven_identify"));
         assert!(web_set.contains("devhaven_tree"));
         assert!(web_set.contains("devhaven_notify"));
+        assert!(web_set.contains("agent_spawn"));
+        assert!(web_set.contains("agent_stop"));
+        assert!(web_set.contains("agent_runtime_diagnose"));
         assert!(!all_set.contains("get_codex_monitor_snapshot"));
         assert!(!web_set.contains("get_codex_monitor_snapshot"));
         assert!(web_set.is_subset(&all_set));

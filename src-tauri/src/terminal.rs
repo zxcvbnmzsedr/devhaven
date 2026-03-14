@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -219,10 +220,23 @@ fn ensure_terminal_env(cmd: &mut CommandBuilder) {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+struct TerminalAgentWrapperPaths {
+    wrapper_bin_path: Option<String>,
+    codex_wrapper_path: Option<String>,
+    claude_wrapper_path: Option<String>,
+    codex_hook_path: Option<String>,
+    claude_hook_path: Option<String>,
+    real_codex_bin: Option<String>,
+    real_claude_bin: Option<String>,
+    node_bin: Option<String>,
+}
+
 fn apply_terminal_control_env(
     cmd: &mut CommandBuilder,
     context: Option<&TerminalBindingRecord>,
     control_endpoint: Option<&str>,
+    wrapper_paths: Option<&TerminalAgentWrapperPaths>,
 ) {
     let Some(context) = context else {
         return;
@@ -235,6 +249,181 @@ fn apply_terminal_control_env(
         .filter(|value| !value.is_empty())
     {
         cmd.env("DEVHAVEN_CONTROL_ENDPOINT", control_endpoint);
+    }
+    if let Some(paths) = wrapper_paths {
+        if let Some(wrapper_bin_path) = paths.wrapper_bin_path.as_deref() {
+            prepend_path_entry(cmd, PathBuf::from(wrapper_bin_path));
+            cmd.env("DEVHAVEN_WRAPPER_BIN_PATH", wrapper_bin_path);
+        }
+        if let Some(wrapper_path) = paths.codex_wrapper_path.as_deref() {
+            cmd.env("DEVHAVEN_CODEX_WRAPPER_PATH", wrapper_path);
+        }
+        if let Some(wrapper_path) = paths.claude_wrapper_path.as_deref() {
+            cmd.env("DEVHAVEN_CLAUDE_WRAPPER_PATH", wrapper_path);
+        }
+        if let Some(hook_path) = paths.codex_hook_path.as_deref() {
+            cmd.env("DEVHAVEN_CODEX_HOOK_PATH", hook_path);
+        }
+        if let Some(hook_path) = paths.claude_hook_path.as_deref() {
+            cmd.env("DEVHAVEN_CLAUDE_HOOK_PATH", hook_path);
+        }
+        if let Some(real_bin) = paths.real_codex_bin.as_deref() {
+            cmd.env("DEVHAVEN_REAL_CODEX_BIN", real_bin);
+        }
+        if let Some(real_bin) = paths.real_claude_bin.as_deref() {
+            cmd.env("DEVHAVEN_REAL_CLAUDE_BIN", real_bin);
+        }
+        if let Some(node_bin) = paths.node_bin.as_deref() {
+            cmd.env("DEVHAVEN_NODE_BIN", node_bin);
+        }
+    }
+}
+
+fn apply_terminal_shell_integration_env(
+    cmd: &mut CommandBuilder,
+    shell: &str,
+) {
+    let shell_name = Path::new(shell)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+
+    match shell_name {
+        "zsh" => {
+            let Some(integration_dir) =
+                resolve_devhaven_script_path("shell-integration/zsh").filter(|path| PathBuf::from(path).is_dir())
+            else {
+                return;
+            };
+            let original_zdotdir = cmd
+                .get_env("ZDOTDIR")
+                .map(|value| value.to_string_lossy().to_string())
+                .or_else(|| std::env::var("ZDOTDIR").ok())
+                .or_else(|| std::env::var("HOME").ok())
+                .filter(|value| !value.trim().is_empty() && value != &integration_dir);
+
+            cmd.env("DEVHAVEN_SHELL_INTEGRATION", "1");
+            cmd.env("DEVHAVEN_SHELL_INTEGRATION_DIR", integration_dir.clone());
+            if let Some(original_zdotdir) = original_zdotdir {
+                cmd.env("DEVHAVEN_USER_ZDOTDIR", original_zdotdir);
+            }
+            if let Some(state_dir) = resolve_devhaven_shell_state_dir(cmd, "zsh") {
+                let histfile = state_dir.join(".zsh_history");
+                let compdump = state_dir.join(".zcompdump");
+                cmd.env("DEVHAVEN_SHELL_STATE_DIR", state_dir.to_string_lossy().to_string());
+                cmd.env("HISTFILE", histfile.to_string_lossy().to_string());
+                cmd.env("ZSH_COMPDUMP", compdump.to_string_lossy().to_string());
+            }
+            cmd.env("ZDOTDIR", integration_dir);
+        }
+        "bash" => {
+            let Some(integration_script) = resolve_devhaven_script_path(
+                "shell-integration/devhaven-bash-integration.sh",
+            ) else {
+                return;
+            };
+            let integration_dir = Path::new(&integration_script)
+                .parent()
+                .map(|value| value.to_string_lossy().to_string());
+            let original_prompt_command = cmd
+                .get_env("PROMPT_COMMAND")
+                .map(|value| value.to_string_lossy().to_string())
+                .or_else(|| std::env::var("PROMPT_COMMAND").ok())
+                .filter(|value| !value.trim().is_empty());
+            cmd.env("DEVHAVEN_SHELL_INTEGRATION", "1");
+            if let Some(integration_dir) = integration_dir {
+                cmd.env("DEVHAVEN_SHELL_INTEGRATION_DIR", integration_dir);
+            }
+            if let Some(state_dir) = resolve_devhaven_shell_state_dir(cmd, "bash") {
+                let histfile = state_dir.join(".bash_history");
+                cmd.env("DEVHAVEN_SHELL_STATE_DIR", state_dir.to_string_lossy().to_string());
+                cmd.env("HISTFILE", histfile.to_string_lossy().to_string());
+            }
+            if let Some(original_prompt_command) = original_prompt_command {
+                cmd.env("DEVHAVEN_USER_PROMPT_COMMAND", original_prompt_command);
+            }
+            cmd.env(
+                "PROMPT_COMMAND",
+                r#"if [ "${DEVHAVEN_WRAPPER_PATH_BOOTSTRAPPED:-0}" != "1" ]; then export DEVHAVEN_WRAPPER_PATH_BOOTSTRAPPED=1; fi; if [ -n "${DEVHAVEN_SHELL_INTEGRATION_DIR:-}" ] && [ -r "${DEVHAVEN_SHELL_INTEGRATION_DIR}/devhaven-bash-integration.sh" ]; then . "${DEVHAVEN_SHELL_INTEGRATION_DIR}/devhaven-bash-integration.sh"; fi; if [ -n "${DEVHAVEN_USER_PROMPT_COMMAND:-}" ]; then eval "${DEVHAVEN_USER_PROMPT_COMMAND}"; fi"#,
+            );
+        }
+        _ => {}
+    }
+}
+
+fn resolve_devhaven_shell_state_dir(cmd: &CommandBuilder, shell_name: &str) -> Option<PathBuf> {
+    let home_dir = cmd
+        .get_env("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
+    let state_dir = home_dir.join(".devhaven").join("shell-state").join(shell_name);
+    std::fs::create_dir_all(&state_dir).ok()?;
+    Some(state_dir)
+}
+
+fn resolve_devhaven_script_path(script_relative_path: &str) -> Option<String> {
+    if let Ok(current_dir) = std::env::current_dir() {
+        for base in current_dir.ancestors() {
+            let path = base.join("scripts").join(script_relative_path);
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
+fn prepend_path_entry(cmd: &mut CommandBuilder, entry: PathBuf) {
+    if !entry.exists() {
+        return;
+    }
+    let current = cmd
+        .get_env("PATH")
+        .map(|value| value.to_os_string())
+        .or_else(|| std::env::var_os("PATH"))
+        .unwrap_or_default();
+    let mut paths: Vec<PathBuf> = std::env::split_paths(&current).collect();
+    if paths.iter().any(|path| path == &entry) {
+        return;
+    }
+    paths.insert(0, entry);
+    if let Ok(joined) = std::env::join_paths(paths) {
+        cmd.env("PATH", joined);
+    }
+}
+
+fn resolve_executable_in_path(path_env: Option<OsString>, executable: &str) -> Option<String> {
+    let path_env = path_env.or_else(|| std::env::var_os("PATH"))?;
+    for dir in std::env::split_paths(&path_env) {
+        let candidate = dir.join(executable);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+fn resolve_terminal_agent_wrapper_paths(cmd: &CommandBuilder) -> TerminalAgentWrapperPaths {
+    let wrapper_bin_path = resolve_devhaven_script_path("bin")
+        .filter(|path| PathBuf::from(path).is_dir());
+    let codex_wrapper_path = resolve_devhaven_script_path("devhaven-codex-wrapper.mjs");
+    let claude_wrapper_path = resolve_devhaven_script_path("devhaven-claude-wrapper.mjs");
+    let codex_hook_path = resolve_devhaven_script_path("devhaven-codex-hook.mjs");
+    let claude_hook_path = resolve_devhaven_script_path("devhaven-claude-hook.mjs");
+    let path_env = cmd.get_env("PATH").map(|value| value.to_os_string());
+    let real_codex_bin = resolve_executable_in_path(path_env.clone(), "codex");
+    let real_claude_bin = resolve_executable_in_path(path_env.clone(), "claude");
+    let node_bin = resolve_executable_in_path(path_env, "node");
+
+    TerminalAgentWrapperPaths {
+        wrapper_bin_path,
+        codex_wrapper_path,
+        claude_wrapper_path,
+        codex_hook_path,
+        claude_hook_path,
+        real_codex_bin,
+        real_claude_bin,
+        node_bin,
     }
 }
 
@@ -672,6 +861,9 @@ pub fn terminal_create_session(
     );
     let _ = runtime.attach_session_client(&runtime_session_id, client_id.clone());
     let _ = control_state.register_terminal_binding(control_context.clone());
+    if let Ok(snapshot) = control_state.export_control_plane_file() {
+        let _ = crate::storage::save_agent_control_plane_store(&app, snapshot);
+    }
 
     if let Some(existing_pty) = find_existing_pty_by_session(&state, &session_id)? {
         attach_terminal_client(&state, &existing_pty, &client_id)?;
@@ -708,10 +900,13 @@ pub fn terminal_create_session(
     let mut cmd = build_terminal_command(&shell);
     cmd.cwd(project_path);
     ensure_terminal_env(&mut cmd);
+    let wrapper_paths = resolve_terminal_agent_wrapper_paths(&cmd);
+    apply_terminal_shell_integration_env(&mut cmd, &shell);
     apply_terminal_control_env(
         &mut cmd,
         Some(&control_context),
         control_command_endpoint.as_deref(),
+        Some(&wrapper_paths),
     );
 
     let child = pair
@@ -872,6 +1067,9 @@ pub fn terminal_create_session(
             exit_code,
         );
         let _ = control_state_for_cleanup.mark_terminal_session_exited(&session_id_for_output);
+        if let Ok(snapshot) = control_state_for_cleanup.export_control_plane_file() {
+            let _ = crate::storage::save_agent_control_plane_store(&app_handle, snapshot);
+        }
         events::emit_terminal_exit(&app_handle, payload);
         if let Ok(mut sessions) = sessions_map.lock() {
             sessions.remove(&pty_id_for_output);
@@ -1033,10 +1231,21 @@ mod tests {
             exited: false,
         };
         let mut cmd = CommandBuilder::new("/bin/sh");
+        let wrapper_paths = TerminalAgentWrapperPaths {
+            wrapper_bin_path: resolve_devhaven_script_path("bin"),
+            codex_wrapper_path: resolve_devhaven_script_path("devhaven-codex-wrapper.mjs"),
+            claude_wrapper_path: resolve_devhaven_script_path("devhaven-claude-wrapper.mjs"),
+            codex_hook_path: resolve_devhaven_script_path("devhaven-codex-hook.mjs"),
+            claude_hook_path: resolve_devhaven_script_path("devhaven-claude-hook.mjs"),
+            real_codex_bin: Some("/opt/bin/codex-real".to_string()),
+            real_claude_bin: Some("/opt/bin/claude-real".to_string()),
+            node_bin: Some("/opt/bin/node".to_string()),
+        };
         apply_terminal_control_env(
             &mut cmd,
             Some(&binding),
             Some("http://127.0.0.1:3210/api/cmd"),
+            Some(&wrapper_paths),
         );
 
         assert_eq!(
@@ -1048,6 +1257,101 @@ mod tests {
             cmd.get_env("DEVHAVEN_TERMINAL_SESSION_ID")
                 .and_then(|value| value.to_str()),
             Some("session-1")
+        );
+        let wrapper_path = cmd
+            .get_env("DEVHAVEN_CODEX_WRAPPER_PATH")
+            .and_then(|value| value.to_str());
+        assert!(
+            wrapper_path.is_some_and(|value| value.ends_with("scripts/devhaven-codex-wrapper.mjs")),
+            "expected codex wrapper path env to point at scripts/devhaven-codex-wrapper.mjs, got {:?}",
+            wrapper_path
+        );
+        let claude_wrapper_path = cmd
+            .get_env("DEVHAVEN_CLAUDE_WRAPPER_PATH")
+            .and_then(|value| value.to_str());
+        assert!(
+            claude_wrapper_path.is_some_and(|value| value.ends_with("scripts/devhaven-claude-wrapper.mjs")),
+            "expected claude wrapper path env to point at scripts/devhaven-claude-wrapper.mjs, got {:?}",
+            claude_wrapper_path
+        );
+        assert_eq!(
+            cmd.get_env("DEVHAVEN_REAL_CODEX_BIN")
+                .and_then(|value| value.to_str()),
+            Some("/opt/bin/codex-real")
+        );
+        assert_eq!(
+            cmd.get_env("DEVHAVEN_REAL_CLAUDE_BIN")
+                .and_then(|value| value.to_str()),
+            Some("/opt/bin/claude-real")
+        );
+        assert_eq!(
+            cmd.get_env("DEVHAVEN_NODE_BIN")
+                .and_then(|value| value.to_str()),
+            Some("/opt/bin/node")
+        );
+        let path_env = cmd.get_env("PATH").and_then(|value| value.to_str());
+        assert!(
+            path_env.is_some_and(|value| value.split(':').next().is_some_and(|first| first.ends_with("scripts/bin"))),
+            "expected PATH to be prepended with scripts/bin, got {:?}",
+            path_env
+        );
+    }
+
+    #[test]
+    fn apply_terminal_shell_integration_env_sets_zdotdir_wrapper() {
+        let mut cmd = CommandBuilder::new("/bin/zsh");
+        cmd.env("HOME", "/tmp/devhaven-home");
+        apply_terminal_shell_integration_env(
+            &mut cmd,
+            "/bin/zsh",
+        );
+
+        let zdotdir = cmd.get_env("ZDOTDIR").and_then(|value| value.to_str());
+        assert!(
+            zdotdir.is_some_and(|value| value.ends_with("scripts/shell-integration/zsh")),
+            "expected ZDOTDIR to point to shell integration dir, got {:?}",
+            zdotdir
+        );
+        assert_eq!(
+            cmd.get_env("DEVHAVEN_SHELL_INTEGRATION")
+                .and_then(|value| value.to_str()),
+            Some("1")
+        );
+        assert_eq!(
+            cmd.get_env("HISTFILE").and_then(|value| value.to_str()),
+            Some("/tmp/devhaven-home/.devhaven/shell-state/zsh/.zsh_history")
+        );
+        assert_eq!(
+            cmd.get_env("ZSH_COMPDUMP").and_then(|value| value.to_str()),
+            Some("/tmp/devhaven-home/.devhaven/shell-state/zsh/.zcompdump")
+        );
+    }
+
+    #[test]
+    fn apply_terminal_shell_integration_env_sets_bash_prompt_bootstrap() {
+        let mut cmd = CommandBuilder::new("/bin/bash");
+        cmd.env("HOME", "/tmp/devhaven-home");
+        apply_terminal_shell_integration_env(
+            &mut cmd,
+            "/bin/bash",
+        );
+
+        let prompt_command = cmd
+            .get_env("PROMPT_COMMAND")
+            .and_then(|value| value.to_str());
+        assert!(
+            prompt_command.is_some_and(|value| value.contains("devhaven-bash-integration.sh")),
+            "expected PROMPT_COMMAND to source devhaven-bash-integration.sh, got {:?}",
+            prompt_command
+        );
+        assert!(
+            prompt_command.is_some_and(|value| !value.contains("unset DEVHAVEN_USER_PROMPT_COMMAND")),
+            "expected PROMPT_COMMAND to preserve user prompt semantics, got {:?}",
+            prompt_command
+        );
+        assert_eq!(
+            cmd.get_env("HISTFILE").and_then(|value| value.to_str()),
+            Some("/tmp/devhaven-home/.devhaven/shell-state/bash/.bash_history")
         );
     }
 

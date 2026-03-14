@@ -17,3 +17,7 @@
 - 当产品方向切到 cmux 式 primitive + control plane 时，不能继续把 provider 选择、运行态和 notification 绑在前端 pane mode 里；应优先把 terminal binding / agent session / notification 真相收口到后端 registry，再让前端只做 projection。
 - 当旧架构已经不再是主路径时，不要长期保留“兼容但无人使用”的 UI/Hook/adapter 壳层；最好在控制面和默认路径稳定后立刻做一次第三轮清场，把死代码删除，并用加载时归一化兼容历史快照。
 - 当系统里同时存在 monitor 事件流和 control plane 事件流时，不能只做 toast/系统通知；必须明确把真实事件桥接进 control plane，否则用户会看到“状态在跑、控制面却没通知”的割裂体验。通知模型也必须尽早补上消费策略（至少 workspace 级自动已读）。
+- 当用户明确反馈“通知没了/看不到是否在运行”时，不能只检查 control plane 消费链路；还要回头核对**事件生产者是否真的被产品化接线**（例如 wrapper 是否自动接管、状态是否有启动恢复、UI 是否还有可见入口），否则容易在删掉兜底监控后留下整条空链路。
+- 当工程里已经有 env 注入、control endpoint、hook 脚本等必要条件时，排查时不能把问题描述成“从零开始”；应明确区分“必要条件已具备”和“闭环尚未产品化”两类状态，避免误导后续实现方向。
+- 当用户明确要求“Codex 必须保持交互式透明 wrapper”时，不能擅自把主路径改写成 non-interactive `exec` 任务；launcher 命令可以保留作诊断/显式托管入口，但终端内默认体验必须仍是透明接管交互命令。
+- 当目标是“像 cmux 一样简洁优雅”时，重点不是删掉控制面，而是把**交互式主路径**收口成单线：shell integration、shim、wrapper、hook、control plane 各守其位；显式 launcher/diagnose 命令应退到工具层，而不是继续占据用户心智。
