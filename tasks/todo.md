@@ -224,3 +224,249 @@
   - `cargo check --manifest-path src-tauri/Cargo.toml`
   - `pnpm build`
 
+## Codex 自动通知与通知自动已读修复（2026-03-14）
+
+- [x] 定位 Codex 自动通知未接通的直接原因与设计层诱因
+- [x] 定位通知未自动已读/消失的直接原因与设计层诱因
+- [x] 先补失败测试，覆盖 Codex 事件桥接到控制面、切回对应 workspace 后通知自动已读
+- [x] 实现最小修复并完成验证/Review
+
+## Review（Codex 自动通知与通知自动已读修复）
+
+- 直接原因：`codex_monitor.rs` 已经能产出 `agent-active / task-complete / task-error / needs-attention` 等真实事件，但 `src/hooks/useCodexIntegration.ts` 之前只把这些事件用于 toast / 系统通知，没有桥接到 `notifyControlPlane()` / `emitAgentSessionEvent()`；同时前端虽然已经有 `markControlPlaneNotificationRead()`，但主路径从未调用，所以测试通知会一直保持 unread。
+- 设计层诱因：存在 **Codex monitor 状态流** 与 **control plane 状态流** 两套平行链路，且 notification 生命周期只有“写入/展示”没有“消费”阶段；这属于状态生命周期闭环缺失。
+- 当前修复方案：
+  1. 新增 `src/utils/codexControlPlaneBridge.ts`，把 `CodexAgentEvent` 映射成统一的 control plane `agentSessionEvent + notification` payload，并在 `useCodexIntegration.ts` 中桥接真实 Codex monitor 事件进入 control plane。
+  2. 新增 `src/utils/controlPlaneAutoRead.ts`，并在 `TerminalWorkspaceView.tsx` 中对当前 active workspace 的 unread notifications 自动调用 `markControlPlaneNotificationRead()`，让测试通知在用户已经切到对应工作区时自动消失。
+  3. 保留现有 toast / 系统通知提示，但 control plane 现在也会同步收到 `Codex 需要处理 / 执行失败 / 已完成` 等状态。
+- 长期改进建议：
+  1. 后续可把这条桥接进一步下沉到后端，让 `codex_monitor.rs` 直接接入 `agent_control.rs`，彻底消除前端双状态流。
+  2. 现在的自动已读策略是 workspace 级，后续可细化为 pane/surface 级消费策略。
+  3. 对 Claude 等 provider 也可复用同样的 bridge helper，逐步统一 provider-neutral notification policy。
+- 验证证据：
+  - `pnpm exec tsc --noEmit`
+  - `node --test src/utils/codexControlPlaneBridge.test.mjs src/utils/controlPlaneAutoRead.test.mjs scripts/devhaven-control.test.mjs src/utils/controlPlaneProjection.test.mjs src/models/terminal.snapshot.test.mjs src/components/terminal/terminalWorkspaceShellModel.test.mjs`
+  - `pnpm build`
+
+## Codex wrapper 与原会话监听裁剪评估（2026-03-14）
+
+- [x] 盘点现有 Codex 会话监听、wrapper 与控制面的职责边界
+- [x] 追踪当前前后端对 Codex monitor 的实际消费点与依赖链
+- [x] 判断 wrapper 是否已完整覆盖 monitor 能力，并给出删除/保留建议
+- [x] 记录 Review，补充分析证据
+
+## Review（Codex wrapper 与原会话监听裁剪评估）
+
+- 当前**还不建议直接删除** `codex_monitor` 主链。仓库现状是：wrapper/hook 只负责把事件推到 control plane（`scripts/devhaven-codex-hook.mjs` → `devhaven_agent_session_event` / `devhaven_notify`），而原 monitor 仍承担**全局会话发现、启动后恢复、侧栏 CLI 会话列表、项目级 Codex 运行计数**。
+- 直接证据：`src/App.tsx` 仍通过 `useCodexMonitor` 驱动 `Sidebar` 的 `CodexSessionSection` 与 `TerminalWorkspaceWindow` 的 `codexProjectStatusById`；`src/hooks/useCodexIntegration.ts` 仍基于 monitor sessions 生成 `codexSessionViews` 并把 monitor 事件桥接进 control plane。
+- wrapper 当前**没有完成产品级全接管**：仓库里只提供了 `scripts/devhaven-control.mjs` / `scripts/devhaven-agent-hook.mjs` / `scripts/devhaven-codex-hook.mjs` 这些接入脚本，没有发现应用内部自动强制所有 Codex 启动都走 wrapper 的链路。
+- 即使你本机已经手工接好了 wrapper，当前 control plane 仍是**内存态 registry**（`src-tauri/src/agent_control.rs`），wrapper 也是**事件推送型**而不是快照恢复型；应用重启后，既有 Codex 会话不会自动回灌。原 monitor 通过 `src-tauri/src/codex_monitor.rs` 监听 `~/.codex/sessions` + 轮询进程，恰好补了这块恢复能力。
+- 因此更稳妥的结论是：
+  1. **现在不能直接删 monitor**；
+  2. 若你的目标是避免 monitor 与 wrapper 双上报，优先考虑**先移除/开关掉“monitor 事件 -> control plane”桥接**，而不是先删掉会话发现能力；
+  3. 等 control plane 补齐“会话列表 / 项目级运行计数 / 启动恢复 / 全量 wrapper 接管”后，再删除 `codex_monitor.rs`、`useCodexMonitor.ts`、`CodexSessionSection.tsx` 这一整套。
+- 本次分析证据命令：`rg -n "codex_monitor|useCodexMonitor|get_codex_monitor_snapshot|codex-monitor" src src-tauri scripts`、`rg -n "devhaven-codex-hook|DEVHAVEN_CONTROL_ENDPOINT|devhaven_notify|devhaven_agent_session_event" src src-tauri scripts`、`sed -n '1,260p' src/hooks/useCodexIntegration.ts`、`sed -n '1,260p' src/hooks/useCodexMonitor.ts`、`sed -n '1,260p' scripts/devhaven-codex-hook.mjs`、`sed -n '1,280p' src-tauri/src/agent_control.rs`。
+
+## Codex monitor 删除迁移方案设计（2026-03-14）
+
+- [ ] 盘点删除 Codex monitor 前必须保留的用户能力、数据源与恢复链路
+- [ ] 明确 wrapper/control plane 接管 monitor 所需补齐的能力缺口
+- [ ] 设计分阶段迁移方案、风险控制与回滚点
+- [ ] 产出迁移清单与验收标准，并记录 Review
+
+
+## Codex wrapper 误报执行失败修复（2026-03-14）
+
+- [x] 复现并定位 Codex 会话为何被持续误判为 `task-error`
+- [x] 对照现有实现与参考模式，确认最小修复边界
+- [x] 先补失败测试，覆盖“成功 tool output 仅因包含 error/failed 字样而被误判”的回归场景
+- [x] 实现修复并完成针对性验证
+- [x] 追加 Review，记录直接原因、设计诱因、修复方案与长期建议
+
+## Review（Codex wrapper 误报执行失败修复）
+
+- 直接原因：`src-tauri/src/codex_monitor.rs` 之前在解析 `response_item.type=function_call_output` 时，直接对整段 `output` 文本做关键字扫描；只要成功输出里出现 `error` / `failed` / `task-error` 之类字样，就会把当前会话打成 `CodexMonitorState::Error`。而 Codex 的真实 tool 输出经常会把源代码、grep 命中、编译日志片段原样塞进 `output`，即使前面已经明确写着 `Process exited with code 0`，也会被误判成失败。
+- 设计层诱因：monitor 当前把“结构化状态信号”与“自由文本内容”混在同一条判定链路里，缺少“优先信结构化字段、谨慎处理自由文本”的边界；这和 cmux 里 hook/notify 主要依赖显式事件类型驱动状态切换的思路相反。除此之外，未发现新的系统设计缺陷。
+- 当前修复方案：
+  1. 为 `function_call_output` 单独增加 `function_call_output_indicates_error()`，优先读取结构化 `is_error=true`，其次只识别标准的 `Process exited with code <非 0>` / `Process exited with signal ...`，不再扫描整段成功输出里的任意关键字。
+  2. `classify_entry()` 的文本匹配改为**只看值、不看对象 key**，避免 `is_error: false` 这种字段名本身就把会话误判成 error。
+  3. 新增 3 个回归测试：
+     - 成功 `function_call_output` 即使正文含有 `task-error` 字样也应保持 `Completed`
+     - 非 0 exit code 仍应判定为 `Error`
+     - `is_error: false` 不应仅因字段名包含 `error` 被误判
+- 长期改进建议：
+  1. 后续如果继续增强 Codex monitor，优先补“结构化事件 -> 状态”的显式映射，而不是继续扩大自由文本关键字匹配范围。
+  2. 若未来 wrapper 真正全量接管状态上报，可以把 monitor 收缩成恢复/发现能力，减少再次从 `.jsonl` 里猜状态的职责。
+  3. 可补一个真实样本回放测试集，覆盖 `exec_command`/`cargo`/`pnpm`/`rg` 等常见 tool 输出，避免再被日志内容误伤。
+- 验证证据：
+  - `cargo test parse_session_file_keeps_successful_function_call_output_with_error_text_completed --manifest-path src-tauri/Cargo.toml`
+  - `cargo test classify_entry_does_not_treat_is_error_false_key_name_as_error --manifest-path src-tauri/Cargo.toml`
+  - `cargo test parse_session_file_marks_error_when_function_call_output_reports_non_zero_exit_code --manifest-path src-tauri/Cargo.toml`
+  - `cargo test codex_monitor --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+
+## Codex 完成通知缺失排查（2026-03-14）
+
+- [x] 收集最新现象证据，确认完成事件是否从 monitor 生成
+- [x] 对照 wrapper / bridge / control plane 链路定位中断层
+- [x] 先补失败测试，再实现最小修复
+- [x] 运行针对性验证并补 Review
+
+## Review（Codex 完成通知缺失排查）
+
+- 直接原因：`src-tauri/src/codex_monitor.rs` 的 `process_event_msg()` 之前没有处理 `event_msg.payload.type = "task_complete"`。而我抽样检查最近 67 份带 `task_complete` 的 Codex session，发现至少有 2 份**没有任何 assistant message，只在最后写了 `task_complete`**。这类完成态会被 monitor 直接落成 `Idle`，于是不会产出 `task-complete` 事件，也就没有 toast / 系统通知 / 控制面通知。
+- 设计层诱因：当前 monitor 同时兼容“从 assistant message 推断完成”和“从显式 session event 恢复状态”两种来源，但完成态路径只实现了前者，没有把 Codex 已经给出的显式 `task_complete` 事件接入同一真相链路，属于状态源接线不完整。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 在 `process_event_msg()` 中显式处理 `task_complete`，把它视为完成信号，更新 `last_assistant_ts / last_agent_activity_ts`。
+  2. 当 `task_complete` 自身不带正文时，如果此前没有更好的 details，就回退为 `任务已完成`，保证会话状态可解释。
+  3. 新增回归测试 `parse_session_file_marks_completed_when_task_complete_has_no_assistant_message`，锁住“只有显式 task_complete 也必须完成”的场景。
+- 长期改进建议：
+  1. 把 monitor 中所有 provider 显式事件（例如 `task_complete / task_error / needs_attention`）统一纳入结构化事件优先的判定链，减少对消息文本推断的依赖。
+  2. 如果后续 wrapper 接管更完整，可以把 monitor 进一步收缩为“恢复/发现兜底”，避免重复猜状态。
+  3. 追加真实 session 样本回放测试，覆盖“无 assistant message 直接 task_complete”的 provider 变体。
+- 验证证据：
+  - `cargo test parse_session_file_marks_completed_when_task_complete_has_no_assistant_message --manifest-path src-tauri/Cargo.toml`
+  - `cargo test parse_session_file_keeps_successful_function_call_output_with_error_text_completed --manifest-path src-tauri/Cargo.toml`
+  - `cargo test codex_monitor --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+
+## Codex 控制面通知已写入但 UI 不显示排查（2026-03-14）
+
+- [x] 收集 control plane tree / projection / auto-read 证据
+- [x] 定位 toast / 系统通知 / 最新消息分别为何未出现
+- [x] 先补失败测试，再实现最小修复
+- [x] 完成验证并补 Review
+
+## Review（Codex 控制面通知已写入但 UI 不显示排查）
+
+- 直接原因：这次日志已经证明 `devhaven_agent_session_event` 与 `devhaven_notify` 都成功执行，问题不在后端命令失败，而在**前端没有以 control plane notification 作为统一的 UI 通知源**。当前 toast / 系统通知只由 `useCodexIntegration` 里的 codex monitor 事件流触发；当外部 wrapper 直接写入 control plane（`devhaven_notify`）时，UI 不会额外弹 toast / 系统通知。另一方面，终端头部的“最新消息”文案优先取 pane projection，而 `projectControlPlaneSurface()` 只在 `unreadCount > 0` 时才返回 notification message；通知一旦被 active workspace 自动已读，inline latest message 就立刻消失。
+- 设计层诱因：目前存在 **monitor 事件流** 与 **control plane notification 流** 两套并行的“用户提示”来源，但 UI 只消费前者、头部 latest message 又只消费 unread pane 视角，导致 wrapper 直写 control plane 时出现“后端有记录、前端无反馈”的断层。这属于通知消费真相源分裂。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. `useCodexIntegration.ts` 新增对 `devhaven-control-plane-changed` 的监听：当 reason=`notification` 时，回读对应 workspace tree，提取本次新写入的 Codex 通知，并统一触发 toast / 系统通知；这样 monitor 桥接和 wrapper 直写都会走同一条 UI 提示链。
+  2. monitor 事件桥接仍负责把 Codex 状态写入 control plane，但当该事件已经会生成 control plane notification 时，不再直接在同一个 effect 里重复 toast，避免后续双提示。
+  3. `TerminalWorkspaceHeader.tsx` 现在会在 active pane latest message 为空时回退显示 workspace 级 latest message，因此通知被 auto-read 后，头部仍能看到最近一条控制面消息，而不是立刻清空。
+  4. `ControlPlaneNotification` 前端模型补齐 `updatedAt`，并新增 helper / 测试覆盖“按事件时间提取新通知”“pane 文案为空时回退 workspace latest message”。
+- 长期改进建议：
+  1. 后续把 toast / 系统通知彻底统一到 control plane notification 真相源，逐步让 monitor 只负责写入状态，不再直接承担 UI 提示。
+  2. 若要进一步减少竞态，可让后端 `devhaven-control-plane-changed` payload 直接携带 notification record，而不是前端再回读 tree。
+  3. 空 session 文件 warning 仍是噪音，后续可把“新建但尚未写入 session_meta 的空 rollout 文件”降级为静默跳过，避免干扰排障。
+- 验证证据：
+  - `node --test src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneProjection.test.mjs src/utils/codexControlPlaneBridge.test.mjs`
+  - `pnpm exec tsc --noEmit`
+
+## Codex 通知链路最小诊断日志（2026-03-14）
+
+- [x] 检查事件订阅/派发实现，选定最小日志打点位置
+- [x] 补充前端诊断日志并给出复现观察点
+- [ ] 根据日志结果继续缩小根因范围
+- [x] 更新 Review 与证据
+
+## Review（Codex 通知链路最小诊断日志）
+
+- 当前结论：需要前端运行时日志来判断 control-plane changed 事件是否到达 `useCodexIntegration.ts`、tree 回读后是否拿到了新 notification、以及 `showToast()` / `sendSystemNotification()` 是否真正被调用。后端日志已经证明 `devhaven_notify` 成功，因此下一步应该看前端链路，而不是继续猜 Rust 侧是否没写入。
+- 本轮新增诊断打点：
+  1. `src/hooks/useCodexIntegration.ts`：打印 `control-plane-changed` payload、tree 回读结果、提取到的新通知、monitor event -> control plane 映射结果，以及是否进入 direct toast / delegated 流程。
+  2. `src/hooks/useToast.ts`：打印 `showToast()` 是否真的被调用。
+  3. `src/services/system.ts`：打印系统通知 API 是否可用、权限状态、以及是否真正 dispatch。
+- 建议你下一轮复现时打开前端控制台，重点过滤关键字：`[codex-debug]`。
+- 重点观察顺序：
+  1. 是否出现 `[codex-debug] control-plane-changed`；若没有，说明前端根本没收到事件。
+  2. 若有，再看 `[codex-debug] loaded control-plane tree` / `collected new control-plane notifications`；若为空，说明 tree 回读/筛选条件有问题。
+  3. 若已经出现 `[codex-debug] forwarding control-plane notification to toast/system`，再看是否有 `[codex-debug] showToast invoked`；若没有，说明 effect 逻辑被提前 return。
+  4. 若 `showToast invoked` 已出现但 UI 仍不显示，再转查 toast 渲染层。
+- 验证证据：
+  - `pnpm exec tsc --noEmit`
+
+## Codex 控制面事件订阅诊断增强（2026-03-14）
+
+- [x] 给前端 listener 注册/卸载路径补生命周期日志
+- [x] 给 Rust emit_control_plane_changed 补发射日志
+- [ ] 让用户复现并采集新日志
+- [x] 更新 Review 与证据
+
+## Review（Codex 控制面事件订阅诊断增强）
+
+- 当前结论：既然后端 `devhaven_notify` 已成功，而前端连一条 `[codex-debug] control-plane-changed` 都没有，那么还需要区分是“前端 listener 根本没注册成功”还是“Rust emit 发了但 Tauri 前端没收到”。
+- 本轮新增诊断：
+  1. `src/hooks/useCodexIntegration.ts` 现在会打印 listener effect mount / register / cleanup 生命周期日志，用来确认前端是否真的完成了 `listenControlPlaneChanged()` 注册。
+  2. `src-tauri/src/agent_control.rs::emit_control_plane_changed()` 现在会打印每次发射的 `project_path / workspace_id / reason / updated_at`，用来确认 Rust 是否真的进入 emit。
+- 下一轮请你重启应用后复现，并同时看两处日志：
+  1. **前端控制台**：查 `[codex-debug] useCodexIntegration control-plane listener effect mounted` 与 `[codex-debug] control-plane listener registered`
+  2. **Tauri 后端日志**：查 `emit_control_plane_changed project_path=... reason=notification`
+- 判定方法：
+  - 若后端有 `emit_control_plane_changed ... reason=notification`，但前端没有 `listener registered`，说明前端订阅没起来。
+  - 若前端有 `listener registered`，后端也有 `emit_control_plane_changed`，但仍没有 `control-plane-changed`，说明问题更可能在 Tauri event 投递链。
+- 验证证据：
+  - `pnpm exec tsc --noEmit`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+
+## Codex 前端 bundle / 事件注册诊断（2026-03-14）
+
+- [x] 检查前端最早期挂载与 Tauri 事件注册点，选定最小全局日志打点
+- [x] 补全局挂载/事件注册日志并给出复现观察点
+- [ ] 根据结果判断是前端 bundle 未更新还是事件订阅链断裂
+- [x] 更新 tasks/todo.md 记录本轮诊断
+
+## Review（Codex 前端 bundle / 事件注册诊断）
+
+- 当前结论：既然你前端连 `useCodexIntegration` 里最早期的 `[codex-debug]` 都看不到，下一步必须先确认“最新前端 bundle 是否真的在跑”。
+- 本轮新增最前置打点：
+  1. `src/App.tsx`：`AppLayout mounted` 日志，验证 React 根组件是否加载了最新 bundle。
+  2. `src/platform/eventClient.ts`：Tauri runtime 下每次 `listenEvent()` 都会打印 `registering tauri listener`，验证事件订阅代码是否执行。
+- 下一轮请你重启应用后先不要触发 Codex，直接打开前端控制台看是否至少出现：
+  - `[codex-debug] AppLayout mounted`
+  - `[codex-debug] registering tauri listener`
+- 判定方法：
+  - 若这两条都没有，优先说明你当前看到的前端不是最新 bundle（或 DevTools 没连到实际渲染窗口）。
+  - 若这两条有，但 `useCodexIntegration` listener 相关日志没有，再继续收缩到 hook 挂载条件。
+- 验证证据：
+  - `pnpm exec tsc --noEmit`
+
+## Codex 通知显示修复（2026-03-14）
+
+- [x] 先补系统通知/Toast 可见性的失败测试或最小验证用例
+- [x] 改为 Tauri 原生系统通知实现，并保留 Web fallback
+- [x] 提升 Toast 可见性，确保终端工作区内明显可见
+- [x] 完成验证并补 Review
+
+## Review（Codex 通知显示修复）
+
+- 直接原因：日志已证明 control plane notification 会到达前端，并且 `showToast()` 已被调用；真正的问题分成两层：
+  1. 系统通知之前一直走浏览器 `Notification` API，在 Tauri 环境里会被权限/用户手势限制拦住；你日志里已经明确出现 `Notification prompting can only be done from a user gesture` 和 `permission: denied`。
+  2. Toast 虽然已触发，但原样式是底部居中的轻量胶囊，和终端工作区重叠时不够醒目，导致主观上像“没出现”。
+- 设计层诱因：桌面应用场景里仍复用了浏览器通知能力，而没有优先走 Tauri/native 路径；同时全局 Toast 在终端场景下缺少足够强的视觉层级。这属于“运行环境能力选择不匹配 + 反馈可见性不足”。除此之外，未发现新的系统设计缺陷。
+- 当前修复方案：
+  1. Rust 侧 `src-tauri/src/system.rs` 新增 `send_system_notification`，在 macOS 通过 `osascript display notification` 发送原生系统通知；并补了 AppleScript 字符串转义与脚本文案测试。
+  2. Tauri 命令层新增 `send_system_notification`（`src-tauri/src/lib.rs` / `src-tauri/src/command_catalog.rs`），前端 `src/services/system.ts` 在 Tauri runtime 下优先走该命令，仅在失败时回退浏览器 `Notification` API。
+  3. `src/App.tsx` 把全局 Toast 调整为右上角高对比卡片（更高 z-index、阴影、白字、明显边框），避免在终端工作区中不易察觉。
+- 长期改进建议：
+  1. 后续若要支持 Windows/Linux，可继续在 `src-tauri/src/system.rs` 按平台实现原生通知，而不是依赖浏览器 API。
+  2. 全局通知可以进一步统一成“控制面通知中心 + Toast + 原生系统通知”三层策略，并允许用户配置等级映射。
+  3. 当前排障用 `[codex-debug]` 日志仍保留，等你确认行为恢复后可以再收敛清理一轮。
+- 验证证据：
+  - `cargo test system::tests --manifest-path src-tauri/Cargo.toml`
+  - `pnpm exec tsc --noEmit`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+
+## Codex task-error 误判根因排查（2026-03-14）
+
+- [x] 检查 monitor 的 error 判定分支并设计最小诊断
+- [x] 补失败测试与诊断日志，锁定哪条规则产生 task-error
+- [x] 实现最小修复并验证
+- [x] 更新 Review 与证据
+
+## Review（Codex task-error 误判根因排查）
+
+- 直接原因：通过回放你日志里的真实 session `rollout-2026-03-14T13-19-49-019ceac9-5873-76d2-843d-6dc28eab201e.jsonl` 可以看出，会话本身其实只有 `task_started -> user_message -> agent_reasoning -> agent_message -> task_complete`，并没有真实失败事件；之所以前端 earlier 收到 `task-error`，是因为 `parse_session_file()` 会把首行 `session_meta` 也送进 `process_entry()`，而旧逻辑把所有未知顶层 type 都交给 `entry_indicates_error()` 做关键字扫描。`session_meta.payload.base_instructions / 用户上下文` 里天然可能包含 `error` / `failed` 等英文单词，于是会把 `last_error_ts` 提前打上；后续 `agent_reasoning` 又把 details 改成 `运行中`，最终就形成了你看到的“event.type = task-error，但 details = 运行中”的矛盾组合。
+- 设计层诱因：monitor 之前把**元数据记录**（`session_meta`）和**运行态记录**放在同一条启发式错误判定链里，没有把“仅用于描述上下文的静态记录”与“真正代表运行结果的事件记录”隔离开。这属于状态判定边界不清。除此之外，未发现新的系统设计缺陷。
+- 当前修复方案：
+  1. `src-tauri/src/codex_monitor.rs::process_entry()` 现在显式忽略顶层 `session_meta`，不再对它做错误关键字扫描。
+  2. 新增回归测试 `parse_session_file_ignores_error_keywords_inside_session_meta`，覆盖“session_meta 文本里即使出现 error/failed，也不能把会话判成 Error；运行中仍应保持 Working + 运行中 details”这个场景。
+- 长期改进建议：
+  1. 后续可继续把 `task_started` 等纯元数据/生命周期记录也显式分类处理，避免再落入 unknown fallback。
+  2. monitor 的未知分支最好逐步从“全文关键字扫描”收敛成“只对白名单字段/结构做判定”，减少被提示词、上下文文案误伤。
+  3. 等 wrapper 全量接管后，monitor 继续收缩为恢复/发现层，降低启发式推断权重。
+- 验证证据：
+  - `cargo test parse_session_file_ignores_error_keywords_inside_session_meta --manifest-path src-tauri/Cargo.toml`
+  - `cargo test codex_monitor --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`

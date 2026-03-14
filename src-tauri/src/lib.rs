@@ -55,7 +55,7 @@ use crate::quick_command_manager::{
     QuickCommandManager, quick_command_finish, quick_command_list, quick_command_start,
     quick_command_stop,
 };
-use crate::system::EditorOpenParams;
+use crate::system::{EditorOpenParams, SystemNotificationParams};
 use crate::terminal::{
     TerminalState, terminal_create_session, terminal_kill, terminal_resize,
     terminal_set_replay_mode, terminal_write,
@@ -703,6 +703,15 @@ fn copy_to_clipboard(app: AppHandle, content: String) -> Result<(), String> {
     log_command_result("copy_to_clipboard", || {
         log::info!("copy_to_clipboard size={}", content.len());
         system::copy_to_clipboard(&app, &content)
+    })
+}
+
+#[tauri::command]
+/// 发送系统通知。
+fn send_system_notification(params: SystemNotificationParams) -> Result<(), String> {
+    log_command_result("send_system_notification", || {
+        log::info!("send_system_notification title={}", params.title);
+        system::send_system_notification(params)
     })
 }
 

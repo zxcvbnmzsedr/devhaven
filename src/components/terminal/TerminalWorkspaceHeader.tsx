@@ -7,6 +7,9 @@ import type {
   ControlPlaneSurfaceProjection,
   ControlPlaneWorkspaceProjection,
 } from "../../utils/controlPlaneProjection";
+import {
+  resolveDisplayedControlPlaneMessage,
+} from "../../utils/controlPlaneProjection";
 import { IconChevronDown, IconFolder, IconGitBranch, IconPlay, IconRerun, IconSettings, IconSquareStop } from "../Icons";
 import TerminalTabs from "./TerminalTabs";
 
@@ -105,6 +108,10 @@ export default function TerminalWorkspaceHeader({
   const isRunning = selectedScriptState === "running";
   const isStopping = selectedScriptState === "stoppingSoft" || selectedScriptState === "stoppingHard";
   const isStarting = selectedScriptState === "starting";
+  const displayedControlPlaneMessage = resolveDisplayedControlPlaneMessage(
+    activePaneControlProjection,
+    controlPlaneProjection,
+  );
 
   return (
     <header className="flex items-center gap-3 border-b border-[var(--terminal-divider)] bg-[var(--terminal-panel-bg)] px-3 py-2">
@@ -143,12 +150,12 @@ export default function TerminalWorkspaceHeader({
           ) : null}
         </div>
       ) : null}
-      {activePaneControlProjection?.latestMessage ? (
+      {displayedControlPlaneMessage ? (
         <div
           className="max-w-[260px] truncate text-[11px] font-medium text-[var(--terminal-muted-fg)]"
-          title={activePaneControlProjection.latestMessage}
+          title={displayedControlPlaneMessage}
         >
-          {activePaneControlProjection.latestMessage}
+          {displayedControlPlaneMessage}
         </div>
       ) : null}
       <TerminalTabs

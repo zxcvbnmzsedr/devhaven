@@ -177,6 +177,13 @@ export function projectControlPlaneWorkspace(
   };
 }
 
+export function resolveDisplayedControlPlaneMessage(
+  surface: ControlPlaneSurfaceProjection | null | undefined,
+  workspace: ControlPlaneWorkspaceProjection | null | undefined,
+): string | null {
+  return surface?.latestMessage ?? workspace?.latestMessage ?? null;
+}
+
 export function buildWorkspaceAttentionProjection(
   tree: ControlPlaneWorkspaceTree | ControlPlaneTree,
 ): WorkspaceAttentionProjection {

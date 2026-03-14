@@ -128,6 +128,13 @@ function AppLayout() {
   useDisableInputCorrections();
 
   useEffect(() => {
+    console.warn("[codex-debug] AppLayout mounted", {
+      isTauriRuntime: isTauriRuntime(),
+      location: typeof window !== "undefined" ? window.location.href : "server",
+    });
+  }, []);
+
+  useEffect(() => {
     if (!import.meta.env.PROD || typeof window === "undefined") {
       return;
     }
@@ -490,11 +497,13 @@ function AppLayout() {
 
       {toast ? (
         <div
-          className={`fixed left-1/2 bottom-7 -translate-x-1/2 rounded-full px-4 py-2 text-fs-caption border text-text z-[95] backdrop-blur-[6px] ${
+          className={`fixed right-5 top-5 max-w-[min(420px,calc(100vw-2.5rem))] rounded-xl px-4 py-3 text-[13px] font-semibold shadow-[0_14px_42px_rgba(0,0,0,0.42)] z-[220] backdrop-blur-[10px] pointer-events-none ${
             toast.variant === "error"
-              ? "bg-[rgba(239,68,68,0.15)] border-[rgba(239,68,68,0.4)]"
-              : "bg-[rgba(16,185,129,0.15)] border-[rgba(16,185,129,0.4)]"
+              ? "bg-[rgba(127,29,29,0.92)] border border-[rgba(248,113,113,0.65)] text-white"
+              : "bg-[rgba(6,78,59,0.92)] border border-[rgba(52,211,153,0.55)] text-white"
           }`}
+          role="status"
+          aria-live="polite"
         >
           {toast.message}
         </div>

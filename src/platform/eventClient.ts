@@ -143,6 +143,7 @@ export async function listenEvent<TPayload>(
   _options?: ListenEventOptions,
 ): Promise<UnlistenFn> {
   if (isTauriRuntime()) {
+    console.warn("[codex-debug] registering tauri listener", { eventName });
     return listen<TPayload>(eventName, handler as (event: TauriEvent<TPayload>) => void);
   }
 

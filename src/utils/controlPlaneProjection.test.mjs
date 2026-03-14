@@ -5,6 +5,7 @@ import {
   buildPaneAttentionMap,
   buildWorkspaceAttentionProjection,
   deriveAttentionTone,
+  resolveDisplayedControlPlaneMessage,
 } from "./controlPlaneProjection.ts";
 
 function createTree(overrides = {}) {
@@ -102,4 +103,21 @@ test("buildPaneAttentionMap keeps pane-level status and unread counts", () => {
   assert.equal(map["pane-1"].unreadCount, 2);
   assert.equal(map["pane-1"].tone, "error");
   assert.equal(map["pane-1"].lastMessage, "命令失败");
+});
+
+test("resolveDisplayedControlPlaneMessage falls back to workspace latest message when pane message is empty", () => {
+  assert.equal(
+    resolveDisplayedControlPlaneMessage(
+      { unreadCount: 0, latestMessage: null, attention: "completed", hasUnread: false },
+      {
+        unreadCount: 0,
+        latestMessage: "Codex 已完成：DevHaven",
+        attention: "completed",
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        errorAgentCount: 0,
+      },
+    ),
+    "Codex 已完成：DevHaven",
+  );
 });

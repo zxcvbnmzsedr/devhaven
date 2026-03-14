@@ -801,6 +801,7 @@ fn process_entry(value: &Value, tracker: &mut SessionTracker) {
         .and_then(|item| item.as_str())
         .unwrap_or("");
     match typ {
+        "session_meta" => {}
         "event_msg" => process_event_msg(payload, timestamp, tracker),
         "response_item" => process_response_item(payload, timestamp, tracker),
         "turn_context" => process_turn_context(payload, tracker),
@@ -878,6 +879,18 @@ fn process_event_msg(payload: Option<&Value>, timestamp: i64, tracker: &mut Sess
                 .map(|text| format!("错误: {}", truncate_text(&text, 80)))
                 .or_else(|| Some("任务执行出现错误".to_string()));
         }
+        "task_complete" => {
+            tracker.last_assistant_ts = tracker.last_assistant_ts.max(timestamp);
+            tracker.last_agent_activity_ts = tracker.last_agent_activity_ts.max(timestamp);
+            if let Some(message) = payload
+                .and_then(extract_message_preview)
+                .map(|text| truncate_text(&text, 80))
+            {
+                tracker.details = Some(message);
+            } else if tracker.details.is_none() {
+                tracker.details = Some("任务已完成".to_string());
+            }
+        }
         "needs_attention" | "awaiting_user_input" => {
             tracker.last_needs_attention_ts = tracker.last_needs_attention_ts.max(timestamp);
             tracker.details = Some("等待用户处理".to_string());
@@ -928,7 +941,7 @@ fn process_response_item(payload: Option<&Value>, timestamp: i64, tracker: &mut 
         }
         "function_call_output" => {
             tracker.last_agent_activity_ts = tracker.last_agent_activity_ts.max(timestamp);
-            if payload.map(entry_indicates_error).unwrap_or(false) {
+            if payload.map(function_call_output_indicates_error).unwrap_or(false) {
                 tracker.last_error_ts = tracker.last_error_ts.max(timestamp);
                 tracker.details = Some("工具调用失败".to_string());
             }
@@ -1102,6 +1115,37 @@ fn entry_indicates_error(value: &Value) -> bool {
     classify_entry(value).indicates_error
 }
 
+fn function_call_output_indicates_error(payload: &Value) -> bool {
+    if payload
+        .get("is_error")
+        .and_then(|item| item.as_bool())
+        .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let Some(output) = payload.get("output").and_then(|item| item.as_str()) else {
+        return false;
+    };
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Process exited with code ") {
+            return rest
+                .split_whitespace()
+                .next()
+                .and_then(|code| code.parse::<i32>().ok())
+                .map(|code| code != 0)
+                .unwrap_or(false);
+        }
+        if trimmed.starts_with("Process exited with signal ") {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn classify_entry(value: &Value) -> EntryClassification {
     let indicates_error_by_text = contains_case_insensitive_text(
         value,
@@ -1133,9 +1177,9 @@ fn contains_case_insensitive_text(value: &Value, needles: &[&str]) -> bool {
         Value::Array(items) => items
             .iter()
             .any(|item| contains_case_insensitive_text(item, needles)),
-        Value::Object(map) => map.iter().any(|(key, item)| {
-            contains_any_keyword(key, needles) || contains_case_insensitive_text(item, needles)
-        }),
+        Value::Object(map) => map
+            .values()
+            .any(|item| contains_case_insensitive_text(item, needles)),
         _ => false,
     }
 }
@@ -1452,6 +1496,67 @@ mod tests {
     }
 
     #[test]
+    fn parse_session_file_marks_error_when_function_call_output_reports_non_zero_exit_code() {
+        let path = write_session(&[
+            r#"{"timestamp":"2026-01-28T05:07:13.570Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-01-28T05:07:13.545Z","cwd":"/tmp/project","cli_version":"0.92.0"}}"#,
+            r#"{"timestamp":"2036-01-28T05:08:13.000Z","type":"response_item","payload":{"type":"function_call_output","output":"Chunk ID: demo\nProcess exited with code 2\nOutput:\nerror TS2305: missing export"}}"#,
+        ]);
+
+        let now = chrono::DateTime::parse_from_rfc3339("2036-01-28T05:08:20.000Z")
+            .expect("parse now")
+            .timestamp_millis();
+        let session = parse_session_file(&path, now, true).expect("parse session");
+        assert_eq!(session.state, CodexMonitorState::Error);
+    }
+
+    #[test]
+    fn parse_session_file_keeps_successful_function_call_output_with_error_text_completed() {
+        let path = write_session(&[
+            r#"{"timestamp":"2026-01-28T05:07:13.570Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-01-28T05:07:13.545Z","cwd":"/tmp/project","cli_version":"0.92.0"}}"#,
+            r#"{"timestamp":"2036-01-28T05:08:13.000Z","type":"event_msg","payload":{"type":"user_message","message":"hi"}}"#,
+            r#"{"timestamp":"2036-01-28T05:08:14.000Z","type":"response_item","payload":{"type":"function_call_output","output":"Chunk ID: demo\nProcess exited with code 0\nOutput:\nsrc/hooks/useCodexIntegration.ts:154:       } else if (event.type === \"task-error\") {"}}"#,
+            r#"{"timestamp":"2036-01-28T05:08:15.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":"done"}}"#,
+        ]);
+
+        let now = chrono::DateTime::parse_from_rfc3339("2036-01-28T05:08:16.000Z")
+            .expect("parse now")
+            .timestamp_millis();
+        let session = parse_session_file(&path, now, true).expect("parse session");
+        assert_eq!(session.state, CodexMonitorState::Completed);
+    }
+
+    #[test]
+    fn parse_session_file_marks_completed_when_task_complete_has_no_assistant_message() {
+        let path = write_session(&[
+            r#"{"timestamp":"2026-01-28T05:07:13.570Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-01-28T05:07:13.545Z","cwd":"/tmp/project","cli_version":"0.92.0"}}"#,
+            r#"{"timestamp":"2036-01-28T05:08:13.000Z","type":"event_msg","payload":{"type":"user_message","message":"hi"}}"#,
+            r#"{"timestamp":"2036-01-28T05:08:14.000Z","type":"event_msg","payload":{"type":"task_complete"}}"#,
+        ]);
+
+        let now = chrono::DateTime::parse_from_rfc3339("2036-01-28T05:08:15.000Z")
+            .expect("parse now")
+            .timestamp_millis();
+        let session = parse_session_file(&path, now, true).expect("parse session");
+        assert_eq!(session.state, CodexMonitorState::Completed);
+    }
+
+    #[test]
+    fn parse_session_file_ignores_error_keywords_inside_session_meta() {
+        let path = write_session(&[
+            r#"{"timestamp":"2026-01-28T05:07:13.570Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-01-28T05:07:13.545Z","cwd":"/tmp/project","cli_version":"0.92.0","base_instructions":{"text":"this text mentions error and failed but is only setup context"}}}"#,
+            r#"{"timestamp":"2036-01-28T05:08:13.000Z","type":"event_msg","payload":{"type":"user_message","message":"hi"}}"#,
+            r#"{"timestamp":"2036-01-28T05:08:14.000Z","type":"event_msg","payload":{"type":"agent_reasoning"}}"#,
+        ]);
+
+        let now = chrono::DateTime::parse_from_rfc3339("2036-01-28T05:08:15.000Z")
+            .expect("parse now")
+            .timestamp_millis();
+        let session = parse_session_file(&path, now, true).expect("parse session");
+        assert_eq!(session.state, CodexMonitorState::Working);
+        assert_eq!(session.details.as_deref(), Some("运行中"));
+    }
+
+    #[test]
     fn parse_session_file_extracts_model_and_effort_from_turn_context() {
         let path = write_session(&[
             r#"{"timestamp":"2026-01-28T05:07:13.570Z","type":"session_meta","payload":{"id":"abc","timestamp":"2026-01-28T05:07:13.545Z","cwd":"/tmp/project","cli_version":"0.92.0"}}"#,
@@ -1508,6 +1613,18 @@ mod tests {
         let classification = classify_entry(&value);
 
         assert!(classification.indicates_error);
+        assert!(!classification.indicates_needs_attention);
+    }
+
+    #[test]
+    fn classify_entry_does_not_treat_is_error_false_key_name_as_error() {
+        let value = json!({
+            "is_error": false,
+            "message": "plain output"
+        });
+        let classification = classify_entry(&value);
+
+        assert!(!classification.indicates_error);
         assert!(!classification.indicates_needs_attention);
     }
 

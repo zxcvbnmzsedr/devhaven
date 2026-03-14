@@ -63,6 +63,7 @@ macro_rules! devhaven_for_each_command {
             { read_shared_script_file, web_read_shared_script_file }
             { write_shared_script_file, web_write_shared_script_file }
             { copy_to_clipboard, web_copy_to_clipboard }
+            { send_system_notification, none }
             { read_project_notes, web_read_project_notes }
             { read_project_notes_previews, web_read_project_notes_previews }
             { write_project_notes, web_write_project_notes }

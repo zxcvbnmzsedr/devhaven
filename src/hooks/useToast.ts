@@ -13,6 +13,7 @@ export function useToast(): UseToastReturn {
   const toastTimerRef = useRef<number | null>(null);
 
   const showToast = useCallback((message: string, variant: "success" | "error" = "success") => {
+    console.info("[codex-debug] showToast invoked", { message, variant });
     setToast({ message, variant });
     if (toastTimerRef.current) {
       window.clearTimeout(toastTimerRef.current);

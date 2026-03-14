@@ -18,6 +18,7 @@ export type ControlPlaneNotification = {
   id: string;
   message: string;
   createdAt: number;
+  updatedAt?: number | null;
   read: boolean;
 };
 

@@ -1,4 +1,5 @@
 import { invokeCommand } from "../platform/commandClient";
+import { isTauriRuntime } from "../platform/runtime";
 
 /** 在系统文件管理器中定位路径。 */
 export async function openInFinder(path: string) {
@@ -20,7 +21,18 @@ export async function copyToClipboard(content: string) {
 
 /** 发送系统通知。 */
 export async function sendSystemNotification(title: string, body?: string) {
+  console.info("[codex-debug] sendSystemNotification called", { title, body });
+  if (isTauriRuntime()) {
+    try {
+      await invokeCommand("send_system_notification", { params: { title, body } });
+      console.info("[codex-debug] tauri system notification dispatched", { title, body });
+      return;
+    } catch (error) {
+      console.warn("Tauri 系统通知发送失败，回退到浏览器通知。", error);
+    }
+  }
   if (typeof window === "undefined" || typeof Notification === "undefined") {
+    console.info("[codex-debug] Notification API unavailable");
     return;
   }
   try {
@@ -29,10 +41,12 @@ export async function sendSystemNotification(title: string, body?: string) {
       permission = await Notification.requestPermission();
     }
     if (permission !== "granted") {
+      console.info("[codex-debug] Notification permission not granted", { permission });
       return;
     }
     const options = body ? { body } : undefined;
     new Notification(title, options);
+    console.info("[codex-debug] system notification dispatched", { title, body });
   } catch (error) {
     console.warn("系统通知发送失败。", error);
   }
