@@ -44,6 +44,7 @@ export async function sendAgentSessionEvent({
   message = null,
   agentSessionId = null,
   cwd = null,
+  fetchImpl,
 }) {
   const context = buildHookContext(env);
   return postDevHavenCommand({
@@ -57,6 +58,7 @@ export async function sendAgentSessionEvent({
       message,
       cwd,
     },
+    fetchImpl,
   });
 }
 
@@ -67,6 +69,7 @@ export async function sendAgentNotification({
   title = null,
   level = "attention",
   agentSessionId = null,
+  fetchImpl,
 }) {
   const context = buildHookContext(env);
   return postDevHavenCommand({
@@ -79,6 +82,111 @@ export async function sendAgentNotification({
       message,
       level,
     },
+    fetchImpl,
+  });
+}
+
+export async function sendTargetedNotification({
+  endpoint,
+  env = process.env,
+  message,
+  title = null,
+  level = "attention",
+  agentSessionId = null,
+  fetchImpl,
+}) {
+  const context = buildHookContext(env);
+  return postDevHavenCommand({
+    endpoint: resolveControlEndpoint({ endpoint, env }),
+    command: "devhaven_notify_target",
+    payload: {
+      ...context,
+      agentSessionId,
+      title,
+      message,
+      level,
+    },
+    fetchImpl,
+  });
+}
+
+export async function sendStatusPrimitive({
+  endpoint,
+  env = process.env,
+  key,
+  value,
+  icon = null,
+  color = null,
+  fetchImpl,
+}) {
+  const context = buildHookContext(env);
+  return postDevHavenCommand({
+    endpoint: resolveControlEndpoint({ endpoint, env }),
+    command: "devhaven_set_status",
+    payload: {
+      ...context,
+      key,
+      value,
+      icon,
+      color,
+    },
+    fetchImpl,
+  });
+}
+
+export async function clearStatusPrimitive({
+  endpoint,
+  env = process.env,
+  key,
+  fetchImpl,
+}) {
+  const context = buildHookContext(env);
+  return postDevHavenCommand({
+    endpoint: resolveControlEndpoint({ endpoint, env }),
+    command: "devhaven_clear_status",
+    payload: {
+      ...context,
+      key,
+    },
+    fetchImpl,
+  });
+}
+
+export async function sendAgentPidPrimitive({
+  endpoint,
+  env = process.env,
+  key,
+  pid,
+  fetchImpl,
+}) {
+  const context = buildHookContext(env);
+  return postDevHavenCommand({
+    endpoint: resolveControlEndpoint({ endpoint, env }),
+    command: "devhaven_set_agent_pid",
+    payload: {
+      ...context,
+      key,
+      pid,
+    },
+    fetchImpl,
+  });
+}
+
+export async function clearAgentPidPrimitive({
+  endpoint,
+  env = process.env,
+  key,
+  fetchImpl,
+}) {
+  const context = buildHookContext(env);
+  return postDevHavenCommand({
+    endpoint: resolveControlEndpoint({ endpoint, env }),
+    command: "devhaven_clear_agent_pid",
+    payload: {
+      ...context,
+      key,
+    },
+    fetchImpl,
   });
 }
 

@@ -551,3 +551,219 @@
   - `cargo test apply_terminal_control_env_includes_http_command_endpoint --manifest-path src-tauri/Cargo.toml`
   - `cargo check --manifest-path src-tauri/Cargo.toml`
 
+
+
+## Codex 增强逻辑与 cmux 差异分析（2026-03-14）
+
+- [x] 读取技能与当前仓库约束，建立分析计划
+- [x] 在 DevHaven 侧定位 Codex 增强逻辑主入口与关键数据流
+- [x] 在 cmux 侧定位对应实现与关键数据流
+- [x] 对照两边差异，提炼直接原因、设计层差异与建议
+- [x] 在本文件追加 Review，记录证据与结论
+
+## Review（Codex 增强逻辑与 cmux 差异分析）
+
+- 结论：**你现在的 DevHaven Codex 增强链路，和 cmux 不是“同一套逻辑换皮”，而是只在“终端注入环境变量 + wrapper/hook + 通知/attention UI”这一层方向相近；核心状态模型、hook 粒度、通知闭环和 provider 抽象层次都明显不同。**
+- 最关键差异 1：cmux 仓库里实际上**没有 Codex 专用适配器**；`Resources/bin/` 只有 `claude` / `open`，`rg -ni "codex"` 只命中 `README.md` 叙述。也就是说，cmux 当前落地的是“通用通知/状态 primitive + Claude 适配器”，不是“Codex 专用主线”。
+- 最关键差异 2：DevHaven Codex 现在是**provider-specific wrapper → control plane command**。入口在 `scripts/devhaven-codex-wrapper.mjs` / `scripts/devhaven-codex-hook.mjs`，由 `src-tauri/src/terminal.rs` 注入 `DEVHAVEN_*` 环境和 wrapper 路径，再通过 `scripts/devhaven-agent-hook.mjs` 调 `devhaven_notify` / `devhaven_agent_session_event` 落到 `src-tauri/src/agent_control.rs` 的 registry。
+- 最关键差异 3：cmux 的 Claude 适配是**wrapper → cmux CLI/socket primitive**。`Resources/bin/claude` 注入 `SessionStart/Stop/SessionEnd/Notification/UserPromptSubmit/PreToolUse` 六类 hooks，`CLI/cmux.swift` 再把这些 hook 翻译成 `notify_target`、`set_status`、`clear_status`、`set_agent_pid` 等通用命令，最终落到 `TerminalNotificationStore` / `Workspace.statusEntries` / `agentPIDs`。
+- 最关键差异 4：DevHaven Codex hook 粒度明显更粗。当前只有：启动时 `running`、退出时 `stopped/failed`、notify 时 `waiting/completed/failed`；而 cmux Claude 还区分 `prompt-submit`（清通知并回 Running）、`pre-tool-use`（工具恢复时清 Needs input）、`session-end`（兜底清理 PID/状态/通知）。这就是你现在看到“逻辑不像 cmux”的直接原因。
+- 最关键差异 5：通知模型也不一样。DevHaven `push_notification()` 是**纯追加记录**，再由前端 `TerminalWorkspaceView.tsx` 主动 mark read、`useCodexIntegration.ts` 再把新通知转成 toast / 系统通知；cmux `TerminalNotificationStore.addNotification()` 会按 tab+surface 去重、在当前聚焦面板时抑制系统通知、维护 unread index，并在 `TabManager` 焦点切换时自动已读。
+- 设计层差异：DevHaven 目前仍有一部分“agent 增强行为在前端收尾”的特点（例如 toast 转发、auto-read），cmux 则把 unread / focus / notification delivery 主逻辑放在原生核心层。换句话说，DevHaven 更像“control plane + 前端 projection”，cmux 更像“native primitive + agent adapter”。
+- 建议：如果你要追到更像 cmux 的感觉，重点不是再堆 Codex 特判，而是继续把 DevHaven 收口成 **provider-neutral primitive**：至少补齐 `set_status / clear_status / notify_target / set_agent_pid` 这类中间层语义，再让 Codex/Claude wrapper 只负责把各自 hook 翻译成这些 primitive；同时把“已读/聚焦抑制/去重”从前端 effect 下沉到 Rust control plane/runtime。
+- 证据：本次仅做源码比对，未改业务实现；核对了 `scripts/devhaven-codex-wrapper.mjs`、`scripts/devhaven-codex-hook.mjs`、`scripts/devhaven-agent-hook.mjs`、`src-tauri/src/agent_control.rs`、`src-tauri/src/terminal.rs`、`src/hooks/useCodexIntegration.ts`，以及 cmux 的 `README.md`、`Resources/bin/claude`、`CLI/cmux.swift`、`Sources/GhosttyTerminalView.swift`、`Sources/TerminalNotificationStore.swift`、`Sources/Workspace.swift`、`Sources/TabManager.swift`。
+
+
+## DevHaven / cmux 数据流对照图输出（2026-03-14）
+
+- [x] 复用上一轮源码比对结果，提炼对照维度
+- [x] 输出 DevHaven 数据流图
+- [x] 输出 cmux 数据流图
+- [x] 总结关键分叉点与迁移方向
+
+
+## Review（DevHaven / cmux 数据流对照图输出）
+
+- 已基于上一轮源码核对，补充 DevHaven 与 cmux 的数据流对照图，重点标出 wrapper/hook、状态真相源、通知闭环与 UI attention 的落点差异。
+- 结论再次确认：cmux 当前仓库没有 Codex 专用适配主线，实际落地的是 Claude wrapper + CLI primitive；DevHaven 当前则是 Codex wrapper + control plane registry + React projection。
+- 本轮为分析输出，无代码改动、无构建验证；证据来自已核对源码文件：`/Users/zhaotianzeng/WebstormProjects/DevHaven/scripts/devhaven-codex-wrapper.mjs`、`/Users/zhaotianzeng/WebstormProjects/DevHaven/scripts/devhaven-codex-hook.mjs`、`/Users/zhaotianzeng/WebstormProjects/DevHaven/src-tauri/src/agent_control.rs`、`/Users/zhaotianzeng/Documents/business/tianzeng/cmux/Resources/bin/claude`、`/Users/zhaotianzeng/Documents/business/tianzeng/cmux/CLI/cmux.swift`、`/Users/zhaotianzeng/Documents/business/tianzeng/cmux/Sources/TerminalNotificationStore.swift` 等。
+
+
+## 终端内容 / 历史输入缺失排查（2026-03-15）
+
+- [x] 记录用户反馈并建立本轮排查 checklist
+- [x] 梳理 DevHaven 终端启动、shell integration 与历史文件链路
+- [x] 对照 cmux shell integration / terminal 启动链路找出关键差异
+- [x] 定位“终端内容不见、历史输入没来”的直接原因与设计层诱因
+- [x] 给出最小修复方向与验证建议
+
+## Review（终端内容 / 历史输入缺失排查）
+
+- 直接原因已定位为 **DevHaven 的 zsh shell integration 把 ZDOTDIR 恢复回集成目录，并试图用 env 覆盖 HISTFILE**，结果 zsh 启动过程仍按集成目录解析历史文件；实际复现输出为 `scripts/shell-integration/zsh/.zsh_history`，不是用户 HOME 下的 `.zsh_history`。这会让命令历史、zsh-autosuggestions、基于共享历史的提示全部失效，看起来像“历史输入没来 / 终端内容不见了”。
+- 证据 1：`src-tauri/src/terminal.rs:310-315`（2026-03-14 提交 `768f6ad`）显式注入 `HISTFILE` / `ZSH_COMPDUMP` 到 `~/.devhaven/shell-state/zsh`；`scripts/shell-integration/zsh/.zshenv` 又会在 source 用户 `.zshenv` 后把 `ZDOTDIR` 改回集成目录。
+- 证据 2：本地对照执行 `zsh -ic 'print -r -- "$ZDOTDIR|$HISTFILE"'`，DevHaven 集成输出为 `.../scripts/shell-integration/zsh|.../scripts/shell-integration/zsh/.zsh_history`，而 cmux 集成输出为 `<临时 HOME>|<临时 HOME>/.zsh_history`。
+- 设计层诱因：为了稳定 wrapper PATH/compdump，把“shell integration 注入”和“shell 状态目录隔离”耦合在一起，导致终端增强侵入了用户 shell 的真实状态源（ZDOTDIR/HISTFILE），这是状态源被错误替换的问题。
+- 最小修复方向：参考 cmux，把 zsh wrapper 改成**在 `.zshenv` 里尽早恢复真实 ZDOTDIR，并保留用户 HISTFILE 语义**；不要再为 zsh 强制写 `HISTFILE`/`ZSH_COMPDUMP` 到 `.devhaven`。同时补一条回归测试，断言 DevHaven 注入后 `HISTFILE` 最终落在用户 HOME/ZDOTDIR，而不是集成目录或 `.devhaven/shell-state`。
+- 本轮为根因排查，未修改业务代码；验证证据为源码核对 + 本地 `zsh -ic 'print -r -- "$ZDOTDIR|$HISTFILE"'` 对照执行输出。
+
+
+## 终端增强完整整改方案设计（2026-03-15）
+
+- [x] 汇总历史缺失问题的根因、受影响链路与设计诱因
+- [x] 提出 2-3 套整改路线并给出推荐方案
+- [x] 输出分阶段完整整改设计（架构、边界、迁移顺序、回滚）
+- [x] 待用户确认后落盘设计稿与实施计划
+
+## 终端增强 C 方案（primitive-first）设计与计划（2026-03-15）
+
+- [x] 写入 primitive-first 完整改造设计稿
+- [x] 写入分阶段实施计划（测试先行）
+- [x] 同步 tasks/todo.md Review 记录设计证据
+
+## Review（终端增强 C 方案（primitive-first）设计与计划）
+
+- 已按用户指定的 C 方案，将“终端增强完整整改”正式落盘为两份文档：`/Users/zhaotianzeng/WebstormProjects/DevHaven/docs/plans/2026-03-15-terminal-enhancement-primitive-first-design.md` 与 `/Users/zhaotianzeng/WebstormProjects/DevHaven/docs/plans/2026-03-15-terminal-enhancement-primitive-first-implementation.md`。
+- 设计稿明确把整改拆成五层边界：terminal launcher、shell bootstrap、wrapper/hook adapter、primitive/control plane、前端 projection，并把当前历史缺失问题归因为 shell integration 接管了用户状态源。
+- 实施计划按 TDD 拆成 7 个任务：先补 shell 语义回归测试，再恢复 zsh 原生语义、重构 bootstrap、引入 provider-neutral primitive、迁移 wrapper、下沉 lifecycle，最后做 AGENTS/文档与整体验证。
+- 本轮仅输出设计与计划，未执行代码改动；证据为已写入的两份设计/实施文档与 `tasks/todo.md` 更新记录。
+
+
+## 终端增强 C 方案执行（2026-03-15）
+
+- [x] Task 1：补 shell 语义回归测试并确认当前失败
+- [x] Task 2：修复 zsh shell bootstrap，恢复用户真实状态源
+- [x] Task 3：重构 shell bootstrap 结构
+- [x] Task 4：引入 provider-neutral primitive
+- [x] Task 5：迁移 Codex / Claude wrapper 到 primitive adapter
+- [x] Task 6：下沉 unread / focus / attention 生命周期
+- [x] Task 7：文档、AGENTS 与整体验证
+
+## Review（Task 2：修复 zsh shell bootstrap，恢复用户真实状态源）
+
+- 直接原因：DevHaven zsh integration 在 source 用户启动文件后仍把 `ZDOTDIR` 收回到 integration 目录，并在 Rust 侧强制注入 zsh `HISTFILE/ZSH_COMPDUMP`，导致最终历史路径落到 `scripts/shell-integration/zsh/.zsh_history`。
+- 设计层诱因：shell bootstrap 与用户 shell 状态源耦合，`wrapper PATH` 与 `ZDOTDIR/HISTFILE` 被一并管理，属于状态源分裂问题。
+- 当前修复方案：`src-tauri/src/terminal.rs` 移除 zsh `HISTFILE/ZSH_COMPDUMP` 注入；重写 zsh bootstrap 为“source 用户文件时临时切到用户 ZDOTDIR，兼容 wrapper 注入后再 finalize 到用户语义”；删除仓库误入的 `scripts/shell-integration/zsh/.zsh_history`。
+- 长期改进建议：在 Task 3 继续把 zsh/bash bootstrap 抽成更清晰分层，避免再依赖启动时隐藏副作用维持 PATH/HISTFILE 行为。
+- 验证证据：
+  - `node --test scripts/devhaven-shell-integration.test.mjs scripts/devhaven-zsh-histfile-regression.test.mjs scripts/devhaven-zsh-stacked-zdotdir.test.mjs scripts/devhaven-bash-history-semantics.test.mjs`（4/4 通过）
+  - `cargo test apply_terminal_shell_integration_env_sets_zdotdir_wrapper --manifest-path src-tauri/Cargo.toml`（通过）
+
+
+## Review（终端增强 C 方案 Task 1-2 阶段结果）
+
+- 已完成 Task 1/2：先补 shell 语义回归测试，再修复 zsh shell bootstrap，恢复用户真实 `ZDOTDIR/HISTFILE` 语义。
+- 直接原因：`src-tauri/src/terminal.rs` 为 zsh 强制注入 `HISTFILE/ZSH_COMPDUMP`，同时 `scripts/shell-integration/zsh/.zshenv` 在 source 用户配置后把 `ZDOTDIR` 拉回集成目录，导致历史文件落到 integration 目录。
+- 设计层诱因：launcher、shell bootstrap、wrapper 注入、用户 shell 状态源职责耦合，存在明显状态源分裂；不是单一实现细节问题。
+- 当前修复方案：
+  1. zsh 启动链不再强制注入 `HISTFILE` / `ZSH_COMPDUMP`；
+  2. `.zshenv/.zprofile/.zshrc/.zlogin` 改为在 source 用户文件时临时切换到用户真实 `ZDOTDIR`；
+  3. 非 login shell 在 `.zshrc`、login shell 在 `.zlogin` 完成最终 shell state finalize；
+  4. 删除误入仓库的 `scripts/shell-integration/zsh/.zsh_history`。
+- 长期改进建议：继续按 primitive-first 方案推进 Task 3+，把 shell bootstrap 与 provider wrapper 完全分层，并把更多 lifecycle 语义下沉到 primitive/control plane。
+- 验证证据：
+  - `node --test scripts/devhaven-shell-integration.test.mjs scripts/devhaven-zsh-histfile-regression.test.mjs scripts/devhaven-zsh-stacked-zdotdir.test.mjs scripts/devhaven-bash-history-semantics.test.mjs` → 4 passed, 0 failed
+  - `cargo test apply_terminal_shell_integration_env_sets_zdotdir_wrapper --manifest-path src-tauri/Cargo.toml` → 1 passed, 0 failed
+  - 手工对照：`zsh -ic 'print -r -- "$ZDOTDIR|$HISTFILE"'` 输出用户 HOME 与 `HOME/.zsh_history`
+
+
+## Review（终端增强 C 方案 Task 1-2）
+
+- Task 1 已补齐 shell 语义回归测试：新增 `scripts/devhaven-zsh-histfile-regression.test.mjs`、`scripts/devhaven-zsh-stacked-zdotdir.test.mjs`、`scripts/devhaven-bash-history-semantics.test.mjs`，并确认当前实现下 zsh 两条回归稳定失败、bash 边界测试通过。
+- Task 2 已恢复 zsh 用户状态源语义：`src-tauri/src/terminal.rs` 不再为 zsh 强制注入 `HISTFILE` / `ZSH_COMPDUMP`；zsh integration 改为优先 source 用户真实 `ZDOTDIR` 下的启动文件，并在 bootstrap 后归还用户 `ZDOTDIR/HISTFILE` 语义，同时保留 wrapper PATH 注入。
+- 本阶段验证证据：
+  - `node --test scripts/devhaven-shell-integration.test.mjs scripts/devhaven-zsh-histfile-regression.test.mjs scripts/devhaven-zsh-stacked-zdotdir.test.mjs scripts/devhaven-bash-history-semantics.test.mjs`
+  - `cargo test apply_terminal_shell_integration_env_sets_zdotdir_wrapper --manifest-path src-tauri/Cargo.toml`
+- 评审结果：Task 1 与 Task 2 均完成实现者自检 + 规格审查 + 代码质量审查，当前无阻塞问题，可继续推进 Task 3。
+
+
+## Review（Task 3：重构 shell bootstrap 结构）
+
+- 直接原因：Task 2 已恢复 zsh 历史语义，但 shell bootstrap 仍散落在 `.zshrc/.zlogin` 与长字符串 `PROMPT_COMMAND` 里，后续继续改 provider / integration 时仍容易再次耦合职责。
+- 设计层诱因：shell integration 文件职责过散，`PROMPT_COMMAND` 里内联 bootstrap 逻辑、zsh 侧直接 source `devhaven-wrapper-path.sh`，都让“注入能力”和“启动时序”难以单独演进。
+- 当前修复方案：
+  1. 新增 `scripts/shell-integration/bash/devhaven-bash-bootstrap.sh`，把 bash prompt bootstrap 逻辑抽到独立文件；
+  2. 新增 `scripts/shell-integration/zsh/devhaven-zsh-bootstrap.zsh`，把 zsh wrapper-path/finalize 收口到独立 primitive；
+  3. `src-tauri/src/terminal.rs` 的 bash `PROMPT_COMMAND` 改为只 source bootstrap 文件，不再内联多职责字符串；
+  4. `scripts/shell-integration/devhaven-bash-integration.sh` 改为兼容 shim，优先转调新 bootstrap。
+- 长期改进建议：Task 4 开始继续把 provider wrapper 事件翻译与 shell bootstrap 分离，避免 bootstrap 文件再次承载 provider-specific 语义。
+- 验证证据：
+  - `node --test scripts/devhaven-shell-integration.test.mjs scripts/devhaven-bash-history-semantics.test.mjs scripts/devhaven-zsh-histfile-regression.test.mjs`（4/4 通过）
+  - `cargo test apply_terminal_shell_integration_env_sets_bash_prompt_bootstrap --manifest-path src-tauri/Cargo.toml`（通过）
+  - `cargo test apply_terminal_shell_integration_env_sets_zdotdir_wrapper --manifest-path src-tauri/Cargo.toml`（通过）
+
+
+## Review（Task 4：引入 provider-neutral primitive）
+
+- 直接原因：当前 control plane 只有 `notify` / `agent_session_event` 两条 provider-specific 写入主线，缺少 provider-neutral primitive，中间层无法承接后续 wrapper 迁移。
+- 设计层诱因：provider wrapper 直接写 control plane 记录，导致后续想对齐 cmux 风格的 `notify_target / set_status / set_agent_pid` 时没有稳定契约层，wrapper 与 durable truth 耦合过紧。
+- 当前修复方案：
+  1. Rust 侧新增并注册 `devhaven_notify_target`、`devhaven_set_status` / `devhaven_clear_status`、`devhaven_set_agent_pid` / `devhaven_clear_agent_pid`；
+  2. `agent_control.rs` 的 durable file / tree 新增 `statuses`、`agent_pids` 记录；
+  3. TS 侧新增 `src/models/terminalPrimitives.ts`、`src/utils/terminalPrimitiveProjection.ts`，提供按 key 取最新 primitive 记录的最小 projection；
+  4. `src/services/controlPlane.ts` 暴露对应 primitive 调用函数，为 Task 5 wrapper 迁移提供稳定接口。
+- 长期改进建议：Task 5/6 继续把 wrapper 事件翻译和 unread/focus lifecycle 下沉到这些 primitive，逐步削弱 provider-specific 写 control plane 的旧路径。
+- 验证证据：
+  - `cargo test agent_control --manifest-path src-tauri/Cargo.toml`（6 passed）
+  - `cargo test command_catalog --manifest-path src-tauri/Cargo.toml`（3 passed）
+  - `node --test src/utils/terminalPrimitiveProjection.test.mjs`（3 passed）
+  - Task 4 已完成规格审查 + 代码质量审查。
+
+
+## Review（Task 5：迁移 Codex / Claude wrapper 到 primitive adapter）
+
+- 直接原因：即使 Task 4 已补齐 primitive 命令，Codex / Claude wrapper 仍直接写 legacy `devhaven_notify` / `devhaven_agent_session_event`，没有真正走到新中间层，Task 4 的 primitive 契约还无法承接真实 provider 流量。
+- 设计层诱因：wrapper/hook 一直把 provider 生命周期直接编码到 control plane 写入路径里，导致 primitive 层存在但未被主路径使用，中间层继续名存实亡。
+- 当前修复方案：
+  1. `scripts/devhaven-agent-hook.mjs` 新增 `sendTargetedNotification`、`sendStatusPrimitive`、`clearStatusPrimitive`、`sendAgentPidPrimitive`、`clearAgentPidPrimitive` primitive adapter；
+  2. `scripts/devhaven-codex-wrapper.mjs` / `scripts/devhaven-codex-hook.mjs` 迁到 adapter：启动/退出同步状态与 pid primitive，notify 同步 `notify_target + set_status`；
+  3. `scripts/devhaven-claude-wrapper.mjs` / `scripts/devhaven-claude-hook.mjs` 迁到 adapter：wrapper 负责 pid primitive，hook 负责 running/waiting/stopped 等状态 primitive；
+  4. 保留 legacy `sendAgentNotification` / `sendAgentSessionEvent` 兼容路径，确保 Task 6 前现有 UI 语义不丢失。
+- 长期改进建议：Task 6 继续把 unread / focus / attention 主逻辑下沉到 primitive lifecycle，届时可以开始削弱 legacy control plane 双写。
+- 验证证据：
+  - `node --test scripts/devhaven-control.test.mjs`（15 passed）
+  - Task 5 已完成规格审查 + 代码质量审查，review 结论确认 wrapper/hook 对 primitive 调用仍是 best-effort，不会阻塞真实 agent 启动/退出。
+
+
+## Review（Task 6：下沉 unread / focus / attention 生命周期）
+
+- 直接原因：Task 5 后 wrapper 已经开始写 primitive，但前端 attention / Codex 通知识别仍优先绑死在 legacy `agentSession/provider` 上，primitive 状态无法真正参与 workspace / pane lifecycle。
+- 设计层诱因：UI projection 与 provider-specific session 路径长期绑定，导致即使后端已有 primitive 契约，前端仍把它当旁路数据，无法支撑后续削弱 legacy 双写。
+- 当前修复方案：
+  1. `src/utils/controlPlaneProjection.ts` 新增 primitive fallback：当 surface/workspace 没有 `agentSession` 时，可用 `statuses` 推导 waiting/running/failed/completed attention 与 lastMessage；
+  2. `src/hooks/useCodexIntegration.ts` 的 Codex 判定不再只依赖 `agentSession.provider`，也识别 `statuses/agentPids`；
+  3. `src/components/terminal/TerminalWorkspaceView.tsx` 的 surface projection 改为把完整 `controlPlaneTree` 传入，确保 pane 级 primitive 状态可见；
+  4. 新增 `src/utils/controlPlaneLifecycle.test.mjs`，锁定 primitive lifecycle fallback 行为。
+- 长期改进建议：Task 7 后可继续评估何时移除 legacy `agentSession` 双写，把 unread / auto-read / toast 进一步下沉到 primitive 主线。
+- 验证证据：
+  - `~/.nvm/versions/node/v22.22.0/bin/node --test src/utils/controlPlaneLifecycle.test.mjs src/utils/controlPlaneProjection.test.mjs`（8/8 通过）
+  - Task 6 已完成规格审查 + 代码质量审查。
+
+
+## Review（Task 7：文档、AGENTS 与整体验证）
+
+- 已同步文档与约束：`AGENTS.md` 增补 shell bootstrap 分层边界与 provider-neutral primitive 层说明；`tasks/todo.md` 持续记录了 Task 1-7 的执行与证据。
+- 最终阻塞问题已修复：Codex / Claude hook 通知路径不再对 `sendTargetedNotification` 与 legacy `sendAgentNotification` 双写，避免重复通知 / 重复未读。
+- 本轮最终验证证据：
+  - `export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"; node --test scripts/devhaven-control.test.mjs scripts/devhaven-shell-integration.test.mjs scripts/devhaven-zsh-histfile-regression.test.mjs scripts/devhaven-zsh-stacked-zdotdir.test.mjs scripts/devhaven-bash-history-semantics.test.mjs src/utils/terminalPrimitiveProjection.test.mjs src/utils/controlPlaneLifecycle.test.mjs src/utils/controlPlaneProjection.test.mjs`（32 passed）
+  - `cargo test agent_control --manifest-path src-tauri/Cargo.toml && cargo test command_catalog --manifest-path src-tauri/Cargo.toml && cargo test terminal_ --manifest-path src-tauri/Cargo.toml && cargo check --manifest-path src-tauri/Cargo.toml`（全部通过）
+  - `export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"; "$HOME/.nvm/versions/node/v22.22.0/bin/pnpm" exec tsc --noEmit && "$HOME/.nvm/versions/node/v22.22.0/bin/pnpm" build`（通过）
+- 最终审查结论：阻塞项已清除，可以进入收尾。
+
+
+## Codex 版本错配排查（2026-03-15）
+
+- [x] 确认宿主 shell 与 DevHaven 终端中的 codex 解析路径差异
+- [x] 定位旧版 codex-cli 0.97.0 的来源与命中条件
+- [x] 输出根因、影响范围与修复建议
+
+## Review（Codex 版本错配排查）
+
+- 直接原因：`src-tauri/src/terminal.rs::resolve_terminal_agent_wrapper_paths()` 会在终端会话创建时用当时的 `PATH` 预解析 `real_codex_bin`，并注入 `DEVHAVEN_REAL_CODEX_BIN`。当前 GUI-like PATH 会命中 `/opt/homebrew/bin/codex`，它是指向 `/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js` 的 symlink；对应 `package.json` 版本是 **0.97.0**。
+- 宿主 shell 中的 `codex` 则解析到 `/Applications/Codex.app/Contents/Resources/codex`，当前输出为 **codex-cli 0.115.0-alpha.11**。因此 DevHaven 终端里看到旧版，不是更新没生效，而是 wrapper 一开始就被固定到了另一套旧安装。
+- 设计层诱因：wrapper 为了避免递归命中 `scripts/bin/codex`，在 session 创建时提前固化 `DEVHAVEN_REAL_CODEX_BIN`；但当前解析策略只按 PATH 首个 `codex` 命中，不会优先选择新版 Codex.app 资源，也不会比较多个候选版本。
+- 当前建议：短期可删除/卸载 `/opt/homebrew/bin/codex` 对应的旧全局包，或在 DevHaven 中显式优先 `/Applications/Codex.app/Contents/Resources/codex`；长期应修改 `resolve_terminal_agent_wrapper_paths()` 的 codex 解析策略，不再盲选 PATH 首个候选。
+- 证据：
+  - 宿主 shell：`which -a codex` → `/Applications/Codex.app/Contents/Resources/codex`，`codex --version` → `codex-cli 0.115.0-alpha.11`
+  - GUI-like PATH 复现：`resolveRealCommand(..., "codex")` → `/opt/homebrew/bin/codex`
+  - `/opt/homebrew/bin/codex` -> `../lib/node_modules/@openai/codex/bin/codex.js`
+  - `/opt/homebrew/lib/node_modules/@openai/codex/package.json` 版本：`0.97.0`

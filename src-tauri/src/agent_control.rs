@@ -63,6 +63,35 @@ pub struct NotificationRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct StatusPrimitiveRecord {
+    pub key: String,
+    pub value: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub project_path: String,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
+    pub terminal_session_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPidPrimitiveRecord {
+    pub key: String,
+    pub pid: i32,
+    pub project_path: String,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
+    pub terminal_session_id: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ControlPlaneSurfaceTreeNode {
     pub pane_id: String,
     pub surface_id: String,
@@ -78,6 +107,8 @@ pub struct ControlPlaneTree {
     pub project_path: String,
     pub panes: Vec<ControlPlaneSurfaceTreeNode>,
     pub notifications: Vec<NotificationRecord>,
+    pub statuses: Vec<StatusPrimitiveRecord>,
+    pub agent_pids: Vec<AgentPidPrimitiveRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,6 +143,32 @@ pub struct NotificationInput {
     pub message: String,
     pub terminal_session_id: Option<String>,
     pub agent_session_id: Option<String>,
+    pub project_path: Option<String>,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusPrimitiveInput {
+    pub key: String,
+    pub value: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub terminal_session_id: Option<String>,
+    pub project_path: Option<String>,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPidPrimitiveInput {
+    pub key: String,
+    pub pid: i32,
+    pub terminal_session_id: Option<String>,
     pub project_path: Option<String>,
     pub workspace_id: Option<String>,
     pub pane_id: Option<String>,
@@ -174,6 +231,20 @@ pub struct DevHavenNotifyRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct DevHavenNotifyTargetRequest {
+    pub terminal_session_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
+    pub agent_session_id: Option<String>,
+    pub project_path: Option<String>,
+    pub title: Option<String>,
+    pub message: String,
+    pub level: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct DevHavenAgentSessionEventRequest {
     pub agent_session_id: Option<String>,
     pub terminal_session_id: Option<String>,
@@ -185,6 +256,43 @@ pub struct DevHavenAgentSessionEventRequest {
     pub project_path: Option<String>,
     pub cwd: Option<String>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PrimitiveKeyRequest {
+    pub key: String,
+    pub terminal_session_id: Option<String>,
+    pub project_path: Option<String>,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DevHavenSetStatusRequest {
+    pub key: String,
+    pub value: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub terminal_session_id: Option<String>,
+    pub project_path: Option<String>,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DevHavenSetAgentPidRequest {
+    pub key: String,
+    pub pid: i32,
+    pub terminal_session_id: Option<String>,
+    pub project_path: Option<String>,
+    pub workspace_id: Option<String>,
+    pub pane_id: Option<String>,
+    pub surface_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -203,7 +311,7 @@ pub struct ControlPlaneChangedPayload {
     pub updated_at: i64,
 }
 
-pub const AGENT_CONTROL_PLANE_FILE_VERSION: u32 = 1;
+pub const AGENT_CONTROL_PLANE_FILE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -212,6 +320,10 @@ pub struct AgentControlPlaneFile {
     pub bindings: HashMap<String, TerminalBindingRecord>,
     pub agent_sessions: HashMap<String, AgentSessionRecord>,
     pub notifications: HashMap<String, NotificationRecord>,
+    #[serde(default)]
+    pub statuses: HashMap<String, StatusPrimitiveRecord>,
+    #[serde(default)]
+    pub agent_pids: HashMap<String, AgentPidPrimitiveRecord>,
 }
 
 impl Default for AgentControlPlaneFile {
@@ -221,6 +333,8 @@ impl Default for AgentControlPlaneFile {
             bindings: HashMap::new(),
             agent_sessions: HashMap::new(),
             notifications: HashMap::new(),
+            statuses: HashMap::new(),
+            agent_pids: HashMap::new(),
         }
     }
 }
@@ -230,6 +344,8 @@ pub struct ControlPlaneRegistry {
     terminal_bindings: HashMap<String, TerminalBindingRecord>,
     agent_sessions: HashMap<String, AgentSessionRecord>,
     notifications: HashMap<String, NotificationRecord>,
+    status_primitives: HashMap<String, StatusPrimitiveRecord>,
+    agent_pid_primitives: HashMap<String, AgentPidPrimitiveRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +381,26 @@ impl AgentControlState {
         registry.push_notification(input)
     }
 
+    pub fn set_status(&self, input: StatusPrimitiveInput) -> Result<StatusPrimitiveRecord, String> {
+        let mut registry = self.inner.lock().map_err(|_| "control plane 锁已损坏".to_string())?;
+        registry.set_status(input)
+    }
+
+    pub fn clear_status(&self, input: PrimitiveKeyRequest) -> Result<Option<StatusPrimitiveRecord>, String> {
+        let mut registry = self.inner.lock().map_err(|_| "control plane 锁已损坏".to_string())?;
+        registry.clear_status(input)
+    }
+
+    pub fn set_agent_pid(&self, input: AgentPidPrimitiveInput) -> Result<AgentPidPrimitiveRecord, String> {
+        let mut registry = self.inner.lock().map_err(|_| "control plane 锁已损坏".to_string())?;
+        registry.set_agent_pid(input)
+    }
+
+    pub fn clear_agent_pid(&self, input: PrimitiveKeyRequest) -> Result<Option<AgentPidPrimitiveRecord>, String> {
+        let mut registry = self.inner.lock().map_err(|_| "control plane 锁已损坏".to_string())?;
+        registry.clear_agent_pid(input)
+    }
+
     pub fn mark_notification_read(&self, notification_id: &str, read: bool) -> Result<NotificationRecord, String> {
         let mut registry = self.inner.lock().map_err(|_| "control plane 锁已损坏".to_string())?;
         registry.mark_notification_read(notification_id, read)
@@ -289,7 +425,6 @@ impl AgentControlState {
         *registry = ControlPlaneRegistry::from_file(file);
         Ok(())
     }
-
 }
 
 pub fn identify_control_plane(
@@ -350,6 +485,28 @@ pub fn notify_control_plane(
     Ok(record)
 }
 
+pub fn notify_target_control_plane(
+    app: &AppHandle,
+    state: tauri::State<'_, AgentControlState>,
+    request: DevHavenNotifyTargetRequest,
+) -> Result<NotificationRecord, String> {
+    notify_control_plane(
+        app,
+        state,
+        DevHavenNotifyRequest {
+            terminal_session_id: request.terminal_session_id,
+            workspace_id: request.workspace_id,
+            pane_id: request.pane_id,
+            surface_id: request.surface_id,
+            agent_session_id: request.agent_session_id,
+            project_path: request.project_path,
+            title: request.title,
+            message: request.message,
+            level: request.level,
+        },
+    )
+}
+
 pub fn upsert_agent_session_event(
     app: &AppHandle,
     state: tauri::State<'_, AgentControlState>,
@@ -402,6 +559,102 @@ pub fn mark_notification_read_state(
     Ok(())
 }
 
+pub fn set_status_control_plane(
+    app: &AppHandle,
+    state: tauri::State<'_, AgentControlState>,
+    request: DevHavenSetStatusRequest,
+) -> Result<StatusPrimitiveRecord, String> {
+    let record = state.set_status(StatusPrimitiveInput {
+        key: request.key,
+        value: request.value,
+        icon: request.icon,
+        color: request.color,
+        terminal_session_id: request.terminal_session_id,
+        project_path: request.project_path,
+        workspace_id: request.workspace_id,
+        pane_id: request.pane_id,
+        surface_id: request.surface_id,
+    })?;
+    emit_control_plane_changed(
+        app,
+        ControlPlaneChangedPayload {
+            project_path: record.project_path.clone(),
+            workspace_id: record.workspace_id.clone(),
+            reason: "status".to_string(),
+            updated_at: record.updated_at,
+        },
+    );
+    Ok(record)
+}
+
+pub fn clear_status_control_plane(
+    app: &AppHandle,
+    state: tauri::State<'_, AgentControlState>,
+    request: PrimitiveKeyRequest,
+) -> Result<bool, String> {
+    let removed = state.clear_status(request)?;
+    if let Some(record) = removed {
+        emit_control_plane_changed(
+            app,
+            ControlPlaneChangedPayload {
+                project_path: record.project_path,
+                workspace_id: record.workspace_id,
+                reason: "status-clear".to_string(),
+                updated_at: now_millis(),
+            },
+        );
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+pub fn set_agent_pid_control_plane(
+    app: &AppHandle,
+    state: tauri::State<'_, AgentControlState>,
+    request: DevHavenSetAgentPidRequest,
+) -> Result<AgentPidPrimitiveRecord, String> {
+    let record = state.set_agent_pid(AgentPidPrimitiveInput {
+        key: request.key,
+        pid: request.pid,
+        terminal_session_id: request.terminal_session_id,
+        project_path: request.project_path,
+        workspace_id: request.workspace_id,
+        pane_id: request.pane_id,
+        surface_id: request.surface_id,
+    })?;
+    emit_control_plane_changed(
+        app,
+        ControlPlaneChangedPayload {
+            project_path: record.project_path.clone(),
+            workspace_id: record.workspace_id.clone(),
+            reason: "agent-pid".to_string(),
+            updated_at: record.updated_at,
+        },
+    );
+    Ok(record)
+}
+
+pub fn clear_agent_pid_control_plane(
+    app: &AppHandle,
+    state: tauri::State<'_, AgentControlState>,
+    request: PrimitiveKeyRequest,
+) -> Result<bool, String> {
+    let removed = state.clear_agent_pid(request)?;
+    if let Some(record) = removed {
+        emit_control_plane_changed(
+            app,
+            ControlPlaneChangedPayload {
+                project_path: record.project_path,
+                workspace_id: record.workspace_id,
+                reason: "agent-pid-clear".to_string(),
+                updated_at: now_millis(),
+            },
+        );
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 impl ControlPlaneRegistry {
     pub fn to_file(&self) -> AgentControlPlaneFile {
         AgentControlPlaneFile {
@@ -409,6 +662,8 @@ impl ControlPlaneRegistry {
             bindings: self.terminal_bindings.clone(),
             agent_sessions: self.agent_sessions.clone(),
             notifications: self.notifications.clone(),
+            statuses: self.status_primitives.clone(),
+            agent_pids: self.agent_pid_primitives.clone(),
         }
     }
 
@@ -417,6 +672,8 @@ impl ControlPlaneRegistry {
             terminal_bindings: file.bindings,
             agent_sessions: file.agent_sessions,
             notifications: file.notifications,
+            status_primitives: file.statuses,
+            agent_pid_primitives: file.agent_pids,
         }
     }
 
@@ -509,6 +766,123 @@ impl ControlPlaneRegistry {
         };
         self.notifications.insert(record.id.clone(), record.clone());
         Ok(record)
+    }
+
+    pub fn set_status(&mut self, input: StatusPrimitiveInput) -> Result<StatusPrimitiveRecord, String> {
+        let key = normalize_required_text(input.key, "key")?;
+        let value = normalize_required_text(input.value, "value")?;
+        let now = now_millis();
+        let context = self.resolve_event_context(
+            input.terminal_session_id.as_deref(),
+            input.project_path,
+            input.workspace_id,
+            input.pane_id,
+            input.surface_id,
+            None,
+            None,
+        )?;
+        let storage_key = primitive_storage_key(&key, &context);
+
+        if let Some(existing) = self.status_primitives.get_mut(&storage_key) {
+            existing.value = value;
+            existing.icon = normalize_optional_text(input.icon);
+            existing.color = normalize_optional_text(input.color);
+            existing.terminal_session_id = context.terminal_session_id;
+            existing.project_path = context.project_path;
+            existing.workspace_id = context.workspace_id;
+            existing.pane_id = context.pane_id;
+            existing.surface_id = context.surface_id;
+            existing.updated_at = now;
+            return Ok(existing.clone());
+        }
+
+        let record = StatusPrimitiveRecord {
+            key,
+            value,
+            icon: normalize_optional_text(input.icon),
+            color: normalize_optional_text(input.color),
+            project_path: context.project_path,
+            workspace_id: context.workspace_id,
+            pane_id: context.pane_id,
+            surface_id: context.surface_id,
+            terminal_session_id: context.terminal_session_id,
+            created_at: now,
+            updated_at: now,
+        };
+        self.status_primitives.insert(storage_key, record.clone());
+        Ok(record)
+    }
+
+    pub fn clear_status(&mut self, input: PrimitiveKeyRequest) -> Result<Option<StatusPrimitiveRecord>, String> {
+        let key = normalize_required_text(input.key, "key")?;
+        let context = self.resolve_event_context(
+            input.terminal_session_id.as_deref(),
+            input.project_path,
+            input.workspace_id,
+            input.pane_id,
+            input.surface_id,
+            None,
+            None,
+        )?;
+        let storage_key = primitive_storage_key(&key, &context);
+        Ok(self.status_primitives.remove(&storage_key))
+    }
+
+    pub fn set_agent_pid(&mut self, input: AgentPidPrimitiveInput) -> Result<AgentPidPrimitiveRecord, String> {
+        if input.pid <= 0 {
+            return Err("pid 必须为正整数".to_string());
+        }
+        let key = normalize_required_text(input.key, "key")?;
+        let now = now_millis();
+        let context = self.resolve_event_context(
+            input.terminal_session_id.as_deref(),
+            input.project_path,
+            input.workspace_id,
+            input.pane_id,
+            input.surface_id,
+            None,
+            None,
+        )?;
+        let storage_key = primitive_storage_key(&key, &context);
+
+        if let Some(existing) = self.agent_pid_primitives.get_mut(&storage_key) {
+            existing.pid = input.pid;
+            existing.terminal_session_id = context.terminal_session_id;
+            existing.project_path = context.project_path;
+            existing.workspace_id = context.workspace_id;
+            existing.pane_id = context.pane_id;
+            existing.surface_id = context.surface_id;
+            existing.updated_at = now;
+            return Ok(existing.clone());
+        }
+
+        let record = AgentPidPrimitiveRecord {
+            key,
+            pid: input.pid,
+            project_path: context.project_path,
+            workspace_id: context.workspace_id,
+            pane_id: context.pane_id,
+            surface_id: context.surface_id,
+            terminal_session_id: context.terminal_session_id,
+            updated_at: now,
+        };
+        self.agent_pid_primitives.insert(storage_key, record.clone());
+        Ok(record)
+    }
+
+    pub fn clear_agent_pid(&mut self, input: PrimitiveKeyRequest) -> Result<Option<AgentPidPrimitiveRecord>, String> {
+        let key = normalize_required_text(input.key, "key")?;
+        let context = self.resolve_event_context(
+            input.terminal_session_id.as_deref(),
+            input.project_path,
+            input.workspace_id,
+            input.pane_id,
+            input.surface_id,
+            None,
+            None,
+        )?;
+        let storage_key = primitive_storage_key(&key, &context);
+        Ok(self.agent_pid_primitives.remove(&storage_key))
     }
 
     pub fn mark_notification_read(&mut self, notification_id: &str, read: bool) -> Result<NotificationRecord, String> {
@@ -625,11 +999,35 @@ impl ControlPlaneRegistry {
             .collect();
         notifications.sort_by(|left, right| left.created_at.cmp(&right.created_at));
 
+        let mut statuses: Vec<StatusPrimitiveRecord> = self
+            .status_primitives
+            .values()
+            .filter(|status| {
+                status.project_path == project_path
+                    && status.workspace_id.as_deref().unwrap_or(project_path) == workspace_id
+            })
+            .cloned()
+            .collect();
+        statuses.sort_by(|left, right| left.key.cmp(&right.key).then(left.updated_at.cmp(&right.updated_at)));
+
+        let mut agent_pids: Vec<AgentPidPrimitiveRecord> = self
+            .agent_pid_primitives
+            .values()
+            .filter(|record| {
+                record.project_path == project_path
+                    && record.workspace_id.as_deref().unwrap_or(project_path) == workspace_id
+            })
+            .cloned()
+            .collect();
+        agent_pids.sort_by(|left, right| left.key.cmp(&right.key).then(left.updated_at.cmp(&right.updated_at)));
+
         Ok(Some(ControlPlaneTree {
             workspace_id,
             project_path: project_path.to_string(),
             panes: surfaces,
             notifications,
+            statuses,
+            agent_pids,
         }))
     }
 
@@ -777,6 +1175,17 @@ fn notification_matches_binding(notification: &NotificationRecord, binding: &Ter
         return true;
     }
     false
+}
+
+fn primitive_storage_key(key: &str, context: &ResolvedContext) -> String {
+    format!(
+        "{}::{}::{}::{}::{}",
+        context.project_path,
+        context.workspace_id.as_deref().unwrap_or(context.project_path.as_str()),
+        context.pane_id.as_deref().unwrap_or("*"),
+        context.surface_id.as_deref().unwrap_or("*"),
+        key,
+    )
 }
 
 fn normalize_required_text(value: String, field: &str) -> Result<String, String> {
@@ -1026,5 +1435,95 @@ mod tests {
         );
         assert_eq!(tree.notifications.len(), 1);
         assert!(tree.notifications[0].read);
+    }
+
+    #[test]
+    fn agent_control_registry_tracks_status_and_agent_pid_primitives() {
+        let mut registry = ControlPlaneRegistry::default();
+        registry.register_terminal_binding(binding("session-1"));
+
+        let status = registry
+            .set_status(StatusPrimitiveInput {
+                key: "codex".to_string(),
+                value: "Running".to_string(),
+                icon: Some("bolt.fill".to_string()),
+                color: Some("#4C8DFF".to_string()),
+                terminal_session_id: Some("session-1".to_string()),
+                project_path: None,
+                workspace_id: None,
+                pane_id: None,
+                surface_id: None,
+            })
+            .expect("set status should work");
+        assert_eq!(status.workspace_id.as_deref(), Some("project-1"));
+
+        let pid = registry
+            .set_agent_pid(AgentPidPrimitiveInput {
+                key: "codex".to_string(),
+                pid: 4242,
+                terminal_session_id: Some("session-1".to_string()),
+                project_path: None,
+                workspace_id: None,
+                pane_id: None,
+                surface_id: None,
+            })
+            .expect("set agent pid should work");
+        assert_eq!(pid.workspace_id.as_deref(), Some("project-1"));
+
+        let notification = registry
+            .push_notification(NotificationInput {
+                message: "需要确认".to_string(),
+                terminal_session_id: Some("session-1".to_string()),
+                agent_session_id: None,
+                project_path: None,
+                workspace_id: None,
+                pane_id: None,
+                surface_id: None,
+            })
+            .expect("notify target should work");
+        assert_eq!(notification.workspace_id.as_deref(), Some("project-1"));
+
+        let tree = registry
+            .tree("/repo", Some("project-1"))
+            .expect("tree should build")
+            .expect("tree should exist");
+        assert_eq!(tree.statuses.len(), 1);
+        assert_eq!(tree.statuses[0].key, "codex");
+        assert_eq!(tree.agent_pids.len(), 1);
+        assert_eq!(tree.agent_pids[0].pid, 4242);
+
+        assert!(
+            registry
+                .clear_status(PrimitiveKeyRequest {
+                    key: "codex".to_string(),
+                    terminal_session_id: Some("session-1".to_string()),
+                    project_path: None,
+                    workspace_id: None,
+                    pane_id: None,
+                    surface_id: None,
+                })
+                .expect("clear status should work")
+                .is_some()
+        );
+        assert!(
+            registry
+                .clear_agent_pid(PrimitiveKeyRequest {
+                    key: "codex".to_string(),
+                    terminal_session_id: Some("session-1".to_string()),
+                    project_path: None,
+                    workspace_id: None,
+                    pane_id: None,
+                    surface_id: None,
+                })
+                .expect("clear pid should work")
+                .is_some()
+        );
+
+        let cleared_tree = registry
+            .tree("/repo", Some("project-1"))
+            .expect("tree should build after clear")
+            .expect("tree should still exist");
+        assert!(cleared_tree.statuses.is_empty());
+        assert!(cleared_tree.agent_pids.is_empty());
     }
 }

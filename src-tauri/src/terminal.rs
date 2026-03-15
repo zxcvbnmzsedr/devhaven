@@ -307,13 +307,6 @@ fn apply_terminal_shell_integration_env(
             if let Some(original_zdotdir) = original_zdotdir {
                 cmd.env("DEVHAVEN_USER_ZDOTDIR", original_zdotdir);
             }
-            if let Some(state_dir) = resolve_devhaven_shell_state_dir(cmd, "zsh") {
-                let histfile = state_dir.join(".zsh_history");
-                let compdump = state_dir.join(".zcompdump");
-                cmd.env("DEVHAVEN_SHELL_STATE_DIR", state_dir.to_string_lossy().to_string());
-                cmd.env("HISTFILE", histfile.to_string_lossy().to_string());
-                cmd.env("ZSH_COMPDUMP", compdump.to_string_lossy().to_string());
-            }
             cmd.env("ZDOTDIR", integration_dir);
         }
         "bash" => {
@@ -334,31 +327,16 @@ fn apply_terminal_shell_integration_env(
             if let Some(integration_dir) = integration_dir {
                 cmd.env("DEVHAVEN_SHELL_INTEGRATION_DIR", integration_dir);
             }
-            if let Some(state_dir) = resolve_devhaven_shell_state_dir(cmd, "bash") {
-                let histfile = state_dir.join(".bash_history");
-                cmd.env("DEVHAVEN_SHELL_STATE_DIR", state_dir.to_string_lossy().to_string());
-                cmd.env("HISTFILE", histfile.to_string_lossy().to_string());
-            }
             if let Some(original_prompt_command) = original_prompt_command {
                 cmd.env("DEVHAVEN_USER_PROMPT_COMMAND", original_prompt_command);
             }
             cmd.env(
                 "PROMPT_COMMAND",
-                r#"if [ "${DEVHAVEN_WRAPPER_PATH_BOOTSTRAPPED:-0}" != "1" ]; then export DEVHAVEN_WRAPPER_PATH_BOOTSTRAPPED=1; fi; if [ -n "${DEVHAVEN_SHELL_INTEGRATION_DIR:-}" ] && [ -r "${DEVHAVEN_SHELL_INTEGRATION_DIR}/devhaven-bash-integration.sh" ]; then . "${DEVHAVEN_SHELL_INTEGRATION_DIR}/devhaven-bash-integration.sh"; fi; if [ -n "${DEVHAVEN_USER_PROMPT_COMMAND:-}" ]; then eval "${DEVHAVEN_USER_PROMPT_COMMAND}"; fi"#,
+                r#"if [ -n "${DEVHAVEN_SHELL_INTEGRATION_DIR:-}" ] && [ -r "${DEVHAVEN_SHELL_INTEGRATION_DIR}/bash/devhaven-bash-bootstrap.sh" ]; then . "${DEVHAVEN_SHELL_INTEGRATION_DIR}/bash/devhaven-bash-bootstrap.sh"; fi"#,
             );
         }
         _ => {}
     }
-}
-
-fn resolve_devhaven_shell_state_dir(cmd: &CommandBuilder, shell_name: &str) -> Option<PathBuf> {
-    let home_dir = cmd
-        .get_env("HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
-    let state_dir = home_dir.join(".devhaven").join("shell-state").join(shell_name);
-    std::fs::create_dir_all(&state_dir).ok()?;
-    Some(state_dir)
 }
 
 fn resolve_devhaven_script_path(script_relative_path: &str) -> Option<String> {
@@ -1317,13 +1295,13 @@ mod tests {
                 .and_then(|value| value.to_str()),
             Some("1")
         );
-        assert_eq!(
-            cmd.get_env("HISTFILE").and_then(|value| value.to_str()),
-            Some("/tmp/devhaven-home/.devhaven/shell-state/zsh/.zsh_history")
+        assert!(
+            cmd.get_env("HISTFILE").is_none(),
+            "expected zsh HISTFILE to follow user shell semantics"
         );
-        assert_eq!(
-            cmd.get_env("ZSH_COMPDUMP").and_then(|value| value.to_str()),
-            Some("/tmp/devhaven-home/.devhaven/shell-state/zsh/.zcompdump")
+        assert!(
+            cmd.get_env("ZSH_COMPDUMP").is_none(),
+            "expected zsh compdump path to follow user shell semantics"
         );
     }
 
@@ -1340,8 +1318,8 @@ mod tests {
             .get_env("PROMPT_COMMAND")
             .and_then(|value| value.to_str());
         assert!(
-            prompt_command.is_some_and(|value| value.contains("devhaven-bash-integration.sh")),
-            "expected PROMPT_COMMAND to source devhaven-bash-integration.sh, got {:?}",
+            prompt_command.is_some_and(|value| value.contains("bash/devhaven-bash-bootstrap.sh")),
+            "expected PROMPT_COMMAND to source bash/devhaven-bash-bootstrap.sh, got {:?}",
             prompt_command
         );
         assert!(
@@ -1349,9 +1327,9 @@ mod tests {
             "expected PROMPT_COMMAND to preserve user prompt semantics, got {:?}",
             prompt_command
         );
-        assert_eq!(
-            cmd.get_env("HISTFILE").and_then(|value| value.to_str()),
-            Some("/tmp/devhaven-home/.devhaven/shell-state/bash/.bash_history")
+        assert!(
+            cmd.get_env("HISTFILE").is_none(),
+            "expected bash HISTFILE to keep user shell default semantics"
         );
     }
 

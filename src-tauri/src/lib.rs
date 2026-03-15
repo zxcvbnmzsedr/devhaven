@@ -49,7 +49,8 @@ use crate::models::{
 use crate::agent_control::{
     AgentControlState, AgentSessionStatus, ControlPlaneIdentifyResult, ControlPlaneTree,
     DevHavenAgentSessionEventRequest, DevHavenIdentifyRequest, DevHavenNotifyRequest,
-    DevHavenTreeRequest, NotificationMutationRequest,
+    DevHavenNotifyTargetRequest, DevHavenSetAgentPidRequest, DevHavenSetStatusRequest,
+    DevHavenTreeRequest, NotificationMutationRequest, PrimitiveKeyRequest,
 };
 use crate::agent_launcher::{AgentLauncherState, AgentRuntimeDiagnoseResult, AgentSpawnResult};
 use crate::quick_command_manager::{
@@ -1035,6 +1036,42 @@ fn devhaven_notify(
 }
 
 #[tauri::command]
+fn devhaven_notify_target(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    terminal_session_id: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+    agent_session_id: Option<String>,
+    project_path: Option<String>,
+    title: Option<String>,
+    message: String,
+    level: Option<String>,
+) -> Result<agent_control::NotificationRecord, String> {
+    log_command_result("devhaven_notify_target", || {
+        let record = agent_control::notify_target_control_plane(
+            &app,
+            state.clone(),
+            DevHavenNotifyTargetRequest {
+                terminal_session_id,
+                workspace_id,
+                pane_id,
+                surface_id,
+                agent_session_id,
+                project_path,
+                title,
+                message,
+                level,
+            },
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)?;
+        Ok(record)
+    })
+}
+
+#[tauri::command]
 fn devhaven_agent_session_event(
     app: AppHandle,
     state: State<AgentControlState>,
@@ -1105,6 +1142,134 @@ fn devhaven_mark_notification_unread(
         )?;
         let snapshot = state.export_control_plane_file()?;
         storage::save_agent_control_plane_store(&app, snapshot)
+    })
+}
+
+#[tauri::command]
+fn devhaven_set_status(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    key: String,
+    value: String,
+    icon: Option<String>,
+    color: Option<String>,
+    terminal_session_id: Option<String>,
+    project_path: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+) -> Result<agent_control::StatusPrimitiveRecord, String> {
+    log_command_result("devhaven_set_status", || {
+        let record = agent_control::set_status_control_plane(
+            &app,
+            state.clone(),
+            DevHavenSetStatusRequest {
+                key,
+                value,
+                icon,
+                color,
+                terminal_session_id,
+                project_path,
+                workspace_id,
+                pane_id,
+                surface_id,
+            },
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)?;
+        Ok(record)
+    })
+}
+
+#[tauri::command]
+fn devhaven_clear_status(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    key: String,
+    terminal_session_id: Option<String>,
+    project_path: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+) -> Result<bool, String> {
+    log_command_result("devhaven_clear_status", || {
+        let removed = agent_control::clear_status_control_plane(
+            &app,
+            state.clone(),
+            PrimitiveKeyRequest {
+                key,
+                terminal_session_id,
+                project_path,
+                workspace_id,
+                pane_id,
+                surface_id,
+            },
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)?;
+        Ok(removed)
+    })
+}
+
+#[tauri::command]
+fn devhaven_set_agent_pid(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    key: String,
+    pid: i32,
+    terminal_session_id: Option<String>,
+    project_path: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+) -> Result<agent_control::AgentPidPrimitiveRecord, String> {
+    log_command_result("devhaven_set_agent_pid", || {
+        let record = agent_control::set_agent_pid_control_plane(
+            &app,
+            state.clone(),
+            DevHavenSetAgentPidRequest {
+                key,
+                pid,
+                terminal_session_id,
+                project_path,
+                workspace_id,
+                pane_id,
+                surface_id,
+            },
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)?;
+        Ok(record)
+    })
+}
+
+#[tauri::command]
+fn devhaven_clear_agent_pid(
+    app: AppHandle,
+    state: State<AgentControlState>,
+    key: String,
+    terminal_session_id: Option<String>,
+    project_path: Option<String>,
+    workspace_id: Option<String>,
+    pane_id: Option<String>,
+    surface_id: Option<String>,
+) -> Result<bool, String> {
+    log_command_result("devhaven_clear_agent_pid", || {
+        let removed = agent_control::clear_agent_pid_control_plane(
+            &app,
+            state.clone(),
+            PrimitiveKeyRequest {
+                key,
+                terminal_session_id,
+                project_path,
+                workspace_id,
+                pane_id,
+                surface_id,
+            },
+        )?;
+        let snapshot = state.export_control_plane_file()?;
+        storage::save_agent_control_plane_store(&app, snapshot)?;
+        Ok(removed)
     })
 }
 

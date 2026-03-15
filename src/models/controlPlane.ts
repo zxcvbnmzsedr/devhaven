@@ -22,6 +22,27 @@ export type ControlPlaneNotification = {
   read: boolean;
 };
 
+export type ControlPlaneStatusPrimitive = {
+  key: string;
+  value: string;
+  icon?: string | null;
+  color?: string | null;
+  paneId?: string | null;
+  surfaceId?: string | null;
+  terminalSessionId?: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ControlPlaneAgentPidPrimitive = {
+  key: string;
+  pid: number;
+  paneId?: string | null;
+  surfaceId?: string | null;
+  terminalSessionId?: string | null;
+  updatedAt: number;
+};
+
 export type ControlPlanePaneNode = {
   paneId: string;
   surfaceId: string;
@@ -35,6 +56,8 @@ export type ControlPlaneTree = {
   projectPath: string;
   panes: ControlPlanePaneNode[];
   notifications: ControlPlaneNotification[];
+  statuses?: ControlPlaneStatusPrimitive[];
+  agentPids?: ControlPlaneAgentPidPrimitive[];
 };
 
 export type ControlPlaneWorkspaceTree = {
@@ -42,6 +65,8 @@ export type ControlPlaneWorkspaceTree = {
   projectPath: string;
   surfaces: ControlPlanePaneNode[];
   notifications: ControlPlaneNotification[];
+  statuses?: ControlPlaneStatusPrimitive[];
+  agentPids?: ControlPlaneAgentPidPrimitive[];
 };
 
 export type ControlPlaneChangedPayload = {

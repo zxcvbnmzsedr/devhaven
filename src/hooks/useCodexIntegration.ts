@@ -17,6 +17,8 @@ function isCodexTree(tree: Awaited<ReturnType<typeof loadControlPlaneTree>>) {
   }
   return (
     tree.surfaces.some((surface) => surface.agentSession?.provider === "codex")
+    || (tree.statuses ?? []).some((status) => status.key === "codex")
+    || (tree.agentPids ?? []).some((record) => record.key === "codex")
     || tree.notifications.some((notification) => notification.message.includes("Codex"))
   );
 }

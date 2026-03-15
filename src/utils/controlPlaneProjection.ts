@@ -2,11 +2,13 @@ import type {
   ControlPlaneAgentSession,
   ControlPlaneAgentStatus,
   ControlPlaneNotification,
+  ControlPlaneStatusPrimitive,
   ControlPlaneTree,
   ControlPlanePaneNode,
   ControlPlaneWorkspaceTree,
   WorkspaceAttentionProjection,
 } from "../models/controlPlane";
+import { projectTerminalPrimitives } from "./terminalPrimitiveProjection.ts";
 
 export type ControlPlaneAttentionLevel =
   | "idle"
@@ -85,12 +87,48 @@ function pickLatestSession(
 function resolveLatestMessage(
   notifications: ControlPlaneNotification[],
   sessions: ControlPlaneAgentSession[],
+  primitiveStatuses: ControlPlaneStatusPrimitive[] = [],
 ): string | null {
   const latestNotification = pickLatestNotification(notifications);
   if (latestNotification?.message) {
     return latestNotification.message;
   }
-  return pickLatestSession(sessions)?.message ?? null;
+  return (
+    pickLatestSession(sessions)?.message
+    ?? [...primitiveStatuses].sort(compareByUpdatedAtDesc)[0]?.value
+    ?? null
+  );
+}
+
+function normalizePrimitiveStatusValue(value: string | null | undefined): ControlPlaneAgentStatus {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized.includes("fail") || normalized.includes("error")) {
+    return "failed";
+  }
+  if (normalized.includes("wait") || normalized.includes("input") || normalized.includes("need")) {
+    return "waiting";
+  }
+  if (normalized.includes("run") || normalized.includes("progress")) {
+    return "running";
+  }
+  if (normalized.includes("complete") || normalized.includes("done") || normalized.includes("success")) {
+    return "completed";
+  }
+  return "idle";
+}
+
+function pickLatestPrimitiveStatusForSurface(
+  statuses: ControlPlaneStatusPrimitive[],
+  surface: ControlPlanePaneNode,
+): ControlPlaneStatusPrimitive | null {
+  const matched = statuses.filter((status) =>
+    (status.surfaceId && status.surfaceId === surface.surfaceId)
+    || (status.paneId && status.paneId === surface.paneId)
+  );
+  if (matched.length === 0) {
+    return null;
+  }
+  return [...matched].sort(compareByUpdatedAtDesc)[0] ?? null;
 }
 
 export function deriveAttentionTone(input: {
@@ -114,23 +152,30 @@ export function deriveAttentionTone(input: {
 
 export function projectControlPlaneSurface(
   surface: ControlPlanePaneNode,
+  tree?: ControlPlaneWorkspaceTree | ControlPlaneTree | null,
 ): ControlPlaneSurfaceProjection {
+  const latestPrimitiveStatus = pickLatestPrimitiveStatusForSurface(tree?.statuses ?? [], surface);
   const notifications = surface.unreadCount
     ? [
         {
           id: `${surface.surfaceId}:latest`,
-          message: surface.agentSession?.message ?? "",
-          createdAt: surface.agentSession?.updatedAt ?? 0,
+          message: surface.agentSession?.message ?? latestPrimitiveStatus?.value ?? "",
+          createdAt: surface.agentSession?.updatedAt ?? latestPrimitiveStatus?.updatedAt ?? 0,
           read: surface.unreadCount === 0,
         },
       ]
     : [];
   const sessions = surface.agentSession ? [surface.agentSession] : [];
+  const status = surface.agentSession?.status ?? normalizePrimitiveStatusValue(latestPrimitiveStatus?.value);
 
   return {
     unreadCount: Math.max(0, surface.unreadCount ?? 0),
-    latestMessage: resolveLatestMessage(notifications, sessions),
-    attention: toAttention(surface.agentSession?.status),
+    latestMessage: resolveLatestMessage(
+      notifications,
+      sessions,
+      latestPrimitiveStatus ? [latestPrimitiveStatus] : [],
+    ),
+    attention: toAttention(status),
     hasUnread: (surface.unreadCount ?? 0) > 0,
   };
 }
@@ -152,28 +197,51 @@ export function projectControlPlaneWorkspace(
   const sessions = tree.surfaces
     .map((surface) => surface.agentSession)
     .filter((session): session is ControlPlaneAgentSession => Boolean(session));
+  const primitiveStatuses = Object.values(projectTerminalPrimitives(tree).statusesByKey);
+  const primitiveAgentStatuses = primitiveStatuses.map((status) => ({
+    status: normalizePrimitiveStatusValue(status.value),
+    message: status.value,
+  }));
   const unreadCount = tree.notifications.filter((notification) => !notification.read).length;
 
   let attention: ControlPlaneAttentionLevel = "idle";
-  if (sessions.some((session) => session.status === "failed")) {
+  if (
+    sessions.some((session) => session.status === "failed")
+    || primitiveAgentStatuses.some((status) => status.status === "failed")
+  ) {
     attention = "error";
-  } else if (sessions.some((session) => session.status === "waiting")) {
+  } else if (
+    sessions.some((session) => session.status === "waiting")
+    || primitiveAgentStatuses.some((status) => status.status === "waiting")
+  ) {
     attention = "waiting";
-  } else if (sessions.some((session) => session.status === "running")) {
+  } else if (
+    sessions.some((session) => session.status === "running")
+    || primitiveAgentStatuses.some((status) => status.status === "running")
+  ) {
     attention = "running";
-  } else if (sessions.some((session) => session.status === "completed")) {
+  } else if (
+    sessions.some((session) => session.status === "completed")
+    || primitiveAgentStatuses.some((status) => status.status === "completed")
+  ) {
     attention = "completed";
   }
 
   return {
     unreadCount,
-    latestMessage: resolveLatestMessage(tree.notifications, sessions),
+    latestMessage: resolveLatestMessage(tree.notifications, sessions, primitiveStatuses),
     attention,
-    activeAgentCount: sessions.filter((session) =>
-      session.status === "running" || session.status === "waiting",
-    ).length,
-    waitingAgentCount: sessions.filter((session) => session.status === "waiting").length,
-    errorAgentCount: sessions.filter((session) => session.status === "failed").length,
+    activeAgentCount:
+      sessions.filter((session) => session.status === "running" || session.status === "waiting").length
+      + primitiveAgentStatuses.filter((status) =>
+        status.status === "running" || status.status === "waiting",
+      ).length,
+    waitingAgentCount:
+      sessions.filter((session) => session.status === "waiting").length
+      + primitiveAgentStatuses.filter((status) => status.status === "waiting").length,
+    errorAgentCount:
+      sessions.filter((session) => session.status === "failed").length
+      + primitiveAgentStatuses.filter((status) => status.status === "failed").length,
   };
 }
 
@@ -185,13 +253,18 @@ export function countRunningProviderSessions(
     return 0;
   }
   const surfaces = "surfaces" in tree ? tree.surfaces : tree.panes;
-  return surfaces.reduce((count, surface) => {
+  const sessionCount = surfaces.reduce((count, surface) => {
     const session = surface.agentSession;
     if (!session) {
       return count;
     }
     return count + (session.provider === provider && session.status === "running" ? 1 : 0);
   }, 0);
+  if (sessionCount > 0) {
+    return sessionCount;
+  }
+  const primitiveStatus = projectTerminalPrimitives(tree).statusesByKey[provider];
+  return primitiveStatus && normalizePrimitiveStatusValue(primitiveStatus.value) === "running" ? 1 : 0;
 }
 
 export function resolveDisplayedControlPlaneMessage(
@@ -241,8 +314,10 @@ export function buildPaneAttentionMap(
 ): Record<string, PaneAttentionProjection> {
   const surfaces = "surfaces" in tree ? tree.surfaces : tree.panes;
   const entries = surfaces.map((surface) => {
-    const status = surface.agentSession?.status ?? "idle";
-    const projection = projectControlPlaneSurface(surface);
+    const latestPrimitiveStatus = pickLatestPrimitiveStatusForSurface(tree.statuses ?? [], surface);
+    const status = surface.agentSession?.status
+      ?? normalizePrimitiveStatusValue(latestPrimitiveStatus?.value);
+    const projection = projectControlPlaneSurface(surface, tree);
     return [
       surface.paneId,
       {
@@ -252,7 +327,7 @@ export function buildPaneAttentionMap(
           status,
           unreadCount: projection.unreadCount,
         }),
-        lastMessage: projection.latestMessage,
+        lastMessage: projection.latestMessage ?? latestPrimitiveStatus?.value ?? null,
       },
     ] as const;
   });

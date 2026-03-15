@@ -9,7 +9,12 @@ import type {
 const DEVHAVEN_TREE_COMMAND = "devhaven_tree";
 const DEVHAVEN_IDENTIFY_COMMAND = "devhaven_identify";
 const DEVHAVEN_NOTIFY_COMMAND = "devhaven_notify";
+const DEVHAVEN_NOTIFY_TARGET_COMMAND = "devhaven_notify_target";
 const DEVHAVEN_AGENT_SESSION_EVENT_COMMAND = "devhaven_agent_session_event";
+const DEVHAVEN_SET_STATUS_COMMAND = "devhaven_set_status";
+const DEVHAVEN_CLEAR_STATUS_COMMAND = "devhaven_clear_status";
+const DEVHAVEN_SET_AGENT_PID_COMMAND = "devhaven_set_agent_pid";
+const DEVHAVEN_CLEAR_AGENT_PID_COMMAND = "devhaven_clear_agent_pid";
 const DEVHAVEN_MARK_NOTIFICATION_READ_COMMAND = "devhaven_mark_notification_read";
 const DEVHAVEN_MARK_NOTIFICATION_UNREAD_COMMAND = "devhaven_mark_notification_unread";
 
@@ -35,6 +40,8 @@ export async function loadControlPlaneTree(params: {
     projectPath: tree.projectPath,
     surfaces: tree.panes,
     notifications: tree.notifications,
+    statuses: tree.statuses ?? [],
+    agentPids: tree.agentPids ?? [],
   };
 }
 
@@ -51,8 +58,28 @@ export async function notifyControlPlane(params: Record<string, unknown>) {
   return invokeCommand(DEVHAVEN_NOTIFY_COMMAND, params);
 }
 
+export async function notifyTargetControlPlane(params: Record<string, unknown>) {
+  return invokeCommand(DEVHAVEN_NOTIFY_TARGET_COMMAND, params);
+}
+
 export async function emitAgentSessionEvent(params: Record<string, unknown>) {
   return invokeCommand(DEVHAVEN_AGENT_SESSION_EVENT_COMMAND, params);
+}
+
+export async function setControlPlaneStatus(params: Record<string, unknown>) {
+  return invokeCommand(DEVHAVEN_SET_STATUS_COMMAND, params);
+}
+
+export async function clearControlPlaneStatus(params: Record<string, unknown>) {
+  return invokeCommand(DEVHAVEN_CLEAR_STATUS_COMMAND, params);
+}
+
+export async function setControlPlaneAgentPid(params: Record<string, unknown>) {
+  return invokeCommand(DEVHAVEN_SET_AGENT_PID_COMMAND, params);
+}
+
+export async function clearControlPlaneAgentPid(params: Record<string, unknown>) {
+  return invokeCommand(DEVHAVEN_CLEAR_AGENT_PID_COMMAND, params);
 }
 
 export async function markControlPlaneNotificationRead(notificationId: string) {

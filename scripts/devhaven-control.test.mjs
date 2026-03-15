@@ -13,14 +13,25 @@ import {
   runWrappedClaude,
 } from "./devhaven-claude-wrapper.mjs";
 import {
+  dispatchCodexNotificationLifecycle,
   summarizeNotifyPayload,
 } from "./devhaven-codex-hook.mjs";
+import {
+  dispatchClaudeHookLifecycle,
+} from "./devhaven-claude-hook.mjs";
 import {
   buildCommandUrl,
   postDevHavenCommand,
   resolveControlEndpoint,
 } from "./devhaven-control.mjs";
-import { buildHookContext } from "./devhaven-agent-hook.mjs";
+import {
+  buildHookContext,
+  clearAgentPidPrimitive,
+  clearStatusPrimitive,
+  sendAgentPidPrimitive,
+  sendStatusPrimitive,
+  sendTargetedNotification,
+} from "./devhaven-agent-hook.mjs";
 import {
   buildWrappedCodexSpawn,
   resolveRealCommand as resolveRealCodexCommand,
@@ -90,6 +101,87 @@ test("buildHookContext reads DEVHAVEN context ids from environment", () => {
       terminalSessionId: "session-1",
     },
   );
+});
+
+test("sendTargetedNotification posts to devhaven_notify_target with hook context", async () => {
+  const calls = [];
+  await sendTargetedNotification({
+    env: {
+      DEVHAVEN_CONTROL_ENDPOINT: "http://127.0.0.1:3210/api/cmd",
+      DEVHAVEN_PROJECT_PATH: "/repo",
+      DEVHAVEN_WORKSPACE_ID: "workspace-1",
+      DEVHAVEN_PANE_ID: "pane-1",
+      DEVHAVEN_SURFACE_ID: "surface-1",
+      DEVHAVEN_TERMINAL_SESSION_ID: "session-1",
+    },
+    title: "Codex",
+    message: "需要确认",
+    level: "attention",
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        async text() {
+          return JSON.stringify({ ok: true });
+        },
+      };
+    },
+  });
+
+  assert.equal(calls[0].url, "http://127.0.0.1:3210/api/cmd/devhaven_notify_target");
+  assert.match(String(calls[0].options.body), /workspace-1/);
+  assert.match(String(calls[0].options.body), /需要确认/);
+});
+
+test("status and pid primitive helpers post expected commands", async () => {
+  const urls = [];
+  const fetchImpl = async (url) => {
+    urls.push(url);
+    return {
+      ok: true,
+      async text() {
+        return JSON.stringify({ ok: true });
+      },
+    };
+  };
+  const env = {
+    DEVHAVEN_CONTROL_ENDPOINT: "http://127.0.0.1:3210/api/cmd",
+    DEVHAVEN_PROJECT_PATH: "/repo",
+    DEVHAVEN_WORKSPACE_ID: "workspace-1",
+    DEVHAVEN_PANE_ID: "pane-1",
+    DEVHAVEN_SURFACE_ID: "surface-1",
+    DEVHAVEN_TERMINAL_SESSION_ID: "session-1",
+  };
+
+  await sendStatusPrimitive({
+    env,
+    key: "codex",
+    value: "Running",
+    fetchImpl,
+  });
+  await clearStatusPrimitive({
+    env,
+    key: "codex",
+    fetchImpl,
+  });
+  await sendAgentPidPrimitive({
+    env,
+    key: "codex",
+    pid: 4321,
+    fetchImpl,
+  });
+  await clearAgentPidPrimitive({
+    env,
+    key: "codex",
+    fetchImpl,
+  });
+
+  assert.deepEqual(urls, [
+    "http://127.0.0.1:3210/api/cmd/devhaven_set_status",
+    "http://127.0.0.1:3210/api/cmd/devhaven_clear_status",
+    "http://127.0.0.1:3210/api/cmd/devhaven_set_agent_pid",
+    "http://127.0.0.1:3210/api/cmd/devhaven_clear_agent_pid",
+  ]);
 });
 
 test("buildWrappedCodexSpawn prefers explicit real codex bin and forwards args", () => {
@@ -196,6 +288,61 @@ test("summarizeNotifyPayload maps completion notifications to completed state", 
       level: "info",
       status: "completed",
     },
+  );
+});
+
+test("dispatchCodexNotificationLifecycle emits exactly one notification through primitive path", async () => {
+  const calls = [];
+  await dispatchCodexNotificationLifecycle({
+    summary: {
+      title: "Codex",
+      message: "需要确认",
+      level: "attention",
+      status: "waiting",
+    },
+    agentSessionId: "session-1",
+    env: { DEVHAVEN_PROJECT_PATH: "/repo" },
+    sendTargetedNotificationImpl: async (payload) => {
+      calls.push(["notify_target", payload]);
+    },
+    sendStatusPrimitiveImpl: async (payload) => {
+      calls.push(["set_status", payload]);
+    },
+    sendAgentSessionEventImpl: async (payload) => {
+      calls.push(["session_event", payload]);
+    },
+  });
+
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["notify_target", "set_status", "session_event"],
+  );
+});
+
+test("dispatchClaudeHookLifecycle notification path avoids legacy duplicate notify writes", async () => {
+  const calls = [];
+  await dispatchClaudeHookLifecycle({
+    hook: "notification",
+    payload: {
+      title: "Claude",
+      message: "需要关注",
+    },
+    agentSessionId: "session-1",
+    env: { DEVHAVEN_PROJECT_PATH: "/repo" },
+    sendTargetedNotificationImpl: async (value) => {
+      calls.push(["notify_target", value]);
+    },
+    sendStatusPrimitiveImpl: async (value) => {
+      calls.push(["set_status", value]);
+    },
+    sendAgentSessionEventImpl: async (value) => {
+      calls.push(["session_event", value]);
+    },
+  });
+
+  assert.deepEqual(
+    calls.map(([name]) => name),
+    ["notify_target", "set_status"],
   );
 });
 

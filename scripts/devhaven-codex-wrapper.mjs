@@ -4,7 +4,12 @@ import { delimiter } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import { sendAgentSessionEvent } from "./devhaven-agent-hook.mjs";
+import {
+  clearAgentPidPrimitive,
+  sendAgentPidPrimitive,
+  sendAgentSessionEvent,
+  sendStatusPrimitive,
+} from "./devhaven-agent-hook.mjs";
 
 function normalizeOptional(value) {
   if (typeof value !== "string") {
@@ -85,6 +90,21 @@ export async function runWrappedCodex({
   const cwd = process.cwd();
 
   try {
+    await sendStatusPrimitive({
+      env: {
+        ...env,
+        CODEX_SESSION_ID: agentSessionId ?? env.CODEX_SESSION_ID,
+      },
+      key: "codex",
+      value: "Running",
+      icon: "bolt.fill",
+      color: "#4C8DFF",
+    });
+  } catch {
+    // best effort: primitive unavailable should not block codex
+  }
+
+  try {
     await sendAgentSessionEvent({
       env: {
         ...env,
@@ -110,8 +130,33 @@ export async function runWrappedCodex({
     stdio: "inherit",
   });
 
+  if (typeof child.pid === "number" && child.pid > 0) {
+    void sendAgentPidPrimitive({
+      env: {
+        ...env,
+        CODEX_SESSION_ID: agentSessionId ?? env.CODEX_SESSION_ID,
+      },
+      key: "codex",
+      pid: child.pid,
+    }).catch(() => {
+      // ignore primitive registration failure
+    });
+  }
+
   return await new Promise((resolve, reject) => {
     child.once("error", async (error) => {
+      try {
+        await clearAgentPidPrimitive({ env, key: "codex" });
+        await sendStatusPrimitive({
+          env,
+          key: "codex",
+          value: "Failed",
+          icon: "xmark.octagon.fill",
+          color: "#FF5F57",
+        });
+      } catch {
+        // ignore primitive failure
+      }
       try {
         await sendAgentSessionEvent({
           env,
@@ -134,6 +179,18 @@ export async function runWrappedCodex({
         exitCode === 0
           ? "Codex 已退出"
           : `Codex 退出异常（code=${code ?? "null"} signal=${signal ?? "none"}）`;
+      try {
+        await clearAgentPidPrimitive({ env, key: "codex" });
+        await sendStatusPrimitive({
+          env,
+          key: "codex",
+          value: exitCode === 0 ? "Stopped" : "Failed",
+          icon: exitCode === 0 ? "pause.circle.fill" : "xmark.octagon.fill",
+          color: exitCode === 0 ? "#8E8E93" : "#FF5F57",
+        });
+      } catch {
+        // ignore primitive failure
+      }
       try {
         await sendAgentSessionEvent({
           env,

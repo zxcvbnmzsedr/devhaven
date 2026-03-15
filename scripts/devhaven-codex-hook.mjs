@@ -2,8 +2,9 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import {
-  sendAgentNotification,
   sendAgentSessionEvent,
+  sendStatusPrimitive,
+  sendTargetedNotification,
 } from "./devhaven-agent-hook.mjs";
 
 function normalizeOptional(value) {
@@ -91,6 +92,63 @@ export function summarizeNotifyPayload(payload) {
   };
 }
 
+function toStatusPrimitive(summary) {
+  if (summary.status === "failed") {
+    return {
+      value: "Failed",
+      icon: "xmark.octagon.fill",
+      color: "#FF5F57",
+    };
+  }
+
+  if (summary.status === "completed") {
+    return {
+      value: "Completed",
+      icon: "checkmark.circle.fill",
+      color: "#34C759",
+    };
+  }
+
+  return {
+    value: "Waiting",
+    icon: "bell.fill",
+    color: "#4C8DFF",
+  };
+}
+
+export async function dispatchCodexNotificationLifecycle({
+  summary,
+  agentSessionId,
+  env = process.env,
+  sendTargetedNotificationImpl = sendTargetedNotification,
+  sendStatusPrimitiveImpl = sendStatusPrimitive,
+  sendAgentSessionEventImpl = sendAgentSessionEvent,
+}) {
+  const primitiveStatus = toStatusPrimitive(summary);
+  await sendTargetedNotificationImpl({
+    title: summary.title,
+    message: summary.message,
+    level: summary.level,
+    agentSessionId,
+    env,
+  }).catch(() => {});
+  await sendStatusPrimitiveImpl({
+    key: "codex",
+    value: primitiveStatus.value,
+    icon: primitiveStatus.icon,
+    color: primitiveStatus.color,
+    env,
+  }).catch(() => {});
+  await sendAgentSessionEventImpl({
+    provider: "codex",
+    status: summary.status,
+    message: summary.message,
+    agentSessionId,
+    cwd: process.cwd(),
+    env,
+  });
+}
+
 async function runCli() {
   const mode = process.argv[2];
   if (!mode) {
@@ -102,6 +160,40 @@ async function runCli() {
     if (!status) {
       throw new Error("session-event 需要状态参数");
     }
+    await sendStatusPrimitive({
+      env: process.env,
+      key: "codex",
+      value:
+        status === "failed"
+          ? "Failed"
+          : status === "stopped"
+            ? "Stopped"
+            : status === "completed"
+              ? "Completed"
+              : status === "waiting"
+                ? "Waiting"
+                : "Running",
+      icon:
+        status === "failed"
+          ? "xmark.octagon.fill"
+          : status === "stopped"
+            ? "pause.circle.fill"
+            : status === "completed"
+              ? "checkmark.circle.fill"
+              : status === "waiting"
+                ? "bell.fill"
+                : "bolt.fill",
+      color:
+        status === "failed"
+          ? "#FF5F57"
+          : status === "stopped"
+            ? "#8E8E93"
+            : status === "completed"
+              ? "#34C759"
+              : "#4C8DFF",
+    }).catch(() => {
+      // ignore primitive failure
+    });
     await sendAgentSessionEvent({
       provider: "codex",
       status,
@@ -118,18 +210,9 @@ async function runCli() {
       normalizeOptional(process.env.CODEX_SESSION_ID) ??
       normalizeOptional(payload?.session_id) ??
       normalizeOptional(payload?.sessionId);
-    await sendAgentNotification({
-      title: summary.title,
-      message: summary.message,
-      level: summary.level,
+    await dispatchCodexNotificationLifecycle({
+      summary,
       agentSessionId,
-    });
-    await sendAgentSessionEvent({
-      provider: "codex",
-      status: summary.status,
-      message: summary.message,
-      agentSessionId,
-      cwd: process.cwd(),
     });
     return;
   }

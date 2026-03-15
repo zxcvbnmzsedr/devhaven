@@ -4,6 +4,12 @@ import { delimiter } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import {
+  clearAgentPidPrimitive,
+  sendAgentPidPrimitive,
+  sendStatusPrimitive,
+} from "./devhaven-agent-hook.mjs";
+
 function normalizeOptional(value) {
   if (typeof value !== "string") {
     return null;
@@ -148,9 +154,66 @@ export async function runWrappedClaude({
     stdio: "inherit",
   });
 
+  if (typeof child.pid === "number" && child.pid > 0) {
+    void sendAgentPidPrimitive({
+      env: {
+        ...env,
+        CLAUDE_SESSION_ID: sessionId,
+      },
+      key: "claude-code",
+      pid: child.pid,
+    }).catch(() => {
+      // ignore primitive registration failure
+    });
+  }
+
   return await new Promise((resolve, reject) => {
-    child.once("error", reject);
+    child.once("error", async (error) => {
+      try {
+        await clearAgentPidPrimitive({
+          env: {
+            ...env,
+            CLAUDE_SESSION_ID: sessionId,
+          },
+          key: "claude-code",
+        });
+        await sendStatusPrimitive({
+          env: {
+            ...env,
+            CLAUDE_SESSION_ID: sessionId,
+          },
+          key: "claude-code",
+          value: "Failed",
+          icon: "xmark.octagon.fill",
+          color: "#FF5F57",
+        });
+      } catch {
+        // ignore primitive failure
+      }
+      reject(error);
+    });
     child.once("exit", (code, signal) => {
+      void clearAgentPidPrimitive({
+        env: {
+          ...env,
+          CLAUDE_SESSION_ID: sessionId,
+        },
+        key: "claude-code",
+      }).catch(() => {
+        // ignore primitive failure
+      });
+      void sendStatusPrimitive({
+        env: {
+          ...env,
+          CLAUDE_SESSION_ID: sessionId,
+        },
+        key: "claude-code",
+        value: typeof code === "number" && code === 0 ? "Stopped" : "Failed",
+        icon: typeof code === "number" && code === 0 ? "pause.circle.fill" : "xmark.octagon.fill",
+        color: typeof code === "number" && code === 0 ? "#8E8E93" : "#FF5F57",
+      }).catch(() => {
+        // ignore primitive failure
+      });
       resolve(typeof code === "number" ? code : signal ? 1 : 0);
     });
   });

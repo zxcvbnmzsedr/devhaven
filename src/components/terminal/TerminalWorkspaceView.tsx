@@ -358,7 +358,7 @@ function TerminalWorkspaceView({
             surface.terminalSessionId === activePane.sessionId,
         );
       }) ?? null;
-    return matchedSurface ? projectControlPlaneSurface(matchedSurface) : null;
+    return matchedSurface ? projectControlPlaneSurface(matchedSurface, controlPlaneTree) : null;
   }, [controlPlaneTree, shellModel]);
   const autoReadNotificationIds = useMemo(
     () => collectNotificationIdsToMarkRead(controlPlaneTree, { isActive }),

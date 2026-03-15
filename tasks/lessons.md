@@ -21,3 +21,21 @@
 - 当工程里已经有 env 注入、control endpoint、hook 脚本等必要条件时，排查时不能把问题描述成“从零开始”；应明确区分“必要条件已具备”和“闭环尚未产品化”两类状态，避免误导后续实现方向。
 - 当用户明确要求“Codex 必须保持交互式透明 wrapper”时，不能擅自把主路径改写成 non-interactive `exec` 任务；launcher 命令可以保留作诊断/显式托管入口，但终端内默认体验必须仍是透明接管交互命令。
 - 当目标是“像 cmux 一样简洁优雅”时，重点不是删掉控制面，而是把**交互式主路径**收口成单线：shell integration、shim、wrapper、hook、control plane 各守其位；显式 launcher/diagnose 命令应退到工具层，而不是继续占据用户心智。
+
+
+## 2026-03-15 终端增强实现回归反馈
+
+- 用户反馈“当前实现导致终端内容都不见了，历史输入也没来”时，不能只从 agent control plane / wrapper 角度解释设计差异，必须回到**终端启动链路、shell integration、历史文件与 replay 恢复**做根因排查。
+- 以后只要涉及终端增强、wrapper、shell integration 改动，结论里必须显式检查：登录 shell 是否仍加载用户 rc、历史文件路径是否被切换、ZDOTDIR/HISTFILE/PROMPT_COMMAND 是否被覆盖、replay/restore 是否影响可见内容。
+
+
+## 2026-03-15 primitive / legacy 双写通知教训
+
+- 在 primitive-first 过渡期，允许 legacy `agent_session_event` 双写兼容，但**通知绝不能 primitive 与 legacy 同时各写一份**；否则会直接造成 unread 计数翻倍、toast/系统通知重复。
+- 以后只要做“旧路径兼容 + 新中间层接管”，必须单独补一条回归测试，锁定“单次 hook 事件只产生一条通知记录/一次外显通知”。
+
+
+## 2026-03-15 codex 路径固化教训
+
+- 终端 wrapper 若在 session 创建时提前固化 `DEVHAVEN_REAL_CODEX_BIN`，就不能只按当时 PATH 的首个 `codex` 命中来选；否则用户同时装有旧 npm/Homebrew 版与新版 App/官方版时，DevHaven 会长期锁死到旧版本，更新 App 也不会生效。
+- 以后涉及 wrapper real-binary 解析，必须同时检查：宿主 shell PATH、GUI-like PATH、显式 env 覆盖、以及“多个候选中是否应按版本/来源优先级选择”的策略。

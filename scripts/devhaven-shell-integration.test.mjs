@@ -46,3 +46,28 @@ test("zsh integration restores wrapper bin path even when user .zshenv overrides
     rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("zsh bootstrap script can prepend wrapper PATH as a standalone primitive", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "devhaven-zsh-bootstrap-"));
+  const wrapperBin = join(tempRoot, "wrapper-bin");
+  mkdirSync(wrapperBin, { recursive: true });
+
+  const result = spawnSync("zsh", ["-fc", "source \"$DEVHAVEN_SHELL_INTEGRATION_DIR/devhaven-zsh-bootstrap.zsh\"; _devhaven_run_zsh_bootstrap; print -r -- $PATH"], {
+    cwd: REPO_ROOT,
+    env: {
+      HOME: tempRoot,
+      PATH: "/usr/bin:/bin",
+      DEVHAVEN_SHELL_INTEGRATION_DIR: ZSH_INTEGRATION_DIR,
+      DEVHAVEN_WRAPPER_BIN_PATH: wrapperBin,
+    },
+    encoding: "utf8",
+  });
+
+  try {
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const output = (result.stdout || "").trim();
+    assert.match(output, new RegExp(`^${wrapperBin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
