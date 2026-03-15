@@ -27,6 +27,16 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../scripts/bin/": "scripts/bin/",
+      "../scripts/shell-integration/": "scripts/shell-integration/",
+      "../scripts/devhaven-control.mjs": "scripts/devhaven-control.mjs",
+      "../scripts/devhaven-agent-hook.mjs": "scripts/devhaven-agent-hook.mjs",
+      "../scripts/devhaven-codex-wrapper.mjs": "scripts/devhaven-codex-wrapper.mjs",
+      "../scripts/devhaven-codex-hook.mjs": "scripts/devhaven-codex-hook.mjs",
+      "../scripts/devhaven-claude-wrapper.mjs": "scripts/devhaven-claude-wrapper.mjs",
+      "../scripts/devhaven-claude-hook.mjs": "scripts/devhaven-claude-hook.mjs"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

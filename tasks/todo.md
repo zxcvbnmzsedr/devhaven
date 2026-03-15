@@ -767,3 +767,30 @@
   - GUI-like PATH 复现：`resolveRealCommand(..., "codex")` → `/opt/homebrew/bin/codex`
   - `/opt/homebrew/bin/codex` -> `../lib/node_modules/@openai/codex/bin/codex.js`
   - `/opt/homebrew/lib/node_modules/@openai/codex/package.json` 版本：`0.97.0`
+
+
+## Tauri bundle resource 迁移（2026-03-15）
+
+- [x] 确认当前 scripts 模式与 build 行为漂移的根因
+- [x] 为 build/resource 路径解析补失败测试
+- [x] 将 wrapper / shell-integration 路径改为优先 bundle resource
+- [x] 更新 tauri.conf.json 资源打包配置
+- [x] 更新 AGENTS.md 并完成验证
+
+
+## Review（Tauri bundle resource 迁移）
+
+- 直接原因：DevHaven 当前通过 `src-tauri/src/terminal.rs::resolve_devhaven_script_path()` 依赖 `current_dir()` 向上找仓库 `scripts/*`，导致 dev 能命中 wrapper / shell integration，而 build 后因 cwd 不再指向仓库，代理链容易失效。
+- 设计层诱因：wrapper / shell integration 资源来源仍是“仓库脚本模式”，而不是像 cmux 那样由 app bundle 统一持有；这会让 dev/build 两套路径解析逻辑天然漂移。
+- 当前修复方案：
+  1. `src-tauri/src/terminal.rs` 新增 resource-dir 优先解析：先从 `app.path().resource_dir()/scripts/*` 取 wrapper / hook / shell integration，再回退到仓库 `scripts/*`；
+  2. `resolve_terminal_agent_wrapper_paths()` 与 `apply_terminal_shell_integration_env()` 都已接入 bundle resource 路径；
+  3. `src-tauri/tauri.conf.json` 新增 `bundle.resources`，把 `scripts/bin/`、`scripts/shell-integration/` 以及 `devhaven-*.mjs` 打进 app bundle；
+  4. `AGENTS.md` 已补“终端增强资源应优先来自 Tauri bundle resource，而不是依赖 cwd 猜仓库脚本”的边界说明。
+- 长期改进建议：后续可继续把 real codex / claude binary 解析也从“PATH 首命中”升级为“显式 env > App bundle 指定 > 官方 app binary > PATH 回退”的优先级策略，彻底解决 build 模式下代理链与版本错配问题。
+- 验证证据：
+  - `cargo test resolve_devhaven_script_path_prefers_bundle_resource_dir_when_available --manifest-path src-tauri/Cargo.toml`
+  - `cargo test resolve_terminal_agent_wrapper_paths_reads_bundle_resources --manifest-path src-tauri/Cargo.toml`
+  - `cargo test apply_terminal_shell_integration_env_sets_zdotdir_wrapper --manifest-path src-tauri/Cargo.toml`
+  - `cargo test command_catalog --manifest-path src-tauri/Cargo.toml`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`

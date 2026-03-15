@@ -282,6 +282,7 @@ fn apply_terminal_control_env(
 fn apply_terminal_shell_integration_env(
     cmd: &mut CommandBuilder,
     shell: &str,
+    resource_dir: Option<&Path>,
 ) {
     let shell_name = Path::new(shell)
         .file_name()
@@ -291,7 +292,8 @@ fn apply_terminal_shell_integration_env(
     match shell_name {
         "zsh" => {
             let Some(integration_dir) =
-                resolve_devhaven_script_path("shell-integration/zsh").filter(|path| PathBuf::from(path).is_dir())
+                resolve_devhaven_script_path(resource_dir, "shell-integration/zsh")
+                    .filter(|path| PathBuf::from(path).is_dir())
             else {
                 return;
             };
@@ -311,6 +313,7 @@ fn apply_terminal_shell_integration_env(
         }
         "bash" => {
             let Some(integration_script) = resolve_devhaven_script_path(
+                resource_dir,
                 "shell-integration/devhaven-bash-integration.sh",
             ) else {
                 return;
@@ -339,7 +342,7 @@ fn apply_terminal_shell_integration_env(
     }
 }
 
-fn resolve_devhaven_script_path(script_relative_path: &str) -> Option<String> {
+fn resolve_devhaven_script_path_in_workspace(script_relative_path: &str) -> Option<String> {
     if let Ok(current_dir) = std::env::current_dir() {
         for base in current_dir.ancestors() {
             let path = base.join("scripts").join(script_relative_path);
@@ -349,6 +352,26 @@ fn resolve_devhaven_script_path(script_relative_path: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn resolve_devhaven_script_path_in_resource_dir(
+    resource_dir: &Path,
+    script_relative_path: &str,
+) -> Option<String> {
+    let path = resource_dir.join("scripts").join(script_relative_path);
+    if path.exists() {
+        return Some(path.to_string_lossy().to_string());
+    }
+    None
+}
+
+fn resolve_devhaven_script_path(
+    resource_dir: Option<&Path>,
+    script_relative_path: &str,
+) -> Option<String> {
+    resource_dir
+        .and_then(|dir| resolve_devhaven_script_path_in_resource_dir(dir, script_relative_path))
+        .or_else(|| resolve_devhaven_script_path_in_workspace(script_relative_path))
 }
 
 fn prepend_path_entry(cmd: &mut CommandBuilder, entry: PathBuf) {
@@ -381,13 +404,16 @@ fn resolve_executable_in_path(path_env: Option<OsString>, executable: &str) -> O
     None
 }
 
-fn resolve_terminal_agent_wrapper_paths(cmd: &CommandBuilder) -> TerminalAgentWrapperPaths {
-    let wrapper_bin_path = resolve_devhaven_script_path("bin")
+fn resolve_terminal_agent_wrapper_paths(
+    cmd: &CommandBuilder,
+    resource_dir: Option<&Path>,
+) -> TerminalAgentWrapperPaths {
+    let wrapper_bin_path = resolve_devhaven_script_path(resource_dir, "bin")
         .filter(|path| PathBuf::from(path).is_dir());
-    let codex_wrapper_path = resolve_devhaven_script_path("devhaven-codex-wrapper.mjs");
-    let claude_wrapper_path = resolve_devhaven_script_path("devhaven-claude-wrapper.mjs");
-    let codex_hook_path = resolve_devhaven_script_path("devhaven-codex-hook.mjs");
-    let claude_hook_path = resolve_devhaven_script_path("devhaven-claude-hook.mjs");
+    let codex_wrapper_path = resolve_devhaven_script_path(resource_dir, "devhaven-codex-wrapper.mjs");
+    let claude_wrapper_path = resolve_devhaven_script_path(resource_dir, "devhaven-claude-wrapper.mjs");
+    let codex_hook_path = resolve_devhaven_script_path(resource_dir, "devhaven-codex-hook.mjs");
+    let claude_hook_path = resolve_devhaven_script_path(resource_dir, "devhaven-claude-hook.mjs");
     let path_env = cmd.get_env("PATH").map(|value| value.to_os_string());
     let real_codex_bin = resolve_executable_in_path(path_env.clone(), "codex");
     let real_claude_bin = resolve_executable_in_path(path_env.clone(), "claude");
@@ -875,11 +901,12 @@ pub fn terminal_create_session(
         })
         .map_err(|err| format!("创建终端失败: {err}"))?;
 
+    let resource_dir = app.path().resource_dir().ok();
     let mut cmd = build_terminal_command(&shell);
     cmd.cwd(project_path);
     ensure_terminal_env(&mut cmd);
-    let wrapper_paths = resolve_terminal_agent_wrapper_paths(&cmd);
-    apply_terminal_shell_integration_env(&mut cmd, &shell);
+    let wrapper_paths = resolve_terminal_agent_wrapper_paths(&cmd, resource_dir.as_deref());
+    apply_terminal_shell_integration_env(&mut cmd, &shell, resource_dir.as_deref());
     apply_terminal_control_env(
         &mut cmd,
         Some(&control_context),
@@ -1194,6 +1221,7 @@ pub fn terminal_set_replay_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn apply_terminal_control_env_includes_http_command_endpoint() {
@@ -1210,11 +1238,11 @@ mod tests {
         };
         let mut cmd = CommandBuilder::new("/bin/sh");
         let wrapper_paths = TerminalAgentWrapperPaths {
-            wrapper_bin_path: resolve_devhaven_script_path("bin"),
-            codex_wrapper_path: resolve_devhaven_script_path("devhaven-codex-wrapper.mjs"),
-            claude_wrapper_path: resolve_devhaven_script_path("devhaven-claude-wrapper.mjs"),
-            codex_hook_path: resolve_devhaven_script_path("devhaven-codex-hook.mjs"),
-            claude_hook_path: resolve_devhaven_script_path("devhaven-claude-hook.mjs"),
+            wrapper_bin_path: resolve_devhaven_script_path(None, "bin"),
+            codex_wrapper_path: resolve_devhaven_script_path(None, "devhaven-codex-wrapper.mjs"),
+            claude_wrapper_path: resolve_devhaven_script_path(None, "devhaven-claude-wrapper.mjs"),
+            codex_hook_path: resolve_devhaven_script_path(None, "devhaven-codex-hook.mjs"),
+            claude_hook_path: resolve_devhaven_script_path(None, "devhaven-claude-hook.mjs"),
             real_codex_bin: Some("/opt/bin/codex-real".to_string()),
             real_claude_bin: Some("/opt/bin/claude-real".to_string()),
             node_bin: Some("/opt/bin/node".to_string()),
@@ -1282,6 +1310,7 @@ mod tests {
         apply_terminal_shell_integration_env(
             &mut cmd,
             "/bin/zsh",
+            None,
         );
 
         let zdotdir = cmd.get_env("ZDOTDIR").and_then(|value| value.to_str());
@@ -1312,6 +1341,7 @@ mod tests {
         apply_terminal_shell_integration_env(
             &mut cmd,
             "/bin/bash",
+            None,
         );
 
         let prompt_command = cmd
@@ -1331,6 +1361,64 @@ mod tests {
             cmd.get_env("HISTFILE").is_none(),
             "expected bash HISTFILE to keep user shell default semantics"
         );
+    }
+
+    #[test]
+    fn resolve_devhaven_script_path_prefers_bundle_resource_dir_when_available() {
+        let temp_root = std::env::temp_dir().join(format!("devhaven-resource-{}", Uuid::new_v4()));
+        let resource_dir = temp_root.join("Resources");
+        let bundle_script = resource_dir.join("scripts/devhaven-codex-wrapper.mjs");
+        fs::create_dir_all(bundle_script.parent().expect("parent should exist"))
+            .expect("create dirs should work");
+        fs::write(&bundle_script, "export {}")
+            .expect("write bundle script should work");
+
+        let resolved = resolve_devhaven_script_path(Some(resource_dir.as_path()), "devhaven-codex-wrapper.mjs");
+        let expected = bundle_script.to_string_lossy().to_string();
+        assert_eq!(
+            resolved.as_deref(),
+            Some(expected.as_str()),
+        );
+
+        let _ = fs::remove_dir_all(temp_root);
+    }
+
+    #[test]
+    fn resolve_terminal_agent_wrapper_paths_reads_bundle_resources() {
+        let temp_root = std::env::temp_dir().join(format!("devhaven-wrapper-resource-{}", Uuid::new_v4()));
+        let resource_dir = temp_root.join("Resources");
+        let bundle_bin = resource_dir.join("scripts/bin");
+        let bundle_codex = resource_dir.join("scripts/devhaven-codex-wrapper.mjs");
+        let bundle_claude = resource_dir.join("scripts/devhaven-claude-wrapper.mjs");
+        let bundle_codex_hook = resource_dir.join("scripts/devhaven-codex-hook.mjs");
+        let bundle_claude_hook = resource_dir.join("scripts/devhaven-claude-hook.mjs");
+        fs::create_dir_all(&bundle_bin).expect("create bin dir should work");
+        fs::write(&bundle_codex, "export {}").expect("write codex wrapper should work");
+        fs::write(&bundle_claude, "export {}").expect("write claude wrapper should work");
+        fs::write(&bundle_codex_hook, "export {}").expect("write codex hook should work");
+        fs::write(&bundle_claude_hook, "export {}").expect("write claude hook should work");
+
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env("PATH", "/usr/bin:/bin");
+        let paths = resolve_terminal_agent_wrapper_paths(&cmd, Some(resource_dir.as_path()));
+        let expected_bin = bundle_bin.to_string_lossy().to_string();
+        let expected_codex = bundle_codex.to_string_lossy().to_string();
+        let expected_codex_hook = bundle_codex_hook.to_string_lossy().to_string();
+
+        assert_eq!(
+            paths.wrapper_bin_path.as_deref(),
+            Some(expected_bin.as_str()),
+        );
+        assert_eq!(
+            paths.codex_wrapper_path.as_deref(),
+            Some(expected_codex.as_str()),
+        );
+        assert_eq!(
+            paths.codex_hook_path.as_deref(),
+            Some(expected_codex_hook.as_str()),
+        );
+
+        let _ = fs::remove_dir_all(temp_root);
     }
 
     #[test]
