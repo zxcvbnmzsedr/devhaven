@@ -203,6 +203,7 @@ export function projectControlPlaneWorkspace(
     message: status.value,
   }));
   const unreadCount = tree.notifications.filter((notification) => !notification.read).length;
+  const hasUnreadNotifications = unreadCount > 0;
 
   let attention: ControlPlaneAttentionLevel = "idle";
   if (
@@ -221,8 +222,10 @@ export function projectControlPlaneWorkspace(
   ) {
     attention = "running";
   } else if (
+    hasUnreadNotifications && (
     sessions.some((session) => session.status === "completed")
     || primitiveAgentStatuses.some((status) => status.status === "completed")
+    )
   ) {
     attention = "completed";
   }

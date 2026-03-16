@@ -1,5 +1,52 @@
 # 本次任务清单
 
+## 工作区改动检查与提交（2026-03-16）
+
+- [x] 记录本次检查范围与待办，建立 Review 占位
+- [x] 审阅当前工作区改动与关键 diff，确认是否存在明显问题
+- [x] 按改动范围执行必要验证并记录证据
+- [x] 若验证通过且未发现阻塞问题，则完成 commit 并回写 Review
+
+## Review（工作区改动检查与提交）
+
+- 本次工作区改动集中在 `src/utils/controlPlaneProjection.ts`、`src/utils/controlPlaneLifecycle.test.mjs`、`tasks/lessons.md`、`tasks/todo.md`；核心代码变更是把 workspace 级 `completed` attention 收口为“**仅在仍有未读通知时显示**”，与 2026-03-15 的用户反馈“已读后绿点不应继续保留”一致。
+- 直接原因已在前一条修复记录中确认：项目列表里的绿点来自 `controlPlaneProjection.attention === "completed"`，不是 unread badge；已读流程只会清 notification，不会自动清状态点。本次 diff 用最少修改把 `completed` 状态展示与未读通知重新绑定，未改动 `failed / waiting / running` 优先级。
+- 审阅结果：未发现新的明显阻塞问题，也未发现额外系统设计缺陷；`latestMessage` 仍会保留最近完成消息，项目列表/Header 的未读 badge 继续只由 `unreadCount` 决定，行为与预期一致。
+- 验证证据：`node --test src/utils/controlPlaneProjection.test.mjs src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneLifecycle.test.mjs scripts/devhaven-control.test.mjs`（29/29 通过）；`node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）；`git diff --check`（通过，无 whitespace/冲突类问题）。
+- 提交说明：本轮检查通过后按 `fix: 已读后不再保留 completed 控制面状态点` 提交当前工作区改动。
+
+## Codex 消息通知分析（2026-03-15）
+
+- [x] 梳理 Codex 通知写入入口与触发场景
+- [x] 梳理通知消失时机、已读/未读状态与自动清理逻辑
+- [x] 梳理前端状态展示位置与投影视图
+- [x] 汇总结论、补充 Review 与验证证据
+
+## Review（Codex 消息通知分析）
+
+- 当前 **真正会触发 UI 级“消息通知”** 的不是 Codex 启动/退出本身，而是 `scripts/devhaven-codex-hook.mjs` 的 `notify` 生命周期：外部 payload 会先被归一化为 `waiting / completed / failed` 三类，再写入 `devhaven_notify_target`、`devhaven_set_status(key=codex)`、`devhaven_agent_session_event(provider=codex)`；其中只有 `devhaven_notify_target` 会生成控制面 notification 记录并触发前端 toast / 系统通知。
+- Codex wrapper 启动与退出只会改 **状态**，不会直接发 UI 消息：启动时写 `Running + "Codex 已启动"`，正常退出写 `Stopped + "Codex 已退出"`，异常退出写 `Failed + 异常信息`；这些会影响“运行中/状态点/最新文案”，但不会走 `useCodexIntegration` 的 popup 通知链路。
+- 通知记录在 Rust 控制面里创建后默认 `read=false`，会落盘到 `~/.devhaven/agent_control_plane.json`；目前未发现自动删除/过期清理逻辑，只有“标记已读/未读”，因此**最新消息文本可长期保留**，直到被新的 notification / session message / primitive status 覆盖。
+- “消失”分三层：1) 顶层 toast 由 `useToast` 固定 1600ms 自动消失；2) 系统通知交给操作系统管理，代码未控制停留时长；3) 终端内未读角标会在工作区处于 active 时被 `TerminalWorkspaceView` 自动批量标记已读后消失，但最新消息文本与部分状态点不会因此自动清空。
+- 状态展示当前至少有三处：终端左侧项目列表（最新消息 + 状态点 + 未读数 + Codex 运行点）、终端 Header（控制面 attention + 未读 badge + 最近消息 + Codex 运行中胶囊）、顶层全局 toast（右上角绿色/红色浮层）；其中颜色语义为 error=红、waiting=黄、completed=绿、running=蓝。
+- 额外注意：`useCodexIntegration` 判断是否“Codex 树”是按 workspace 级别粗粒度判断的，只要该 tree 内存在 codex session/status/pid 或通知文案含 `Codex`，后续新 notification 就会被当作 Codex 通知转成 toast / 系统通知；混合 provider 场景下这里有潜在误归类空间。
+- 验证证据：`/usr/local/bin/node --test scripts/devhaven-control.test.mjs`（17/17 通过，覆盖 Codex/Claude wrapper 与 notification lifecycle）；`/usr/local/bin/node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）。
+
+## Codex completed 角标已读后仍保留修复（2026-03-15）
+
+- [x] 复核 completed 绿点未消失的直接原因与影响范围
+- [x] 先补回归测试，覆盖 completed 状态在已读后不再保留 workspace attention
+- [x] 按最少修改原则修复 control plane workspace 投影
+- [x] 运行定向验证并补充 Review 记录
+
+## Review（Codex completed 角标已读后仍保留修复）
+
+- 直接原因已确认：项目列表里的绿色点走的是 `controlPlaneProjection.attention === "completed"` 状态展示，而不是 unread badge；已读链路只会把 notification 标成 `read=true`，不会自动清除 workspace attention。
+- 本轮先按 TDD 补了回归测试 `workspace projection clears completed attention after notifications are read`，锁定“completed 消息已读后，workspace attention 应回落到 idle，但 latestMessage 仍保留”的目标行为，避免以后再把状态点和未读角标混淆。
+- 修复采用最少修改原则：仅调整 `src/utils/controlPlaneProjection.ts::projectControlPlaneWorkspace`，让 `completed` attention 只有在当前 workspace 仍有未读 notification 时才显示；`failed / waiting / running` 的优先级与行为保持不变。
+- 修复后效果：用户读完 completed 通知后，项目列表/终端 Header 的 completed 绿色状态点会消失；最近消息文本仍会保留，Codex 运行中点与其他错误/等待态不受影响。
+- 验证证据：`$HOME/.nvm/versions/node/v22.22.0/bin/node --test src/utils/controlPlaneProjection.test.mjs src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneLifecycle.test.mjs scripts/devhaven-control.test.mjs`（29/29 通过）；`$HOME/.nvm/versions/node/v22.22.0/bin/node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）。
+
 ## 终端工作区过快回收修复（2026-03-13）
 
 - [x] 定位“工作区一会没看就被回收，运行中的任务被结束”的直接原因

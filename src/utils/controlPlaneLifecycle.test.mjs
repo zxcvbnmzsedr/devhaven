@@ -69,3 +69,48 @@ test("pane attention map falls back to primitive statuses when no agent session 
   assert.equal(map["pane-1"].tone, "error");
   assert.equal(map["pane-1"].lastMessage, "Failed");
 });
+
+test("workspace projection clears completed attention after notifications are read", () => {
+  const projection = projectControlPlaneWorkspace(
+    createWorkspaceTree({
+      surfaces: [
+        {
+          paneId: "pane-1",
+          surfaceId: "surface-1",
+          terminalSessionId: "session-1",
+          unreadCount: 0,
+          agentSession: {
+            agentSessionId: "agent-1",
+            provider: "codex",
+            status: "completed",
+            message: "Codex 已完成一轮处理",
+            updatedAt: 30,
+          },
+        },
+      ],
+      notifications: [
+        {
+          id: "n1",
+          message: "Codex 已完成一轮处理",
+          createdAt: 20,
+          updatedAt: 25,
+          read: true,
+        },
+      ],
+      statuses: [
+        {
+          key: "codex",
+          value: "Completed",
+          paneId: "pane-1",
+          surfaceId: "surface-1",
+          createdAt: 20,
+          updatedAt: 30,
+        },
+      ],
+    }),
+  );
+
+  assert.equal(projection.unreadCount, 0);
+  assert.equal(projection.attention, "idle");
+  assert.equal(projection.latestMessage, "Codex 已完成一轮处理");
+});
