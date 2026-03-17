@@ -44,3 +44,24 @@ test("collectNewControlPlaneNotifications returns only notifications since the e
     ["n3"],
   );
 });
+
+test("collectNewControlPlaneNotifications prefers explicit notification ids to avoid swallowing later events", () => {
+  const tree = {
+    workspaceId: "project-1",
+    projectPath: "/repo",
+    surfaces: [],
+    notifications: [
+      { id: "n1", message: "第一轮完成", createdAt: 20, updatedAt: 20, read: false },
+      { id: "n2", message: "第二轮完成", createdAt: 30, updatedAt: 30, read: false },
+    ],
+  };
+
+  assert.deepEqual(
+    collectNewControlPlaneNotifications(tree, {
+      since: 20,
+      seenIds: new Set(),
+      notificationIds: ["n1"],
+    }).map((item) => item.id),
+    ["n1"],
+  );
+});

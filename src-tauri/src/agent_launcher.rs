@@ -212,6 +212,7 @@ pub fn spawn_agent_command(
         ControlPlaneChangedPayload {
             project_path: result.project_path.clone(),
             workspace_id: result.workspace_id.clone(),
+            notification_id: None,
             reason: "agent-session".to_string(),
             updated_at: result.updated_at,
         },
@@ -232,6 +233,7 @@ pub fn stop_agent_command(
         ControlPlaneChangedPayload {
             project_path: result.project_path,
             workspace_id: result.workspace_id,
+            notification_id: None,
             reason: "agent-session".to_string(),
             updated_at: result.updated_at,
         },

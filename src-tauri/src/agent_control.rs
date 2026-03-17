@@ -307,6 +307,8 @@ pub struct ControlPlaneChangedPayload {
     pub project_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_id: Option<String>,
     pub reason: String,
     pub updated_at: i64,
 }
@@ -478,6 +480,7 @@ pub fn notify_control_plane(
         ControlPlaneChangedPayload {
             project_path: record.project_path.clone(),
             workspace_id: record.workspace_id.clone(),
+            notification_id: Some(record.id.clone()),
             reason: "notification".to_string(),
             updated_at: record.updated_at,
         },
@@ -529,6 +532,7 @@ pub fn upsert_agent_session_event(
         ControlPlaneChangedPayload {
             project_path: record.project_path.clone(),
             workspace_id: record.workspace_id.clone(),
+            notification_id: None,
             reason: "agent-session".to_string(),
             updated_at: record.updated_at,
         },
@@ -548,6 +552,7 @@ pub fn mark_notification_read_state(
         ControlPlaneChangedPayload {
             project_path: record.project_path,
             workspace_id: record.workspace_id,
+            notification_id: Some(record.id.clone()),
             reason: if read {
                 "notification-read".to_string()
             } else {
@@ -580,6 +585,7 @@ pub fn set_status_control_plane(
         ControlPlaneChangedPayload {
             project_path: record.project_path.clone(),
             workspace_id: record.workspace_id.clone(),
+            notification_id: None,
             reason: "status".to_string(),
             updated_at: record.updated_at,
         },
@@ -599,6 +605,7 @@ pub fn clear_status_control_plane(
             ControlPlaneChangedPayload {
                 project_path: record.project_path,
                 workspace_id: record.workspace_id,
+                notification_id: None,
                 reason: "status-clear".to_string(),
                 updated_at: now_millis(),
             },
@@ -627,6 +634,7 @@ pub fn set_agent_pid_control_plane(
         ControlPlaneChangedPayload {
             project_path: record.project_path.clone(),
             workspace_id: record.workspace_id.clone(),
+            notification_id: None,
             reason: "agent-pid".to_string(),
             updated_at: record.updated_at,
         },
@@ -646,6 +654,7 @@ pub fn clear_agent_pid_control_plane(
             ControlPlaneChangedPayload {
                 project_path: record.project_path,
                 workspace_id: record.workspace_id,
+                notification_id: None,
                 reason: "agent-pid-clear".to_string(),
                 updated_at: now_millis(),
             },

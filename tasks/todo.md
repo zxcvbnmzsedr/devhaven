@@ -1,5 +1,65 @@
 # 本次任务清单
 
+## 提交当前工作区改动（2026-03-17）
+
+- [x] 记录本轮提交范围与待办
+- [x] 重新运行提交前验证并确认结果
+- [x] 暂存当前改动并执行 commit
+- [x] 回写 Review 与提交结果
+
+## Review（提交当前工作区改动）
+
+- 提交范围：本轮将控制面通知竞态修复链路与相应任务沉淀一并提交，包含 Rust `notification_id` 事件字段补齐、前端 `notificationId` 类型/消费逻辑同步、`controlPlaneAutoRead` 过滤逻辑与回归测试，以及 `tasks/lessons.md` / `tasks/todo.md` 记录更新。
+- 直接原因：用户要求“直接 commit”，因此在前一轮 diff 审阅基础上，按仓库约束重新执行了一轮新鲜验证，再提交当前工作区全部 8 个改动文件。
+- 是否存在设计层诱因：本次提交针对的核心问题仍是“控制面变更事件粒度过粗，前端需要回拉全量 tree 再猜本次通知”，修复方向是把 notification 主键直接下沉到事件 payload；除此之外，未发现新的明显系统设计缺陷。
+- 提交结果：已执行 `git commit -m "fix: 控制面通知事件携带 notificationId"`，当前提交为 `c902021`。
+- 验证证据：`git status --short`（提交前 8 个目标文件均为已修改）；`node --test src/utils/controlPlaneAutoRead.test.mjs`（4/4 通过）；`node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）；`cargo check --manifest-path src-tauri/Cargo.toml`（通过）；`git diff --check`（通过）。
+
+## 未暂存改动分析（2026-03-17）
+
+- [x] 记录本轮未暂存 diff 分析范围与待办
+- [x] 查看未暂存文件清单、摘要与关键 diff
+- [x] 总结主要改动意图、潜在风险与建议
+- [x] 回写 Review 与证据
+
+## Review（未暂存改动分析）
+
+- 本轮未暂存改动的**主线非常集中**：真正的功能代码都围绕“控制面 notification 事件要显式携带 `notificationId`，前端消费时优先按主键精确取通知，避免后续通知被时间窗口竞态提前吞掉”这一处修复展开。涉及链路完整：Rust `ControlPlaneChangedPayload` → TS payload 类型 → `useCodexIntegration` 订阅消费 → `collectNewControlPlaneNotifications` 过滤逻辑 → 对应回归测试。
+- 代码改动之间是自洽的：`src-tauri/src/agent_control.rs` 为 notification / read / unread 事件补 `notification_id`，并把其它 reason 显式设为 `None`；`src-tauri/src/agent_launcher.rs` 也同步补齐字段，避免 Rust 结构体新增字段后遗漏编译入口；前端 `src/models/controlPlane.ts`、`src/hooks/useCodexIntegration.ts`、`src/utils/controlPlaneAutoRead.ts` 与测试文件同步消费该字段，说明这不是半截改动。
+- 审阅判断：**未发现明显阻塞问题**。当前实现保留了“无 `notificationId` 时按 `since` 回退”的兼容路径，同时新增测试准确覆盖“显式 ID 优先于时间窗口”的关键竞态场景；轻量验证也已通过。
+- 需要注意的非功能性风险：`tasks/todo.md` 与 `tasks/lessons.md` 里混有两类内容——一类是本轮通知修复的 Review/教训，一类是本次/此前的分析记录（包括暂存区/未暂存区分析与 Swift 可行性评估）。如果你后续想做一个**只包含通知修复**的干净 commit，这两个文件会让提交主题变宽，最好在提交前确认是否要拆分。
+- 验证证据：`git diff --stat`（8 files changed, 154 insertions(+), 2 deletions(-)）；`node --test src/utils/controlPlaneAutoRead.test.mjs`（4/4 通过）；`node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）；`cargo check --manifest-path src-tauri/Cargo.toml`（通过）；`git diff --check`（通过）。
+
+## 暂存区内容分析（2026-03-17）
+
+- [x] 记录本轮暂存区分析范围与待办
+- [x] 查看暂存文件清单、摘要与关键 diff
+- [x] 总结主要改动意图、潜在风险与建议
+- [x] 回写 Review 与证据
+
+## Review（暂存区内容分析）
+
+- 结论：当前 **暂存区为空**，`git diff --cached --stat` 与 `git diff --cached --name-status` 都没有输出，因此没有可供逐文件审阅的 staged diff。
+- 当前工作区存在 **未暂存** 修改，主要文件为 `src-tauri/src/agent_control.rs`、`src-tauri/src/agent_launcher.rs`、`src/hooks/useCodexIntegration.ts`、`src/models/controlPlane.ts`、`src/utils/controlPlaneAutoRead.test.mjs`、`src/utils/controlPlaneAutoRead.ts`、`tasks/lessons.md`、`tasks/todo.md`；其中 `tasks/todo.md` 包含本轮为满足仓库流程新增的分析记录。
+- 风险判断：如果你原本以为这些改动已经 `git add`，那当前实际上还没有进入待提交集合；此时直接 `git commit` 不会带上这些文件。
+- 建议：若你要我继续审阅“准备提交但还没 add 的改动”，下一步应改看 `git diff`（未暂存）；若你只是想确认 staged 状态，那么本轮结论就是“暂无 staged 内容”。
+- 验证证据：`git status --short`（仅看到工作区 ` M`，没有 `M  / A  / D  / R` 等 index 侧标记）；`git diff --cached --stat`（无输出）；`git diff --cached --name-status`（无输出）。
+
+## Codex 通知一两轮后不再弹出排查（2026-03-16）
+
+- [x] 记录用户反馈现象、建立本轮排查 checklist
+- [x] 梳理 Codex 通知生产/消费链路并定位根因
+- [x] 先补失败测试，再做最少修改修复
+- [x] 运行定向验证并补充 Review 结论与证据
+
+## Review（Codex 通知一两轮后不再弹出排查）
+
+- 直接原因：`useCodexIntegration` 当前是收到 `devhaven-control-plane-changed(reason=notification)` 后，再去加载**整棵** control-plane tree，并用 `updatedAt >= payload.updatedAt` 的时间窗口筛通知。这个实现把“当前这条通知事件”和“树里后来才写入的通知”混在了一起；如果后续几轮通知在前一次异步 `loadControlPlaneTree` 返回前就已经落盘，前一次回调会把这些**未来通知**提前记进 `seenNotificationIdsRef`，导致它们自己的事件到来时被误判成“已处理”，用户就会感知为“通知一两轮后就不再弹了”。
+- 设计层诱因：控制面变更事件只带了 `projectPath/workspaceId/updatedAt`，没带 **具体 notificationId**，前端只能靠“重新拉全量树 + 时间窗口”猜测本次是哪条通知；这是事件语义过粗导致的消费竞态。除此之外，未发现明显系统设计缺陷。
+- 当前修复方案：给 `ControlPlaneChangedPayload` 增加可选 `notificationId`，Rust 在 `reason=notification` / `notification-read` / `notification-unread` 时把具体通知 ID 一并带上；前端 `collectNewControlPlaneNotifications` 优先按显式 `notificationIds` 精确挑选通知，仅在缺少 ID 的兼容场景下才退回旧的 `since` 逻辑。
+- 长期改进建议：后续若继续扩展控制面通知，优先坚持“**事件 payload 直接带主键，消费侧按主键处理**”的原则，避免再次走“收到事件后回拉整棵树再猜是谁”的路径；如果还要做更多通知聚合，可继续把 toast/system-notify 消费逻辑下沉为纯函数并补独立回归测试。
+- 验证证据：`node --test src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneLifecycle.test.mjs src/utils/controlPlaneProjection.test.mjs scripts/devhaven-control.test.mjs`（30/30 通过）；`node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）；`cargo check --manifest-path src-tauri/Cargo.toml`（通过）；`git diff --check`（通过）。
+
 ## 工作区改动检查与提交（2026-03-16）
 
 - [x] 记录本次检查范围与待办，建立 Review 占位
@@ -841,3 +901,68 @@
   - `cargo test apply_terminal_shell_integration_env_sets_zdotdir_wrapper --manifest-path src-tauri/Cargo.toml`
   - `cargo test command_catalog --manifest-path src-tauri/Cargo.toml`
   - `cargo check --manifest-path src-tauri/Cargo.toml`
+
+
+## macOS 原生 Swift 重构可行性评估（2026-03-16）
+
+- [x] 盘点当前前端/后端/平台桥接的实现规模
+- [x] 识别只能通过 Tauri/Rust/Node 获得的能力与可替代方案
+- [x] 评估是否适合完全重写为原生 Swift
+- [x] 输出推荐迁移路线、风险与投入级别
+
+
+## Review（macOS 原生 Swift 重构可行性评估）
+
+- 结论：**可以做，但应视为“分阶段重写”，不应按“小步重构”预期成本。** 当前仓库前端约 `126` 个 TS/TSX 文件 / `26241` 行，Rust 后端约 `30` 个文件 / `17041` 行，另有 `15` 个脚本文件 / `2125` 行；`src-tauri/src/command_catalog.rs` 暴露约 `79` 个 Tauri/Web 命令对。
+- 关键判断依据：
+  1. UI 并非简单 CRUD，而是包含大型终端工作区、Run 面板、右侧文件/Git 侧栏、Markdown/备注/Todo、筛选/仪表盘等完整桌面工作台；
+  2. 本地能力并非薄壳，Rust 侧已有 PTY、Git/worktree、控制平面、存储、Web bridge、共享脚本、交互锁等厚后端；
+  3. 若改为纯 Swift/SwiftUI/AppKit，需要同时替换 React 组件层与 Rust/Tauri 命令层，尤其终端模拟器、代码编辑器、diff/Git 工作流、agent control plane 成本最高。
+- 推荐路线：
+  1. 若目标只是“只支持 macOS”，优先保留现有 Rust 核心，先砍掉跨平台负担；
+  2. 若目标是“mac 原生体验”，优先考虑 **Swift 壳 + 复用 Rust 核心**，而不是一步到位纯 Swift 全重写；
+  3. 只有在你明确接受 2~3 个大版本演进周期、且愿意重做终端/编辑器/工作区交互时，才建议推进纯 Swift 重写。
+- 证据：
+  - `package.json` / `src-tauri/Cargo.toml`
+  - `src/platform/commandClient.ts`（Tauri invoke + Web HTTP 双桥接）
+  - `src-tauri/src/web_server.rs`（浏览器运行时桥）
+  - `src/components/terminal/TerminalWorkspaceView.tsx`、`src/components/terminal/TerminalPane.tsx`
+  - `src-tauri/src/terminal.rs`、`src-tauri/src/agent_control.rs`、`src-tauri/src/git_ops.rs`、`src-tauri/src/worktree_init.rs`
+
+
+## 后续跨平台接入能力评估（2026-03-16）
+
+- [x] 盘点当前项目对浏览器 / 移动端接入的现有基础
+- [x] 判断纯 Swift macOS 重构后是否还能对外提供跨平台调用能力
+- [x] 输出推荐的目标架构与边界划分
+
+
+### 评估补充（跨平台接入基础）
+
+- 当前仓库已经具备“多客户端接入雏形”：
+  1. `src/platform/commandClient.ts` 已抽象 Tauri `invoke` 与 Web HTTP `/api/cmd/:command` 双入口；
+  2. `src/platform/eventClient.ts` 已支持 Tauri event 与 WebSocket `/api/ws` 双事件通道；
+  3. `src-tauri/src/web_server.rs` 已提供浏览器运行时桥接，说明核心能力并不完全绑死在桌面壳；
+  4. `src/services/controlPlane.ts` + `src-tauri/src/agent_control.rs` 已有 control plane / notification / status tree，可继续演进为“远程客户端消费的状态 API”。
+
+
+## Review（后续跨平台接入能力评估）
+
+- 结论：**可以，而且建议现在就按“本地核心服务 + 多端客户端”来设计。** 纯 Swift macOS 重构不会天然阻断浏览器/手机接入；真正决定未来扩展性的不是 UI 用不用 Swift，而是你是否把核心能力抽成稳定的本地/远程 API。
+- 直接原因：当前仓库已经存在 Web API / WebSocket / control plane 的雏形，说明项目天然适合演进为“Mac 宿主 + Browser/Mobile 客户端”模式。
+- 是否存在设计层诱因：存在一定架构分裂风险。当前命令层虽然已经抽象出 Tauri invoke 与 Web HTTP 双入口，但核心能力仍主要按桌面前端直接消费来组织；如果未来要支持手机/浏览器远程接入，应继续把“桌面 UI 语义”和“核心服务语义”彻底分层。
+- 当前建议方案：
+  1. 把项目分成 `Core Service`、`Desktop Client(macOS)`、`Remote Clients(Web/iOS/Android)` 三层；
+  2. Core Service 负责 PTY、Git/worktree、文件系统、控制平面、持久化；
+  3. Desktop/Browser/Mobile 都只消费统一 API，不直接持有业务真相源；
+  4. 若做 Swift 重构，优先重写 mac 客户端壳与原生交互，不要先重写 Core Service。
+- 长期改进建议：
+  1. 明确区分“本机专属能力”与“可远程代理能力”；
+  2. 为远程接入设计鉴权、会话隔离、权限模型与只读/可执行级别；
+  3. 逐步把现有 command/event/control-plane 收敛成稳定的 API contract。
+- 证据：
+  - `src/platform/commandClient.ts`
+  - `src/platform/eventClient.ts`
+  - `src/platform/runtime.ts`
+  - `src/services/controlPlane.ts`
+  - `src-tauri/src/web_server.rs`

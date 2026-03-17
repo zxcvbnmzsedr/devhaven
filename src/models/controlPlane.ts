@@ -72,6 +72,7 @@ export type ControlPlaneWorkspaceTree = {
 export type ControlPlaneChangedPayload = {
   projectPath?: string | null;
   workspaceId?: string | null;
+  notificationId?: string | null;
   reason?: string | null;
   updatedAt?: number | null;
 };

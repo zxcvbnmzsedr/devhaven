@@ -78,6 +78,7 @@ export function useCodexIntegration({ showToast }: UseCodexIntegrationParams) {
       const projectPath = payload.projectPath;
       const updatedAt = payload.updatedAt;
       const workspaceId = payload.workspaceId ?? undefined;
+      const notificationId = payload.notificationId ?? undefined;
 
       void (async () => {
         try {
@@ -91,6 +92,7 @@ export function useCodexIntegration({ showToast }: UseCodexIntegrationParams) {
           const notifications = collectNewControlPlaneNotifications(tree, {
             since: updatedAt,
             seenIds: seenNotificationIdsRef.current,
+            notificationIds: notificationId ? [notificationId] : undefined,
           });
           for (const notification of notifications) {
             rememberNotificationId(notification.id);
