@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 
+import { isTauriRuntime } from "../platform/runtime";
+import type { ControlPlaneNotification } from "../models/controlPlane";
 import {
   listenControlPlaneChanged,
   loadControlPlaneTree,
@@ -30,7 +32,41 @@ function resolveToastVariant(message: string): "success" | "error" {
   return "success";
 }
 
-function resolveSystemNotification(message: string) {
+function isCodexNotification(notification: ControlPlaneNotification | null | undefined) {
+  if (!notification) {
+    return false;
+  }
+  return (
+    notification.title?.includes("Codex")
+    || notification.message.includes("Codex")
+    || notification.body?.includes("Codex")
+  );
+}
+
+function resolveNotificationMessage(notification: ControlPlaneNotification | null | undefined) {
+  if (!notification) {
+    return null;
+  }
+  const displayMessage = notification.message?.trim();
+  if (displayMessage) {
+    return displayMessage;
+  }
+  if (notification.title?.trim() && notification.body?.trim()) {
+    return `${notification.title.trim()}：${notification.body.trim()}`;
+  }
+  return notification.body?.trim() || notification.title?.trim() || null;
+}
+
+function resolveSystemNotification(notification: ControlPlaneNotification) {
+  const title = notification.title?.trim();
+  const body = notification.body?.trim() || notification.message?.trim() || "";
+  if (title) {
+    return {
+      title,
+      body,
+    };
+  }
+  const message = resolveNotificationMessage(notification) ?? "Codex 通知";
   const separatorIndex = message.indexOf("：");
   if (separatorIndex <= 0) {
     return {
@@ -78,7 +114,24 @@ export function useCodexIntegration({ showToast }: UseCodexIntegrationParams) {
       const projectPath = payload.projectPath;
       const updatedAt = payload.updatedAt;
       const workspaceId = payload.workspaceId ?? undefined;
+      const eventNotification = payload.notification ?? undefined;
       const notificationId = payload.notificationId ?? undefined;
+      if (eventNotification && isCodexNotification(eventNotification)) {
+        const eventNotificationId = eventNotification.id || notificationId;
+        if (eventNotificationId && seenNotificationIdsRef.current.has(eventNotificationId)) {
+          return;
+        }
+        const displayMessage = resolveNotificationMessage(eventNotification) ?? "Codex 需要你的关注";
+        if (eventNotificationId) {
+          rememberNotificationId(eventNotificationId);
+        }
+        showToast(displayMessage, resolveToastVariant(displayMessage));
+        if (!isTauriRuntime()) {
+          const systemNotification = resolveSystemNotification(eventNotification);
+          void sendSystemNotification(systemNotification.title, systemNotification.body);
+        }
+        return;
+      }
 
       void (async () => {
         try {
@@ -96,9 +149,12 @@ export function useCodexIntegration({ showToast }: UseCodexIntegrationParams) {
           });
           for (const notification of notifications) {
             rememberNotificationId(notification.id);
-            showToast(notification.message, resolveToastVariant(notification.message));
-            const systemNotification = resolveSystemNotification(notification.message);
-            void sendSystemNotification(systemNotification.title, systemNotification.body);
+            const displayMessage = resolveNotificationMessage(notification) ?? notification.message;
+            showToast(displayMessage, resolveToastVariant(displayMessage));
+            if (!isTauriRuntime()) {
+              const systemNotification = resolveSystemNotification(notification);
+              void sendSystemNotification(systemNotification.title, systemNotification.body);
+            }
           }
         } catch (error) {
           if (!disposed) {

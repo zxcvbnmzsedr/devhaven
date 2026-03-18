@@ -49,7 +49,11 @@ pub struct AgentSessionRecord {
 #[serde(rename_all = "camelCase")]
 pub struct NotificationRecord {
     pub id: String,
+    pub title: Option<String>,
+    pub subtitle: Option<String>,
+    pub body: Option<String>,
     pub message: String,
+    pub level: Option<String>,
     pub read: bool,
     pub project_path: String,
     pub workspace_id: Option<String>,
@@ -140,7 +144,11 @@ pub struct AgentSessionEventInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct NotificationInput {
+    pub title: Option<String>,
+    pub subtitle: Option<String>,
+    pub body: Option<String>,
     pub message: String,
+    pub level: Option<String>,
     pub terminal_session_id: Option<String>,
     pub agent_session_id: Option<String>,
     pub project_path: Option<String>,
@@ -225,6 +233,8 @@ pub struct DevHavenNotifyRequest {
     pub agent_session_id: Option<String>,
     pub project_path: Option<String>,
     pub title: Option<String>,
+    pub subtitle: Option<String>,
+    pub body: Option<String>,
     pub message: String,
     pub level: Option<String>,
 }
@@ -239,6 +249,8 @@ pub struct DevHavenNotifyTargetRequest {
     pub agent_session_id: Option<String>,
     pub project_path: Option<String>,
     pub title: Option<String>,
+    pub subtitle: Option<String>,
+    pub body: Option<String>,
     pub message: String,
     pub level: Option<String>,
 }
@@ -309,6 +321,8 @@ pub struct ControlPlaneChangedPayload {
     pub workspace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notification_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification: Option<NotificationRecord>,
     pub reason: String,
     pub updated_at: i64,
 }
@@ -462,12 +476,16 @@ pub fn notify_control_plane(
     state: tauri::State<'_, AgentControlState>,
     request: DevHavenNotifyRequest,
 ) -> Result<NotificationRecord, String> {
-    let message = match normalize_optional_text(request.title.clone()) {
-        Some(title) => format!("{title}：{}", request.message),
-        None => request.message,
-    };
+    let title = normalize_optional_text(request.title);
+    let subtitle = normalize_optional_text(request.subtitle);
+    let message = normalize_required_text(request.message, "message")?;
+    let body = resolve_notification_body(request.body, &message);
     let record = state.push_notification(NotificationInput {
+        title,
+        subtitle,
+        body,
         message,
+        level: normalize_optional_text(request.level),
         terminal_session_id: request.terminal_session_id,
         agent_session_id: request.agent_session_id,
         project_path: request.project_path,
@@ -475,12 +493,16 @@ pub fn notify_control_plane(
         pane_id: request.pane_id,
         surface_id: request.surface_id,
     })?;
+    if let Err(error) = crate::system::send_system_notification(build_system_notification_params(&record)) {
+        log::warn!("发送 control plane 系统通知失败: {}", error);
+    }
     emit_control_plane_changed(
         app,
         ControlPlaneChangedPayload {
             project_path: record.project_path.clone(),
             workspace_id: record.workspace_id.clone(),
             notification_id: Some(record.id.clone()),
+            notification: Some(record.clone()),
             reason: "notification".to_string(),
             updated_at: record.updated_at,
         },
@@ -504,6 +526,8 @@ pub fn notify_target_control_plane(
             agent_session_id: request.agent_session_id,
             project_path: request.project_path,
             title: request.title,
+            subtitle: request.subtitle,
+            body: request.body,
             message: request.message,
             level: request.level,
         },
@@ -533,6 +557,7 @@ pub fn upsert_agent_session_event(
             project_path: record.project_path.clone(),
             workspace_id: record.workspace_id.clone(),
             notification_id: None,
+            notification: None,
             reason: "agent-session".to_string(),
             updated_at: record.updated_at,
         },
@@ -550,9 +575,10 @@ pub fn mark_notification_read_state(
     emit_control_plane_changed(
         app,
         ControlPlaneChangedPayload {
-            project_path: record.project_path,
-            workspace_id: record.workspace_id,
+            project_path: record.project_path.clone(),
+            workspace_id: record.workspace_id.clone(),
             notification_id: Some(record.id.clone()),
+            notification: Some(record.clone()),
             reason: if read {
                 "notification-read".to_string()
             } else {
@@ -586,6 +612,7 @@ pub fn set_status_control_plane(
             project_path: record.project_path.clone(),
             workspace_id: record.workspace_id.clone(),
             notification_id: None,
+            notification: None,
             reason: "status".to_string(),
             updated_at: record.updated_at,
         },
@@ -606,6 +633,7 @@ pub fn clear_status_control_plane(
                 project_path: record.project_path,
                 workspace_id: record.workspace_id,
                 notification_id: None,
+                notification: None,
                 reason: "status-clear".to_string(),
                 updated_at: now_millis(),
             },
@@ -635,6 +663,7 @@ pub fn set_agent_pid_control_plane(
             project_path: record.project_path.clone(),
             workspace_id: record.workspace_id.clone(),
             notification_id: None,
+            notification: None,
             reason: "agent-pid".to_string(),
             updated_at: record.updated_at,
         },
@@ -655,6 +684,7 @@ pub fn clear_agent_pid_control_plane(
                 project_path: record.project_path,
                 workspace_id: record.workspace_id,
                 notification_id: None,
+                notification: None,
                 reason: "agent-pid-clear".to_string(),
                 updated_at: now_millis(),
             },
@@ -749,6 +779,10 @@ impl ControlPlaneRegistry {
 
     pub fn push_notification(&mut self, input: NotificationInput) -> Result<NotificationRecord, String> {
         let message = normalize_required_text(input.message, "message")?;
+        let title = normalize_optional_text(input.title);
+        let subtitle = normalize_optional_text(input.subtitle);
+        let body = resolve_notification_body(input.body, &message);
+        let display_message = build_notification_message(title.as_deref(), body.as_deref().unwrap_or(&message));
         let now = now_millis();
         let context = self.resolve_event_context(
             input.terminal_session_id.as_deref(),
@@ -762,7 +796,11 @@ impl ControlPlaneRegistry {
 
         let record = NotificationRecord {
             id: next_record_id(),
-            message,
+            title,
+            subtitle,
+            body,
+            message: display_message,
+            level: normalize_optional_text(input.level),
             read: false,
             project_path: context.project_path,
             workspace_id: context.workspace_id,
@@ -1216,6 +1254,44 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
     })
 }
 
+fn build_notification_message(title: Option<&str>, body: &str) -> String {
+    let trimmed_title = title.map(str::trim).filter(|value| !value.is_empty());
+    let trimmed_body = body.trim();
+    match trimmed_title {
+        Some(title) => format!("{title}：{trimmed_body}"),
+        None => trimmed_body.to_string(),
+    }
+}
+
+fn resolve_notification_body(body: Option<String>, message: &str) -> Option<String> {
+    normalize_optional_text(body).or_else(|| Some(message.trim().to_string()))
+}
+
+fn build_system_notification_params(record: &NotificationRecord) -> crate::system::SystemNotificationParams {
+    let title = record
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("DevHaven 通知")
+        .to_string();
+    let body = record
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .or_else(|| {
+            let trimmed = record.message.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+    crate::system::SystemNotificationParams { title, body }
+}
+
 fn normalize_agent_status(raw: &str) -> Result<String, String> {
     let status = raw.trim().to_ascii_lowercase();
     let normalized = match status.as_str() {
@@ -1305,7 +1381,11 @@ mod tests {
 
         let notification = registry
             .push_notification(NotificationInput {
+                title: Some("Claude Code".to_string()),
+                subtitle: Some("Waiting".to_string()),
+                body: Some("需要确认".to_string()),
                 message: "需要确认".to_string(),
+                level: None,
                 terminal_session_id: Some("session-1".to_string()),
                 agent_session_id: Some(agent.agent_session_id.clone()),
                 project_path: None,
@@ -1342,7 +1422,11 @@ mod tests {
         let mut registry = ControlPlaneRegistry::default();
         let notification = registry
             .push_notification(NotificationInput {
+                title: Some("Codex".to_string()),
+                subtitle: None,
+                body: Some("孤儿通知".to_string()),
                 message: "孤儿通知".to_string(),
+                level: None,
                 terminal_session_id: None,
                 agent_session_id: None,
                 project_path: Some("/repo".to_string()),
@@ -1407,7 +1491,11 @@ mod tests {
             .expect("upsert agent session should work");
         let notification = state
             .push_notification(NotificationInput {
+                title: Some("Codex".to_string()),
+                subtitle: None,
+                body: Some("需要确认".to_string()),
                 message: "需要确认".to_string(),
+                level: None,
                 terminal_session_id: Some("session-1".to_string()),
                 agent_session_id: Some("agent-1".to_string()),
                 project_path: None,
@@ -1481,7 +1569,11 @@ mod tests {
 
         let notification = registry
             .push_notification(NotificationInput {
+                title: Some("Codex".to_string()),
+                subtitle: None,
+                body: Some("需要确认".to_string()),
                 message: "需要确认".to_string(),
+                level: None,
                 terminal_session_id: Some("session-1".to_string()),
                 agent_session_id: None,
                 project_path: None,
@@ -1534,5 +1626,39 @@ mod tests {
             .expect("tree should still exist");
         assert!(cleared_tree.statuses.is_empty());
         assert!(cleared_tree.agent_pids.is_empty());
+    }
+
+    #[test]
+    fn agent_control_registry_preserves_structured_notification_fields() {
+        let mut registry = ControlPlaneRegistry::default();
+        registry.register_terminal_binding(binding("session-1"));
+
+        let notification = registry
+            .push_notification(NotificationInput {
+                title: Some("Codex".to_string()),
+                subtitle: Some("Waiting".to_string()),
+                body: Some("请确认是否继续".to_string()),
+                message: "请确认是否继续".to_string(),
+                level: None,
+                terminal_session_id: Some("session-1".to_string()),
+                agent_session_id: None,
+                project_path: None,
+                workspace_id: None,
+                pane_id: None,
+                surface_id: None,
+            })
+            .expect("should create notification");
+
+        assert_eq!(notification.title.as_deref(), Some("Codex"));
+        assert_eq!(notification.subtitle.as_deref(), Some("Waiting"));
+        assert_eq!(notification.body.as_deref(), Some("请确认是否继续"));
+        assert_eq!(notification.message, "Codex：请确认是否继续");
+
+        let tree = registry
+            .tree("/repo", Some("project-1"))
+            .expect("tree should build")
+            .expect("tree should exist");
+        assert_eq!(tree.notifications[0].title.as_deref(), Some("Codex"));
+        assert_eq!(tree.notifications[0].body.as_deref(), Some("请确认是否继续"));
     }
 }

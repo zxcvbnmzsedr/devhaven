@@ -895,6 +895,8 @@ fn web_devhaven_notify(app: &AppHandle, guard: &PathGuard, payload: &Value) -> W
         optional::<String>(payload, &["agentSessionId", "agent_session_id"])?,
         project_path,
         optional::<String>(payload, &["title"])?,
+        optional::<String>(payload, &["subtitle"])?,
+        optional::<String>(payload, &["body"])?,
         required::<String>(payload, &["message"])?,
         optional::<String>(payload, &["level"])?,
     ))
@@ -916,6 +918,8 @@ fn web_devhaven_notify_target(app: &AppHandle, guard: &PathGuard, payload: &Valu
         optional::<String>(payload, &["agentSessionId", "agent_session_id"])?,
         project_path,
         optional::<String>(payload, &["title"])?,
+        optional::<String>(payload, &["subtitle"])?,
+        optional::<String>(payload, &["body"])?,
         required::<String>(payload, &["message"])?,
         optional::<String>(payload, &["level"])?,
     ))

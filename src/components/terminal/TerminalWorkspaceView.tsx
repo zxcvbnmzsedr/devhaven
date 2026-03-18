@@ -88,7 +88,6 @@ export type TerminalWorkspaceViewProps = {
   xtermTheme: ITheme;
   sharedScriptsRoot: string;
   terminalUseWebglRenderer: boolean;
-  codexRunningCount?: number;
   controlPlaneTree?: ControlPlaneWorkspaceTree | null;
   scripts?: ProjectScript[];
   onRegisterPersistWorkspace?: (projectId: string, persistWorkspace: (() => Promise<void>) | null) => void;
@@ -221,9 +220,6 @@ function areTerminalWorkspaceViewPropsEqual(
   if (prevProps.terminalUseWebglRenderer !== nextProps.terminalUseWebglRenderer) {
     return false;
   }
-  if (prevProps.codexRunningCount !== nextProps.codexRunningCount) {
-    return false;
-  }
   if (prevProps.controlPlaneTree !== nextProps.controlPlaneTree) {
     return false;
   }
@@ -264,7 +260,6 @@ function TerminalWorkspaceView({
   xtermTheme,
   sharedScriptsRoot,
   terminalUseWebglRenderer,
-  codexRunningCount = 0,
   controlPlaneTree = null,
   scripts = [],
   onRegisterPersistWorkspace,
@@ -338,13 +333,13 @@ function TerminalWorkspaceView({
     () => projectControlPlaneWorkspace(controlPlaneTree),
     [controlPlaneTree],
   );
-  const activePaneControlProjection = useMemo(() => {
+  const activeControlPlaneSurface = useMemo(() => {
     if (!shellModel?.activeWorkspaceTab || !controlPlaneTree) {
       return null;
     }
     const activePaneId = shellModel.activeWorkspaceTab.activePaneId;
     const activePane = shellModel.activePaneProjections[activePaneId];
-    const matchedSurface =
+    return (
       controlPlaneTree.surfaces.find((surface) => {
         if (surface.paneId && surface.paneId === activePaneId) {
           return true;
@@ -357,12 +352,22 @@ function TerminalWorkspaceView({
             surface.terminalSessionId &&
             surface.terminalSessionId === activePane.sessionId,
         );
-      }) ?? null;
-    return matchedSurface ? projectControlPlaneSurface(matchedSurface, controlPlaneTree) : null;
+      }) ?? null
+    );
   }, [controlPlaneTree, shellModel]);
+  const activePaneControlProjection = useMemo(() => {
+    return activeControlPlaneSurface
+      ? projectControlPlaneSurface(activeControlPlaneSurface, controlPlaneTree)
+      : null;
+  }, [activeControlPlaneSurface, controlPlaneTree]);
   const autoReadNotificationIds = useMemo(
-    () => collectNotificationIdsToMarkRead(controlPlaneTree, { isActive }),
-    [controlPlaneTree, isActive],
+    () => collectNotificationIdsToMarkRead(controlPlaneTree, {
+      isActive,
+      activePaneId: activeControlPlaneSurface?.paneId ?? shellModel?.activeWorkspaceTab?.activePaneId ?? null,
+      activeSurfaceId: activeControlPlaneSurface?.surfaceId ?? null,
+      activeTerminalSessionId: activeControlPlaneSurface?.terminalSessionId ?? null,
+    }),
+    [activeControlPlaneSurface, controlPlaneTree, isActive, shellModel],
   );
   const autoReadSignatureRef = useRef<string>("");
   const visibleTerminalPaneCount = useMemo(
@@ -1655,7 +1660,6 @@ function TerminalWorkspaceView({
         projectName={projectName}
         projectId={projectId}
         projectPath={projectPath}
-        codexRunningCount={codexRunningCount}
         controlPlaneProjection={controlPlaneProjection}
         activePaneControlProjection={activePaneControlProjection}
         isGitRepo={isGitRepo}

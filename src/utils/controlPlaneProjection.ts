@@ -84,6 +84,26 @@ function pickLatestSession(
   return [...sessions].sort(compareByUpdatedAtDesc)[0] ?? null;
 }
 
+function notificationMatchesSurface(
+  notification: ControlPlaneNotification,
+  surface: ControlPlanePaneNode,
+): boolean {
+  if (
+    surface.terminalSessionId
+    && notification.terminalSessionId
+    && notification.terminalSessionId === surface.terminalSessionId
+  ) {
+    return true;
+  }
+  if (notification.surfaceId && notification.surfaceId === surface.surfaceId) {
+    return true;
+  }
+  if (notification.paneId && notification.paneId === surface.paneId) {
+    return true;
+  }
+  return false;
+}
+
 function resolveLatestMessage(
   notifications: ControlPlaneNotification[],
   sessions: ControlPlaneAgentSession[],
@@ -155,16 +175,9 @@ export function projectControlPlaneSurface(
   tree?: ControlPlaneWorkspaceTree | ControlPlaneTree | null,
 ): ControlPlaneSurfaceProjection {
   const latestPrimitiveStatus = pickLatestPrimitiveStatusForSurface(tree?.statuses ?? [], surface);
-  const notifications = surface.unreadCount
-    ? [
-        {
-          id: `${surface.surfaceId}:latest`,
-          message: surface.agentSession?.message ?? latestPrimitiveStatus?.value ?? "",
-          createdAt: surface.agentSession?.updatedAt ?? latestPrimitiveStatus?.updatedAt ?? 0,
-          read: surface.unreadCount === 0,
-        },
-      ]
-    : [];
+  const notifications = (tree?.notifications ?? []).filter((notification) =>
+    notificationMatchesSurface(notification, surface),
+  );
   const sessions = surface.agentSession ? [surface.agentSession] : [];
   const status = surface.agentSession?.status ?? normalizePrimitiveStatusValue(latestPrimitiveStatus?.value);
 
@@ -246,28 +259,6 @@ export function projectControlPlaneWorkspace(
       sessions.filter((session) => session.status === "failed").length
       + primitiveAgentStatuses.filter((status) => status.status === "failed").length,
   };
-}
-
-export function countRunningProviderSessions(
-  tree: ControlPlaneWorkspaceTree | ControlPlaneTree | null | undefined,
-  provider: string,
-): number {
-  if (!tree) {
-    return 0;
-  }
-  const surfaces = "surfaces" in tree ? tree.surfaces : tree.panes;
-  const sessionCount = surfaces.reduce((count, surface) => {
-    const session = surface.agentSession;
-    if (!session) {
-      return count;
-    }
-    return count + (session.provider === provider && session.status === "running" ? 1 : 0);
-  }, 0);
-  if (sessionCount > 0) {
-    return sessionCount;
-  }
-  const primitiveStatus = projectTerminalPrimitives(tree).statusesByKey[provider];
-  return primitiveStatus && normalizePrimitiveStatusValue(primitiveStatus.value) === "running" ? 1 : 0;
 }
 
 export function resolveDisplayedControlPlaneMessage(

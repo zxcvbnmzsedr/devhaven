@@ -2,13 +2,36 @@ import type { ControlPlaneWorkspaceTree } from "../models/controlPlane";
 
 export function collectNotificationIdsToMarkRead(
   tree: ControlPlaneWorkspaceTree | null | undefined,
-  options: { isActive: boolean },
+  options: {
+    isActive: boolean;
+    activePaneId?: string | null;
+    activeSurfaceId?: string | null;
+    activeTerminalSessionId?: string | null;
+  },
 ): string[] {
   if (!options.isActive || !tree) {
     return [];
   }
   return tree.notifications
-    .filter((notification) => !notification.read)
+    .filter((notification) => {
+      if (notification.read) {
+        return false;
+      }
+      const hasScopedTarget = Boolean(
+        notification.paneId || notification.surfaceId || notification.terminalSessionId,
+      );
+      if (!hasScopedTarget) {
+        return true;
+      }
+      return (
+        (options.activePaneId && notification.paneId === options.activePaneId)
+        || (options.activeSurfaceId && notification.surfaceId === options.activeSurfaceId)
+        || (
+          options.activeTerminalSessionId
+          && notification.terminalSessionId === options.activeTerminalSessionId
+        )
+      );
+    })
     .map((notification) => notification.id);
 }
 

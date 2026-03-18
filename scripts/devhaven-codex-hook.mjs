@@ -57,6 +57,7 @@ export function summarizeNotifyPayload(payload) {
       payload.summary,
       payload.body,
       payload.text,
+      payload["last-assistant-message"],
       payload.last_assistant_message,
       payload.lastAssistantMessage,
     ) ??
@@ -128,6 +129,7 @@ export async function dispatchCodexNotificationLifecycle({
   await sendTargetedNotificationImpl({
     title: summary.title,
     message: summary.message,
+    body: summary.message,
     level: summary.level,
     agentSessionId,
     env,

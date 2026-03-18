@@ -6,24 +6,72 @@ import {
   collectNotificationIdsToMarkRead,
 } from "./controlPlaneAutoRead.ts";
 
-test("collectNotificationIdsToMarkRead returns unread ids only when workspace is active", () => {
+test("collectNotificationIdsToMarkRead returns workspace-level plus active-surface unread ids only when workspace is active", () => {
   const tree = {
     workspaceId: "project-1",
     projectPath: "/repo",
     surfaces: [],
     notifications: [
-      { id: "n1", message: "第一条", createdAt: 1, read: false },
-      { id: "n2", message: "第二条", createdAt: 2, read: true },
-      { id: "n3", message: "第三条", createdAt: 3, read: false },
+      { id: "n1", message: "工作区级通知", createdAt: 1, read: false },
+      { id: "n2", message: "当前 pane 的通知", createdAt: 2, read: false, paneId: "pane-1", surfaceId: "surface-1" },
+      { id: "n3", message: "其它 pane 的通知", createdAt: 3, read: false, paneId: "pane-2", surfaceId: "surface-2" },
+      { id: "n4", message: "当前会话通知", createdAt: 4, read: false, terminalSessionId: "session-1" },
+      { id: "n5", message: "已读通知", createdAt: 5, read: true, paneId: "pane-1", surfaceId: "surface-1" },
     ],
   };
 
-  assert.deepEqual(collectNotificationIdsToMarkRead(tree, { isActive: false }), []);
-  assert.deepEqual(collectNotificationIdsToMarkRead(tree, { isActive: true }), ["n1", "n3"]);
+  assert.deepEqual(
+    collectNotificationIdsToMarkRead(tree, {
+      isActive: false,
+      activePaneId: "pane-1",
+      activeSurfaceId: "surface-1",
+      activeTerminalSessionId: "session-1",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    collectNotificationIdsToMarkRead(tree, {
+      isActive: true,
+      activePaneId: "pane-1",
+      activeSurfaceId: "surface-1",
+      activeTerminalSessionId: "session-1",
+    }),
+    ["n1", "n2", "n4"],
+  );
 });
 
 test("collectNotificationIdsToMarkRead handles empty trees", () => {
-  assert.deepEqual(collectNotificationIdsToMarkRead(null, { isActive: true }), []);
+  assert.deepEqual(
+    collectNotificationIdsToMarkRead(null, {
+      isActive: true,
+      activePaneId: "pane-1",
+      activeSurfaceId: "surface-1",
+      activeTerminalSessionId: "session-1",
+    }),
+    [],
+  );
+});
+
+test("collectNotificationIdsToMarkRead only keeps workspace-level notifications when active surface is unknown", () => {
+  const tree = {
+    workspaceId: "project-1",
+    projectPath: "/repo",
+    surfaces: [],
+    notifications: [
+      { id: "n1", message: "工作区级通知", createdAt: 1, read: false },
+      { id: "n2", message: "pane 通知", createdAt: 2, read: false, paneId: "pane-1", surfaceId: "surface-1" },
+    ],
+  };
+
+  assert.deepEqual(
+    collectNotificationIdsToMarkRead(tree, {
+      isActive: true,
+      activePaneId: null,
+      activeSurfaceId: null,
+      activeTerminalSessionId: null,
+    }),
+    ["n1"],
+  );
 });
 
 test("collectNewControlPlaneNotifications returns only notifications since the event and skips seen ids", () => {

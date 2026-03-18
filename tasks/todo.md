@@ -1,5 +1,68 @@
 # 本次任务清单
 
+## 实施 Codex 通知完整修复（2026-03-18）
+
+- [x] 读取技能、计划与当前工作区状态，建立本轮 checklist
+- [x] 先补通知模型 / payload / auto-read 相关失败测试
+- [x] 实现结构化通知、Rust 主投递与 pane/surface 级已读修复
+- [x] 同步更新计划文档与 AGENTS.md 中的职责说明
+- [x] 运行验证并回写 Review
+
+## Review（实施 Codex 通知完整修复）
+
+- 直接原因：当前 DevHaven 的 Codex 通知效果不佳，核心卡在三处：Codex 常见 `last-assistant-message` 字段未兼容导致正文经常退化成兜底文案；系统通知主链依赖前端 `useCodexIntegration -> loadControlPlaneTree` 二次转发；workspace 一激活就批量 auto-read，导致其它 pane 的提醒被过早清掉。
+- 是否存在设计层诱因：存在。控制面通知职责原先分散在 hook / Rust control plane / React hook / workspace view 四层，且 notification model 只有扁平 `message`，导致正文兼容、通知投递和已读语义彼此耦合。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. `scripts/devhaven-codex-hook.mjs` 兼容 `last-assistant-message` / `last_assistant_message` / `lastAssistantMessage`，并在 primitive-only 通知路径显式透传 `body`。
+  2. Rust `src-tauri/src/agent_control.rs` 把 notification record 升级为结构化字段（`title/subtitle/body/level/message`），`devhaven_notify` / `devhaven_notify_target` 落盘后直接发送系统通知，并在 `devhaven-control-plane-changed` 里附带结构化 notification payload。
+  3. 前端 `useCodexIntegration.ts` 改为优先消费事件里的结构化 notification 来弹 toast，只有兼容场景才回退 tree pull；Tauri 运行时不再重复发系统通知。
+  4. `collectNotificationIdsToMarkRead` 与 `TerminalWorkspaceView.tsx` 改成按 active pane/surface/session 精准 auto-read；`projectControlPlaneSurface` 改为读取真实匹配 notification，保证 pane latest message 在 read 后仍正确保留。
+  5. 同步写入 `docs/plans/2026-03-18-codex-notification-fix-plan.md`，并更新 `AGENTS.md` 中 control-plane 通知职责说明。
+- 长期改进建议：后续如果继续追平 cmux 体验，下一步应考虑“通知列表/跳转到最新未读”这类产品能力，但前提依然是继续保住当前这条低开销主线——结构化 notification、Rust 主投递、pane/surface 级已读，不要退回 monitor 扫描或前端主通知链。
+- 验证证据：
+  - 红灯阶段：`node --test src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneLifecycle.test.mjs scripts/devhaven-control.test.mjs` 初次运行按预期失败（hyphen-case payload、workspace 级 auto-read、pane latest message 三类用例）；`cargo test agent_control_registry_preserves_structured_notification_fields --manifest-path src-tauri/Cargo.toml` 初次运行因 `NotificationInput` / `NotificationRecord` 缺字段而编译失败。
+  - 绿灯阶段：`node --test src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneProjection.test.mjs src/utils/controlPlaneLifecycle.test.mjs scripts/devhaven-control.test.mjs`（33/33 通过）；`cargo test agent_control_registry_preserves_structured_notification_fields --manifest-path src-tauri/Cargo.toml`（通过）；`node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）；`cargo check --manifest-path src-tauri/Cargo.toml`（通过）；`git diff --check`（通过）。
+
+## 产出 Codex 通知完整修复方案（2026-03-18）
+
+- [x] 基于上一轮对照结果收敛本轮计划目标与边界
+- [x] 明确完整修复目标、非目标与验收标准
+- [x] 设计分阶段实施方案（数据模型 / 后端 / 前端 / hook / 验证）
+- [x] 识别风险、迁移顺序与回滚策略
+- [x] 回写 Review，并向用户交付完整修复方案
+
+## Review（产出 Codex 通知完整修复方案）
+
+- 直接原因：用户要求的是“完整修复方案”，不是只指出 1~2 个表面差异，因此本轮把 Codex 通知问题重新收口为一条完整主线：**payload 兼容、通知模型、Rust 投递职责、前端消费职责、pane/surface 级已读生命周期、验证闭环** 必须一起设计，不能继续只修单点。
+- 是否存在设计层诱因：存在，且较明显。当前 DevHaven 的通知职责分散在 `scripts/devhaven-codex-hook.mjs`、`src-tauri/src/agent_control.rs`、`src/hooks/useCodexIntegration.ts`、`src/components/terminal/TerminalWorkspaceView.tsx` 四层；同时通知记录还是单 `message` 扁平模型，导致字段兼容、通知投递、已读策略彼此耦合。除此之外，未发现新的系统设计缺陷源头。
+- 当前完整方案结论：采用 **四阶段修复** 最稳妥——Phase 0 先补 payload 兼容与回归测试；Phase 1 升级 control plane 通知模型为结构化通知，并保持旧字段兼容；Phase 2 把系统通知主投递前移到 Rust/control-plane 侧，前端降级为 UI 投影；Phase 3 把 auto-read 从 workspace 级批量已读收紧为 pane/surface 级焦点已读，并补齐 attention / latestMessage 投影测试。
+- 风险与迁移策略：本轮明确不做“大爆炸重写”。先保证现有 wrapper/hook 不断，结构化字段先增量兼容，再切通知主投递位置，最后才调整已读语义；这样每一步都可独立验证和回滚，避免再次出现“通知没了但不知道是 hook、Rust 还是前端哪层断掉”。
+- 验证证据：本轮方案依据来自真实代码与本地实测，而非纯记忆推断——包括 `scripts/devhaven-codex-hook.mjs` / `src/hooks/useCodexIntegration.ts` / `src/utils/controlPlaneAutoRead.ts` / `src-tauri/src/agent_control.rs` 的当前实现，对照 cmux 的 `docs/notifications.md` / `CLI/cmux.swift` / `Sources/TerminalNotificationStore.swift` / `Sources/TabManager.swift` / `Sources/AppDelegate.swift`，以及 `node --input-type=module` 对 Codex hyphen 字段丢失的实测输出。
+
+
+## 对照 cmux 排查 Codex 通知差异（2026-03-18）
+
+- [x] 读取技能、记忆与仓库约束，建立本轮 checklist
+- [x] 梳理 DevHaven 当前 Codex 通知 / attention / control-plane 链路
+- [x] 梳理 cmux 中对应的 Codex 通知实现与触发链路
+- [x] 逐点对比两边差异并定位主要问题
+- [x] 回写 Review、证据与后续建议
+
+## Review（对照 cmux 排查 Codex 通知差异）
+
+- 直接原因：DevHaven 当前 Codex 通知链路与 cmux 相比有两处最硬的差异。其一，`scripts/devhaven-codex-hook.mjs` 只识别 `last_assistant_message` / `lastAssistantMessage`，**没有兼容 Codex 常见的 `last-assistant-message` 字段**，导致不少通知正文会退化成兜底文案“Codex 需要你的关注”；其二，DevHaven 的系统通知/Toast 不在 Rust 收到通知时直接投递，而是要先写 control plane、发 `devhaven-control-plane-changed` 事件，再由前端 `useCodexIntegration` 异步回拉整棵 tree 后二次转发，因此链路比 cmux 多一跳、也更脆弱。
+- 设计层诱因：存在明显的“通知真相源与通知投递职责分裂”。cmux 的 `cmux notify -> notify_target -> TerminalNotificationStore.addNotification` 是同进程直接闭环；DevHaven 则把“记录通知”“决定是否属于 Codex”“真正弹 Toast/系统通知”“自动已读”拆散在 hook、Rust control plane、React hook、workspace view 四处，导致字段兼容、事件粒度、已读时机任何一处变粗都会影响最终效果。
+- 当前建议修复方案：
+  1. 先补齐 Codex payload 兼容：`summarizeNotifyPayload` 至少同时支持 `last-assistant-message` / `last_assistant_message` / `lastAssistantMessage`，避免正文丢失。
+  2. 再收紧通知投递路径：尽量让 Rust 在收到 `notify_target` 时就具备“可直接投递系统通知”的能力，前端只负责补充 UI 投影，不要把真正的通知投递完全依赖 `useCodexIntegration -> loadControlPlaneTree` 这条异步链路。
+  3. 最后重做已读策略：不要像现在这样“工作区一激活就把该 workspace 下所有 unread 全部标记已读”，至少要收紧到当前 pane / 当前 surface 级别，向 cmux 的 focus-aware 语义看齐。
+- 长期改进建议：如果目标真的是“参照 cmux 的通知体验”，后续不应只模仿 hook 命令，而应补齐 cmux 真正高价值的那层基础设施：**pane/surface 级 unread 生命周期、直接投递、按焦点抑制外部通知、以及结构化 title/subtitle/body**。否则即使 control plane 事件正确，最终体验仍会显得“有通知链路，但提醒不够准也不够稳”。
+- 验证证据：
+  - `node --input-type=module` 导入 `summarizeNotifyPayload` 后实测：输入 `{"last-assistant-message":"来自 hyphen 字段的消息"}` 会返回兜底文案 `Codex 需要你的关注`；而输入 `last_assistant_message` 才会正确取正文，证明当前 DevHaven 确实漏了 Codex 常见字段。
+  - `printf '{"last-assistant-message":"来自 cmux 文档的消息"}' | jq -r '."last-assistant-message" // "Turn complete"'` 输出真实消息，和 `cmux/docs/notifications.md` 中 Codex 示例一致。
+  - 代码对照：DevHaven `src/hooks/useCodexIntegration.ts` 需要在收到事件后再 `loadControlPlaneTree` 并调用 `sendSystemNotification`；cmux `Sources/TerminalNotificationStore.swift` 则在 `addNotification` 后直接 `scheduleUserNotification`，没有再经过前端回拉。
+  - 已读语义对照：DevHaven `src/utils/controlPlaneAutoRead.ts` + `TerminalWorkspaceView.tsx` 会在 workspace 处于 active 时批量 `markControlPlaneNotificationRead`；cmux 只会在当前 tab+surface 真正处于焦点交互时调用 `markRead(forTabId:surfaceId:)`。
+
 ## 提交工作区左侧项目点击区域扩大改动（2026-03-18）
 
 - [x] 重新运行提交前验证并确认结果
@@ -995,3 +1058,64 @@
   - `src/platform/runtime.ts`
   - `src/services/controlPlane.ts`
   - `src-tauri/src/web_server.rs`
+
+
+## 收口 Codex 重复状态标识（2026-03-18）
+
+- [x] 复核当前终端头部 / 项目列表 / worktree 的重复标识来源，并确认最小修改边界
+- [x] 移除独立 Codex 运行中标识，统一改为 control plane 状态展示
+- [x] 运行针对性测试与静态检查，确认无回归
+- [x] 追加 Review，记录根因、修复方案与验证证据
+
+## Review（收口 Codex 重复状态标识）
+
+- 直接原因：终端头部和项目列表同时渲染了两套 Codex 相关标识：一套来自 `codexRunningCount` 的“Codex 运行中”独立蓝点/徽标，另一套来自 `controlPlaneProjection` 的 control plane attention 状态点，因此 Codex 运行时会并排出现两个标识。
+- 是否存在设计层诱因：存在。UI 曾同时暴露“独立运行态”与“控制面状态”两条并行语义，和当前 control plane 单一状态源主线不一致；除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：删除 `TerminalWorkspaceHeader` / `TerminalWorkspaceShell` / `TerminalWorkspaceView` 链路上的 `codexRunningCount` 展示与透传；左侧项目列表不再单独渲染 Codex 运行中蓝点；worktree 行同步改为复用 `projectControlPlaneWorkspace(...)` 的 attention / unread 投影，统一只保留 control plane 状态点与未读 badge。
+- 长期改进建议：后续若继续调整终端列表提示，优先坚持“一个真相源对应一个主标识”的规则；运行中、等待、完成、失败都应继续收敛到 control plane attention，不要再恢复独立 provider 运行态徽标。
+- 验证证据：
+  - `node --test src/utils/controlPlaneProjection.test.mjs src/utils/controlPlaneLifecycle.test.mjs`（11/11 通过，新增 running attention 用例通过）
+  - `pnpm exec tsc --noEmit`（通过，无输出）
+  - `git diff --check -- src/components/terminal/TerminalWorkspaceHeader.tsx src/components/terminal/TerminalWorkspaceShell.tsx src/components/terminal/TerminalWorkspaceView.tsx src/components/terminal/TerminalWorkspaceWindow.tsx src/utils/controlPlaneLifecycle.test.mjs tasks/todo.md`（通过，无输出）
+  - `rg -n "Codex 运行中" src/components/terminal/TerminalWorkspaceHeader.tsx src/components/terminal/TerminalWorkspaceShell.tsx src/components/terminal/TerminalWorkspaceView.tsx src/components/terminal/TerminalWorkspaceWindow.tsx`（无命中，说明这条 UI 链路已移除独立运行态标识）
+
+
+## 清理 Codex 重复标识收口后的死代码（2026-03-18）
+
+- [x] 复核 `countRunningProviderSessions` 当前是否已退出生产主路径
+- [x] 删除死代码与对应测试，保持 control plane 单一状态入口
+- [x] 运行针对性测试与静态检查，确认清理无回归
+- [x] 追加 Review，记录清理原因与验证证据
+
+## Review（清理 Codex 重复标识收口后的死代码）
+
+- 直接原因：在上一轮把独立的 `Codex 运行中` 标识从头部 / 项目列表 / worktree 行全部移除后，`src/utils/controlPlaneProjection.ts::countRunningProviderSessions` 已不再被任何生产代码引用，只剩测试引用，属于退出主路径后的死代码。
+- 是否存在设计层诱因：存在。状态源从“双入口”收口为 control plane 单入口后，如果不顺手清理旧 helper，后续很容易又有人拿它重新画一层重复的 provider 运行态徽标；除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：删除 `countRunningProviderSessions` 导出及其在 `src/utils/controlPlaneProjection.test.mjs` 中的对应测试，只保留 `projectControlPlaneWorkspace` / `projectControlPlaneSurface` 这条 control plane 投影主路径。
+- 长期改进建议：以后凡是做 UI 状态收口，完成主链替换后应马上清理仅剩“历史兼容心智”的 helper / test，避免代码层面继续暗示旧入口仍是受支持能力。
+- 验证证据：
+  - `rg -n "countRunningProviderSessions" src tasks`（当前仅剩历史任务记录，不再有生产代码/测试引用）
+  - `node --test src/utils/controlPlaneProjection.test.mjs src/utils/controlPlaneLifecycle.test.mjs`（10/10 通过）
+  - `pnpm exec tsc --noEmit`（通过，无输出）
+  - `git diff --check -- src/utils/controlPlaneProjection.ts src/utils/controlPlaneProjection.test.mjs tasks/todo.md`（通过，无输出）
+
+
+## 最终工作区审查并提交（2026-03-18）
+
+- [x] 审阅当前工作区改动范围与关键 diff
+- [x] 运行新鲜验证（Node tests / tsc / cargo test / cargo check / git diff --check）
+- [x] 确认无阻塞问题并整理提交说明
+- [x] 提交当前工作区改动
+
+## Review（最终工作区审查并提交）
+
+- 直接原因：用户要求“检查一下工作区的改动，如果没有什么问题则进行 commit”，因此本轮在提交前重新审阅了通知主链、auto-read 收紧、控制面结构化通知、终端重复标识收口与相关文档改动，而不是直接沿用上一轮验证结果。
+- 是否存在设计层诱因：存在，但当前已经收口到可接受状态。此前的主要诱因是通知职责分散、事件 payload 过粗、以及 UI 还残留独立 provider 运行态标识；本轮工作区已经把这些问题统一收敛到 control plane 主路径，并清理了退出主路径的死代码。除此之外，未发现新的明显系统设计缺陷。
+- 当前审查结论：未发现阻塞本次 commit 的问题。工作区改动在语义上围绕同一主线展开——结构化通知、Rust 主投递、pane/surface 级 auto-read、终端状态入口收口——且最新验证全部通过。
+- 提交说明：本次提交采用单个提交，覆盖 control plane 通知修复、终端重复状态标识收口、死代码清理，以及对应的计划/任务/AGENTS 文档同步。
+- 验证证据：
+  - `node --test src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneProjection.test.mjs src/utils/controlPlaneLifecycle.test.mjs scripts/devhaven-control.test.mjs`（33/33 通过）
+  - `pnpm exec tsc --noEmit`（通过，无输出）
+  - `cargo test agent_control_registry_preserves_structured_notification_fields --manifest-path src-tauri/Cargo.toml`（通过）
+  - `cargo check --manifest-path src-tauri/Cargo.toml`（通过）
+  - `git diff --check`（通过，无输出）

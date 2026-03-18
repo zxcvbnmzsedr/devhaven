@@ -16,7 +16,17 @@ export type ControlPlaneAgentSession = {
 
 export type ControlPlaneNotification = {
   id: string;
+  title?: string | null;
+  subtitle?: string | null;
+  body?: string | null;
   message: string;
+  level?: string | null;
+  paneId?: string | null;
+  surfaceId?: string | null;
+  terminalSessionId?: string | null;
+  workspaceId?: string | null;
+  projectPath?: string | null;
+  agentSessionId?: string | null;
   createdAt: number;
   updatedAt?: number | null;
   read: boolean;
@@ -73,6 +83,7 @@ export type ControlPlaneChangedPayload = {
   projectPath?: string | null;
   workspaceId?: string | null;
   notificationId?: string | null;
+  notification?: ControlPlaneNotification | null;
   reason?: string | null;
   updatedAt?: number | null;
 };

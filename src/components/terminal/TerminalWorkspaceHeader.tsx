@@ -21,7 +21,6 @@ type TerminalHeaderTab = {
 type TerminalWorkspaceHeaderProps = {
   projectName: string | null | undefined;
   projectPath: string;
-  codexRunningCount: number;
   controlPlaneProjection: ControlPlaneWorkspaceProjection;
   activePaneControlProjection: ControlPlaneSurfaceProjection | null;
   rightSidebarOpen: boolean;
@@ -48,7 +47,6 @@ type TerminalWorkspaceHeaderProps = {
 export default function TerminalWorkspaceHeader({
   projectName,
   projectPath,
-  codexRunningCount,
   controlPlaneProjection,
   activePaneControlProjection,
   rightSidebarOpen,
@@ -116,15 +114,6 @@ export default function TerminalWorkspaceHeader({
   return (
     <header className="flex items-center gap-3 border-b border-[var(--terminal-divider)] bg-[var(--terminal-panel-bg)] px-3 py-2">
       <div className="max-w-[200px] truncate text-[13px] font-semibold text-[var(--terminal-fg)]">{projectName ?? projectPath}</div>
-      {codexRunningCount > 0 ? (
-        <div
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--terminal-divider)] bg-[var(--terminal-hover-bg)] px-2 py-0.5 text-[11px] font-semibold text-[var(--terminal-muted-fg)]"
-          title={`Codex 运行中（${codexRunningCount} 个会话）`}
-        >
-          <span className="h-2 w-2 rounded-full bg-[var(--terminal-accent)]" aria-hidden="true" />
-          <span className="whitespace-nowrap">Codex 运行中</span>
-        </div>
-      ) : null}
       {controlPlaneProjection.attention !== "idle" || controlPlaneProjection.unreadCount > 0 ? (
         <div
           className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--terminal-divider)] bg-[var(--terminal-hover-bg)] px-2 py-0.5 text-[11px] font-semibold text-[var(--terminal-muted-fg)]"

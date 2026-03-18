@@ -33,7 +33,6 @@ export type TerminalWorkspaceShellProps = {
   projectName: string | null | undefined;
   projectId: string | null;
   projectPath: string;
-  codexRunningCount: number;
   controlPlaneProjection: ControlPlaneWorkspaceProjection;
   activePaneControlProjection: ControlPlaneSurfaceProjection | null;
   isGitRepo: boolean;
@@ -103,7 +102,6 @@ export default function TerminalWorkspaceShell({
   projectName,
   projectId,
   projectPath,
-  codexRunningCount,
   controlPlaneProjection,
   activePaneControlProjection,
   isGitRepo,
@@ -173,7 +171,6 @@ export default function TerminalWorkspaceShell({
       <TerminalWorkspaceHeader
         projectName={projectName}
         projectPath={projectPath}
-        codexRunningCount={codexRunningCount}
         controlPlaneProjection={controlPlaneProjection}
         activePaneControlProjection={activePaneControlProjection}
         rightSidebarOpen={rightSidebarOpen}

@@ -291,6 +291,21 @@ test("summarizeNotifyPayload maps completion notifications to completed state", 
   );
 });
 
+test("summarizeNotifyPayload reads Codex hyphen-case last assistant message", () => {
+  assert.deepEqual(
+    summarizeNotifyPayload({
+      title: "Codex",
+      "last-assistant-message": "请确认是否继续执行",
+    }),
+    {
+      title: "Codex",
+      message: "请确认是否继续执行",
+      level: "attention",
+      status: "waiting",
+    },
+  );
+});
+
 test("dispatchCodexNotificationLifecycle emits exactly one notification through primitive path", async () => {
   const calls = [];
   await dispatchCodexNotificationLifecycle({

@@ -17,7 +17,6 @@ import {
   loadControlPlaneTree,
 } from "../../services/controlPlane";
 import {
-  countRunningProviderSessions,
   projectControlPlaneWorkspace,
 } from "../../utils/controlPlaneProjection";
 import { buildMountedWorkspaceEntries } from "./terminalWorkspaceMountModel";
@@ -382,7 +381,6 @@ function TerminalWorkspaceWindow({
           {rootProjects.map((project) => {
             const isActive = (activeProject?.id ?? "") === project.id;
             const projectControlPlaneTree = controlPlaneTreeByProjectId[project.id] ?? null;
-            const codexRunningCount = countRunningProviderSessions(projectControlPlaneTree, "codex");
             const controlPlaneProjection = projectControlPlaneWorkspace(projectControlPlaneTree);
             const trackedWorktrees = project.worktrees ?? [];
             const gitWorktrees = gitWorktreesByProjectId[project.id];
@@ -436,15 +434,6 @@ function TerminalWorkspaceWindow({
                         {controlPlaneProjection.unreadCount}
                       </span>
                     ) : null}
-                    {codexRunningCount > 0 ? (
-                      <span
-                        className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--terminal-accent)]"
-                        title={`Codex 运行中（${codexRunningCount} 个会话）`}
-                        aria-label={`Codex 运行中（${codexRunningCount} 个会话）`}
-                      >
-                        <span className="sr-only">Codex 运行中</span>
-                      </span>
-                    ) : null}
                     <button
                       className="hidden h-6 w-6 items-center justify-center rounded-md border border-transparent text-[var(--terminal-muted-fg)] transition-colors hover:border-[var(--terminal-divider)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)] group-hover:inline-flex group-focus-within:inline-flex"
                       onClick={(event) => {
@@ -491,9 +480,8 @@ function TerminalWorkspaceWindow({
                   <div className="flex flex-col gap-1 pl-3">
                     {worktreesToRender.map((worktree) => {
                       const openedProject = openProjectsByPath.get(worktree.path);
-                      const codexWorktreeRunningCount = countRunningProviderSessions(
+                      const worktreeControlPlaneProjection = projectControlPlaneWorkspace(
                         openedProject ? controlPlaneTreeByProjectId[openedProject.id] ?? null : null,
-                        "codex",
                       );
                       const isWorktreeActive = activeProject?.path === worktree.path;
                       const isCreating = worktree.status === "creating";
@@ -535,13 +523,29 @@ function TerminalWorkspaceWindow({
                           <span className="shrink-0 rounded border border-[var(--terminal-divider)] px-1.5 py-0.5 text-[10px] text-[var(--terminal-muted-fg)]">
                             {worktree.branch}
                           </span>
-                          {codexWorktreeRunningCount > 0 ? (
+                          {worktreeControlPlaneProjection.attention !== "idle" ? (
                             <span
-                              className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--terminal-accent)]"
-                              title={`Codex 运行中（${codexWorktreeRunningCount} 个会话）`}
-                              aria-label={`Codex 运行中（${codexWorktreeRunningCount} 个会话）`}
+                              className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${
+                                worktreeControlPlaneProjection.attention === "error"
+                                  ? "bg-[rgba(239,68,68,0.95)]"
+                                  : worktreeControlPlaneProjection.attention === "waiting"
+                                    ? "bg-[rgba(245,158,11,0.95)]"
+                                    : worktreeControlPlaneProjection.attention === "completed"
+                                      ? "bg-[rgba(34,197,94,0.95)]"
+                                      : "bg-[var(--terminal-accent)]"
+                              }`}
+                              title={`控制平面状态：${worktreeControlPlaneProjection.attention}`}
+                              aria-label={`控制平面状态：${worktreeControlPlaneProjection.attention}`}
                             >
-                              <span className="sr-only">Codex 运行中</span>
+                              <span className="sr-only">控制平面状态</span>
+                            </span>
+                          ) : null}
+                          {worktreeControlPlaneProjection.unreadCount > 0 ? (
+                            <span
+                              className="inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--terminal-accent-bg)] px-1.5 text-[10px] font-semibold text-[var(--terminal-fg)]"
+                              title={`未读通知 ${worktreeControlPlaneProjection.unreadCount} 条`}
+                            >
+                              {worktreeControlPlaneProjection.unreadCount}
                             </span>
                           ) : null}
                           {isCreating ? (
@@ -611,10 +615,6 @@ function TerminalWorkspaceWindow({
               xtermTheme={terminalThemePreset.xterm}
               sharedScriptsRoot={sharedScriptsRoot}
               terminalUseWebglRenderer={terminalUseWebglRenderer}
-              codexRunningCount={countRunningProviderSessions(
-                controlPlaneTreeByProjectId[project.id] ?? null,
-                "codex",
-              )}
               controlPlaneTree={controlPlaneTreeByProjectId[project.id] ?? null}
               scripts={project.scripts ?? EMPTY_PROJECT_SCRIPTS}
               onRegisterPersistWorkspace={onRegisterPersistWorkspace}
