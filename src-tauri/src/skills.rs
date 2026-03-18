@@ -85,7 +85,9 @@ impl TempDirGuard {
 impl Drop for TempDirGuard {
     fn drop(&mut self) {
         if let Some(path) = &self.path {
-            let _ = fs::remove_dir_all(path);
+            if let Err(e) = fs::remove_dir_all(path) {
+                log::warn!("清理临时目录失败 ({}): {}", path.display(), e);
+            }
         }
     }
 }

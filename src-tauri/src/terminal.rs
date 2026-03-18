@@ -864,9 +864,13 @@ pub fn terminal_create_session(
         Some(shell.clone()),
     );
     let _ = runtime.attach_session_client(&runtime_session_id, client_id.clone());
-    let _ = control_state.register_terminal_binding(control_context.clone());
+    if let Err(e) = control_state.register_terminal_binding(control_context.clone()) {
+        log::warn!("注册终端控制面绑定失败 (session={}): {}", session_id, e);
+    }
     if let Ok(snapshot) = control_state.export_control_plane_file() {
-        let _ = crate::storage::save_agent_control_plane_store(&app, snapshot);
+        if let Err(e) = crate::storage::save_agent_control_plane_store(&app, snapshot) {
+            log::warn!("保存控制面状态失败: {}", e);
+        }
     }
 
     if let Some(existing_pty) = find_existing_pty_by_session(&state, &session_id)? {
@@ -952,8 +956,12 @@ pub fn terminal_create_session(
             sessions.remove(&pty_id);
         }
         if let Ok(mut child) = session.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+            if let Err(e) = child.kill() {
+                log::warn!("终端进程 kill 失败 (pty={}): {}", pty_id, e);
+            }
+            if let Err(e) = child.wait() {
+                log::warn!("终端进程 wait 失败 (pty={}): {}", pty_id, e);
+            }
         }
         return Err(error);
     }
@@ -1201,8 +1209,12 @@ pub fn terminal_kill(
             .child
             .lock()
             .map_err(|_| "终端会话锁定失败".to_string())?;
-        let _ = child.kill();
-        let _ = child.wait();
+        if let Err(e) = child.kill() {
+            log::warn!("终端进程 kill 失败 (pty={}): {}", pty_id, e);
+        }
+        if let Err(e) = child.wait() {
+            log::warn!("终端进程 wait 失败 (pty={}): {}", pty_id, e);
+        }
     }
     let _ = runtime.mark_session_exited(&runtime_session_id, None);
     remove_terminal_session_index_by_pty(&state, &pty_id);
