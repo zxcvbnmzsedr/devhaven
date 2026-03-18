@@ -1,5 +1,34 @@
 # 本次任务清单
 
+## 提交工作区左侧项目点击区域扩大改动（2026-03-18）
+
+- [x] 重新运行提交前验证并确认结果
+- [x] 暂存本轮改动并执行 commit
+- [x] 回写提交 Review 与结果
+
+## Review（提交工作区左侧项目点击区域扩大改动）
+
+- 提交范围：本轮提交包含左侧项目列表整行点击热区修复、对应实施计划文档，以及 `tasks/todo.md` 中的任务与审查记录。
+- 直接原因：用户明确要求“进行 git commit”，因此在实现完成后重新执行了一轮新鲜验证，再将本轮 3 个目标文件暂存并提交。
+- 是否存在设计层诱因：本次提交针对的核心问题仍是“视觉上是整行列表项，但实际只有局部文字按钮可点”的交互边界不一致；除此之外，未发现新的明显系统设计缺陷。
+- 提交结果：已执行 `git commit -m "fix: 扩大终端项目列表点击区域"`，当前以本轮最新 `fix: 扩大终端项目列表点击区域` 提交为准，可用 `git log --oneline -1` 核对最终提交号。
+- 验证证据：`git status --short`（提交前 staged 文件为 `docs/plans/2026-03-18-terminal-sidebar-hit-area.md`、`src/components/terminal/TerminalWorkspaceWindow.tsx`、`tasks/todo.md`）；`node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）；`pnpm build`（通过，Vite build succeeded）；`git diff --check`（通过）。
+
+## 工作区左侧项目点击区域扩大（2026-03-18）
+
+- [x] 读取技能、记忆与仓库约束，建立本轮 checklist
+- [x] 定位左侧项目列表的点击命中区域实现与约束
+- [x] 给出最小改动方案并与用户确认
+- [x] 实现改动、完成定向验证并回写 Review
+
+## Review（工作区左侧项目点击区域扩大）
+
+- 直接原因：`src/components/terminal/TerminalWorkspaceWindow.tsx` 里左侧“已打开项目”的根项目行与 worktree 行，主选择动作都只绑在文字按钮本身，导致行容器、状态点、未读数周围留白都不算命中区域，用户会感知为“点击区域有点小”。
+- 是否存在设计层诱因：存在轻微的交互入口分裂——视觉上整行都像一个列表项，但实现上只有局部文字按钮可选中，导致命中区域与视觉边界不一致；除此之外，未发现明显系统设计缺陷。
+- 当前修复方案：把根项目行与可打开的 worktree 行都改成**整行可点**，并保留右侧刷新 / 创建 worktree / 关闭 / 重试 / 删除按钮的独立行为（继续 `stopPropagation()`）；同时补了 `role="button"`、`tabIndex` 与 `Enter / Space` 键盘激活，避免扩大热区后可访问性退化。
+- 长期改进建议：这类终端侧边栏列表项后续可抽成统一的“可整行激活 + trailing actions”模式组件，避免项目行、worktree 行、未来其他侧栏列表再次各写一套命中区域逻辑。
+- 验证证据：`node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）；`pnpm build`（通过，Vite build succeeded）；`git diff --check`（通过，无 whitespace/冲突类问题）；`git status --short`（本轮改动文件为 `src/components/terminal/TerminalWorkspaceWindow.tsx`、`tasks/todo.md`，新增 `docs/plans/2026-03-18-terminal-sidebar-hit-area.md`）。
+
 ## 提交当前工作区改动（2026-03-17）
 
 - [x] 记录本轮提交范围与待办

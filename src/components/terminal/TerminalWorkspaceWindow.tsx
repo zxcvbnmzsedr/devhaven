@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, KeyboardEvent } from "react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TerminalQuickCommandDispatch } from "../../models/quickCommands";
@@ -140,6 +140,20 @@ function resolveActiveProject(
     return openProjects[0];
   }
   return openProjects.find((project) => project.id === activeProjectId) ?? openProjects[0];
+}
+
+function handleRowActivationKeyDown(
+  event: KeyboardEvent<HTMLDivElement>,
+  onActivate: () => void,
+) {
+  if (event.target !== event.currentTarget) {
+    return;
+  }
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  event.preventDefault();
+  onActivate();
 }
 
 function TerminalWorkspaceWindow({
@@ -373,56 +387,58 @@ function TerminalWorkspaceWindow({
             const trackedWorktrees = project.worktrees ?? [];
             const gitWorktrees = gitWorktreesByProjectId[project.id];
             const worktreesToRender = mergeWorktreesToRender(trackedWorktrees, gitWorktrees);
+            const handleSelectProjectRow = () => onSelectProject(project.id);
 
             const hasWorktrees = worktreesToRender.length > 0;
             return (
               <div key={project.id} className="flex flex-col gap-1" title={project.path}>
                 <div
-                  className={`group relative flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px] font-semibold transition-colors ${
+                  className={`group relative flex cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-[12px] font-semibold transition-colors ${
                     isActive
                       ? "bg-[var(--terminal-accent-bg)] text-[var(--terminal-fg)]"
                       : "text-[var(--terminal-muted-fg)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)]"
                   }`}
-                  >
-                    <button
-                      className="min-w-0 flex-1 pr-6 text-left"
-                      title={project.name}
-                      onClick={() => onSelectProject(project.id)}
-                    >
-                      <div className="truncate">{project.name}</div>
-                      {controlPlaneProjection.latestMessage ? (
-                        <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--terminal-muted-fg)]">
-                          {controlPlaneProjection.latestMessage}
-                        </div>
-                      ) : null}
-                    </button>
-                    <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
-                      {controlPlaneProjection.attention !== "idle" ? (
-                        <span
-                          className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${
-                            controlPlaneProjection.attention === "error"
-                              ? "bg-[rgba(239,68,68,0.95)]"
-                              : controlPlaneProjection.attention === "waiting"
-                                ? "bg-[rgba(245,158,11,0.95)]"
-                                : controlPlaneProjection.attention === "completed"
-                                  ? "bg-[rgba(34,197,94,0.95)]"
-                                  : "bg-[var(--terminal-accent)]"
-                          }`}
-                          title={`控制平面状态：${controlPlaneProjection.attention}`}
-                          aria-label={`控制平面状态：${controlPlaneProjection.attention}`}
-                        />
-                      ) : null}
-                      {controlPlaneProjection.unreadCount > 0 ? (
-                        <span
-                          className="inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--terminal-accent-bg)] px-1.5 text-[10px] font-semibold text-[var(--terminal-fg)]"
-                          title={`未读通知 ${controlPlaneProjection.unreadCount} 条`}
-                        >
-                          {controlPlaneProjection.unreadCount}
-                        </span>
-                      ) : null}
-                      {codexRunningCount > 0 ? (
-                        <span
-                          className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--terminal-accent)]"
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={isActive}
+                  onClick={handleSelectProjectRow}
+                  onKeyDown={(event) => handleRowActivationKeyDown(event, handleSelectProjectRow)}
+                >
+                  <div className="min-w-0 flex-1 pr-6" title={project.name}>
+                    <div className="truncate">{project.name}</div>
+                    {controlPlaneProjection.latestMessage ? (
+                      <div className="mt-0.5 truncate text-[10px] font-normal text-[var(--terminal-muted-fg)]">
+                        {controlPlaneProjection.latestMessage}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="absolute right-1.5 top-1/2 flex -translate-y-1/2 items-center gap-1">
+                    {controlPlaneProjection.attention !== "idle" ? (
+                      <span
+                        className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${
+                          controlPlaneProjection.attention === "error"
+                            ? "bg-[rgba(239,68,68,0.95)]"
+                            : controlPlaneProjection.attention === "waiting"
+                              ? "bg-[rgba(245,158,11,0.95)]"
+                              : controlPlaneProjection.attention === "completed"
+                                ? "bg-[rgba(34,197,94,0.95)]"
+                                : "bg-[var(--terminal-accent)]"
+                        }`}
+                        title={`控制平面状态：${controlPlaneProjection.attention}`}
+                        aria-label={`控制平面状态：${controlPlaneProjection.attention}`}
+                      />
+                    ) : null}
+                    {controlPlaneProjection.unreadCount > 0 ? (
+                      <span
+                        className="inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--terminal-accent-bg)] px-1.5 text-[10px] font-semibold text-[var(--terminal-fg)]"
+                        title={`未读通知 ${controlPlaneProjection.unreadCount} 条`}
+                      >
+                        {controlPlaneProjection.unreadCount}
+                      </span>
+                    ) : null}
+                    {codexRunningCount > 0 ? (
+                      <span
+                        className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--terminal-accent)]"
                         title={`Codex 运行中（${codexRunningCount} 个会话）`}
                         aria-label={`Codex 运行中（${codexRunningCount} 个会话）`}
                       >
@@ -484,6 +500,16 @@ function TerminalWorkspaceWindow({
                       const isFailed = worktree.status === "failed";
                       const isQueued = isCreating && worktree.initStep === "pending";
                       const canOpen = !isCreating && !isFailed;
+                      const handleSelectWorktreeRow = () => {
+                        if (!canOpen) {
+                          return;
+                        }
+                        if (openedProject) {
+                          onSelectProject(openedProject.id);
+                          return;
+                        }
+                        onOpenWorktree(project.id, worktree.path);
+                      };
                       return (
                         <div
                           key={worktree.path}
@@ -491,27 +517,21 @@ function TerminalWorkspaceWindow({
                             isWorktreeActive
                               ? "bg-[var(--terminal-accent-bg)] text-[var(--terminal-fg)]"
                               : "text-[var(--terminal-muted-fg)] hover:bg-[var(--terminal-hover-bg)] hover:text-[var(--terminal-fg)]"
-                          }`}
+                          } ${canOpen ? "cursor-pointer" : ""}`}
                           title={worktree.path}
+                          role={canOpen ? "button" : undefined}
+                          tabIndex={canOpen ? 0 : -1}
+                          aria-pressed={canOpen ? isWorktreeActive : undefined}
+                          onClick={handleSelectWorktreeRow}
+                          onKeyDown={(event) => handleRowActivationKeyDown(event, handleSelectWorktreeRow)}
                         >
-                          <button
+                          <div
                             className={`min-w-0 flex-1 truncate text-left ${
-                              canOpen ? "" : "opacity-60 cursor-not-allowed"
+                              canOpen ? "" : "cursor-not-allowed opacity-60"
                             }`}
-                            disabled={!canOpen}
-                            onClick={() => {
-                              if (!canOpen) {
-                                return;
-                              }
-                              if (openedProject) {
-                                onSelectProject(openedProject.id);
-                                return;
-                              }
-                              onOpenWorktree(project.id, worktree.path);
-                            }}
                           >
                             ↳ {worktree.name}
-                          </button>
+                          </div>
                           <span className="shrink-0 rounded border border-[var(--terminal-divider)] px-1.5 py-0.5 text-[10px] text-[var(--terminal-muted-fg)]">
                             {worktree.branch}
                           </span>
