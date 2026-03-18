@@ -81,7 +81,11 @@ function AppLayout() {
     terminalOpenProjectsRef: terminal.terminalOpenProjectsRef,
   });
 
-  useCodexIntegration({ showToast });
+  useCodexIntegration({
+    showToast,
+    projects,
+    openTerminalWorkspace: terminal.openTerminalWorkspace,
+  });
 
   const commandPalette = useCommandPalette({
     showTerminalWorkspace: terminal.showTerminalWorkspace,

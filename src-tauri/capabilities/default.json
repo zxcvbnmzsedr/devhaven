@@ -12,6 +12,7 @@
     "opener:default",
     "dialog:allow-open",
     "dialog:allow-confirm",
+    "notification:default",
     "clipboard-manager:default",
     "log:default"
   ]

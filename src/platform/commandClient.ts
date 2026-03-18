@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import { isTauriRuntime, resolveWebApiBase } from "./runtime";
+import { isTauriRuntime, resolveWebApiBase } from "./runtime.ts";
 
 type LegacyWebCommandResponse<T> = {
   ok: boolean;

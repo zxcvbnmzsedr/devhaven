@@ -1,5 +1,67 @@
 # 本次任务清单
 
+## 发布 2.8.3（2026-03-18）
+
+- [x] 核对当前分支 / 版本 / 现有 tag / 工作区状态
+- [x] 记录本轮发布计划并锁定变更范围
+- [x] 更新版本号到 2.8.3
+- [x] 汇总上个版本 `v2.8.2` 以来的变更说明
+- [x] 运行发布前验证
+- [ ] 提交 release commit、创建 `v2.8.3` tag 并 push
+- [ ] 回写 Review（包含验证证据与发布结果）
+
+
+## 说明当前 Codex 目前推送内容（2026-03-18）
+
+- [x] 读取技能、记忆与仓库约束，建立本轮 checklist
+- [x] 定位 Codex wrapper / hook / control plane 的推送实现
+- [x] 整理当前实际推送字段、触发点与前端消费位置
+- [x] 回写 Review，并向用户说明结论与证据
+
+## Review（说明当前 Codex 目前推送内容）
+
+- 结论：当前 DevHaven 里的 Codex **不会把整段对话或整屏终端输出推到 control plane**；主线推送的是几类**结构化状态/通知元数据**，并统一挂上 `projectPath/workspaceId/paneId/surfaceId/terminalSessionId` 等上下文。实际入口是 `shell integration -> scripts/bin/codex -> scripts/devhaven-codex-wrapper.mjs -> scripts/devhaven-codex-hook.mjs -> scripts/devhaven-agent-hook.mjs -> Rust control plane`。
+- 当前实际推送内容分 4 类：
+  1. **通知（`devhaven_notify_target`）**：字段是 `title/subtitle/body/message/level + agentSessionId + 上下文 IDs`。Codex notify payload 会优先从 `message/summary/body/text/last-assistant-message/last_assistant_message/lastAssistantMessage` 里挑一条正文；`type/event/kind` 含 `complete` 时标成 completed/info，含 `error/fail` 时标成 failed/error，否则按 waiting/attention。
+  2. **状态 primitive（`devhaven_set_status` / `clear_status`）**：当前 key 固定为 `codex`，value 主要是 `Running / Waiting / Completed / Failed / Stopped`，并附 `icon/color`，供 workspace attention 与徽标投影直接消费。
+  3. **会话事件（`devhaven_agent_session_event`）**：字段是 `provider=status/message/agentSessionId/cwd + 上下文 IDs`，当前 provider 固定为 `codex`，状态会写 `running / waiting / completed / failed / stopped`。
+  4. **进程 PID primitive（`devhaven_set_agent_pid` / `clear_agent_pid`）**：字段是 `key=codex`、`pid` 加上下文 IDs，用来标记当前 pane/workspace 里哪个 Codex 进程还活着。
+- 触发时机：
+  1. **启动真实 Codex 前**：wrapper 先推 `set_status(key=codex,value=Running)`，再推 `agent_session_event(status=running,message=\"Codex 已启动\")`。
+  2. **spawn 成功拿到子进程 PID 后**：再推 `set_agent_pid(key=codex,pid=<child pid>)`。
+  3. **Codex notify hook 触发时**：每次会推一组三连——`notify_target + set_status + agent_session_event`；例如需要用户确认时，会把摘要消息同时写成通知正文、Waiting 状态和值得注意的 session message。
+  4. **退出或异常时**：先 `clear_agent_pid`，再把状态改成 `Stopped` 或 `Failed`，同时写一条 `agent_session_event`（例如 `Codex 已退出` 或退出异常信息）。
+- 前端消费方式：`useCodexIntegration.ts` 监听 `devhaven-control-plane-changed`，对 notification 事件弹 toast / 系统通知；工作区 attention、latest message、active count 等则由 `projectControlPlaneWorkspace` / `projectControlPlaneSurface` 从 `notifications + agentSession + statuses + agentPids` 投影出来。
+- 设计层判断：未发现新的明显系统设计缺陷；当前“只推结构化通知/状态，不推整段会话文本”的边界是清楚的，也是前面清理 monitor 后保留下来的低开销主线。
+- 证据：
+  - `scripts/devhaven-codex-wrapper.mjs`：启动/退出时推 `set_status`、`agent_session_event`、`set/clear_agent_pid`。
+  - `scripts/devhaven-codex-hook.mjs`：notify 时推 `notify_target`、`set_status`、`agent_session_event`，并从 `last-assistant-message` 等字段抽正文。
+  - `scripts/devhaven-agent-hook.mjs`：定义了实际 POST 到 control plane 的 payload 结构。
+  - `src-tauri/src/lib.rs` + `src-tauri/src/agent_control.rs`：Rust 侧落盘 notification/status/agent_pid/session record，并发 `devhaven-control-plane-changed` 事件。
+
+
+## 修复通知点击跳错目标（2026-03-18）
+
+- [x] 读取技能、记忆与仓库约束，建立本轮 checklist
+- [x] 定位系统通知点击链路与直接原因
+- [x] 先补失败测试或最小复现，再实现最小修复
+- [x] 运行验证并回写 Review
+
+## Review（修复通知点击跳错目标）
+
+- 直接原因：当前 Tauri/macOS 通知主链仍停留在 Rust `send_system_notification -> osascript display notification`。这类通知的来源应用会显示为“脚本编辑器”，点击后只会把系统带到 Script Editor，既没有 DevHaven 自己的点击回调，也没有任何“打开对应工作区”的跳转链路，所以用户看到的就是“点通知弹出脚本编辑器”。
+- 是否存在设计层诱因：存在。通知真相源已经收口到 control plane，但“通知展示”和“通知点击后的导航”仍被拆在两套世界里：Rust 侧只会发一个无上下文的 AppleScript 通知，前端 `useCodexIntegration.ts` 只管 toast，不掌握系统通知点击事件，导致 control plane 明明知道 `projectPath/workspaceId/paneId`，最终外显通知却丢掉了这些导航语义。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 保留 control plane 作为通知真相源，但取消 `agent_control.rs` 在写入 notification 后直接走 `osascript` 发通知的主路径。
+  2. 在 Tauri 侧接入 `tauri-plugin-notification`，并把 `src/services/system.ts` 改成**优先使用 Web Notification API** 发送系统通知，这样通知来源回到 DevHaven 本体，同时可以保留 `onclick` 回调；只有 Notification API 不可用时才回退到原后端命令。
+  3. `useCodexIntegration.ts` 现在会在收到结构化 control-plane notification 时，统一发 toast + 系统通知，并在通知点击后通过 `resolveNotificationProject` 把 `projectPath/workspaceId` 解析为真实项目/Worktree，再直接调用 `openTerminalWorkspace` 跳到对应工作区。
+  4. 新增 `src/utils/controlPlaneNotificationRouting.ts`，把“普通项目路径优先、Worktree 路径回退、workspaceId 兜底”的解析规则收口成单独 helper，避免点击跳转逻辑散落在 hook 里。
+  5. 同步更新 `AGENTS.md` 中 control-plane / system-notification 职责说明，明确当前通知主链已改成“Rust 负责结构化事件，前端负责可点击系统通知桥接”。
+- 长期改进建议：后续如果继续强化通知体验，最好把“通知点击后不仅打开工作区，还能精确定位 pane/surface/terminal session”也做成统一路由协议，而不是在 hook 里逐步堆条件；同时如果未来真的恢复多窗口终端模式，需要再补一层“只有主窗口负责外显系统通知”的单点桥，避免重复通知。
+- 验证证据：
+  - 红灯阶段：`node --test src/utils/controlPlaneNotificationRouting.test.mjs src/services/system.test.mjs` 初次运行失败，暴露出“通知路由 helper 缺失”和“系统通知服务没有 click callback / 仍走旧 Tauri 路径”两处缺口。
+  - 绿灯阶段：`node --test src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneProjection.test.mjs src/utils/controlPlaneLifecycle.test.mjs src/utils/controlPlaneNotificationRouting.test.mjs scripts/devhaven-control.test.mjs src/services/system.test.mjs`（37/37 通过）；`node node_modules/typescript/bin/tsc --noEmit`（通过，无输出）；`cargo check --manifest-path src-tauri/Cargo.toml`（通过，含 `tauri-plugin-notification` 新依赖）；`git diff --check`（通过）。
+
 ## 实施 Codex 通知完整修复（2026-03-18）
 
 - [x] 读取技能、计划与当前工作区状态，建立本轮 checklist

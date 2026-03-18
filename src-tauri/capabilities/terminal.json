@@ -6,6 +6,7 @@
   "permissions": [
     "core:event:default",
     "core:window:allow-set-title",
+    "notification:default",
     "opener:default",
     "log:default"
   ]

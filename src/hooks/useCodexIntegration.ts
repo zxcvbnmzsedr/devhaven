@@ -2,15 +2,19 @@ import { useEffect, useRef } from "react";
 
 import { isTauriRuntime } from "../platform/runtime";
 import type { ControlPlaneNotification } from "../models/controlPlane";
+import type { Project } from "../models/types";
 import {
   listenControlPlaneChanged,
   loadControlPlaneTree,
 } from "../services/controlPlane";
 import { sendSystemNotification } from "../services/system";
 import { collectNewControlPlaneNotifications } from "../utils/controlPlaneAutoRead";
+import { resolveNotificationProject } from "../utils/controlPlaneNotificationRouting.ts";
 
 type UseCodexIntegrationParams = {
   showToast: (message: string, variant?: "success" | "error") => void;
+  projects: Project[];
+  openTerminalWorkspace: (project: Project) => void;
 };
 
 function isCodexTree(tree: Awaited<ReturnType<typeof loadControlPlaneTree>>) {
@@ -81,8 +85,15 @@ function resolveSystemNotification(notification: ControlPlaneNotification) {
 }
 
 /** 监听控制面中的 Codex 通知，并转发为 toast / 系统通知。 */
-export function useCodexIntegration({ showToast }: UseCodexIntegrationParams) {
+export function useCodexIntegration({ showToast, projects, openTerminalWorkspace }: UseCodexIntegrationParams) {
   const seenNotificationIdsRef = useRef<Set<string>>(new Set());
+  const projectsRef = useRef<Project[]>(projects);
+  const openTerminalWorkspaceRef = useRef(openTerminalWorkspace);
+
+  useEffect(() => {
+    projectsRef.current = projects;
+    openTerminalWorkspaceRef.current = openTerminalWorkspace;
+  }, [openTerminalWorkspace, projects]);
 
   useEffect(() => {
     let disposed = false;
@@ -97,6 +108,26 @@ export function useCodexIntegration({ showToast }: UseCodexIntegrationParams) {
           break;
         }
         seen.delete(first);
+      }
+    };
+
+    const handleNotificationClick = async (notification: ControlPlaneNotification) => {
+      const targetProject = resolveNotificationProject(projectsRef.current, notification);
+      if (targetProject) {
+        openTerminalWorkspaceRef.current(targetProject);
+      }
+      if (!isTauriRuntime()) {
+        return;
+      }
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        const currentWindow = getCurrentWindow();
+        await currentWindow.show().catch(() => undefined);
+        await currentWindow.setFocus().catch(() => undefined);
+      } catch (error) {
+        if (!disposed) {
+          console.warn("通知点击后聚焦窗口失败。", error);
+        }
       }
     };
 
@@ -126,10 +157,13 @@ export function useCodexIntegration({ showToast }: UseCodexIntegrationParams) {
           rememberNotificationId(eventNotificationId);
         }
         showToast(displayMessage, resolveToastVariant(displayMessage));
-        if (!isTauriRuntime()) {
-          const systemNotification = resolveSystemNotification(eventNotification);
-          void sendSystemNotification(systemNotification.title, systemNotification.body);
-        }
+        const systemNotification = resolveSystemNotification(eventNotification);
+        void sendSystemNotification({
+          title: systemNotification.title,
+          body: systemNotification.body,
+          tag: eventNotificationId ? `control-plane:${eventNotificationId}` : undefined,
+          onClick: () => handleNotificationClick(eventNotification),
+        });
         return;
       }
 
@@ -151,10 +185,13 @@ export function useCodexIntegration({ showToast }: UseCodexIntegrationParams) {
             rememberNotificationId(notification.id);
             const displayMessage = resolveNotificationMessage(notification) ?? notification.message;
             showToast(displayMessage, resolveToastVariant(displayMessage));
-            if (!isTauriRuntime()) {
-              const systemNotification = resolveSystemNotification(notification);
-              void sendSystemNotification(systemNotification.title, systemNotification.body);
-            }
+            const systemNotification = resolveSystemNotification(notification);
+            void sendSystemNotification({
+              title: systemNotification.title,
+              body: systemNotification.body,
+              tag: `control-plane:${notification.id}`,
+              onClick: () => handleNotificationClick(notification),
+            });
           }
         } catch (error) {
           if (!disposed) {

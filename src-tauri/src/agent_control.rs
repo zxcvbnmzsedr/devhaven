@@ -493,9 +493,6 @@ pub fn notify_control_plane(
         pane_id: request.pane_id,
         surface_id: request.surface_id,
     })?;
-    if let Err(error) = crate::system::send_system_notification(build_system_notification_params(&record)) {
-        log::warn!("发送 control plane 系统通知失败: {}", error);
-    }
     emit_control_plane_changed(
         app,
         ControlPlaneChangedPayload {
@@ -1265,31 +1262,6 @@ fn build_notification_message(title: Option<&str>, body: &str) -> String {
 
 fn resolve_notification_body(body: Option<String>, message: &str) -> Option<String> {
     normalize_optional_text(body).or_else(|| Some(message.trim().to_string()))
-}
-
-fn build_system_notification_params(record: &NotificationRecord) -> crate::system::SystemNotificationParams {
-    let title = record
-        .title
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("DevHaven 通知")
-        .to_string();
-    let body = record
-        .body
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .or_else(|| {
-            let trimmed = record.message.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        });
-    crate::system::SystemNotificationParams { title, body }
 }
 
 fn normalize_agent_status(raw: &str) -> Result<String, String> {
