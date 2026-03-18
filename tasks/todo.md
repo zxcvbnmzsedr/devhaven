@@ -7,9 +7,27 @@
 - [x] 更新版本号到 2.8.3
 - [x] 汇总上个版本 `v2.8.2` 以来的变更说明
 - [x] 运行发布前验证
-- [ ] 提交 release commit、创建 `v2.8.3` tag 并 push
-- [ ] 回写 Review（包含验证证据与发布结果）
+- [x] 提交 release commit、创建 `v2.8.3` tag 并 push
+- [x] 回写 Review（包含验证证据与发布结果）
 
+
+## Review（发布 2.8.3）
+
+- 发布结果：已将版本从 `2.8.2` 升级到 `2.8.3`，同步更新 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/tauri.conf.json`；发布提交为 `6ed1e50 fix: route control-plane notifications back to workspace`，并已创建/推送 tag `v2.8.3`。
+- 本次 release 直接原因：上一版之后控制面/通知主线连续收口，当前工作区剩余未发布的核心改动集中在“通知点击回到 DevHaven 正确工作区”这一闭环，因此本轮在补齐版本号后，将通知桥接修复与版本升级一并发布。
+- 是否存在设计层诱因：未发现新的系统性阻塞，但确认了一个已经被修正的诱因——此前系统通知仍依赖 `osascript display notification`，通知来源会落到“脚本编辑器”，点击后也拿不回 `projectPath/workspaceId` 导航上下文；本次发布已把通知真相源和点击跳转重新收口到 DevHaven 主链。
+- `v2.8.2 -> v2.8.3` 主要变更摘要：
+  1. **控制面与通知链路继续收口**：移除旧 monitor 依赖，增强 durable control plane / agent wrapper / primitive-first terminal 主线，补齐 `notificationId`、completed 已读后清理、结构化通知消费。
+  2. **通知点击闭环补齐**：Tauri 侧接入 `tauri-plugin-notification`，前端 `useCodexIntegration.ts` 统一桥接 toast + 系统通知；新增 `resolveNotificationProject(...)`，支持点击通知后按 `projectPath/workspaceId` 直接打开对应项目或 Worktree。
+  3. **终端与资源解析稳定性提升**：终端代理资源优先从 bundle resource 解析，减少打包后资源定位漂移；终端项目列表点击热区扩大，降低误触/点不中。
+  4. **启动与运行态体验优化**：收口启动与终端内存占用、同步 quick command runtime 状态、降低 git daily 自动统计日志噪声。
+- 验证证据：
+  - `node --test src/utils/controlPlaneAutoRead.test.mjs src/utils/controlPlaneProjection.test.mjs src/utils/controlPlaneLifecycle.test.mjs src/utils/controlPlaneNotificationRouting.test.mjs scripts/devhaven-control.test.mjs src/services/system.test.mjs` → `37/37` 通过。
+  - `node node_modules/typescript/bin/tsc --noEmit` → 通过，无输出。
+  - `cargo check --manifest-path src-tauri/Cargo.toml` → 通过，`Finished 'dev' profile ...`。
+  - `cargo test agent_control_registry_preserves_structured_notification_fields --manifest-path src-tauri/Cargo.toml` → `1 passed; 0 failed`。
+  - `git diff --check` → 通过，无输出。
+  - `git push origin main` → `a769e44..6ed1e50  main -> main`；`git push origin v2.8.3` → `[new tag] v2.8.3 -> v2.8.3`。
 
 ## 说明当前 Codex 目前推送内容（2026-03-18）
 
