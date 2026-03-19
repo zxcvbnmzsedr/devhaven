@@ -2,6 +2,8 @@
 
 DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 运行时（浏览器 + 本机 Rust HTTP/WS 服务）**：前端负责 UI/交互（React + Vite + UnoCSS），后端负责本地能力（Rust + Tauri Commands / Web API：文件扫描、Git 读取、存储、PTY 终端等）。
 
+当前仓库还新增了一条 **macOS 原生重写主线（`macos/` Swift Package）**：`DevHavenApp` 负责原生窗口与 SwiftUI 内容视图，`DevHavenCore` 负责兼容读取 `~/.devhaven/*` 与项目文档，并为后续 Rust Core / 原生终端子系统继续预留边界。当前 Phase A 已落地项目列表 / 详情 / 备注 / Todo / 设置 / 回收站 / 自动化只读视图的原生骨架，**终端工作区仍未迁入该子工程**。
+
 ## 1) 开发语言 + 框架
 
 ### 前端（UI）
@@ -194,6 +196,17 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - WebSocket 事件分发：浏览器端通过 `src/platform/eventClient.ts` 先声明订阅事件集合，`src-tauri/src/web_server.rs` 仅按已订阅事件名推送；终端/快捷命令已不再广播 legacy `terminal-output` / `terminal-exit` / `quick-command-event`。
 - 事件镜像：`src-tauri/src/web_event_bus.rs` + `src-tauri/src/{terminal.rs,quick_command_manager.rs,worktree_init.rs,interaction_lock.rs,agent_control.rs}`
 - 新增 command：`resolve_home_dir`（`src-tauri/src/lib.rs`），供 Web 模式路径展开使用
+
+### N. macOS 原生客户端（Phase A，Swift Package）
+- 原生子工程入口：`macos/Package.swift`
+- 原生 App 壳：`macos/Sources/DevHavenApp/DevHavenApp.swift`、`AppRootView.swift`
+- 原生主界面已从系统三栏收口为**接近 Tauri 版的信息架构**：左侧 `ProjectSidebarView.swift`、中间 `MainContentView.swift`、右侧 overlay 抽屉 `ProjectDetailRootView.swift`，并统一走 `NativeTheme.swift` 深色主题
+- 原生设置 / 回收站：`macos/Sources/DevHavenApp/SettingsView.swift`、`RecycleBinSheetView.swift`
+- 数据兼容层：`macos/Sources/DevHavenCore/Storage/LegacyCompatStore.swift`（直接兼容 `~/.devhaven/app_state.json`、`projects.json`、`PROJECT_NOTES.md`、`PROJECT_TODO.md`，写回时保留未知字段）
+- 原生状态编排：`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift`（负责搜索、目录/标签/Git/日期筛选、详情抽屉开关、回收站/收藏/设置写回）
+- Todo 语义：`macos/Sources/DevHavenCore/Models/TodoModels.swift`（继续沿用 `- [ ]` / `- [x]` Markdown checklist）
+- 测试：`swift test --package-path macos`；当前测试位于 `macos/Tests/DevHavenCoreTests/LegacyCompatStoreTests.swift`
+- 当前边界：此子工程**暂不覆盖终端工作区 / PTY / pane-tab-split / control plane 原生投影**；侧栏里的“CLI 会话”目前仅做布局占位，`WorkspacePlaceholderView.swift` 保留为后续终端子系统预研文件，但不再挂在主界面主路径
 
 ## 3) 回写（维护）AGENTS.md 的逻辑
 

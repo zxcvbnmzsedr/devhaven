@@ -1199,3 +1199,76 @@
   - `cargo test agent_control_registry_preserves_structured_notification_fields --manifest-path src-tauri/Cargo.toml`（通过）
   - `cargo check --manifest-path src-tauri/Cargo.toml`（通过）
   - `git diff --check`（通过，无输出）
+
+
+## macOS 原生重写 Phase A（2026-03-19）
+
+- [x] 建立 `macos/` Swift Package 原生子工程与基础目录
+- [x] 先写失败测试，锁定 `~/.devhaven` 数据兼容与 Todo 语义
+- [x] 实现 `DevHavenCore` 数据模型与 `LegacyCompatStore`
+- [x] 实现 `NativeAppViewModel` 与基础原生 UI（项目列表 / 详情 / 设置 / 回收站 / 工作区占位）
+- [x] 更新 `AGENTS.md` 记录新的 macOS 原生工程结构与边界
+- [x] 运行 `swift test --package-path macos` 与必要构建验证
+- [x] 回写 Review（包含验证证据、已实现范围与剩余未覆盖项）
+
+## Review（macOS 原生重写 Phase A）
+
+- 直接原因：当前 `swift` worktree 里并不存在先前讨论过的原生骨架，因此这轮不是“续写 Swift 工程”，而是从现有 Tauri 主仓中重新建立 `macos/` 原生子工程，并先交付一个可编译、可读真实 `~/.devhaven` 数据的 Phase A 主壳。
+- 是否存在设计层诱因：存在。此前仓库里桌面 UI、终端工作区、控制面和数据持久化都强耦合在 Tauri/React 主链上，导致“只支持 macOS、追求更高性能”的目标没有原生落点；本轮先把原生主壳与数据兼容层拆出来，作为后续继续接 Rust Core / 原生终端子系统的稳定边界。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复 / 实现方案：
+  1. 新建 `macos/Package.swift`，拆出 `DevHavenCore` 与 `DevHavenApp` 两个 target。
+  2. 在 `DevHavenCore` 中实现 `AppStateFile / Project / TodoItem` 等模型、`LegacyCompatStore` 数据兼容层，以及 `NativeAppViewModel` 状态编排。
+  3. `LegacyCompatStore` 直接兼容 `~/.devhaven/app_state.json`、`projects.json`、`PROJECT_NOTES.md`、`PROJECT_TODO.md`，并在更新 `recycleBin/settings` 时保留未知字段与嵌套未来字段。
+  4. 在 `DevHavenApp` 中落地原生三栏主界面：左侧项目列表与搜索，中间详情（概览 / 备注 / 自动化），右侧 `WorkspacePlaceholderView` 作为后续终端子系统接入位；同时补齐原生设置页与回收站 Sheet，并提供显式关闭入口。
+  5. 新增 `.gitignore` 规则忽略 Swift Package `.build/` 运行产物，并同步更新 `AGENTS.md` 说明新的原生工程结构与当前边界。
+- 当前已实现范围：项目列表搜索、基础详情、Todo 编辑保存、备注保存、README 回退展示、设置读写、回收站恢复、快捷命令/Worktree 只读展示、原生 Workspace 占位。
+- 当前未覆盖范围：终端工作区 / PTY / pane-tab-split / control plane 原生投影、快捷命令真实运行态、Git 分支操作与更深层 Rust Core API 桥接，这些仍属于后续批次。
+- 验证证据：
+  - 红灯阶段：首次 `swift test --package-path macos` 因目标为空、测试引用类型缺失而失败，随后补齐 Swift Package 与实现；中途又因测试里的 key path 写法错误二次失败，已修正。
+  - 绿灯阶段：`swift test --package-path macos`（4/4 通过）；`swift build --package-path macos`（通过）；`git diff --check`（通过）。
+
+## macOS 原生 UI 向 Tauri 主界面收口（2026-03-19）
+
+- [x] 从头重新核对当前 worktree 状态，避免沿用被中断回合的半成品判断
+- [x] 对照 Tauri 主界面截图与现有 React 组件，确认差距来自“系统三栏”而非单个控件样式
+- [x] 先补失败测试，锁定原生详情抽屉与筛选投影行为
+- [x] 将原生主界面改为左侧 Sidebar + 中央 MainContent + 右侧 overlay Detail Drawer
+- [x] 让原生版在视觉层次上尽量贴近 Tauri：深色主题、顶部工具栏、卡片/列表切换、热力图/标签/目录分区
+- [x] 同步更新 `AGENTS.md` 与验证记录
+
+## Review（macOS 原生 UI 向 Tauri 主界面收口）
+
+- 直接原因：用户实际启动后明确反馈“当前原生 UI 和 Tauri 版差距太大，需要复刻 Tauri 版本”。重新核对截图与现有 Swift 实现后，根因不是某个控件细节，而是主布局模型错了——当前原生版仍是系统 `NavigationSplitView` 三栏结构，而 Tauri 版实际是“左侧导航 + 中央项目画布 + 右侧 overlay 详情抽屉”。
+- 是否存在设计层诱因：存在。上一批原生实现虽然已经把数据兼容和基础 UI 跑通，但仍过度沿用了系统默认三栏范式，导致信息架构与用户已习惯的 Tauri 主界面脱节；这类偏差如果不尽快收口，后续继续补功能只会让错误布局越来越难改。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复 / 实现方案：
+  1. 将 `AppRootView.swift` 改为自定义 `HStack + ZStack` 容器，主路径收口成左侧 Sidebar、中央 MainContent、右侧 overlay 详情抽屉。
+  2. 新增 `MainContentView.swift` 和 `NativeTheme.swift`，统一深色视觉基调、顶部工具栏、搜索框、日期 / Git 筛选和卡片/列表模式切换。
+  3. 重写 `ProjectSidebarView.swift`，把目录、开发热力图、CLI 会话占位、标签区按 Tauri 版侧栏层次重新摆放。
+  4. 重写 `ProjectDetailRootView.swift` 为右侧抽屉式滚动详情，保留基础信息、标签、备注、Todo、快捷命令、Markdown 等板块，不再使用原来的 segmented 三栏详情模式。
+  5. 在 `NativeAppViewModel.swift` 中新增主视图所需投影：目录/标签计数、热力图聚合、搜索 + 目录 + 标签 + 日期 + Git 筛选、详情抽屉开关、收藏/回收站写回。
+- 当前已实现范围：接近 Tauri 版的主界面骨架、深色视觉层次、卡片/列表视图、右侧详情抽屉、基础侧栏分区与热力图聚合、原生筛选状态投影。
+- 当前未覆盖范围：像素级样式追平、完整图标/交互细节、真实 CLI 会话列表、终端工作区与 control plane 原生投影；当前“CLI 会话”区域仍是占位投影，不代表终端已迁完。
+- 验证证据：
+  - 新增 `NativeAppViewModelTests`，覆盖“选中项目会打开详情抽屉并加载备注”“目录/标签/Git 筛选会缩小项目列表”两条行为。
+  - `swift test --package-path macos`（6/6 通过）
+  - `swift build --package-path macos`（通过）
+  - `git diff --check`（通过）
+
+## 提交当前 macOS 原生迁移改动（2026-03-19）
+
+- [x] 复核当前分支、工作区状态与需要提交的文件范围
+- [x] 运行提交前新鲜验证（`swift test` / `swift build` / `git diff --check`）
+- [x] 仅暂存原生迁移相关文件并执行 commit
+- [x] 回写 Review（包含 commit hash 与验证证据）
+
+## Review（提交当前 macOS 原生迁移改动）
+
+- 直接原因：用户明确要求“先将目前的代码进行 commit，然后再进行迁移”，因此本轮先把已经落地的 macOS 原生主壳、数据兼容层、Tauri 主界面收口、以及对应的 AGENTS / lessons / todo 记录整理成单个提交，作为后续继续迁移的稳定基线。
+- 是否存在设计层诱因：未发现新的系统性阻塞；但确认了一个需要持续避免的诱因——如果在原生迁移阶段不及时提交当前稳定基线，后续继续做 UI 追平与终端接入时，工作区会混入过多未分段的结构性改动，导致回滚、对照和继续迁移都变得困难。
+- 当前提交方案：只暂存原生迁移相关文件（`.gitignore`、`AGENTS.md`、`tasks/lessons.md`、`tasks/todo.md`、`macos/` 子工程），明确排除 `.agents/`、`.claude/skills/`、`.iflow/`、`skills-lock.json` 这些本地无关未跟踪文件；并额外忽略 `macos/.swiftpm/` 与 `macos/.build/`，避免把 Xcode / SwiftPM 本地状态带进版本库。
+- 提交结果：已执行 `git commit -m "feat: 搭建 macOS 原生主壳并收口主界面结构"`，当前提交以本轮最新 commit 为准，可用 `git log --oneline -1` 核对。
+- 验证证据：
+  - `swift test --package-path macos`（6/6 通过）
+  - `swift build --package-path macos`（通过）
+  - `git diff --check`（通过）
+  - 提交前 `git status --short` 仅暂存原生迁移相关文件；未将 `.agents/`、`.claude/skills/`、`.iflow/`、`skills-lock.json` 纳入 commit。

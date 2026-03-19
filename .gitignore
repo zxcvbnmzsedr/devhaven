@@ -38,3 +38,9 @@ src/terminal/
 
 # Rust target (root level)
 /target/
+
+# Swift Package build artifacts
+.build/
+
+# Swift Package local workspace state
+.swiftpm/
