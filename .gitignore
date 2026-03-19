@@ -32,6 +32,8 @@ dist-ssr
 openspec/changes/add-ghostty-terminal-core/
 public/wasm/
 src/terminal/
+macos/Vendor/GhosttyResources/
+macos/Vendor/GhosttyKit.xcframework/
 
 # Serena local cache
 .serena/
