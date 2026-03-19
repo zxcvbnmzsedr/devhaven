@@ -34,7 +34,7 @@ const SEARCH_OPTIONS = {
   wholeWord: false,
 };
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
-const LOCAL_PATH_TOKEN_REGEX = /(?<![:/A-Za-z0-9._~-])(?:~\/|\/|Users\/)[^\s"'<>`|]+/g;
+const LOCAL_PATH_TOKEN_REGEX = /(^|[^:/A-Za-z0-9._~-])(?:~\/|\/|Users\/)[^\s"'<>`|]+/g;
 const LOCAL_PATH_TRAILING_PUNCTUATION = /[.,;!?]+$/;
 const LOCAL_PATH_MATCH_WINDOW_MAX_CHARS = 2048;
 
@@ -236,12 +236,14 @@ function createLocalPathLinkProvider(
       LOCAL_PATH_TOKEN_REGEX.lastIndex = 0;
       let match: RegExpExecArray | null = null;
       while ((match = LOCAL_PATH_TOKEN_REGEX.exec(mergedText)) !== null) {
-        const parsedPath = parseLocalPathToken(match[0], homeDir);
+        const prefixLen = match[1].length;
+        const pathText = match[0].slice(prefixLen);
+        const parsedPath = parseLocalPathToken(pathText, homeDir);
         if (!parsedPath) {
           continue;
         }
 
-        const [startLine, startColumn] = mapStringIndexToBufferPosition(term, startLineNumber, 0, match.index);
+        const [startLine, startColumn] = mapStringIndexToBufferPosition(term, startLineNumber, 0, match.index + prefixLen);
         const [endLine, endColumn] = mapStringIndexToBufferPosition(
           term,
           startLine,

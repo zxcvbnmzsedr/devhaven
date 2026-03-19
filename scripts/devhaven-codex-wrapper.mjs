@@ -61,7 +61,7 @@ export function buildWrappedCodexSpawn(argv = process.argv.slice(2), env = proce
   });
 
   const hookPath = normalizeOptional(env.DEVHAVEN_CODEX_HOOK_PATH);
-  const nodeBin = normalizeOptional(env.DEVHAVEN_NODE_BIN) ?? process.execPath;
+  const nodeBin = process.execPath;
   if (!hasNotifyOverride && hookPath && nodeBin) {
     args.unshift(
       "-c",

@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo } from "react";
+import TerminalErrorBoundary from "./components/TerminalErrorBoundary";
 import Sidebar from "./components/Sidebar";
 import MainContent from "./components/MainContent";
 import DetailPanel from "./components/DetailPanel";
@@ -496,31 +497,33 @@ function AppLayout() {
             terminal.showTerminalWorkspace ? "opacity-100" : "opacity-0 pointer-events-none"
           }`}
         >
-          <Suspense fallback={<div className="h-full w-full bg-[var(--bg)]" />}>
-            <TerminalWorkspaceWindow
-              openProjects={terminal.terminalOpenProjects}
-              activeProjectId={terminal.terminalActiveProjectId}
-              quickCommandDispatch={terminal.terminalQuickCommandDispatch}
-              onSelectProject={terminal.selectTerminalProject}
-              onCloseProject={terminal.handleCloseTerminalProject}
-              onCreateWorktree={handleTerminalCreateWorktree}
-              onOpenWorktree={handleTerminalOpenWorktree}
-              onDeleteWorktree={handleTerminalDeleteWorktree}
-              onRetryWorktree={handleTerminalRetryWorktree}
-              onRefreshWorktrees={handleTerminalRefreshWorktrees}
-              onRegisterPersistWorkspace={terminal.registerTerminalWorkspacePersistence}
-              onAddProjectScript={addProjectScript}
-              onUpdateProjectScript={updateProjectScript}
-              onRemoveProjectScript={removeProjectScript}
-              onExit={handleTerminalExit}
-              windowLabel={MAIN_WINDOW_LABEL}
-              isVisible={terminal.showTerminalWorkspace}
-              terminalTheme={appState.settings.terminalTheme}
-              sharedScriptsRoot={appState.settings.sharedScriptsRoot}
-              terminalUseWebglRenderer={appState.settings.terminalUseWebglRenderer}
-              gitWorktreesByProjectId={terminal.terminalGitWorktreesByProjectId}
-            />
-          </Suspense>
+          <TerminalErrorBoundary onReset={handleTerminalExit}>
+            <Suspense fallback={<div className="h-full w-full bg-[#171717]" />}>
+              <TerminalWorkspaceWindow
+                openProjects={terminal.terminalOpenProjects}
+                activeProjectId={terminal.terminalActiveProjectId}
+                quickCommandDispatch={terminal.terminalQuickCommandDispatch}
+                onSelectProject={terminal.selectTerminalProject}
+                onCloseProject={terminal.handleCloseTerminalProject}
+                onCreateWorktree={handleTerminalCreateWorktree}
+                onOpenWorktree={handleTerminalOpenWorktree}
+                onDeleteWorktree={handleTerminalDeleteWorktree}
+                onRetryWorktree={handleTerminalRetryWorktree}
+                onRefreshWorktrees={handleTerminalRefreshWorktrees}
+                onRegisterPersistWorkspace={terminal.registerTerminalWorkspacePersistence}
+                onAddProjectScript={addProjectScript}
+                onUpdateProjectScript={updateProjectScript}
+                onRemoveProjectScript={removeProjectScript}
+                onExit={handleTerminalExit}
+                windowLabel={MAIN_WINDOW_LABEL}
+                isVisible={terminal.showTerminalWorkspace}
+                terminalTheme={appState.settings.terminalTheme}
+                sharedScriptsRoot={appState.settings.sharedScriptsRoot}
+                terminalUseWebglRenderer={appState.settings.terminalUseWebglRenderer}
+                gitWorktreesByProjectId={terminal.terminalGitWorktreesByProjectId}
+              />
+            </Suspense>
+          </TerminalErrorBoundary>
         </div>
       ) : null}
     </div>

@@ -66,7 +66,9 @@ function quoteForJsonCommand(value) {
 }
 
 export function buildClaudeHooksSettings(env = process.env) {
-  const nodeBin = normalizeOptional(env.DEVHAVEN_NODE_BIN) ?? process.execPath;
+  // Always use the current node (which passed the ES2020 check in the shell wrapper)
+  // rather than DEVHAVEN_NODE_BIN which may point to an incompatible old version.
+  const nodeBin = process.execPath;
   const hookPath = normalizeOptional(env.DEVHAVEN_CLAUDE_HOOK_PATH);
   if (!hookPath) {
     return null;

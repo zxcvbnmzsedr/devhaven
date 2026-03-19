@@ -4,6 +4,11 @@ set -eu
 NODE_BIN="${DEVHAVEN_NODE_BIN:-node}"
 WRAPPER_PATH="${DEVHAVEN_CLAUDE_WRAPPER_PATH:-}"
 
+# Ensure node supports ES2020 syntax (nullish coalescing); fall back to shell node if too old.
+if ! "$NODE_BIN" -e "null ?? 0" 2>/dev/null; then
+  NODE_BIN="node"
+fi
+
 if [ -z "$WRAPPER_PATH" ]; then
   echo "DEVHAVEN_CLAUDE_WRAPPER_PATH 未设置" >&2
   exit 1
