@@ -53,7 +53,7 @@ struct MainContentView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            toolbarIcon("waveform.path.ecg", action: { })
+            toolbarIcon("waveform.path.ecg", action: { viewModel.revealDashboard() })
             toolbarIcon("square.split.2x1", action: { viewModel.closeDetailPanel() })
             toolbarIcon("gearshape", action: { viewModel.revealSettings() })
 
@@ -227,6 +227,7 @@ struct MainContentView: View {
                 .clipShape(.rect(cornerRadius: 10))
         }
         .buttonStyle(.plain)
+        .focusable(false)
     }
 
     private func cardActionIcon(_ systemName: String, action: @escaping () -> Void) -> some View {

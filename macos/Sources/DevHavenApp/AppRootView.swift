@@ -31,6 +31,10 @@ struct AppRootView: View {
         .background(NativeTheme.window.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.18), value: viewModel.isDetailPanelPresented)
+        .sheet(isPresented: $viewModel.isDashboardPresented) {
+            GitDashboardView(viewModel: viewModel)
+                .preferredColorScheme(.dark)
+        }
         .sheet(isPresented: $viewModel.isSettingsPresented) {
             SettingsView(
                 settings: viewModel.snapshot.appState.settings,

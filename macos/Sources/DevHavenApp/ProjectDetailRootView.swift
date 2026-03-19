@@ -33,6 +33,22 @@ struct ProjectDetailRootView: View {
                         .buttonStyle(.plain)
                     }
 
+                    if viewModel.isProjectDocumentLoading {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(NativeTheme.accent)
+                            Text("正在加载项目文档…")
+                                .font(.caption)
+                                .foregroundStyle(NativeTheme.textSecondary)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.04))
+                        .clipShape(.rect(cornerRadius: 10))
+                    }
+
                     section("基础信息") {
                         detailRow("最近修改", formatSwiftDate(project.mtime))
                         detailRow("Git 提交", project.gitCommits > 0 ? "\(project.gitCommits) 次" : "非 Git 项目")

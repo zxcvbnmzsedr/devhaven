@@ -5,6 +5,12 @@ import Observation
 @Observable
 public final class NativeAppViewModel {
     @ObservationIgnored private let store: LegacyCompatStore
+    @ObservationIgnored private var projectDocumentCache = [String: ProjectDocumentSnapshot]()
+    @ObservationIgnored private let projectDocumentLoader: @Sendable (String) throws -> ProjectDocumentSnapshot
+    @ObservationIgnored private let gitDailyCollector: @Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult]
+    @ObservationIgnored private let gitDailyCollectorAsync: @Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult]
+    @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var projectDocumentLoadRevision = 0
 
     public struct DirectoryRow: Identifiable, Equatable {
         public let id: String
@@ -38,20 +44,6 @@ public final class NativeAppViewModel {
         }
     }
 
-    public struct HeatmapCell: Identifiable, Equatable {
-        public let id: String
-        public let dateKey: String
-        public let intensity: Int
-        public let count: Int
-
-        public init(dateKey: String, intensity: Int, count: Int) {
-            self.id = dateKey
-            self.dateKey = dateKey
-            self.intensity = intensity
-            self.count = count
-        }
-    }
-
     public struct CLISessionItem: Identifiable, Equatable {
         public let id: String
         public let title: String
@@ -64,10 +56,15 @@ public final class NativeAppViewModel {
     public var searchQuery: String
     public var selectedDirectory: String?
     public var selectedTag: String?
+    public var selectedHeatmapDateKey: String?
     public var selectedDateFilter: NativeDateFilter
     public var selectedGitFilter: NativeGitFilter
     public var isLoading: Bool
+    public var isRefreshingGitStatistics: Bool
+    public var gitStatisticsProgressText: String?
+    public var isProjectDocumentLoading: Bool
     public var errorMessage: String?
+    public var isDashboardPresented: Bool
     public var isSettingsPresented: Bool
     public var isRecycleBinPresented: Bool
     public var isDetailPanelPresented: Bool
@@ -77,17 +74,30 @@ public final class NativeAppViewModel {
     public var readmeFallback: MarkdownDocument?
     public var hasLoadedInitialData: Bool
 
-    public init(store: LegacyCompatStore = LegacyCompatStore()) {
+    public init(
+        store: LegacyCompatStore = LegacyCompatStore(),
+        projectDocumentLoader: (@Sendable (String) throws -> ProjectDocumentSnapshot)? = nil,
+        gitDailyCollector: (@Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult])? = nil,
+        gitDailyCollectorAsync: (@Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult])? = nil
+    ) {
         self.store = store
+        self.projectDocumentLoader = projectDocumentLoader ?? loadProjectDocumentFromDisk
+        self.gitDailyCollector = gitDailyCollector ?? collectGitDaily
+        self.gitDailyCollectorAsync = gitDailyCollectorAsync ?? collectGitDailyAsync
         self.snapshot = NativeAppSnapshot()
         self.selectedProjectPath = nil
         self.searchQuery = ""
         self.selectedDirectory = nil
         self.selectedTag = nil
+        self.selectedHeatmapDateKey = nil
         self.selectedDateFilter = .all
         self.selectedGitFilter = .all
         self.isLoading = false
+        self.isRefreshingGitStatistics = false
+        self.gitStatisticsProgressText = nil
+        self.isProjectDocumentLoading = false
         self.errorMessage = nil
+        self.isDashboardPresented = false
         self.isSettingsPresented = false
         self.isRecycleBinPresented = false
         self.isDetailPanelPresented = false
@@ -156,34 +166,35 @@ public final class NativeAppViewModel {
         return rows
     }
 
-    public var heatmapCells: [HeatmapCell] {
-        let counts = visibleProjects.reduce(into: [String: Int]()) { partialResult, project in
-            for (dateKey, count) in parseGitDaily(project.gitDaily) {
-                partialResult[dateKey, default: 0] += count
-            }
+    public var sidebarHeatmapDays: [GitHeatmapDay] {
+        buildGitHeatmapDays(projects: visibleProjects, days: GitDashboardRange.threeMonths.days)
+    }
+
+    public var isHeatmapFilterActive: Bool {
+        selectedHeatmapDateKey != nil
+    }
+
+    public var heatmapActiveProjects: [GitActiveProject] {
+        guard let selectedHeatmapDateKey else {
+            return []
         }
-        let orderedDates = counts.keys.sorted().suffix(70)
-        let maxCount = counts.values.max() ?? 0
-        return orderedDates.map { dateKey in
-            let count = counts[dateKey] ?? 0
-            let intensity: Int
-            switch count {
-            case 0:
-                intensity = 0
-            default:
-                let ratio = maxCount == 0 ? 0 : Double(count) / Double(maxCount)
-                if ratio < 0.25 {
-                    intensity = 1
-                } else if ratio < 0.5 {
-                    intensity = 2
-                } else if ratio < 0.75 {
-                    intensity = 3
-                } else {
-                    intensity = 4
-                }
-            }
-            return HeatmapCell(dateKey: dateKey, intensity: intensity, count: count)
+        return buildGitActiveProjects(on: selectedHeatmapDateKey, projects: visibleProjects)
+    }
+
+    public var selectedHeatmapSummary: String? {
+        guard let selectedHeatmapDateKey else {
+            return nil
         }
+        let totalCommits = heatmapActiveProjects.reduce(into: 0) { $0 += $1.commitCount }
+        return "\(selectedHeatmapDateKey) · \(heatmapActiveProjects.count) 个活跃项目 · \(totalCommits) 次提交"
+    }
+
+    public var gitStatisticsLastUpdated: Date? {
+        visibleProjects
+            .map(\.checked)
+            .filter { $0 != .zero }
+            .max()
+            .flatMap(swiftDateToDate)
     }
 
     public var cliSessionItems: [CLISessionItem] {
@@ -215,9 +226,10 @@ public final class NativeAppViewModel {
         }
 
         do {
+            projectDocumentCache.removeAll()
             snapshot = try store.loadSnapshot()
             alignSelectionAfterReload()
-            try refreshSelectedProjectDocument()
+            scheduleSelectedProjectDocumentRefresh()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -227,14 +239,82 @@ public final class NativeAppViewModel {
         load()
     }
 
+    @discardableResult
+    public func refreshGitStatistics() throws -> GitStatisticsRefreshSummary {
+        let targetProjects = visibleProjects.filter { $0.gitCommits > 0 }
+        guard !targetProjects.isEmpty else {
+            return GitStatisticsRefreshSummary(requestedRepositories: 0, updatedRepositories: 0, failedRepositories: 0)
+        }
+
+        isRefreshingGitStatistics = true
+        defer { isRefreshingGitStatistics = false }
+
+        let results = gitDailyCollector(targetProjects.map(\.path), snapshot.appState.settings.gitIdentities)
+        try store.updateProjectsGitDaily(results)
+        load()
+
+        return makeGitStatisticsRefreshSummary(from: results)
+    }
+
+    public func refreshGitStatisticsAsync() async throws -> GitStatisticsRefreshSummary {
+        let targetProjects = visibleProjects.filter { $0.gitCommits > 0 }
+        guard !targetProjects.isEmpty else {
+            return GitStatisticsRefreshSummary(requestedRepositories: 0, updatedRepositories: 0, failedRepositories: 0)
+        }
+
+        isRefreshingGitStatistics = true
+        gitStatisticsProgressText = "正在扫描 \(targetProjects.count) 个 Git 仓库..."
+        defer {
+            isRefreshingGitStatistics = false
+            gitStatisticsProgressText = nil
+        }
+
+        let paths = targetProjects.map(\.path)
+        let identities = snapshot.appState.settings.gitIdentities
+        let collector = gitDailyCollectorAsync
+        let results = await collector(paths, identities) { completed, total in
+            await MainActor.run {
+                if completed < total {
+                    self.gitStatisticsProgressText = "正在扫描 \(completed)/\(total) 个 Git 仓库..."
+                } else {
+                    self.gitStatisticsProgressText = "正在写入统计结果..."
+                }
+            }
+        }
+
+        gitStatisticsProgressText = "正在写入统计结果..."
+        try store.updateProjectsGitDaily(results)
+        gitStatisticsProgressText = "正在刷新项目列表..."
+        load()
+
+        return makeGitStatisticsRefreshSummary(from: results)
+    }
+
+    private func makeGitStatisticsRefreshSummary(from results: [GitDailyRefreshResult]) -> GitStatisticsRefreshSummary {
+        let failedRepositories = results.reduce(into: 0) { partialResult, result in
+            if result.error != nil {
+                partialResult += 1
+            }
+        }
+        let updatedRepositories = results.reduce(into: 0) { partialResult, result in
+            if result.error == nil {
+                partialResult += 1
+            }
+        }
+        return GitStatisticsRefreshSummary(
+            requestedRepositories: results.count,
+            updatedRepositories: updatedRepositories,
+            failedRepositories: failedRepositories
+        )
+    }
+
     public func selectProject(_ path: String?) {
+        if path == selectedProjectPath, isDetailPanelPresented == (path != nil) {
+            return
+        }
         selectedProjectPath = path
         isDetailPanelPresented = path != nil
-        do {
-            try refreshSelectedProjectDocument()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        scheduleSelectedProjectDocumentRefresh()
     }
 
     public func closeDetailPanel() {
@@ -243,22 +323,32 @@ public final class NativeAppViewModel {
 
     public func selectDirectory(_ path: String?) {
         selectedDirectory = path
-        alignSelectionAfterReload()
+        reconcileSelectionAfterFilterChange()
     }
 
     public func selectTag(_ name: String?) {
         selectedTag = name
-        alignSelectionAfterReload()
+        reconcileSelectionAfterFilterChange()
+    }
+
+    public func selectHeatmapDate(_ dateKey: String?) {
+        selectedHeatmapDateKey = dateKey
+        reconcileSelectionAfterFilterChange()
+    }
+
+    public func clearHeatmapDateFilter() {
+        selectedHeatmapDateKey = nil
+        reconcileSelectionAfterFilterChange()
     }
 
     public func updateDateFilter(_ filter: NativeDateFilter) {
         selectedDateFilter = filter
-        alignSelectionAfterReload()
+        reconcileSelectionAfterFilterChange()
     }
 
     public func updateGitFilter(_ filter: NativeGitFilter) {
         selectedGitFilter = filter
-        alignSelectionAfterReload()
+        reconcileSelectionAfterFilterChange()
     }
 
     public func updateProjectListViewMode(_ mode: ProjectListViewMode) {
@@ -295,7 +385,12 @@ public final class NativeAppViewModel {
         do {
             let value = notesDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notesDraft
             try store.writeNotes(value, for: project.path)
-            try refreshSelectedProjectDocument()
+            let document = ProjectDocumentSnapshot(
+                notes: value,
+                todoItems: todoItems,
+                readmeFallback: readmeFallback
+            )
+            projectDocumentCache[project.path] = document
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -305,7 +400,12 @@ public final class NativeAppViewModel {
         guard let project = selectedProject else { return }
         do {
             try store.writeTodoItems(todoItems, for: project.path)
-            try refreshSelectedProjectDocument()
+            let document = ProjectDocumentSnapshot(
+                notes: notesDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notesDraft,
+                todoItems: todoItems,
+                readmeFallback: readmeFallback
+            )
+            projectDocumentCache[project.path] = document
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -315,27 +415,27 @@ public final class NativeAppViewModel {
         do {
             let nextPaths = Array(Set(snapshot.appState.recycleBin + [path])).sorted()
             try store.updateRecycleBin(nextPaths)
-            load()
+            snapshot.appState.recycleBin = nextPaths
             if selectedProjectPath == path {
                 isDetailPanelPresented = false
             }
+            reconcileSelectionAfterFilterChange()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     public func toggleProjectFavorite(_ path: String) {
-        var nextAppState = snapshot.appState
-        var favorites = Set(nextAppState.favoriteProjectPaths)
+        var favorites = Set(snapshot.appState.favoriteProjectPaths)
         if favorites.contains(path) {
             favorites.remove(path)
         } else {
             favorites.insert(path)
         }
-        nextAppState.favoriteProjectPaths = favorites.sorted()
+        let nextFavoritePaths = favorites.sorted()
         do {
-            try store.updateFavoriteProjectPaths(nextAppState.favoriteProjectPaths)
-            load()
+            try store.updateFavoriteProjectPaths(nextFavoritePaths)
+            snapshot.appState.favoriteProjectPaths = nextFavoritePaths
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -345,7 +445,8 @@ public final class NativeAppViewModel {
         do {
             let nextPaths = snapshot.appState.recycleBin.filter { $0 != path }
             try store.updateRecycleBin(nextPaths)
-            load()
+            snapshot.appState.recycleBin = nextPaths
+            reconcileSelectionAfterFilterChange()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -354,7 +455,7 @@ public final class NativeAppViewModel {
     public func saveSettings(_ settings: AppSettings) {
         do {
             try store.updateSettings(settings)
-            load()
+            snapshot.appState.settings = settings
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -364,8 +465,16 @@ public final class NativeAppViewModel {
         isSettingsPresented = true
     }
 
+    public func revealDashboard() {
+        isDashboardPresented = true
+    }
+
     public func revealRecycleBin() {
         isRecycleBinPresented = true
+    }
+
+    public func hideDashboard() {
+        isDashboardPresented = false
     }
 
     public func hideSettings() {
@@ -391,16 +500,83 @@ public final class NativeAppViewModel {
         selectedProjectPath = filteredProjects.first?.path ?? visibleProjects.first?.path
     }
 
-    private func refreshSelectedProjectDocument() throws {
+    private func reconcileSelectionAfterFilterChange() {
+        let previousSelectedPath = selectedProjectPath
+        alignSelectionAfterReload()
+        guard selectedProjectPath != previousSelectedPath else {
+            return
+        }
+        scheduleSelectedProjectDocumentRefresh()
+    }
+
+    private func scheduleSelectedProjectDocumentRefresh() {
+        projectDocumentLoadTask?.cancel()
+        projectDocumentLoadTask = nil
+        projectDocumentLoadRevision &+= 1
+        let revision = projectDocumentLoadRevision
+
         guard let project = selectedProject else {
-            notesDraft = ""
-            todoDraft = ""
-            todoItems = []
-            readmeFallback = nil
+            isProjectDocumentLoading = false
+            clearDisplayedProjectDocument(preserveTodoDraft: false)
             return
         }
 
-        let document = try store.loadProjectDocument(at: project.path)
+        if let cached = projectDocumentCache[project.path] {
+            isProjectDocumentLoading = false
+            applyProjectDocument(cached)
+            return
+        }
+
+        isProjectDocumentLoading = true
+        clearDisplayedProjectDocument(preserveTodoDraft: true)
+
+        let projectPath = project.path
+        let loader = projectDocumentLoader
+        let backgroundTask = Task.detached(priority: .userInitiated) {
+            do {
+                return ProjectDocumentLoadOutcome.success(try loader(projectPath))
+            } catch {
+                return .failure(error.localizedDescription)
+            }
+        }
+
+        projectDocumentLoadTask = Task { @MainActor [weak self] in
+            let outcome = await withTaskCancellationHandler(operation: {
+                await backgroundTask.value
+            }, onCancel: {
+                backgroundTask.cancel()
+            })
+            guard !Task.isCancelled, let self else {
+                return
+            }
+            guard revision == self.projectDocumentLoadRevision else {
+                return
+            }
+
+            self.projectDocumentLoadTask = nil
+            self.isProjectDocumentLoading = false
+
+            switch outcome {
+            case let .success(document):
+                self.projectDocumentCache[projectPath] = document
+                self.applyProjectDocument(document)
+            case let .failure(message):
+                self.errorMessage = message
+                self.clearDisplayedProjectDocument(preserveTodoDraft: true)
+            }
+        }
+    }
+
+    private func clearDisplayedProjectDocument(preserveTodoDraft: Bool) {
+        notesDraft = ""
+        if !preserveTodoDraft {
+            todoDraft = ""
+        }
+        todoItems = []
+        readmeFallback = nil
+    }
+
+    private func applyProjectDocument(_ document: ProjectDocumentSnapshot) {
         notesDraft = document.notes ?? ""
         todoItems = document.todoItems
         readmeFallback = document.readmeFallback
@@ -410,7 +586,11 @@ public final class NativeAppViewModel {
         if let selectedDirectory, !project.path.hasPrefix(selectedDirectory) {
             return false
         }
-        if let selectedTag, !project.tags.contains(selectedTag) {
+        if let selectedHeatmapDateKey {
+            if gitCommitCount(on: selectedHeatmapDateKey, project: project) <= 0 {
+                return false
+            }
+        } else if let selectedTag, !project.tags.contains(selectedTag) {
             return false
         }
         switch selectedGitFilter {
@@ -448,21 +628,31 @@ public final class NativeAppViewModel {
         let interval: TimeInterval = selectedDateFilter == .lastDay ? 24 * 60 * 60 : 7 * 24 * 60 * 60
         return now.timeIntervalSince(date) <= interval
     }
+
+    public func gitDashboardSummary(for range: GitDashboardRange) -> GitDashboardSummary {
+        buildGitDashboardSummary(projects: visibleProjects, tagCount: snapshot.appState.tags.count, range: range)
+    }
+
+    public func gitDashboardDailyActivities(for range: GitDashboardRange) -> [GitDashboardDailyActivity] {
+        buildGitDashboardDailyActivities(projects: visibleProjects, range: range)
+    }
+
+    public func gitDashboardProjectActivities(for range: GitDashboardRange) -> [GitDashboardProjectActivity] {
+        buildGitDashboardProjectActivities(projects: visibleProjects, range: range)
+    }
+
+    public func gitDashboardHeatmapDays(for range: GitDashboardRange) -> [GitHeatmapDay] {
+        buildGitHeatmapDays(projects: visibleProjects, days: range.days)
+    }
 }
 
-private func parseGitDaily(_ gitDaily: String?) -> [String: Int] {
-    guard let gitDaily, !gitDaily.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-        return [:]
-    }
-    return gitDaily
-        .split(separator: ",")
-        .reduce(into: [String: Int]()) { result, pair in
-            let parts = pair.split(separator: ":")
-            guard parts.count == 2, let count = Int(parts[1]) else {
-                return
-            }
-            result[String(parts[0])] = count
-        }
+private enum ProjectDocumentLoadOutcome: Sendable {
+    case success(ProjectDocumentSnapshot)
+    case failure(String)
+}
+
+private func loadProjectDocumentFromDisk(_ projectPath: String) throws -> ProjectDocumentSnapshot {
+    try LegacyCompatStore().loadProjectDocument(at: projectPath)
 }
 
 private func hexColor(for color: ColorData) -> String {

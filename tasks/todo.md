@@ -1,5 +1,164 @@
 # 本次任务清单
 
+## 改善更新统计耗时感知与执行效率（2026-03-19）
+
+- [x] 检查更新统计长时间“更新中”的真实执行链，确认是顺序扫描慢还是缺少进度提示
+- [x] 为更新统计补充阶段/进度反馈，并对 Git 仓库扫描做必要提速与防卡保护
+- [x] 同步 tasks / lessons / AGENTS（如涉及可见行为）并完成验证闭环
+
+## Review（改善更新统计耗时感知与执行效率）
+
+- 直接原因：你看到“等了好久还是在更新”，根因其实有两层。第一层是**它确实在干活**：会遍历所有可见 Git 项目，对每个仓库执行一次 `git log --date=short` 来重建 `git_daily`；在你当前这份数据里，截图已经显示 Git 项目数是 109，所以这不是瞬时任务。第二层是此前 UI 只会显示一个笼统的“更新中...”，既没有阶段提示，也没有进度；再加上底层最开始是完全串行扫描，所以用户体感就像“按钮一直在转，但不知道它在干嘛”。
+- 是否存在设计层诱因：存在。之前我们虽然把“更新统计”从主线程卡死里拆出来了，但还停留在“后台执行就算完事”的阶段，没有把**长任务可观测性**和**多仓库扫描吞吐**同时收口。因此功能 technically 在跑，但用户侧仍然缺少“当前扫到哪儿了、是不是卡住了”的反馈。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. `GitDashboardView.swift` 头部现在会在刷新期间显示明确阶段文案，而不再只有“更新中...”按钮：例如 `正在扫描 X/Y 个 Git 仓库...`、`正在写入统计结果...`、`正在刷新项目列表...`。
+  2. `NativeAppViewModel.swift` 新增 `gitStatisticsProgressText`，并在 `refreshGitStatisticsAsync()` 中驱动这条状态文案；刷新完成或失败后会自动清空。
+  3. `GitDailyCollector.swift` 新增异步 `collectGitDailyAsync(...)`：默认最多 4 个仓库并发扫描，不再完全串行。
+  4. 同时给单仓库 `git log` 加了超时保护（当前 8 秒），避免个别异常仓库把整轮统计无限拖住。
+- 长期改进建议：下一步如果你仍觉得总耗时偏长，我建议继续做两件事：一是把 `store.updateProjectsGitDaily(...) + load()` 这段写盘/重载也进一步拆出细粒度进度；二是把 Git 统计改成“增量刷新 + 失败仓库列表 + 可取消任务”，而不是每次都对所有仓库做全量重扫。
+- 验证证据：
+  - 根因定位：当前代码可直接确认 `collectGitDaily(...)` 会对所有路径逐仓运行 `git log`，而你的截图也明确显示 Git 项目数为 109；这解释了为什么任务本身会持续一段时间。
+  - 红/绿灯约束：`NativeAppViewModelTests/testRefreshGitStatisticsAsyncMarksRefreshingImmediatelyAndAppliesResults` 已扩展为验证刷新启动后会立刻进入 `isRefreshingGitStatistics == true` 且出现 `gitStatisticsProgressText`，并在完成后正确清空状态与写回结果；定向测试通过。
+  - 全量验证：`swift test --package-path macos`（17/17 通过）、`swift build --package-path macos`（通过）、`git diff --check`（通过）。
+
+## 修复项目仪表板布局错误（2026-03-19）
+
+- [x] 结合截图检查 Dashboard 布局与热力图标签实现，确认直接原因
+- [x] 修复窄宽度下的仪表板裁切、统计卡片空白与月份标签截断问题
+- [x] 同步 tasks / lessons 并完成验证闭环
+
+## Review（修复项目仪表板布局错误）
+
+- 直接原因：当前原生 `GitDashboardView.swift` 仍按“宽屏仪表盘”硬编码布局，包含 `minWidth: 980`、固定 3 列统计卡片、底部双栏并排；当 sheet 实际宽度远小于 980 时，左侧内容会直接被裁掉，所以看起来就像“左边卡片空白”“范围按钮缺一截”“热力图被顶歪了”。另外，`GitHeatmapGridView.swift` 里月份标签每列只给了 `cellSize` 宽度，像 `10月/11月/12月` 会被压成 `1...`。
+- 是否存在设计层诱因：存在。此前实现更偏“把宽屏视觉大体搭出来”，但没有把 sheet 实际宽度和热力图标签渲染当成一等约束，所以固定宽度/固定列数/固定并排布局把 SwiftUI 的默认裁切直接暴露给了用户。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 在 `GitStatisticsModels.swift` 新增 `GitDashboardLayoutPlan` 与 `buildGitDashboardLayoutPlan(width:)`，把仪表板布局从“写死 3 列”改为按可用宽度切换：窄宽度走 2 列统计卡片 + 底部纵向堆叠，宽宽度才保持 3 列 + 双栏并排。
+  2. `GitDashboardView.swift` 改为基于 `GeometryReader` 读取实际宽度，不再写死 `minWidth: 980`；时间范围按钮也改成横向可滚动，避免窄宽度下直接被裁掉。
+  3. `GitHeatmapGridView.swift` 把月份标签移到和热力图本体同一条横向滚动内容里，并把每周标签槽位改成“固定占位 + 文本可向右自然展开”，不再把 `10月/11月/12月` 硬塞进 18pt 宽度里。
+- 长期改进建议：如果后面继续打磨 Dashboard，建议把“统计卡片、热力图、底部榜单”的断点策略统一沉成可复用 dashboard primitive，而不是各视图各自写 `HStack/LazyVGrid`；这样后续再补筛选、悬浮提示、卡片交互时，不会重复踩固定宽度与窄窗口裁切的问题。
+- 验证证据：
+  - 根因定位：从代码可直接确认 `GitDashboardView.swift` 使用了 `minWidth: 980`、固定 3 列 `LazyVGrid`、底部固定 `HStack`，而 `GitHeatmapGridView.swift` 的月份标签槽位宽度只有 `style.cellSize`，与截图里的“左侧裁切 + 月份标签变成 1...” 完全一致。
+  - 红/绿灯约束：新增 `NativeAppViewModelTests/testGitDashboardLayoutPlanAdaptsToWindowWidth`，锁住 560 / 920 / 1280 宽度下的布局切换规则，定向测试通过。
+  - 全量验证：`swift test --package-path macos`（16/16 通过）、`swift build --package-path macos`（通过）、`git diff --check`（通过）。
+
+## 仪表板默认尺寸、异步刷新与手动缩放（2026-03-19）
+
+- [x] 检查 Dashboard 默认尺寸、刷新统计主线程阻塞与窗口缩放约束
+- [x] 将“更新统计”改成后台异步执行，并保留刷新状态与结果提示
+- [x] 放大 Dashboard 默认宽度，并让该窗口支持手动拖拽放大缩小
+- [x] 同步 AGENTS / tasks / lessons 并完成验证闭环
+
+## Review（仪表板默认尺寸、异步刷新与手动缩放）
+
+- 直接原因：
+  1. Dashboard 当前 attached sheet 没有单独配置窗口尺寸，默认会按内容拟合成较窄宽度，所以用户直观感受就是“宽度还是不够”。
+  2. “更新统计”按钮直接同步调用 `NativeAppViewModel.refreshGitStatistics()`，而它内部会在 `@MainActor` 上串行跑完整个 `git log` 聚合，所以仓库一多，整个项目就会卡死、按钮一直转圈。
+  3. 当前 Dashboard 也没有显式收口 sheet/window 的最小尺寸与可缩放能力，所以就算布局已经开始响应式，用户仍然缺少“手动拖大/拖小”的控制。
+- 是否存在设计层诱因：存在。此前原生 Dashboard 主要先追平静态视觉，没有把“统计刷新是重任务”“sheet 在 macOS 上本质也是一个 window，需要单独配置尺寸/缩放策略”当作一等约束，因此同步重任务和默认窗口行为直接暴露到了用户层。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. `NativeAppViewModel.swift` 新增 `gitDailyCollector` 注入点，并补 `refreshGitStatisticsAsync()`：重的 `collectGitDaily` 聚合改为 `Task.detached(priority: .userInitiated)` 后台执行，写盘与 `load()` 仍回到主线程做最终状态同步。
+  2. `GitDashboardView.swift` 的“更新统计”改为通过 `Task` 调用异步刷新，不再同步卡住整个 SwiftUI 主线程；刷新期间仍复用 `isRefreshingGitStatistics` 控制按钮文案与禁用态。
+  3. Dashboard 本体加大默认内容尺寸，并通过 `DashboardWindowConfigurator` 显式把该窗口设为可缩放：默认尺寸调到更宽、更高，同时保留合理 `minSize`，支持用户手动拖拽放大缩小。
+- 长期改进建议：后续如果继续做 Git 统计体验，建议把刷新状态从“按钮转圈 + 顶部文案”进一步收口成可取消任务 / 仓库级进度；同时把 Settings / RecycleBin 这些原生窗口也统一接到同一套 window sizing primitive，避免每个面板各自踩一遍 macOS 默认窗口行为。
+- 验证证据：
+  - 红灯阶段：从代码可确认 `GitDashboardView.refreshStatistics()` 直接同步调用 `viewModel.refreshGitStatistics()`，而 `NativeAppViewModel.refreshGitStatistics()` 内部在 `@MainActor` 上直接执行 `collectGitDaily(...)`，这和“点击更新统计整个项目卡死一直在转圈”的现象完全一致。
+  - 红/绿灯约束：新增 `NativeAppViewModelTests/testRefreshGitStatisticsAsyncMarksRefreshingImmediatelyAndAppliesResults`，锁住异步刷新会立即进入 `isRefreshingGitStatistics == true`，并在完成后把统计结果写回 snapshot；定向测试通过。
+  - 全量验证：`swift test --package-path macos`（17/17 通过）、`swift build --package-path macos`（通过）、`git diff --check`（通过）。
+
+## 修复启动时统计图标误显选中态（2026-03-19）
+
+- [x] 检查顶部工具栏图标的选中态与焦点来源，确认直接原因
+- [x] 修复启动时统计图标误显蓝色高亮的问题，保持与 Tauri 版一致
+- [x] 同步 tasks / lessons 并完成验证闭环
+
+## Review（修复启动时统计图标误显选中态）
+
+- 直接原因：这个蓝色效果不是业务上的“统计页已选中”，而是 macOS 在窗口启动后把顶部工具栏里的**第一个可聚焦 Button** 当成了当前键盘焦点，所以 `waveform.path.ecg` 图标看起来像选中态。代码里它本来没有任何 `isDashboardPresented` 或 active 条件样式。
+- 是否存在设计层诱因：存在轻微的原生控件默认行为外露问题。当前工具栏图标为了快速复刻 Tauri 版，直接用了 `Button + .buttonStyle(.plain)`，但没有显式收口“这些图标是否应该参与初始焦点链”，于是 macOS 原生焦点高亮泄漏成了产品视觉。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：在 `MainContentView.swift` 的 `toolbarIcon(...)` 上补 `.focusable(false)`，让这些顶部纯图标按钮不再抢启动时的初始键盘焦点，从而去掉那种“像被选中”的蓝色高亮，视觉上更接近 Tauri 版。
+- 长期改进建议：后续如果工具栏继续扩展，最好把“图标按钮 / 筛选 chip / 输入框”的焦点策略收口成单独的 toolbar primitive，明确哪些控件应该参与键盘焦点、哪些只作为点击入口，避免再出现系统默认 focus ring 混进产品态。
+- 验证证据：
+  - 根因定位：检查 `MainContentView.swift` 可确认统计按钮只是 `toolbarIcon("waveform.path.ecg", action: { viewModel.revealDashboard() })`，没有任何选中态判断，因此蓝色高亮只能来自系统焦点而非业务状态。
+  - 构建验证：`swift build --package-path macos`（通过）。
+  - 全量验证：`swift test --package-path macos`（15/15 通过）、`git diff --check`（通过）。
+
+## 原生项目详情异步文档加载（2026-03-19）
+
+- [x] 通过失败测试锁定项目详情首次点击仍阻塞主线程的缺口
+- [x] 将项目详情文档读取改为后台异步加载，并补齐缓存命中 / 防串结果 / loading 状态
+- [x] 视情况补充详情抽屉 loading 提示，避免旧项目内容串屏
+- [x] 同步 AGENTS / lessons / memory 并完成验证闭环
+
+## Review（原生项目详情异步文档加载）
+
+- 直接原因：第一轮性能修复已经消掉“筛选重复读文档”“收藏/设置保存后整份 reload”两条高频卡顿链，但**首次点开未缓存项目时**，`NativeAppViewModel` 仍会在 `@MainActor` 上同步读取 `PROJECT_NOTES.md / PROJECT_TODO.md / README.md`，导致点击项目时仍有一次可感知的主线程停顿。
+- 是否存在设计层诱因：存在。原生详情抽屉此前把“切换选中态”和“读取磁盘文档”绑成同一个同步步骤，因此 UI 无法先响应、再补数据；快速切换多个项目时，也缺少“只接受最新请求结果”的保护。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. `NativeAppViewModel.swift` 新增 `isProjectDocumentLoading`、文档加载 revision 和后台任务编排；点项目时先立即更新 `selectedProjectPath` / 打开详情抽屉，再按需异步读取项目文档。
+  2. 继续保留 `projectDocumentCache`：命中缓存时直接同步展示，未命中时先清空旧项目的备注 / Todo / README 回显，再在后台任务里读取磁盘文档，避免旧内容串屏。
+  3. 后台任务完成后只在 **revision 仍是最新** 时才回写 UI；这样 Alpha -> Beta -> Gamma 快速切换时，Beta 的慢结果不会覆盖 Gamma 的当前详情。
+  4. `ProjectDetailRootView.swift` 新增轻量 `ProgressView("正在加载项目文档…")` 提示，让抽屉在异步读取期间有明确反馈，而不是看起来像“点了没反应”。
+- 长期改进建议：下一步若还要继续优化点击手感，可把 `loadSnapshot()` / `projects.json` 读取与 Git 统计刷新也逐步拆离主线程，再把首页派生聚合做成更细粒度的后台缓存，而不是继续让 `@MainActor` 兜底承接所有 IO。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter 'NativeAppViewModelTests/testSelectingAnotherProjectStartsAsyncDocumentLoad|NativeAppViewModelTests/testSelectingProjectOpensDetailDrawerAndLoadsNotes'` 初次运行编译失败，明确暴露 `NativeAppViewModel` 尚缺 `isProjectDocumentLoading` 与异步文档加载能力。
+  - 绿灯阶段：定向测试 `swift test --package-path macos --filter 'NativeAppViewModelTests/testSelectingAnotherProjectStartsAsyncDocumentLoad|NativeAppViewModelTests/testSelectingProjectOpensDetailDrawerAndLoadsNotes|NativeAppViewModelTests/testFilterChangeDoesNotReloadProjectDocumentWhenSelectionStaysSame|NativeAppViewModelTests/testLatestAsyncProjectDocumentResultWinsWhenSelectionsRace'` 通过，覆盖抽屉即时打开、后台加载、缓存复用与快速切项目防串结果。
+  - 全量验证：`swift test --package-path macos`（15/15 通过）、`swift build --package-path macos`（通过）、`git diff --check`（通过）。
+
+## 原生首页点击卡顿修复（2026-03-19）
+
+- [x] 通过失败测试锁定筛选点击与收藏点击的主线程卡顿根因
+- [x] 为项目文档加入缓存，并避免筛选不变更选中项目时重复读文档
+- [x] 将收藏 / 回收站 / 设置保存改为局部状态更新，避免整份 snapshot reload
+- [x] 同步文档 / lessons 并完成验证闭环
+
+## Review（原生首页点击卡顿修复）
+
+- 直接原因：原生首页当前把点击后的很多真实工作都放在 `@MainActor` 的 `NativeAppViewModel` 上执行，尤其是两条高频路径：一条是**筛选点击后无条件重读当前项目文档**，另一条是**收藏 / 回收站 / 设置保存后立即调用 `load()` 触发整份 snapshot 重载**。这会把同步文件读取、JSON 解码和派生状态重算都塞进主线程，所以用户点击时会感知到明显“闷一下”。
+- 是否存在设计层诱因：存在。当前原生 Phase A 里，UI 状态编排与兼容层同步 IO 仍耦合得比较紧；轻交互动作（筛选、收藏）不该默认升级成“重新读文档”或“整份状态快照重建”。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 给 `NativeAppViewModel.swift` 加入项目文档缓存，`refreshSelectedProjectDocument()` 优先命中缓存，避免同一个选中项目被反复同步读取。
+  2. `reconcileSelectionAfterFilterChange()` 改成只有在**筛选真的导致选中项目变化**时，才刷新项目文档；如果选中的还是同一个项目，就不再重复读取 `PROJECT_NOTES.md / PROJECT_TODO.md / README.md`。
+  3. `toggleProjectFavorite`、`moveProjectToRecycleBin`、`restoreProjectFromRecycleBin`、`saveSettings` 改成**写磁盘成功后直接局部更新内存快照**，不再立刻 `load()` 全量重建 `snapshot`。
+  4. `saveNotes` / `saveTodo` 现在会同步更新文档缓存，保证后续切筛选或切详情时能复用最新内容，而不会再次从磁盘读回旧值。
+  5. `load()` 开始时会清空文档缓存，避免用户主动刷新后继续看到过期缓存。
+- 长期改进建议：这轮修掉的是最伤点击手感的两条同步链，但当前“首次点击某个未缓存项目时同步读文档”“Dashboard 更新统计仍是显式重任务入口”这两类路径仍可继续优化。下一步建议把**项目详情文档加载改成后台任务**，再把首页派生数据（尤其热力图）做增量缓存或后台聚合。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter 'NativeAppViewModelTests/testFilterChangeDoesNotReloadProjectDocumentWhenSelectionStaysSame|NativeAppViewModelTests/testToggleFavoriteDoesNotNeedSnapshotReloadForImmediateUiState'` 初次运行失败，分别暴露“筛选点击仍会重读损坏的备注文件”和“收藏点击仍会因为 `load()` 读取损坏的 `projects.json` 而报错”。
+  - 绿灯阶段：同一条定向测试通过，说明这两条高频点击路径已不再依赖同步重复读文档 / 全量 reload。
+  - 全量验证：`swift test --package-path macos`（13/13 通过）、`swift build --package-path macos`（通过）、`git diff --check`（通过）。
+
+## 原生复刻 Git 统计与设置页（2026-03-19）
+
+- [x] 对照 Tauri 版共享脚本与 Git 统计更新主链，确认原生复用边界
+- [x] 先补共享脚本与 Git 统计更新相关失败测试
+- [x] 实现 DevHavenCore 的共享脚本存储与 Git 统计更新写回
+- [x] 在原生设置页接入内嵌脚本中心，并让 Dashboard 更新统计走真实链路
+- [x] 对照 Tauri 版 Sidebar 热力图 / SettingsModal，收口本轮复刻范围
+- [x] 先补 Git 统计筛选与聚合相关失败测试
+- [x] 实现原生 ViewModel 的热力图日期筛选、活跃项目聚合与统计文案
+- [x] 重做 Sidebar 的 Git 统计区与 Settings 页面结构样式
+- [x] 更新 AGENTS.md / tasks 文档并完成验证闭环
+
+## Review（原生复刻 Git 统计与设置页）
+
+- 直接原因：用户确认首页整体视觉已经满意，下一步明确要求继续复刻 **Git 统计** 与 **设置页面**，因此本轮聚焦把原生 Phase A 从“主壳好看”推进到“关键侧边能力与设置结构也贴近 Tauri 版”。
+- 是否存在设计层诱因：存在轻微的“结构已像、关键子页仍停留在骨架态”的收口缺口。此前原生侧边栏热力图只有静态方块，设置页仍是系统 `Form` 风格且暴露了 Tauri 版并未提供的字段，导致视觉与交互信息架构仍和现有产品不一致。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 在 `DevHavenCore` 新增 `GitStatisticsModels.swift`，把热力图日期、活跃项目、Dashboard 汇总、最近活跃日期与最活跃项目排行的聚合逻辑从视图里抽离，保持可测试。
+  2. `NativeAppViewModel.swift` 新增热力图日期筛选、活跃项目列表、Dashboard 统计接口，并让热力图筛选优先级对齐 Tauri：**热力图日期筛选生效时覆盖标签筛选**；同时补了过滤后选中项目与文档草稿的重新对齐，避免详情抽屉内容滞后。
+  3. 原生首页左侧 `ProjectSidebarView.swift` 改成更接近 Tauri 的 Git 统计区：3 个月热力图、日期筛选状态条、清除按钮、当天活跃项目列表；新增可复用 `GitHeatmapGridView.swift` 供 Sidebar 与 Dashboard 共用。
+  4. `MainContentView.swift` 顶部波形按钮已接线到新的 `GitDashboardView.swift`，可打开原生仪表盘：时间范围切换、统计卡片、热力图、最近活跃日期、最活跃项目。
+  5. `SettingsView.swift` 已从系统表单重写为 **左侧分类 + 右侧卡片区**，分类对齐 `常规 / 终端 / 脚本 / 协作`；同时去掉 Tauri 版没有的 `webEnabled/webBindHost/webBindPort/sharedScriptsRoot` 编辑入口，只保留真实支持的端口、终端主题/WebGL、Git 身份，以及脚本目录只读入口，避免伪造能力。
+  6. 在用户继续要求“B. 1 2”后，`LegacyCompatStore.swift` 已补齐共享脚本主链：直接读写 `~/.devhaven/scripts/manifest.json`、脚本文件内容，并支持恢复内置预设；`SettingsView.swift` 的脚本分类现已内嵌 `SharedScriptsManagerView.swift`，可在原生设置页里管理脚本清单、参数与脚本文件。
+  7. 原生 Git 仪表盘的“更新统计”已不再只是刷新 UI：`GitDailyCollector.swift` 会在本地直接执行 `git log --date=short`，按 `gitIdentities` 过滤后写回 `projects.json` 的 `git_daily` 字段，同时保留项目对象未知字段，和 Tauri 的 `collect_git_daily -> updateGitDaily -> heatmap refresh` 语义对齐。
+- 长期改进建议：下一步如果继续追平设置页，可把共享脚本管理继续打磨成更接近 Tauri 的自动保存与更细的错误提示；Git 统计侧则可继续补 `heatmap_cache.json` 的 lastUpdated 真值与更明确的仓库失败列表。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter NativeAppViewModelTests` 初次运行失败，明确暴露原生 ViewModel 尚缺 `selectHeatmapDate` / `heatmapActiveProjects` / `gitDashboardSummary` 等接口。
+  - 绿灯阶段：`swift test --package-path macos --filter NativeAppViewModelTests` 通过，覆盖热力图筛选覆盖标签、Dashboard 汇总等新增行为。
+  - 第二轮红灯阶段：`swift test --package-path macos --filter 'SharedScriptsStoreTests|NativeAppViewModelTests/testRefreshGitStatisticsReadsRealGitLogAndPreservesUnknownProjectFields'` 初次运行失败，暴露 `saveSharedScriptsManifest` / `listSharedScripts` / `restoreSharedScriptPresets` / `refreshGitStatistics` 等真实主链尚未落地。
+  - 第二轮绿灯阶段：同一条定向测试通过，覆盖共享脚本清单 round-trip、恢复内置预设、真实 Git 仓库 `git log` 聚合写回 `projects.json` 且保留未知字段。
+  - 全量验证：`swift test --package-path macos`（11/11 通过）、`swift build --package-path macos`（通过）、`git diff --check`（通过）。
+
 ## 发布 2.8.3（2026-03-18）
 
 - [x] 核对当前分支 / 版本 / 现有 tag / 工作区状态

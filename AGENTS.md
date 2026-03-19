@@ -201,9 +201,10 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - 原生子工程入口：`macos/Package.swift`
 - 原生 App 壳：`macos/Sources/DevHavenApp/DevHavenApp.swift`、`AppRootView.swift`
 - 原生主界面已从系统三栏收口为**接近 Tauri 版的信息架构**：左侧 `ProjectSidebarView.swift`、中间 `MainContentView.swift`、右侧 overlay 抽屉 `ProjectDetailRootView.swift`，并统一走 `NativeTheme.swift` 深色主题
-- 原生设置 / 回收站：`macos/Sources/DevHavenApp/SettingsView.swift`、`RecycleBinSheetView.swift`
-- 数据兼容层：`macos/Sources/DevHavenCore/Storage/LegacyCompatStore.swift`（直接兼容 `~/.devhaven/app_state.json`、`projects.json`、`PROJECT_NOTES.md`、`PROJECT_TODO.md`，写回时保留未知字段）
-- 原生状态编排：`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift`（负责搜索、目录/标签/Git/日期筛选、详情抽屉开关、回收站/收藏/设置写回）
+- 原生 Git 统计：左侧 Sidebar 已支持 `GitHeatmapGridView.swift` 的 3 个月热力图、日期筛选与活跃项目列表；顶部波形按钮会打开 `GitDashboardView.swift` 仪表盘，展示时间范围切换、统计卡片、热力图与活跃日期/项目排行；Dashboard 已按窗口宽度切换统计卡片列数与底部区块堆叠方式，月份标签与热力图共享同一横向滚动坐标；“更新统计”现通过 `NativeAppViewModel.refreshGitStatisticsAsync()` 在后台执行 `git log --date=short` 聚合并写回 `projects.json`，`GitDashboardView` 头部会显示阶段/进度文案（扫描仓库数、写入、刷新列表），底层 `GitDailyCollector.swift` 默认以最多 4 仓并发扫描并对单仓 `git log` 加超时保护，同时该窗口配置了更宽的默认尺寸与可手动拖拽缩放能力
+- 原生设置 / 回收站：`macos/Sources/DevHavenApp/SettingsView.swift`、`RecycleBinSheetView.swift`；设置页已改成**左侧分类 + 右侧卡片区**，分类为 `常规 / 终端 / 脚本 / 协作`；脚本分类现已内嵌 `SharedScriptsManagerView.swift`，直接兼容 `~/.devhaven/scripts/manifest.json` 与脚本文件内容的读写
+- 数据兼容层：`macos/Sources/DevHavenCore/Storage/LegacyCompatStore.swift`（直接兼容 `~/.devhaven/app_state.json`、`projects.json`、`PROJECT_NOTES.md`、`PROJECT_TODO.md`、`~/.devhaven/scripts/*`；`app_state.json` / `projects.json` 写回时保留未知字段）
+- 原生状态编排：`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift`（负责搜索、目录/标签/Git/日期筛选、热力图日期筛选、Dashboard 聚合、原生 Git 统计更新、详情抽屉开关、回收站/收藏/设置写回）；当前已补一层**项目文档缓存 + 局部状态更新**，避免筛选点击重复读 `PROJECT_NOTES.md/PROJECT_TODO.md/README.md`，以及避免收藏/回收站/设置保存后立刻整份 `load()` 重载；未命中文档缓存时会以后台任务异步读取项目文档，并用 `isProjectDocumentLoading + revision guard` 防止快速切换项目时旧结果回写串屏，详情抽屉 `ProjectDetailRootView.swift` 会显示轻量 loading 提示；Git 统计聚合类型/辅助函数位于 `macos/Sources/DevHavenCore/Models/GitStatisticsModels.swift`，共享脚本模型位于 `macos/Sources/DevHavenCore/Models/SharedScriptModels.swift`
 - Todo 语义：`macos/Sources/DevHavenCore/Models/TodoModels.swift`（继续沿用 `- [ ]` / `- [x]` Markdown checklist）
 - 测试：`swift test --package-path macos`；当前测试位于 `macos/Tests/DevHavenCoreTests/LegacyCompatStoreTests.swift`
 - 当前边界：此子工程**暂不覆盖终端工作区 / PTY / pane-tab-split / control plane 原生投影**；侧栏里的“CLI 会话”目前仅做布局占位，`WorkspacePlaceholderView.swift` 保留为后续终端子系统预研文件，但不再挂在主界面主路径
