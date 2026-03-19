@@ -1431,3 +1431,24 @@
   - `swift build --package-path macos`（通过）
   - `git diff --check`（通过）
   - 提交前 `git status --short` 仅暂存原生迁移相关文件；未将 `.agents/`、`.claude/skills/`、`.iflow/`、`skills-lock.json` 纳入 commit。
+
+
+## 修复输入框无法输入字符（2026-03-19）
+
+- [x] 检查当前输入链路与最近相关改动，确认直接原因
+- [x] 先补最小失败用例或可验证复现，再做最小修复
+- [x] 运行验证并回写 Review
+
+## Review（修复输入框无法输入字符）
+
+- 直接原因：这次问题不在某一个 `TextField` / `TextEditor` 本身，而在 **Swift 原生预览的窗口激活链**。从当前 CLI 环境直接启动 `DevHaven Native` 后，用 `lsappinfo front` 可以看到前台应用仍停留在其它应用，而不是 DevHaven；这说明预览启动链把窗口拉起来了，但没有稳定把当前进程提升为 active/frontmost app。对用户来说，体感就会是“点了输入框，但焦点根本没过去，所以所有输入框都打不进去”。
+- 是否存在设计层诱因：存在。之前我们把“原生主界面搭起来”当成主要目标，默认相信 SwiftUI `WindowGroup` 会自动处理好预览态窗口激活；但对于 `swift run` / Xcode 调试这类预览启动链，这个假设并不稳。结果就是输入能力这种跨页面的基础交互，被错误地暴露成“每个输入框都坏了”。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 在 `AppRootView.swift` 新增 `InitialWindowActivationBridge`，让主窗口首次挂到真实 `NSWindow` 时，统一走一次激活流程，而不是去给每个输入框单独补焦点逻辑。
+  2. 激活逻辑收口到 `InitialWindowActivator`：首次看到新的 `windowNumber` 时，顺序执行 `setActivationPolicy(.regular)`、`orderFrontRegardless()`、`makeKey()`、`NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])`，把当前 Swift 原生预览提升为真正的 active/key app。
+  3. 增加 `DevHavenAppTests/InitialWindowActivatorTests.swift`，锁住“同一个窗口只激活一次”“切到新窗口会重新激活”两条回归约束，避免后续再把这层激活桥删坏。
+- 长期改进建议：后续如果原生版继续扩展多窗口 / 更多 sheet，建议把“窗口激活、默认 key window、首次 responder 策略”继续沉成统一的 macOS window primitive，而不是等到用户报告“输入框没反应”时，再从具体控件层向上追。
+- 验证证据：
+  - 根因证据：修复前从当前 CLI 环境启动 Swift 原生预览后，`lsappinfo front` 返回的前台 ASN 仍不是 DevHaven，对应现象与“所有输入框都像拿不到焦点”一致。
+  - 定向测试：`swift test --package-path macos --filter InitialWindowActivatorTests`（2/2 通过）。
+  - 全量验证：`swift test --package-path macos`（19/19 通过）、`swift build --package-path macos`（通过）、`git diff --check`（通过）。

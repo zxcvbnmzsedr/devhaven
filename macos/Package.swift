@@ -19,6 +19,10 @@ let package = Package(
             dependencies: ["DevHavenCore"]
         ),
         .testTarget(
+            name: "DevHavenAppTests",
+            dependencies: ["DevHavenApp", "DevHavenCore"]
+        ),
+        .testTarget(
             name: "DevHavenCoreTests",
             dependencies: ["DevHavenCore"]
         ),

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import DevHavenCore
 
 struct AppRootView: View {
@@ -29,6 +30,10 @@ struct AppRootView: View {
             }
         }
         .background(NativeTheme.window.ignoresSafeArea())
+        .background(
+            InitialWindowActivationBridge()
+                .allowsHitTesting(false)
+        )
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.18), value: viewModel.isDetailPanelPresented)
         .sheet(isPresented: $viewModel.isDashboardPresented) {
@@ -70,5 +75,85 @@ struct AppRootView: View {
             }
             viewModel.load()
         }
+    }
+}
+
+private struct InitialWindowActivationBridge: NSViewRepresentable {
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = view.window else {
+                return
+            }
+            context.coordinator.activator.activateIfNeeded(window: AppKitWindowActivationProxy(window: window))
+        }
+    }
+
+    final class Coordinator {
+        let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
+    }
+}
+
+protocol WindowActivating {
+    var windowNumber: Int { get }
+    func orderFrontRegardless()
+    func makeKey()
+}
+
+protocol ApplicationActivating {
+    func setRegularActivationPolicy()
+    func activateIgnoringOtherApps()
+}
+
+final class InitialWindowActivator {
+    private let application: ApplicationActivating
+    private var activatedWindowNumber: Int?
+
+    init(application: ApplicationActivating) {
+        self.application = application
+    }
+
+    func activateIfNeeded(window: WindowActivating) {
+        guard activatedWindowNumber != window.windowNumber else {
+            return
+        }
+        activatedWindowNumber = window.windowNumber
+        application.setRegularActivationPolicy()
+        window.orderFrontRegardless()
+        window.makeKey()
+        application.activateIgnoringOtherApps()
+    }
+}
+
+struct AppKitWindowActivationProxy: WindowActivating {
+    let window: NSWindow
+
+    var windowNumber: Int {
+        window.windowNumber
+    }
+
+    func orderFrontRegardless() {
+        window.orderFrontRegardless()
+    }
+
+    func makeKey() {
+        window.makeKey()
+    }
+}
+
+struct AppKitApplicationActivationProxy: ApplicationActivating {
+    func setRegularActivationPolicy() {
+        NSApp.setActivationPolicy(.regular)
+    }
+
+    func activateIgnoringOtherApps() {
+        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
     }
 }
