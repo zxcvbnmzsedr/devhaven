@@ -107,101 +107,111 @@ struct MainContentView: View {
     }
 
     private func projectCard(_ project: Project) -> some View {
-        Button {
-            viewModel.selectProject(project.path)
-        } label: {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 10) {
-                    Text(project.name)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(NativeTheme.textPrimary)
-                        .lineLimit(2)
-                    Spacer(minLength: 10)
-                    HStack(spacing: 10) {
-                        cardActionIcon("folder") { openInFinder(project.path) }
-                        cardActionIcon(viewModel.snapshot.appState.favoriteProjectPaths.contains(project.path) ? "star.fill" : "star") {
-                            viewModel.toggleProjectFavorite(project.path)
-                        }
-                        cardActionIcon("trash") { viewModel.moveProjectToRecycleBin(project.path) }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Text(project.name)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(NativeTheme.textPrimary)
+                    .lineLimit(2)
+                Spacer(minLength: 10)
+                HStack(spacing: 10) {
+                    cardActionIcon("folder") { openInFinder(project.path) }
+                    cardActionIcon(viewModel.snapshot.appState.favoriteProjectPaths.contains(project.path) ? "star.fill" : "star") {
+                        viewModel.toggleProjectFavorite(project.path)
                     }
-                }
-
-                Text("~/\(compactDisplayPath(project.path))")
-                    .font(.caption)
-                    .foregroundStyle(NativeTheme.textSecondary)
-                    .lineLimit(1)
-
-                HStack {
-                    Label(dateString(project.mtime), systemImage: "calendar")
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    Spacer()
-                    if project.gitCommits > 0 {
-                        Text("\(project.gitCommits) 次提交")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(NativeTheme.accent)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(NativeTheme.accent.opacity(0.14))
-                            .clipShape(.rect(cornerRadius: 8))
-                    } else {
-                        Text("非 Git 项目")
-                            .font(.caption)
-                            .foregroundStyle(NativeTheme.textSecondary)
-                    }
+                    cardActionIcon("trash") { viewModel.moveProjectToRecycleBin(project.path) }
                 }
             }
-            .padding(16)
-            .frame(maxWidth: .infinity, minHeight: 128, alignment: .topLeading)
-            .background(NativeTheme.elevated)
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(viewModel.selectedProjectPath == project.path && viewModel.isDetailPanelPresented ? NativeTheme.accent.opacity(0.8) : NativeTheme.border, lineWidth: 1)
-            )
-            .clipShape(.rect(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
-    }
 
-    private func projectRow(_ project: Project) -> some View {
-        Button {
-            viewModel.selectProject(project.path)
-        } label: {
-            HStack(spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(project.name)
-                        .font(.headline)
-                        .foregroundStyle(NativeTheme.textPrimary)
-                    Text(project.path)
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                        .lineLimit(1)
-                }
+            Text("~/\(compactDisplayPath(project.path))")
+                .font(.caption)
+                .foregroundStyle(NativeTheme.textSecondary)
+                .lineLimit(1)
+
+            HStack {
+                Label(dateString(project.mtime), systemImage: "calendar")
+                    .font(.caption)
+                    .foregroundStyle(NativeTheme.textSecondary)
                 Spacer()
-                Text(project.gitLastCommitMessage ?? "暂无提交摘要")
-                    .font(.caption)
-                    .foregroundStyle(NativeTheme.textSecondary)
-                    .frame(maxWidth: 260, alignment: .leading)
-                Text(dateString(project.mtime))
-                    .font(.caption)
-                    .foregroundStyle(NativeTheme.textSecondary)
-                    .frame(width: 120, alignment: .leading)
                 if project.gitCommits > 0 {
                     Text("\(project.gitCommits) 次提交")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(NativeTheme.accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(NativeTheme.accent.opacity(0.14))
+                        .clipShape(.rect(cornerRadius: 8))
                 } else {
-                    Text("非 Git")
-                        .font(.caption2)
+                    Text("非 Git 项目")
+                        .font(.caption)
                         .foregroundStyle(NativeTheme.textSecondary)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(viewModel.selectedProjectPath == project.path && viewModel.isDetailPanelPresented ? NativeTheme.accent.opacity(0.12) : Color.clear)
-            .clipShape(.rect(cornerRadius: 10))
         }
-        .buttonStyle(.plain)
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 128, alignment: .topLeading)
+        .background(NativeTheme.elevated)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(viewModel.selectedProjectPath == project.path && viewModel.isDetailPanelPresented ? NativeTheme.accent.opacity(0.8) : NativeTheme.border, lineWidth: 1)
+        )
+        .clipShape(.rect(cornerRadius: 14))
+        .contentShape(.rect(cornerRadius: 14))
+        .onTapGesture(count: 2) {
+            viewModel.enterWorkspace(project.path)
+        }
+        .onTapGesture {
+            viewModel.selectProject(project.path)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .help("单击查看详情，双击进入工作区")
+    }
+
+    private func projectRow(_ project: Project) -> some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(project.name)
+                    .font(.headline)
+                    .foregroundStyle(NativeTheme.textPrimary)
+                Text(project.path)
+                    .font(.caption)
+                    .foregroundStyle(NativeTheme.textSecondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Text(project.gitLastCommitMessage ?? "暂无提交摘要")
+                .font(.caption)
+                .foregroundStyle(NativeTheme.textSecondary)
+                .frame(maxWidth: 260, alignment: .leading)
+            Text(dateString(project.mtime))
+                .font(.caption)
+                .foregroundStyle(NativeTheme.textSecondary)
+                .frame(width: 120, alignment: .leading)
+            if project.gitCommits > 0 {
+                Text("\(project.gitCommits) 次提交")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(NativeTheme.accent)
+            } else {
+                Text("非 Git")
+                    .font(.caption2)
+                    .foregroundStyle(NativeTheme.textSecondary)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(viewModel.selectedProjectPath == project.path && viewModel.isDetailPanelPresented ? NativeTheme.accent.opacity(0.12) : Color.clear)
+        .clipShape(.rect(cornerRadius: 10))
+        .contentShape(.rect(cornerRadius: 10))
+        .onTapGesture(count: 2) {
+            viewModel.enterWorkspace(project.path)
+        }
+        .onTapGesture {
+            viewModel.selectProject(project.path)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .help("单击查看详情，双击进入工作区")
     }
 
     private func toolbarChip(_ title: String, systemImage: String) -> some View {

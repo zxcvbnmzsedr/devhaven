@@ -6,6 +6,12 @@
 - attached sheet 在 macOS 上也是一扇真实窗口；如果用户希望它“默认更宽一点，还能手动拖大拖小”，就要显式配置该 window 的 `minSize`、`initialSize` 和 `.resizable`，不能只指望 SwiftUI 根据内容自动推导出合适的窗口尺寸。
 - 对“更新统计”这类会遍历大量 Git 仓库的长任务，仅仅改成后台执行还不够；如果没有阶段/进度提示，用户仍会觉得“按钮一直在转，不知道在干嘛”。稳定做法是同时补：进度文案、合理并发度，以及单仓超时保护，避免少数异常仓库把整轮刷新无限拖住。
 - 对 Swift 原生预览（`swift run` / Xcode 调试）这类启动链，不能默认相信 `WindowGroup` 会自动把应用提升为 active/frontmost；如果窗口能看到但输入框普遍拿不到焦点，优先先查“当前进程是否真的成为 key/active app”，并把激活逻辑统一收口在窗口挂载层，而不是去给每个 `TextField` 分散补焦点补丁。
+- 在 AppKit 内嵌 Ghostty 时，宿主外观不要再硬编码另一套终端主题；如果用户要求“和 Ghostty 配置保持一致”，应直接把 `background/background-opacity` 等基础样式从 Ghostty config 读取出来，并在 config/color change action 到来时同步更新宿主 chrome。
+- 对 Ghostty 这类原生终端，`keyDown` 不能简化成“拿 `event.characters` 直接发给底层”；否则 `interpretKeyEvents` / `insertText` 会和手工 text 发送双写，出现 `ls -> lsls` 一类重复回显。稳定做法是 translation event + `interpretKeyEvents` + `insertText` accumulator，再决定发 key 还是 text。
+- `Ctrl+D` / shell exit 这类 close-surface 场景不能只把 pane 留在失败态；收到进程关闭回调后，上层宿主必须显式 `tearDown()` + `shutdown()` 并切到 exited UI，保证 workspace 仍可继续操作。
+- 对 Ghostty / AppKit 终端输入链，不能只用“直接调 `keyDown` 的 ASCII smoke”来判断输入已经稳定；真实用户桌面输入常常还会经过 `NSTextInputClient` / `setMarkedText` / preedit。若这层没接，中文输入法或输入法英文态都可能把 `p -> pw -> pwd` 这类预编辑中间态错误提交成重复文本。
+- 当 Ghostty / AppKit 终端的复杂度已经同时碰到 `keyDown`、`NSTextInputClient`、preedit、keybinding 和 runtime observer 时，不要继续在宿主 host 文件里补丁式修复；应尽快收敛成 dedicated `GhosttySurfaceView.swift`，让 SwiftUI host、Ghostty runtime 和 AppKit 输入协议各守边界。
+- 涉及原生终端 smoke 时，不要把断言直接绑定到 `pwd` 输出 cwd、prompt 主题或其他 shell 展示细节；更稳的做法是锁住“输入只回显一次、没有 `ppwd/pwdd/pwdpwd/command not found` 这类伪影”这类稳定不变量。
 # Lessons Learned
 
 - 当终端侧新增“运行配置”能力时，必须先对齐详情面板已有的配置模型与交互（通用脚本插入、模板参数快照、校验逻辑），避免出现两套不一致的配置语义。

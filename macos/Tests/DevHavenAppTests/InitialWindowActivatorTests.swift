@@ -1,6 +1,7 @@
 import XCTest
 @testable import DevHavenApp
 
+@MainActor
 final class InitialWindowActivatorTests: XCTestCase {
     func testActivateIfNeededActivatesApplicationAndWindowOncePerWindowNumber() {
         let application = ApplicationSpy()

@@ -11,12 +11,23 @@ let package = Package(
         .executable(name: "DevHavenApp", targets: ["DevHavenApp"]),
     ],
     targets: [
+        .binaryTarget(
+            name: "GhosttyKit",
+            path: "Vendor/GhosttyKit.xcframework"
+        ),
         .target(
             name: "DevHavenCore"
         ),
         .executableTarget(
             name: "DevHavenApp",
-            dependencies: ["DevHavenCore"]
+            dependencies: ["DevHavenCore", "GhosttyKit"],
+            resources: [
+                .copy("GhosttyResources"),
+            ],
+            linkerSettings: [
+                .linkedFramework("Carbon"),
+                .linkedLibrary("c++"),
+            ]
         ),
         .testTarget(
             name: "DevHavenAppTests",

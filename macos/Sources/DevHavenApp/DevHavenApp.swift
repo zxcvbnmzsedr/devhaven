@@ -5,6 +5,10 @@ import DevHavenCore
 struct DevHavenApp: App {
     @State private var viewModel = NativeAppViewModel()
 
+    init() {
+        _ = GhosttyAppRuntime.shared.runtime
+    }
+
     var body: some Scene {
         WindowGroup("DevHaven Native") {
             AppRootView(viewModel: viewModel)

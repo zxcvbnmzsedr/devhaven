@@ -12,7 +12,7 @@ struct AppRootView: View {
                     .frame(width: 240)
                     .background(NativeTheme.sidebar)
 
-                MainContentView(viewModel: viewModel)
+                primaryContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(NativeTheme.window)
             }
@@ -76,6 +76,33 @@ struct AppRootView: View {
             viewModel.load()
         }
     }
+
+    @ViewBuilder
+    private var primaryContent: some View {
+        if let workspaceProject = viewModel.activeWorkspaceProject {
+            if let launchRequest = viewModel.activeWorkspaceLaunchRequest {
+                WorkspaceHostView(
+                    project: workspaceProject,
+                    launchRequest: launchRequest,
+                    onOpenInTerminal: {
+                        do {
+                            try viewModel.openActiveWorkspaceInTerminal()
+                        } catch {
+                            // 错误已经由 ViewModel 收口到 errorMessage，避免重复提示
+                        }
+                    },
+                    onBack: {
+                        viewModel.exitWorkspace()
+                    },
+                    onShowDetails: {
+                        viewModel.selectProject(workspaceProject.path)
+                    }
+                )
+            }
+        } else {
+            MainContentView(viewModel: viewModel)
+        }
+    }
 }
 
 private struct InitialWindowActivationBridge: NSViewRepresentable {
@@ -96,22 +123,26 @@ private struct InitialWindowActivationBridge: NSViewRepresentable {
         }
     }
 
+    @MainActor
     final class Coordinator {
         let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
     }
 }
 
+@MainActor
 protocol WindowActivating {
     var windowNumber: Int { get }
     func orderFrontRegardless()
     func makeKey()
 }
 
+@MainActor
 protocol ApplicationActivating {
     func setRegularActivationPolicy()
     func activateIgnoringOtherApps()
 }
 
+@MainActor
 final class InitialWindowActivator {
     private let application: ApplicationActivating
     private var activatedWindowNumber: Int?
@@ -132,6 +163,7 @@ final class InitialWindowActivator {
     }
 }
 
+@MainActor
 struct AppKitWindowActivationProxy: WindowActivating {
     let window: NSWindow
 
@@ -148,12 +180,13 @@ struct AppKitWindowActivationProxy: WindowActivating {
     }
 }
 
+@MainActor
 struct AppKitApplicationActivationProxy: ApplicationActivating {
     func setRegularActivationPolicy() {
         NSApp.setActivationPolicy(.regular)
     }
 
     func activateIgnoringOtherApps() {
-        NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+        NSApp.activate(ignoringOtherApps: true)
     }
 }

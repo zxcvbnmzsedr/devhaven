@@ -2,7 +2,7 @@
 
 DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 运行时（浏览器 + 本机 Rust HTTP/WS 服务）**：前端负责 UI/交互（React + Vite + UnoCSS），后端负责本地能力（Rust + Tauri Commands / Web API：文件扫描、Git 读取、存储、PTY 终端等）。
 
-当前仓库还新增了一条 **macOS 原生重写主线（`macos/` Swift Package）**：`DevHavenApp` 负责原生窗口与 SwiftUI 内容视图，`DevHavenCore` 负责兼容读取 `~/.devhaven/*` 与项目文档，并为后续 Rust Core / 原生终端子系统继续预留边界。当前 Phase A 已落地项目列表 / 详情 / 备注 / Todo / 设置 / 回收站 / 自动化只读视图的原生骨架，**终端工作区仍未迁入该子工程**。
+当前仓库还新增了一条 **macOS 原生重写主线（`macos/` Swift Package）**：`DevHavenApp` 负责原生窗口与 SwiftUI 内容视图，`DevHavenCore` 负责兼容读取 `~/.devhaven/*` 与项目文档，并为后续 Rust Core / 原生终端子系统继续预留边界。当前 Phase A 已落地项目列表 / 详情 / 备注 / Todo / 设置 / 回收站 / 自动化只读视图的原生骨架；2026-03-19 在先前 bootstrap 试探版基础上，已进一步把 Ghostty 集成 **改造成 Supacode 风格的 app 级共享 runtime**：Ghostty 资源通过 SwiftPM bundle 稳定打进 `DevHavenApp`，启动期一次性完成 `ghostty_init(...)` 与共享 `GhosttyRuntime` 创建，workspace 主路径直接进入单一 Ghostty shell pane，不再依赖运行时 `GhosttyPathLocator/GhosttyBootstrap` 探测或 placeholder 分支。当前原生版已经支持“单击项目看详情、双击进入 workspace、workspace 内显示单一 Ghostty shell pane”，但**仍未覆盖 tabs / split / 多 pane / worktree / control plane 原生投影**。
 
 ## 1) 开发语言 + 框架
 
@@ -198,16 +198,19 @@ DevHaven 是一个基于 **Tauri + React** 的桌面应用，并已新增 **Web 
 - 新增 command：`resolve_home_dir`（`src-tauri/src/lib.rs`），供 Web 模式路径展开使用
 
 ### N. macOS 原生客户端（Phase A，Swift Package）
-- 原生子工程入口：`macos/Package.swift`
-- 原生 App 壳：`macos/Sources/DevHavenApp/DevHavenApp.swift`、`AppRootView.swift`
-- 原生主界面已从系统三栏收口为**接近 Tauri 版的信息架构**：左侧 `ProjectSidebarView.swift`、中间 `MainContentView.swift`、右侧 overlay 抽屉 `ProjectDetailRootView.swift`，并统一走 `NativeTheme.swift` 深色主题
+- 原生子工程入口：`macos/Package.swift`（当前已接入 `GhosttyKit` binary target；`DevHavenApp` target 额外链接 `Carbon` 与 `libc++`，用于满足 Ghostty 静态库的输入法 / C++ 运行时依赖）
+- 原生 App 壳：`macos/Sources/DevHavenApp/DevHavenApp.swift`、`AppRootView.swift`；当前启动时会直接触发 `Ghostty/GhosttyAppRuntime.swift` 获取共享 runtime，并把 `GhosttyResources` bundle 路径注入 `GHOSTTY_RESOURCES_DIR`。主界面不再展示 bootstrap 告警条，也不再在运行时查找 cwd / executable ancestor 下的 Vendor 目录。
+- 原生主界面已从系统三栏收口为**接近 Tauri 版的信息架构**：左侧 `ProjectSidebarView.swift`、中间主区按状态切换 `MainContentView.swift` / `WorkspaceHostView.swift`、右侧 overlay 抽屉 `ProjectDetailRootView.swift`，并统一走 `NativeTheme.swift` 深色主题；当前交互为 **单击项目打开详情、双击项目进入 workspace 页面**
+- 原生 workspace 最小宿主：`macos/Sources/DevHavenApp/WorkspaceHostView.swift`、`WorkspaceTerminalPaneView.swift`、`Ghostty/GhosttySurfaceHost.swift`、`Ghostty/GhosttyTerminalView.swift`、`Ghostty/GhosttySurfaceView.swift`；当前范围仅覆盖**单一 Ghostty shell pane**，无 tabs / split / 多 pane。当前 Ghostty 主线已按 Supacode 风格拆成五层：`GhosttyAppRuntime.swift`（bundle 资源定位 + 全局 `ghostty_init(...)` + 共享 runtime 入口）、`GhosttyRuntime.swift`（共享 `ghostty_app_t` / `ghostty_config_t` / focus 与 keyboard observer / surface 创建）、`GhosttySurfaceBridge.swift`（Ghostty action callback -> 宿主闭包桥）、`GhosttySurfaceState.swift`（surface 状态）、`GhosttySurfaceView.swift`（AppKit `NSView`、mouse/key 事件、`performKeyEquivalent/flagsChanged/doCommand`、`NSTextInputClient`、preedit、surface config 与 Ghostty 输入 helper）。`GhosttySurfaceHost.swift` 现在只负责 SwiftUI 宿主壳、状态条和 host model；shell 因 `Ctrl+D` 退出时只释放当前 surface 并切到 exited UI，不再销毁 app 级 runtime。
 - 原生 Git 统计：左侧 Sidebar 已支持 `GitHeatmapGridView.swift` 的 3 个月热力图、日期筛选与活跃项目列表；顶部波形按钮会打开 `GitDashboardView.swift` 仪表盘，展示时间范围切换、统计卡片、热力图与活跃日期/项目排行；Dashboard 已按窗口宽度切换统计卡片列数与底部区块堆叠方式，月份标签与热力图共享同一横向滚动坐标；“更新统计”现通过 `NativeAppViewModel.refreshGitStatisticsAsync()` 在后台执行 `git log --date=short` 聚合并写回 `projects.json`，`GitDashboardView` 头部会显示阶段/进度文案（扫描仓库数、写入、刷新列表），底层 `GitDailyCollector.swift` 默认以最多 4 仓并发扫描并对单仓 `git log` 加超时保护，同时该窗口配置了更宽的默认尺寸与可手动拖拽缩放能力
 - 原生设置 / 回收站：`macos/Sources/DevHavenApp/SettingsView.swift`、`RecycleBinSheetView.swift`；设置页已改成**左侧分类 + 右侧卡片区**，分类为 `常规 / 终端 / 脚本 / 协作`；脚本分类现已内嵌 `SharedScriptsManagerView.swift`，直接兼容 `~/.devhaven/scripts/manifest.json` 与脚本文件内容的读写
 - 数据兼容层：`macos/Sources/DevHavenCore/Storage/LegacyCompatStore.swift`（直接兼容 `~/.devhaven/app_state.json`、`projects.json`、`PROJECT_NOTES.md`、`PROJECT_TODO.md`、`~/.devhaven/scripts/*`；`app_state.json` / `projects.json` 写回时保留未知字段）
-- 原生状态编排：`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift`（负责搜索、目录/标签/Git/日期筛选、热力图日期筛选、Dashboard 聚合、原生 Git 统计更新、详情抽屉开关、回收站/收藏/设置写回）；当前已补一层**项目文档缓存 + 局部状态更新**，避免筛选点击重复读 `PROJECT_NOTES.md/PROJECT_TODO.md/README.md`，以及避免收藏/回收站/设置保存后立刻整份 `load()` 重载；未命中文档缓存时会以后台任务异步读取项目文档，并用 `isProjectDocumentLoading + revision guard` 防止快速切换项目时旧结果回写串屏，详情抽屉 `ProjectDetailRootView.swift` 会显示轻量 loading 提示；Git 统计聚合类型/辅助函数位于 `macos/Sources/DevHavenCore/Models/GitStatisticsModels.swift`，共享脚本模型位于 `macos/Sources/DevHavenCore/Models/SharedScriptModels.swift`
+- Ghostty bundle 资源：`macos/Sources/DevHavenApp/GhosttyResources/`（当前是由 `macos/Vendor/GhosttyResources` 复制进 target 的稳定 bundle 输入；运行时直接从 `Bundle.module/GhosttyResources/ghostty` 获取资源目录，不再依赖路径探测）
+- Ghostty vendor setup 脚本：`macos/scripts/setup-ghostty-framework.sh`（当前仍保留为开发辅助脚本，用于把外部 Ghostty 源码 checkout 的 `GhosttyKit.xcframework`、`zig-out/share/ghostty`、`zig-out/share/terminfo` 同步到 `macos/Vendor`；但它已不再参与应用启动时的运行主链）
+- 原生状态编排：`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift` + `macos/Sources/DevHavenCore/Models/WorkspaceModels.swift`（负责搜索、目录/标签/Git/日期筛选、热力图日期筛选、Dashboard 聚合、原生 Git 统计更新、详情抽屉开关、回收站/收藏/设置写回，以及 **workspace 进入/退出、`activeWorkspaceLaunchRequest` 生成与系统 Terminal 打开动作**）；当前已补一层**项目文档缓存 + 局部状态更新**，避免筛选点击重复读 `PROJECT_NOTES.md/PROJECT_TODO.md/README.md`，以及避免收藏/回收站/设置保存后立刻整份 `load()` 重载；未命中文档缓存时会以后台任务异步读取项目文档，并用 `isProjectDocumentLoading + revision guard` 防止快速切换项目时旧结果回写串屏，详情抽屉 `ProjectDetailRootView.swift` 会显示轻量 loading 提示；Git 统计聚合类型/辅助函数位于 `macos/Sources/DevHavenCore/Models/GitStatisticsModels.swift`，共享脚本模型位于 `macos/Sources/DevHavenCore/Models/SharedScriptModels.swift`
 - Todo 语义：`macos/Sources/DevHavenCore/Models/TodoModels.swift`（继续沿用 `- [ ]` / `- [x]` Markdown checklist）
-- 测试：`swift test --package-path macos`；当前测试位于 `macos/Tests/DevHavenCoreTests/LegacyCompatStoreTests.swift`
-- 当前边界：此子工程**暂不覆盖终端工作区 / PTY / pane-tab-split / control plane 原生投影**；侧栏里的“CLI 会话”目前仅做布局占位，`WorkspacePlaceholderView.swift` 保留为后续终端子系统预研文件，但不再挂在主界面主路径
+- 测试：`swift test --package-path macos`；当前与原生终端主线直接相关的测试位于 `macos/Tests/DevHavenCoreTests/{NativeAppViewModelWorkspaceEntryTests,WorkspaceSubsystemTests}.swift` 与 `macos/Tests/DevHavenAppTests/{GhosttyAppRuntimeTests,GhosttySharedRuntimeTests,GhosttySurfaceHostTests,InitialWindowActivatorTests}.swift`
+- 当前边界：此子工程现在已经覆盖 **workspace 主路径 + 首个 App 内嵌 Ghostty 单 session shell pane**，但**仍不覆盖 tabs / split / 多 pane / PTY 持久化 / worktree / control plane 原生投影**；侧栏里的“CLI 会话”仍仅做布局占位，workspace 里也暂未补运行配置、文件/Git 侧边栏或多 surface 管理。当前 `WorkspaceHostView.swift` 会直接显示内嵌 Ghostty pane，同时保留“在系统 Terminal 打开当前项目 / 查看详情 / 返回项目列表”动作，作为调试与兜底路径。
 
 ## 3) 回写（维护）AGENTS.md 的逻辑
 

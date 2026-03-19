@@ -9,6 +9,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let projectDocumentLoader: @Sendable (String) throws -> ProjectDocumentSnapshot
     @ObservationIgnored private let gitDailyCollector: @Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult]
     @ObservationIgnored private let gitDailyCollectorAsync: @Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult]
+    @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
 
@@ -53,6 +54,8 @@ public final class NativeAppViewModel {
 
     public var snapshot: NativeAppSnapshot
     public var selectedProjectPath: String?
+    public var activeWorkspaceProjectPath: String?
+    public var activeWorkspaceLaunchRequest: WorkspaceTerminalLaunchRequest?
     public var searchQuery: String
     public var selectedDirectory: String?
     public var selectedTag: String?
@@ -78,14 +81,18 @@ public final class NativeAppViewModel {
         store: LegacyCompatStore = LegacyCompatStore(),
         projectDocumentLoader: (@Sendable (String) throws -> ProjectDocumentSnapshot)? = nil,
         gitDailyCollector: (@Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult])? = nil,
-        gitDailyCollectorAsync: (@Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult])? = nil
+        gitDailyCollectorAsync: (@Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult])? = nil,
+        terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil
     ) {
         self.store = store
         self.projectDocumentLoader = projectDocumentLoader ?? loadProjectDocumentFromDisk
         self.gitDailyCollector = gitDailyCollector ?? collectGitDaily
         self.gitDailyCollectorAsync = gitDailyCollectorAsync ?? collectGitDailyAsync
+        self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.snapshot = NativeAppSnapshot()
         self.selectedProjectPath = nil
+        self.activeWorkspaceProjectPath = nil
+        self.activeWorkspaceLaunchRequest = nil
         self.searchQuery = ""
         self.selectedDirectory = nil
         self.selectedTag = nil
@@ -126,6 +133,17 @@ public final class NativeAppViewModel {
             return filteredProjects.first ?? visibleProjects.first
         }
         return snapshot.projects.first(where: { $0.path == selectedProjectPath })
+    }
+
+    public var activeWorkspaceProject: Project? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return snapshot.projects.first(where: { $0.path == activeWorkspaceProjectPath })
+    }
+
+    public var isWorkspacePresented: Bool {
+        activeWorkspaceProject != nil
     }
 
     public var directoryRows: [DirectoryRow] {
@@ -312,9 +330,49 @@ public final class NativeAppViewModel {
         if path == selectedProjectPath, isDetailPanelPresented == (path != nil) {
             return
         }
+        if let activeWorkspaceProjectPath, path != activeWorkspaceProjectPath {
+            self.activeWorkspaceProjectPath = nil
+            self.activeWorkspaceLaunchRequest = nil
+        }
         selectedProjectPath = path
         isDetailPanelPresented = path != nil
         scheduleSelectedProjectDocumentRefresh()
+    }
+
+    public func enterWorkspace(_ path: String) {
+        selectedProjectPath = path
+        activeWorkspaceProjectPath = path
+        activeWorkspaceLaunchRequest = WorkspaceTerminalLaunchRequest(
+            projectPath: path,
+            workspaceId: "workspace:\(UUID().uuidString.lowercased())",
+            tabId: "tab:\(UUID().uuidString.lowercased())",
+            paneId: "pane:\(UUID().uuidString.lowercased())",
+            surfaceId: "surface:\(UUID().uuidString.lowercased())",
+            terminalSessionId: "session:\(UUID().uuidString.lowercased())"
+        )
+        isDetailPanelPresented = false
+        scheduleSelectedProjectDocumentRefresh()
+    }
+
+    public func exitWorkspace() {
+        activeWorkspaceProjectPath = nil
+        activeWorkspaceLaunchRequest = nil
+    }
+
+    public func openActiveWorkspaceInTerminal() throws {
+        guard let project = activeWorkspaceProject else {
+            let error = WorkspaceTerminalCommandError.noActiveWorkspace
+            errorMessage = error.localizedDescription
+            throw error
+        }
+
+        do {
+            try terminalCommandRunner("/usr/bin/open", ["-a", "Terminal", project.path])
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
     }
 
     public func closeDetailPanel() {
@@ -493,6 +551,11 @@ public final class NativeAppViewModel {
     }
 
     private func alignSelectionAfterReload() {
+        let allPaths = Set(snapshot.projects.map(\.path))
+        if let activeWorkspaceProjectPath, !allPaths.contains(activeWorkspaceProjectPath) {
+            self.activeWorkspaceProjectPath = nil
+            self.activeWorkspaceLaunchRequest = nil
+        }
         let availablePaths = Set(filteredProjects.map(\.path))
         if let selectedProjectPath, availablePaths.contains(selectedProjectPath) {
             return
@@ -643,6 +706,32 @@ public final class NativeAppViewModel {
 
     public func gitDashboardHeatmapDays(for range: GitDashboardRange) -> [GitHeatmapDay] {
         buildGitHeatmapDays(projects: visibleProjects, days: range.days)
+    }
+
+    private nonisolated static func runTerminalCommand(executable: String, arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw WorkspaceTerminalCommandError.launchFailed("打开 Terminal 失败，退出码 \(process.terminationStatus)。")
+        }
+    }
+}
+
+enum WorkspaceTerminalCommandError: LocalizedError {
+    case noActiveWorkspace
+    case launchFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noActiveWorkspace:
+            return "当前没有可打开的工作区。"
+        case let .launchFailed(message):
+            return message
+        }
     }
 }
 
