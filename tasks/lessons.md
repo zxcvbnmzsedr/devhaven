@@ -83,6 +83,12 @@
 - 以后做原生迁移时，如果用户已经明确选择“尽量保留现有信息架构”，就不要擅自把界面改造成更像系统样板 app 的布局；先追平现有产品结构，再谈更原生的局部优化。
 - 在 SwiftUI + Ghostty 的原生 workspace 里，标签页切换不能靠“只渲染当前选中 tab”实现；如果非选中 tab 被卸载，`GhosttySurfaceHost.onDisappear -> releaseSurface()` 会把后台终端直接销毁。稳定做法是保活所有 tab，只把非选中项做透明隐藏并禁交互。
 - 在 SwiftUI + Ghostty 的原生 workspace 里，项目切换和标签页切换属于同一类生命周期问题；如果通过“只渲染当前 active project/workspace”来切换项目，`WorkspaceHostView` 的 `onDisappear` 一样会把后台 Ghostty surface 提前释放。稳定做法是保活所有已打开项目对应的 workspace host，只把非激活项隐藏并禁交互。
+- 当用户明确要求“进入 workspace 后不要再看到目录栏，终端区直接显示终端”时，不能继续把项目标题、路径、统计 chip、pane 工具条塞回终端主区；这些信息若仍有必要，应该留在 workspace 壳层或后续单独入口，终端区默认只保留 Ghostty 本体。
+- workspace tab 标题如果是 topology 真相的一部分，就不要再让 shell/renderer 的 `title` 或 `pwd` 事件反向覆盖它；像“终端1/2/3/4”这种稳定编号，应由 workspace 自己生成并保持，避免 UI 很快又退化成路径或 prompt 文案。
+- 当用户明确要求 `⌘D` 这类 IDE 风格快捷键时，先确认这条命令到底应该由 Ghostty binding 负责，还是由应用壳层 command menu 负责；如果当前原生壳压根没接线，就直接在 app/workspace 层补入口，不要误把“没实现”当成底层终端 bug。
 - 对“支持同时打开多个项目”这类需求，不能只把底层状态模型做成 `openWorkspaceSessions` 就算完成；还必须在 workspace 壳里提供**继续打开其他项目的真实入口**，否则用户仍要先退出当前 workspace 才能打开第二个项目，产品语义并没有真正闭环。
 - 对 workspace 的“返回上一页”操作，不能等价实现成“关闭所有已打开会话”；返回只是暂时离开 workspace 视图，不应清空 `openWorkspaceSessions`。否则用户回到主列表再双击进入时，会误以为原本已打开的项目被系统吞掉了。
 - 当前 `xctest` 宿主下，`ghostty_surface_new(...)` 可能直接失败并返回 nil；后续写 Ghostty smoke 时，必须先区分“surface 根本没创建成功”和“已创建但交互回归”，否则很容易把 GUI 宿主限制误判成输入/分屏逻辑 bug。
+
+- 当 Swift 原生 workspace 已经进入多项目 + 多 tab/pane 阶段时，不要再让 `NativeAppViewModel` 直接持有和改写 pane tree；应尽快抽成 `GhosttyWorkspaceController` 这类 dedicated owner，只让 ViewModel 管项目级导航，终端布局层只对外暴露 projection。
+- 在 SwiftUI + Ghostty 终端里，**pane view 的 `onDisappear` 不能直接等价为“pane 已关闭”**；split/tree 重排、tab 切换、项目切换都可能触发 view 生命周期变化。稳定做法是引入 `WorkspaceSurfaceRegistry` 这类按 pane ID 持有 host model 的 owner，只在 pane 真正从 topology 中移除时才释放 surface。

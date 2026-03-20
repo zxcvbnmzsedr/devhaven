@@ -1,5 +1,190 @@
 # 本次任务清单
 
+## 修复 split 时旧 pane 被重新初始化（2026-03-20）
+
+- [x] 先根据 workspace-launch 日志与当前 SwiftUI / Ghostty 生命周期重放，确认旧 pane 重建的触发点
+- [x] 先补 `WorkspaceSurfaceRegistryTests`，锁定相同 pane 复用 host model、关闭 pane 时才清理
+- [x] 新增 `WorkspaceSurfaceRegistry.swift` 并调整 `WorkspaceHostView` / `WorkspaceSplitTreeView` / `WorkspaceTerminalPaneView` / `GhosttySurfaceHost`，把 surface 生命周期从 view `onDisappear` 改成由 pane owner 显式管理
+- [x] 同步更新 AGENTS / tasks / lessons，并完成验证闭环
+
+## Review（修复 split 时旧 pane 被重新初始化）
+
+- 直接原因：从你给的日志可以直接看到，执行 `1 -> 2` 分屏时，`pane:1 / surface:1` 又重新打出了一次 `surface-start`，随后 Ghostty 又重新执行了一次 `/usr/bin/login`。这说明问题不是“新 pane 创建太慢”，而是**旧 pane 也被重新初始化了**。结合当前代码链路，根因是：`WorkspaceSplitTreeView.swift` 在 root leaf -> split tree 结构切换时，会让旧的 `WorkspaceTerminalPaneView.swift` 先 `onDisappear`；而 `GhosttySurfaceHost.swift` 之前把 `onDisappear` 直接当成“pane 生命周期结束”，立刻 `releaseSurface()`，导致旧 pane 还没从 topology 里删除就先被销毁，随后新树里的同一 pane 又重新 new 了一次 Ghostty surface。
+- 是否存在设计层诱因：存在。当前 Swift 原生 workspace 已经在 root 层和项目 host 层解决了“隐藏 ≠ 销毁”的问题，但 pane 级 surface 生命周期还停留在“跟着 SwiftUI view 生命周期走”的旧假设。这在普通静态 view 上没问题，但对 Ghostty 这类重资源终端 surface 来说，split/tree 重排、tab 切换、项目切换都可能触发 view 消失/重建；如果没有 dedicated pane owner，就会继续把结构重排误判成真正关闭。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenApp/WorkspaceSurfaceRegistry.swift`，按 `pane.id` 持有稳定的 `GhosttySurfaceHostModel`。同一个 pane 在 split/tree 重排期间会复用同一份 host model / surface，不会因为 view 结构变化重新创建 Ghostty 实例。
+  2. `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceHost.swift` 改成直接消费外部传入的 `GhosttySurfaceHostModel`，并移除“view `onDisappear` 就 `releaseSurface()`”这条错误主线。
+  3. `macos/Sources/DevHavenApp/WorkspaceHostView.swift` 现在通过 `@StateObject private var surfaceRegistry` 统一发放 pane 对应的 host model，并在 pane 真正从 workspace topology 中移除时用 `syncRetainedPaneIDs(...)` 清理；整个 host 销毁时再 `releaseAll()`。
+  4. `macos/Sources/DevHavenApp/WorkspaceSplitTreeView.swift` / `WorkspaceTerminalPaneView.swift` 改成消费 registry 提供的稳定 model，而不是每次视图重建都重新 new 一份 host model。
+- 长期改进建议：后续如果继续做 lazy attach、inherited config 或 Ghostty 原生 split API，对 surface 生命周期仍要坚持同一条边界：**由 pane owner 管逻辑生命周期，不由 SwiftUI view 的短暂出现/消失直接决定**。否则每次做布局重排都会重新踩一遍“旧 pane 被误释放”的坑。
+- 验证证据：
+  - 红灯阶段：新增 `swift test --package-path macos --filter WorkspaceSurfaceRegistryTests` 时首次编译失败，明确报错 `cannot find 'WorkspaceSurfaceRegistry' in scope`。
+  - 定向测试：`swift test --package-path macos --filter WorkspaceSurfaceRegistryTests` 通过（2/2）。
+  - 相关回归：`swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests` 通过（13/13）。
+  - 全量测试：`swift test --package-path macos` 通过（66 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+
+## 收口 Swift 原生 workspace 终端布局 owner（2026-03-20）
+
+- [x] 产出 dedicated workspace owner 设计/实施文档，明确 ViewModel 与项目内布局层拆边界
+- [x] 先补 `GhosttyWorkspaceControllerTests`，锁定 owner 的初始态、tab/pane 变更与标题策略
+- [x] 新增 `GhosttyWorkspaceController.swift`，把单项目 tab/pane mutation 从 `NativeAppViewModel.swift` 中抽出
+- [x] 调整 `OpenWorkspaceSessionState` / `WorkspaceShellView` / `WorkspaceHostView` / `DevHavenApp`，让 workspace 壳直接消费 controller
+- [x] 同步更新 AGENTS / tasks / lessons，并完成验证闭环
+
+## Review（收口 Swift 原生 workspace 终端布局 owner）
+
+- 直接原因：虽然前几轮已经把 root 常驻挂载、进入命令行诊断链和 workspace 左右壳补齐，但**项目内终端布局真相仍然停留在 `NativeAppViewModel.swift`**。`openWorkspaceSessions` 里直接放 `WorkspaceSessionState`，新建/关闭 tab、分屏、焦点切换、缩放和标题同步也都由 ViewModel 直接改 value state，导致多项目导航层和单项目终端布局层仍然缠在一起。
+- 是否存在设计层诱因：存在。当前最明显的诱因不是某个 Ghostty API 没接到，而是**布局 owner 边界不清**：项目级导航、Ghostty action 回推和单项目内 pane tree mutation 都混在全局 ViewModel 里。只要这条边界不收口，后续无论继续接 Ghostty layout manager、inherited config，还是再补侧边栏/持久化，复杂度都会继续回流到全局状态层。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenCore/ViewModels/GhosttyWorkspaceController.swift`，把单项目内 tab/pane mutation 收口成 dedicated owner；controller 内部持有 `WorkspaceSessionState` projection，并统一处理 create/select/move/close tab、split/focus/resize/equalize/zoom/close pane、runtime title 同步。
+  2. `macos/Sources/DevHavenCore/Models/OpenWorkspaceSessionState.swift` 改成只保存 `projectPath + controller`；`NativeAppViewModel.swift` 现在只负责 open sessions、active project、系统 Terminal 打开动作、诊断与只读派生，不再直接维护 pane tree。旧 workspace action 仅保留为 controller 转发兼容层。
+  3. `macos/Sources/DevHavenApp/WorkspaceShellView.swift` / `WorkspaceHostView.swift` 现在直接消费 controller；`Ghostty` 的 tab/split action 与 tab bar / pane 按钮都直接调用 controller，而不是再绕回全局 ViewModel。
+  4. `macos/Sources/DevHavenApp/DevHavenApp.swift` 的 `⌘D -> 向右分屏` 入口也已直接派发到 `activeWorkspaceController`。
+  5. `AGENTS.md`、`tasks/lessons.md`、`docs/plans/2026-03-20-devhaven-swift-ghostty-workspace-controller-{design,plan}.md` 已同步回写 dedicated owner / projection 的新边界。
+- 长期改进建议：后续如果继续把项目内 split/focus/resize 替换为更原生的 Ghostty layout API，或继续接 inherited config / 懒 attach，不要再回到“让 `NativeAppViewModel` 直接改 pane tree”的旧结构；应继续把变化限制在 `GhosttyWorkspaceController` 内部，让 SwiftUI 与项目级 ViewModel 只消费 projection。
+- 验证证据：
+  - 新增 owner 定向测试：`swift test --package-path macos --filter GhosttyWorkspaceControllerTests` 通过（4/4）。
+  - ViewModel 回归：`swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests` 通过（13/13）。
+  - 全量测试：`swift test --package-path macos` 通过（64 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+
+## 修复返回主列表再进 workspace 时 Ghostty surface 全量重建导致假死（2026-03-20）
+
+- [x] 产出最小设计/实施文档，明确 root 级常驻挂载方案
+- [x] 先补失败测试，锁定 AppRoot 内容层的显示/交互切换策略
+- [x] 修改 AppRootView 为主列表/workspace 双层常驻，仅切换可见性与交互
+- [x] 同步 AGENTS / tasks，并完成验证闭环
+
+## Review（修复返回主列表再进 workspace 时 Ghostty surface 全量重建导致假死）
+
+- 直接原因：这次“进入 workspace 后长时间未响应”的根因不是某个项目目录本身慢，也不是 `ghostty_surface_new(...)` 单次调用慢，而是 **`AppRootView.swift` 在主列表 / workspace 之间使用条件挂载**。当用户从 workspace 回到主列表时，整棵 `WorkspaceShellView.swift` 被 root 层卸载，随之触发各个 `GhosttySurfaceHost.swift` 的 `onDisappear -> releaseSurface()`；之后再次进入 workspace，就会把 `openWorkspaceSessions` 里所有项目的 panes/surfaces 一口气全重建，最终出现假死。
+- 是否存在设计层诱因：存在。此前 workspace 已经在项目切换层做了“保活所有 open sessions / hosts”的约束，但 root 层仍保留着“主列表和 workspace 二选一条件挂载”的旧结构，导致上层导航语义和下层终端保活语义彼此打架：项目内切换不卸载，回主列表却整体卸载。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenApp/AppRootContentVisibilityPolicy.swift`，把 root 内容层切换收口为可测试策略：`MainContentView.swift` 与 `WorkspaceShellView.swift` **都保持 mounted**，只切换 `opacity / allowsHitTesting / accessibilityHidden`。
+  2. `AppRootView.swift` 改成 `ZStack` 双层常驻，不再用 `if viewModel.isWorkspacePresented { ... } else { ... }` 在主列表与 workspace 之间切换整棵视图。
+  3. `AGENTS.md` 已同步回写：当前 Swift 原生版除了项目内 host 保活外，root 层也已改为“主列表 / workspace 双层常驻”，后续排查类似假死时，应先检查是否又把 root 层退回条件挂载。
+- 长期改进建议：如果这轮修完后仍有重度 workspace 进入慢，再继续做第二层优化——只为 active project / selected tab / visible pane attach Ghostty surface。但在这之前，不要再回到“workspace 视图可以随意 root-level 卸载”的旧结构，否则任何 lazy attach 都会被整棵卸载重新打回原形。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter AppRootContentVisibilityPolicyTests` 首次运行失败，明确报错 `cannot find 'AppRootContentVisibilityPolicy' in scope`。
+  - 定向测试：`swift test --package-path macos --filter AppRootContentVisibilityPolicyTests` 通过（2/2）。
+  - 全量测试：`swift test --package-path macos` 通过（60 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+
+## 为 Swift 原生 workspace 补进入命令行诊断日志（2026-03-20）
+
+- [x] 产出最小设计/实施文档，明确只加诊断链、不改恢复策略
+- [x] 先补失败测试，锁定诊断汇总内容与埋点触发边界
+- [x] 在 enterWorkspace / WorkspaceShell / Ghostty surface 创建链补诊断日志
+- [x] 同步 AGENTS / tasks，并完成验证闭环
+
+## Review（为 Swift 原生 workspace 补进入命令行诊断日志）
+
+- 直接原因：上一轮只读排查已经把嫌疑收敛到“workspace 恢复链太重”，但代码里还缺少能直接回答这三个问题的证据：本次进入时一共恢复了多少 open sessions、每个 project host 挂载时有多少 tab/pane、每个 Ghostty surface 创建到底花了多少时间。因此即使体感上已经怀疑“不是 cwd 慢，而是恢复太重”，也还没有一条能在真实运行时自证的诊断链。
+- 是否存在设计层诱因：存在。当前原生 workspace 为了保住后台任务，采用的是“session/topology 保活、重新进入时整体挂载”的主线；这本身没错，但如果没有入口级诊断，后续一旦再出现“某个项目进入命令行特别久”，就只能在 shell/cwd/Ghostty/workspace topology 之间反复猜。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenCore/Diagnostics/WorkspaceLaunchDiagnostics.swift`，统一收口结构化诊断事件与日志输出，支持记录 `entryRequested / shellMounted / hostMounted / surfaceCreationStarted / surfaceCreationFinished / surfaceReused` 六类事件，并按 `workspaceId` / `surfaceId` 计算入口累计耗时与 surface 单次创建耗时。
+  2. `NativeAppViewModel.enterWorkspace(_:)` 新增 `workspaceLaunchDiagnostics` 注入与入口埋点，会把目标项目当前的 `tabCount / paneCount` 以及 `openWorkspaceSessions.count` 一起打出来。
+  3. `WorkspaceShellView.swift` 与 `WorkspaceHostView.swift` 分别补 `shell-mounted` / `host-mounted` 日志，帮助区分“进入 workspace 后到底挂了多少项目 host”。
+  4. `GhosttySurfaceHost.swift` 在 `acquireSurfaceView()` 链路补 `surface-start / surface-finish / surface-reused`，能直接看到某个 pane 的 Ghostty surface 是复用还是新建，以及新建到底耗时多少毫秒、是否失败。
+  5. `AGENTS.md` 已同步回写：后续遇到“进入命令行慢”时，优先先看 `WorkspaceLaunchDiagnostics` 这组日志，而不是只凭体感猜 cwd / shell / topology。
+- 长期改进建议：下一步若用户继续反馈某些项目进入仍慢，先基于这条诊断链抓一次真实日志，再决定是否进入“active host / selected tab / visible pane 以外的 Ghostty surface 延迟 attach”主线；不要在没有 fresh 证据的前提下直接改恢复策略。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter WorkspaceLaunchDiagnosticsTests` 与 `swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests` 首次运行均因 `WorkspaceLaunchDiagnostics` / `WorkspaceLaunchDiagnosticEvent` / `workspaceLaunchDiagnostics` 注入点不存在而编译失败，符合“先补失败测试”的预期。
+  - 定向测试：`swift test --package-path macos --filter WorkspaceLaunchDiagnosticsTests` 通过（2/2）；`swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests` 通过（13/13）。
+  - 全量测试：`swift test --package-path macos` 通过（58 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+
+## 诊断“打开项目后进入命令行很慢”（2026-03-20）
+
+- [x] 盘点 Swift 原生 workspace 中“打开项目 -> 创建 Ghostty surface -> 进入 shell”的实际调用链
+- [x] 对照 `/Users/zhaotianzeng/Documents/business/tianzeng/supacode` 的 Ghostty / shell 启动实现，找出关键差异
+- [x] 在慢目录与快目录上做最小耗时采样，判断慢点在 shell 启动、cwd 相关逻辑还是项目级初始化脚本
+- [x] 汇总结论与证据，明确直接原因、设计层诱因、当前建议与后续验证办法
+
+## Review（诊断“打开项目后进入命令行很慢”）
+
+- 直接原因：从当前 Swift 原生代码看，慢点更像 **workspace 恢复/挂载阶段一次性重建 Ghostty surfaces**，而不是目标目录本身的 shell 启动更慢。证据链如下：
+  1. `NativeAppViewModel.enterWorkspace(_:)` 会复用已存在的 `openWorkspaceSessions`，`exitWorkspace()` 只隐藏 workspace，不清空这些会话。
+  2. `WorkspaceShellView.swift` 进入 workspace 时会 `ForEach(openWorkspaceSessions)` 把所有已打开项目的 `WorkspaceHostView` 一起挂上。
+  3. `WorkspaceHostView.swift` 又会 `ForEach(workspace.tabs)` 把当前项目的所有 tab 一起挂上，即使非选中 tab 只是 `opacity(0)` 隐藏。
+  4. `WorkspaceSplitTreeView.swift` / `WorkspaceTerminalPaneView.swift` 会把每个 pane 都落到 `GhosttySurfaceHost`。
+  5. `GhosttyTerminalView.swift::makeNSView` -> `GhosttySurfaceHostModel.acquireSurfaceView()` -> `GhosttyTerminalSurfaceView.init` -> `GhosttyRuntime.createSurface(...)`，说明 **每个被挂载的 pane 都会立即创建一个真实 Ghostty surface / shell**，没有 lazy attach。
+- 是否存在设计层诱因：存在。当前实现为了保住后台任务，选择“隐藏而不销毁”项目 host / tab / pane；但与此同时，重新进入 workspace 时又会把这些保活状态全部重新挂载回来。也就是说，“保活后台终端”和“按需懒恢复”还没有拆层，导致某些项目如果之前开过很多 tab/pane，再次进入时就会明显变慢。除此之外，未发现更明显的目录级 shell 启动缺陷。
+- 当前结论：
+  1. 目录本身不是主要嫌疑。我对 `~/.devhaven/worktrees/DevHaven/swift` 和 `/Users/zhaotianzeng/Documents/business/tianzeng/supacode` 做了最小采样：`git status` / `git rev-parse` 都在约 10~20ms；`zsh -ilc exit` 两边都约 2.1s，差异不大。
+  2. 因此，“某个项目进入命令行明显慢”更可能是 **该项目当前保留的 workspace topology 更重**（更多已打开项目、tab、pane、surface 需要恢复），而不是这个 repo 的 `.git` / `.nvmrc` / package.json 自身让 shell 比 `supacode` 慢了很多。
+  3. `supacode` 之所以主观上更快，更像是它当前要恢复的终端状态更轻，而不是 cwd 进入 shell 的底层成本更低。
+- 长期改进建议：
+  1. 把“保住后台运行态”和“重新进入时是否立即重建全部 surface”拆开，做 **workspace host 保活 + pane/surface 按需懒恢复**。
+  2. 先只为当前激活项目、当前选中 tab、当前可见 pane 立即创建 Ghostty surface；其余 tab/pane 仅保留 topology 元数据，切到它们时再 attach。
+  3. 给 `enterWorkspace` / `WorkspaceHostView` / `GhosttyRuntime.createSurface` 补启动耗时日志，后续就能直接看到是“恢复了几个 host/tab/pane，分别耗时多少”，避免继续凭体感猜。
+- 验证证据：
+  - 代码链路核对：`NativeAppViewModel.swift`、`WorkspaceShellView.swift`、`WorkspaceHostView.swift`、`WorkspaceSplitTreeView.swift`、`WorkspaceTerminalPaneView.swift`、`GhosttyTerminalView.swift`、`GhosttySurfaceHost.swift`、`GhosttySurfaceView.swift`。
+  - 目录级最小采样：`git status --short --branch`、`git status --porcelain=v2 -b --show-stash`、`git rev-parse --show-toplevel`、`zsh -ilc exit`（两目录均执行）。
+
+## 收口 Swift 原生 workspace 终端界面（二次修正，2026-03-20）
+
+- [x] 逐条核对最新视觉反馈，对齐“不显示 Ghostty 顶部 pill / tab 用终端编号 / ⌘D 向右分屏”
+- [x] 先补失败测试，锁定 surface chrome、tab 标题策略与 workspace 级分屏入口
+- [x] 以最少改动修复 UI 展示、tab 标题来源与 app 级快捷键入口
+- [x] 同步更新 AGENTS / tasks / lessons，避免当前 Swift workspace 真相滞后
+- [x] 运行全量测试、构建与 diff 校验，并补 Review
+
+## Review（收口 Swift 原生 workspace 终端界面二次修正）
+
+- 直接原因：你这轮指出的 3 个问题分别来自 3 个不同层次：其一，截图里的 `Ghostty 渲染器正常 / prompt title / pwd` 三块 pill 不是 workspace header，而是 `GhosttySurfaceHost.swift` 自己在终端上方渲染的状态条；其二，tab 名之所以变成路径，是 `Ghostty` 运行时 title 事件继续回写到 `WorkspaceSessionState.updateTitle(...)`，把默认“终端 N”覆盖掉了；其三，`⌘D` 不起效不是 split 模型坏了，而是当前 Swift 原生壳里根本没接这条 workspace 级快捷键，导致没有任何入口把命令派发到 `splitWorkspaceFocusedPane(.right)`。
+- 是否存在设计层诱因：存在。workspace 终端区当前同时承载了三类语义——终端运行态 pill、workspace 自己的 tab 命名、以及 IDE 风格快捷键——但之前没有把“哪些属于 Ghostty runtime、哪些属于 workspace topology、哪些属于 app 壳快捷键”边界钉死，结果很容易出现 shell/path 标题反向污染 UI 真相、以及期望中的快捷键其实还没接线。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 扩展 `WorkspaceChromePolicy.swift`，新增 `showsSurfaceStatusBar`，并让 `GhosttySurfaceHost.swift` 在 workspace 极简模式下隐藏顶部运行态 pill。
+  2. 新增 `WorkspaceTabTitlePolicy.swift`，把默认标题收口成 `终端1/终端2/...`，并让 runtime shell title 不再覆盖 workspace 稳定命名；`WorkspaceTopologyModels.swift` 与对应测试已同步改成无空格编号。
+  3. `NativeAppViewModel.swift` 新增 `splitActiveWorkspaceRight()` 与 `canSplitActiveWorkspace`，`DevHavenApp.swift` 的 `CommandMenu("DevHaven")` 新增 `⌘D -> 向右分屏`，直接派发到当前激活 workspace。
+  4. `AGENTS.md`、`tasks/lessons.md` 已同步回写新的 UI / shortcut / title 真相。
+- 长期改进建议：后续如果继续加快捷键，优先先判定归属层——Ghostty binding、workspace topology 还是 app command——不要再把“缺入口”和“底层终端 bug”混成一个问题；同时 workspace tab 标题若继续保持拓扑真相，就不要再让 shell runtime 事件回写覆盖它。
+- 验证证据：
+  - 红灯阶段：新增 `WorkspaceTabTitlePolicyTests` 时首次编译失败，明确报错 `cannot find 'WorkspaceTabTitlePolicy' in scope`；新增 `testSplitActiveWorkspaceRightAddsPaneToSelectedTab` 时首次编译失败，明确报错 `NativeAppViewModel` 缺少 `splitActiveWorkspaceRight`。
+  - 绿灯阶段：`swift test --package-path macos --filter WorkspaceChromePolicyTests`、`WorkspaceTabTitlePolicyTests`、`NativeAppViewModelWorkspaceEntryTests`、`WorkspaceTopologyTests` 全部通过。
+  - 全量测试：`swift test --package-path macos` 通过（56 tests passed，5 tests skipped，0 failures，时间 2026-03-20 09:47）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+
+## 收口 Swift 原生 workspace 终端界面（2026-03-20）
+
+- [x] 将本轮 workspace 极简终端诉求拆成可执行 checklist，并确认最小改动范围
+- [x] 先补失败测试，锁定 workspace 模式下的 chrome 策略
+- [x] 实现 workspace 模式隐藏全局目录侧栏，以及终端区去 header / pane 工具条
+- [x] 同步更新 AGENTS / tasks / lessons，确保当前 UI 结构文档不滞后
+- [x] 运行定向测试、全量测试/构建与 diff 校验，并补 Review
+
+
+## Review（收口 Swift 原生 workspace 终端界面）
+
+- 直接原因：当前 Swift 原生 workspace 仍残留两层和你最新要求不一致的界面 chrome：一是进入 workspace 后，`AppRootView.swift` 仍会继续显示首页全局 `ProjectSidebarView`，把“目录/热力图/标签”整栏带进 workspace；二是终端主区里，`WorkspaceHostView.swift` 还在显示项目名/路径/系统终端/查看详情/统计 chip，`WorkspaceTerminalPaneView.swift` 还在显示 pane 顶部工具条，导致“系统终端区域直接展示终端”没有真正落实。
+- 是否存在设计层诱因：存在。workspace 壳层信息架构和终端本体 chrome 之前没有被显式拆开：全局 sidebar、workspace 导航、终端 header、pane 工具条都叠在同一条展示链里，导致用户一要求“纯终端”，实现层很容易只删一层又留下另一层。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenApp/WorkspaceChromePolicy.swift`，把“普通浏览模式保留标准 chrome / workspace 模式切到极简 chrome”收口成可测试的纯策略。
+  2. `AppRootView.swift` 现在会在 `viewModel.isWorkspacePresented` 为 true 时隐藏全局 `ProjectSidebarView`，进入 workspace 后不再继续显示首页目录栏。
+  3. `WorkspaceHostView.swift` 去掉了项目 header 常驻展示，`WorkspaceTerminalPaneView.swift` 去掉了 pane 工具条常驻展示，终端区默认直接渲染 Ghostty 内容。
+  4. `WorkspaceShellView.swift` 的本地 sheet 状态同步按 SwiftUI 规则收口为 `@State private`；`AGENTS.md`、`tasks/lessons.md` 已同步回写当前 UI 真相。
+- 长期改进建议：后续如果还需要把“查看详情 / 在系统终端打开 / pane 管理”重新暴露出来，优先把它们放回 workspace 壳层的独立入口或快捷键，不要再次塞回终端主区，否则纯终端体验会再次回退。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter WorkspaceChromePolicyTests` 首次运行失败，明确报错 `cannot find 'WorkspaceChromePolicy' in scope`。
+  - 绿灯阶段：补齐策略与视图接线后，同一条定向测试通过（2 tests, 0 failures）。
+  - 全量测试：`swift test --package-path macos` 通过（53 tests passed，5 tests skipped，0 failures，时间 2026-03-20 09:33）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+
+## 对齐 Tauri workspace 外层壳：左侧已打开项目列表 + 右侧完整终端（2026-03-20）
+
+- [x] 盘点当前 Swift worktree 中 workspace 外层壳、已打开项目状态与现有设计文档
+- [ ] 与用户确认这轮要对齐的边界（仅信息架构，还是连 worktree / 状态点 / 侧栏一起收口）
+- [ ] 基于确认后的边界给出 2-3 个方案取舍与推荐方案
+- [ ] 输出分段设计并等待用户批准，再决定是否进入 implementation plan / 实施
+
 ## 对齐 supacode 的 Ghostty 继承链并评估替换方案（2026-03-19）
 
 - [x] 盘点 `/Users/zhaotianzeng/Documents/business/tianzeng/supacode` 中 Ghostty 的继承/封装结构、初始化链路与最小宿主职责

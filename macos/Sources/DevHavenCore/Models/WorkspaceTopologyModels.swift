@@ -656,7 +656,12 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         let tabID = "\(workspaceId)/tab:\(tabNumber)"
         let pane = makePane(for: tabID)
         let tree = WorkspacePaneTree(root: .leaf(pane), zoomedPaneId: nil)
-        let tab = WorkspaceTabState(id: tabID, title: "终端 \(tabNumber)", tree: tree, focusedPaneId: pane.id)
+        let tab = WorkspaceTabState(
+            id: tabID,
+            title: WorkspaceTabTitlePolicy.defaultTitle(for: tabNumber),
+            tree: tree,
+            focusedPaneId: pane.id
+        )
 
         if let selectedTabId,
            let selectedIndex = tabs.firstIndex(where: { $0.id == selectedTabId }) {
@@ -822,7 +827,10 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        tabs[index].title = trimmed
+        tabs[index].title = WorkspaceTabTitlePolicy.resolveRuntimeTitle(
+            currentTitle: tabs[index].title,
+            runtimeTitle: trimmed
+        )
     }
 
     private var selectedTabIndex: Int? {

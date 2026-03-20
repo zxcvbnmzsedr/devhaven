@@ -5,23 +5,29 @@ import DevHavenCore
 struct WorkspaceHostView: View {
     @Bindable var viewModel: NativeAppViewModel
     let project: Project
-    let workspace: WorkspaceSessionState
+    let workspace: GhosttyWorkspaceController
+    @StateObject private var surfaceRegistry = WorkspaceSurfaceRegistry()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            header
+        let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
+
+        VStack(alignment: .leading, spacing: chromePolicy.showsWorkspaceHeader ? 16 : 0) {
+            if chromePolicy.showsWorkspaceHeader {
+                header
+            }
+
             WorkspaceTabBarView(
                 tabs: workspace.tabs,
                 selectedTabID: workspace.selectedTabId,
                 canSplit: workspace.selectedPane != nil,
-                onSelectTab: { viewModel.selectWorkspaceTab($0, in: project.path) },
-                onCloseTab: { viewModel.closeWorkspaceTab($0, in: project.path) },
-                onCreateTab: { viewModel.createWorkspaceTab(in: project.path) },
+                onSelectTab: { workspace.selectTab($0) },
+                onCloseTab: { workspace.closeTab($0) },
+                onCreateTab: { _ = workspace.createTab() },
                 onSplitHorizontally: {
-                    viewModel.splitWorkspaceFocusedPane(direction: .down, in: project.path)
+                    _ = workspace.splitFocusedPane(direction: .down)
                 },
                 onSplitVertically: {
-                    viewModel.splitWorkspaceFocusedPane(direction: .right, in: project.path)
+                    _ = workspace.splitFocusedPane(direction: .right)
                 }
             )
             ZStack {
@@ -29,34 +35,35 @@ struct WorkspaceHostView: View {
                     WorkspaceSplitTreeView(
                         tab: tab,
                         isTabSelected: tab.id == workspace.selectedTabId,
-                        onFocusPane: { viewModel.focusWorkspacePane($0, in: project.path) },
-                        onClosePane: { viewModel.closeWorkspacePane($0, in: project.path) },
+                        surfaceModelForPane: surfaceModel,
+                        onFocusPane: { workspace.focusPane($0) },
+                        onClosePane: { workspace.closePane($0) },
                         onSplitPane: { paneID, direction in
-                            viewModel.focusWorkspacePane(paneID, in: project.path)
-                            viewModel.splitWorkspaceFocusedPane(direction: direction, in: project.path)
+                            workspace.focusPane(paneID)
+                            _ = workspace.splitFocusedPane(direction: direction)
                         },
                         onFocusDirection: { paneID, direction in
-                            viewModel.focusWorkspacePane(paneID, in: project.path)
-                            viewModel.focusWorkspacePane(direction: direction, in: project.path)
+                            workspace.focusPane(paneID)
+                            workspace.focusPane(direction: direction)
                         },
                         onResizePane: { paneID, direction, amount in
-                            viewModel.focusWorkspacePane(paneID, in: project.path)
-                            viewModel.resizeWorkspaceFocusedPane(direction: direction, amount: amount, in: project.path)
+                            workspace.focusPane(paneID)
+                            workspace.resizeFocusedPane(direction: direction, amount: amount)
                         },
                         onEqualize: { paneID in
-                            viewModel.focusWorkspacePane(paneID, in: project.path)
-                            viewModel.equalizeWorkspaceSplits(in: project.path)
+                            workspace.focusPane(paneID)
+                            workspace.equalizeSelectedTabSplits()
                         },
                         onToggleZoom: { paneID in
-                            viewModel.focusWorkspacePane(paneID, in: project.path)
-                            viewModel.toggleWorkspaceFocusedPaneZoom(in: project.path)
+                            workspace.focusPane(paneID)
+                            workspace.toggleZoomOnFocusedPane()
                         },
-                        onSurfaceExit: { viewModel.closeWorkspacePane($0, in: project.path) },
+                        onSurfaceExit: { workspace.closePane($0) },
                         onUpdateTabTitle: { title in
-                            viewModel.updateWorkspaceTabTitle(title, for: tab.id, in: project.path)
+                            workspace.updateTitle(for: tab.id, title: title)
                         },
                         onNewTab: {
-                            viewModel.createWorkspaceTab(in: project.path)
+                            _ = workspace.createTab()
                             return true
                         },
                         onCloseTabAction: { mode in
@@ -70,7 +77,7 @@ struct WorkspaceHostView: View {
                             guard tab.id == workspace.selectedTabId else {
                                 return
                             }
-                            viewModel.setWorkspaceSelectedTabSplitRatio(at: path, ratio: ratio, in: project.path)
+                            workspace.setSelectedTabSplitRatio(at: path, ratio: ratio)
                         }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -82,8 +89,20 @@ struct WorkspaceHostView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(20)
         .background(NativeTheme.window)
+        .onAppear {
+            surfaceRegistry.syncRetainedPaneIDs(retainedPaneIDs)
+            WorkspaceLaunchDiagnostics.shared.recordHostMounted(
+                workspace: workspace.sessionState,
+                isActive: project.path == viewModel.activeWorkspaceProjectPath
+            )
+        }
+        .onChange(of: retainedPaneIDs) { _, paneIDs in
+            surfaceRegistry.syncRetainedPaneIDs(paneIDs)
+        }
+        .onDisappear {
+            surfaceRegistry.releaseAll()
+        }
     }
 
     private var header: some View {
@@ -163,16 +182,78 @@ struct WorkspaceHostView: View {
         .clipShape(.rect(cornerRadius: 10))
     }
 
+    private var retainedPaneIDs: Set<String> {
+        Set(workspace.tabs.flatMap(\.leaves).map(\.id))
+    }
+
+    private func surfaceModel(for pane: WorkspacePaneState) -> GhosttySurfaceHostModel {
+        surfaceRegistry.model(
+            for: pane,
+            onFocusChange: { focused in
+                guard focused else { return }
+                workspace.focusPane(pane.id)
+            },
+            onSurfaceExit: {
+                workspace.closePane(pane.id)
+            },
+            onTabTitleChange: { title in
+                workspace.updateTitle(for: pane.request.tabId, title: title)
+            },
+            onNewTab: {
+                _ = workspace.createTab()
+                return true
+            },
+            onCloseTab: { mode in
+                self.handleCloseTab(mode, tabID: pane.request.tabId)
+            },
+            onGotoTab: { target in
+                self.handleGotoTab(target)
+            },
+            onMoveTab: { move in
+                self.handleMoveTab(move, tabID: pane.request.tabId)
+            },
+            onSplitAction: { action in
+                workspace.focusPane(pane.id)
+                return self.handleSplitAction(action, paneID: pane.id)
+            }
+        )
+    }
+
+    private func handleSplitAction(_ action: GhosttySplitAction, paneID: String) -> Bool {
+        switch action {
+        case let .newSplit(direction):
+            workspace.focusPane(paneID)
+            _ = workspace.splitFocusedPane(direction: direction)
+            return true
+        case let .gotoSplit(direction):
+            workspace.focusPane(paneID)
+            workspace.focusPane(direction: direction)
+            return true
+        case let .resizeSplit(direction, amount):
+            workspace.focusPane(paneID)
+            workspace.resizeFocusedPane(direction: direction, amount: amount)
+            return true
+        case .equalizeSplits:
+            workspace.focusPane(paneID)
+            workspace.equalizeSelectedTabSplits()
+            return true
+        case .toggleSplitZoom:
+            workspace.focusPane(paneID)
+            workspace.toggleZoomOnFocusedPane()
+            return true
+        }
+    }
+
     private func handleCloseTab(_ mode: ghostty_action_close_tab_mode_e, tabID: String) -> Bool {
         switch mode {
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_THIS:
-            viewModel.closeWorkspaceTab(tabID, in: project.path)
+            workspace.closeTab(tabID)
             return true
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_OTHER:
-            viewModel.closeWorkspaceOtherTabs(keeping: tabID, in: project.path)
+            workspace.closeOtherTabs(keeping: tabID)
             return true
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_RIGHT:
-            viewModel.closeWorkspaceTabsToRight(of: tabID, in: project.path)
+            workspace.closeTabsToRight(of: tabID)
             return true
         default:
             return false
@@ -182,19 +263,19 @@ struct WorkspaceHostView: View {
     private func handleGotoTab(_ target: ghostty_action_goto_tab_e) -> Bool {
         let raw = Int(target.rawValue)
         if raw > 0 {
-            viewModel.gotoWorkspaceTab(at: raw, in: project.path)
+            workspace.gotoTab(at: raw)
             return true
         }
 
         switch raw {
         case Int(GHOSTTY_GOTO_TAB_PREVIOUS.rawValue):
-            viewModel.gotoPreviousWorkspaceTab(in: project.path)
+            workspace.gotoPreviousTab()
             return true
         case Int(GHOSTTY_GOTO_TAB_NEXT.rawValue):
-            viewModel.gotoNextWorkspaceTab(in: project.path)
+            workspace.gotoNextTab()
             return true
         case Int(GHOSTTY_GOTO_TAB_LAST.rawValue):
-            viewModel.gotoLastWorkspaceTab(in: project.path)
+            workspace.gotoLastTab()
             return true
         default:
             return false
@@ -206,7 +287,7 @@ struct WorkspaceHostView: View {
         guard amount != 0 else {
             return false
         }
-        viewModel.moveWorkspaceTab(tabID, by: amount, in: project.path)
+        workspace.moveTab(id: tabID, by: amount)
         return true
     }
 }

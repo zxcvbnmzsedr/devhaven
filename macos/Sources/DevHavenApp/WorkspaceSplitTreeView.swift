@@ -5,6 +5,7 @@ import DevHavenCore
 struct WorkspaceSplitTreeView: View {
     let tab: WorkspaceTabState
     let isTabSelected: Bool
+    let surfaceModelForPane: (WorkspacePaneState) -> GhosttySurfaceHostModel
     let onFocusPane: (String) -> Void
     let onClosePane: (String) -> Void
     let onSplitPane: (String, WorkspacePaneSplitDirection) -> Void
@@ -26,6 +27,7 @@ struct WorkspaceSplitTreeView: View {
                let zoomedPane = tab.tree.find(paneID: zoomedPaneID) {
                 WorkspaceTerminalPaneView(
                     pane: zoomedPane,
+                    model: surfaceModelForPane(zoomedPane),
                     isFocused: isTabSelected && tab.focusedPaneId == zoomedPane.id,
                     isZoomed: true,
                     onFocusPane: onFocusPane,
@@ -55,6 +57,7 @@ struct WorkspaceSplitTreeView: View {
         case let .leaf(pane):
             return AnyView(WorkspaceTerminalPaneView(
                 pane: pane,
+                model: surfaceModelForPane(pane),
                 isFocused: isTabSelected && tab.focusedPaneId == pane.id,
                 isZoomed: false,
                 onFocusPane: onFocusPane,

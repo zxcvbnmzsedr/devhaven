@@ -148,72 +148,39 @@ enum GhosttySurfaceHostError: LocalizedError {
 }
 
 struct GhosttySurfaceHost: View {
-    let request: WorkspaceTerminalLaunchRequest
     let isFocused: Bool
-    let onFocusChange: ((Bool) -> Void)?
-    let onSurfaceExit: (() -> Void)?
-    let onTabTitleChange: ((String) -> Void)?
-    let onNewTab: (() -> Bool)?
-    let onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)?
-    let onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)?
-    let onMoveTab: ((ghostty_action_move_tab_s) -> Bool)?
-    let onSplitAction: ((GhosttySplitAction) -> Bool)?
+    let chromePolicy: WorkspaceChromePolicy
 
-    @StateObject private var model: GhosttySurfaceHostModel
+    @ObservedObject var model: GhosttySurfaceHostModel
 
     init(
-        request: WorkspaceTerminalLaunchRequest,
+        model: GhosttySurfaceHostModel,
         isFocused: Bool = false,
-        onFocusChange: ((Bool) -> Void)? = nil,
-        onSurfaceExit: (() -> Void)? = nil,
-        onTabTitleChange: ((String) -> Void)? = nil,
-        onNewTab: (() -> Bool)? = nil,
-        onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)? = nil,
-        onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
-        onMoveTab: ((ghostty_action_move_tab_s) -> Bool)? = nil,
-        onSplitAction: ((GhosttySplitAction) -> Bool)? = nil
+        chromePolicy: WorkspaceChromePolicy = .workspaceMinimal
     ) {
-        self.request = request
+        self.model = model
         self.isFocused = isFocused
-        self.onFocusChange = onFocusChange
-        self.onSurfaceExit = onSurfaceExit
-        self.onTabTitleChange = onTabTitleChange
-        self.onNewTab = onNewTab
-        self.onCloseTab = onCloseTab
-        self.onGotoTab = onGotoTab
-        self.onMoveTab = onMoveTab
-        self.onSplitAction = onSplitAction
-        _model = StateObject(
-            wrappedValue: GhosttySurfaceHostModel(
-                request: request,
-                onFocusChange: onFocusChange,
-                onSurfaceExit: onSurfaceExit,
-                onTabTitleChange: onTabTitleChange,
-                onNewTab: onNewTab,
-                onCloseTab: onCloseTab,
-                onGotoTab: onGotoTab,
-                onMoveTab: onMoveTab,
-                onSplitAction: onSplitAction
-            )
-        )
+        self.chromePolicy = chromePolicy
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                statusChip(
-                    title: model.terminalStatusText,
-                    background: model.processState == .running
-                        ? model.appearance.successChipBackground
-                        : model.appearance.warningChipBackground
-                )
-                if let title = model.surfaceTitle, !title.isEmpty {
-                    statusChip(title: title, background: model.appearance.chipBackground)
+            if chromePolicy.showsSurfaceStatusBar {
+                HStack(spacing: 12) {
+                    statusChip(
+                        title: model.terminalStatusText,
+                        background: model.processState == .running
+                            ? model.appearance.successChipBackground
+                            : model.appearance.warningChipBackground
+                    )
+                    if let title = model.surfaceTitle, !title.isEmpty {
+                        statusChip(title: title, background: model.appearance.chipBackground)
+                    }
+                    if let pwd = model.surfaceWorkingDirectory, !pwd.isEmpty {
+                        statusChip(title: pwd, background: model.appearance.chipBackground, monospaced: true)
+                    }
+                    Spacer(minLength: 0)
                 }
-                if let pwd = model.surfaceWorkingDirectory, !pwd.isEmpty {
-                    statusChip(title: pwd, background: model.appearance.chipBackground, monospaced: true)
-                }
-                Spacer(minLength: 0)
             }
 
             if let initializationError = model.initializationError {
@@ -262,9 +229,6 @@ struct GhosttySurfaceHost: View {
                     )
             }
         }
-        .onDisappear {
-            model.releaseSurface()
-        }
     }
 
     private func statusChip(title: String, background: Color, monospaced: Bool = false) -> some View {
@@ -299,6 +263,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
     private let onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)?
     private let onMoveTab: ((ghostty_action_move_tab_s) -> Bool)?
     private let onSplitAction: ((GhosttySplitAction) -> Bool)?
+    private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
     private var ownedSurfaceView: GhosttyTerminalSurfaceView?
 
     init(
@@ -311,7 +276,8 @@ final class GhosttySurfaceHostModel: ObservableObject {
         onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
         onMoveTab: ((ghostty_action_move_tab_s) -> Bool)? = nil,
         onSplitAction: ((GhosttySplitAction) -> Bool)? = nil,
-        appRuntime: GhosttyAppRuntime = .shared
+        appRuntime: GhosttyAppRuntime = .shared,
+        workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics = .shared
     ) {
         self.request = request
         self.appRuntime = appRuntime
@@ -323,6 +289,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
         self.onGotoTab = onGotoTab
         self.onMoveTab = onMoveTab
         self.onSplitAction = onSplitAction
+        self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
         self.terminalRuntime = appRuntime.runtime
         self.surfaceWorkingDirectory = request.projectPath
         self.appearance = terminalRuntime?.appearance ?? .fallback
@@ -332,6 +299,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
 
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
         if let ownedSurfaceView {
+            workspaceLaunchDiagnostics.recordSurfaceReused(request: request)
             if preferredFocus {
                 ownedSurfaceView.requestFocus()
             }
@@ -365,6 +333,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
         bridge.onMoveTab = onMoveTab
         bridge.onSplitAction = onSplitAction
 
+        workspaceLaunchDiagnostics.recordSurfaceCreationStarted(request: request)
         let view = GhosttyTerminalSurfaceView(
             runtime: terminalRuntime,
             request: request,
@@ -376,10 +345,22 @@ final class GhosttySurfaceHostModel: ObservableObject {
         }
         ownedSurfaceView = view
         if let error = view.initializationError {
+            workspaceLaunchDiagnostics.recordSurfaceCreationFinished(
+                request: request,
+                status: .failed,
+                errorDescription: error.localizedDescription
+            )
             initializationError = error.localizedDescription
             processState = .failed
-        } else if preferredFocus {
-            view.requestFocus()
+        } else {
+            workspaceLaunchDiagnostics.recordSurfaceCreationFinished(
+                request: request,
+                status: .success,
+                errorDescription: nil
+            )
+            if preferredFocus {
+                view.requestFocus()
+            }
         }
         return view
     }

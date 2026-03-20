@@ -4,6 +4,7 @@ import DevHavenCore
 
 struct WorkspaceTerminalPaneView: View {
     let pane: WorkspacePaneState
+    let model: GhosttySurfaceHostModel
     let isFocused: Bool
     let isZoomed: Bool
     let onFocusPane: (String) -> Void
@@ -21,34 +22,34 @@ struct WorkspaceTerminalPaneView: View {
     let onMoveTabAction: (ghostty_action_move_tab_s) -> Bool
 
     var body: some View {
-        VStack(spacing: 10) {
-            header
-            GhosttySurfaceHost(
-                request: pane.request,
-                isFocused: isFocused,
-                onFocusChange: { focused in
-                    guard focused else { return }
-                    onFocusPane(pane.id)
-                },
-                onSurfaceExit: {
-                    onSurfaceExit(pane.id)
-                },
-                onTabTitleChange: onUpdateTabTitle,
-                onNewTab: onNewTab,
-                onCloseTab: onCloseTabAction,
-                onGotoTab: onGotoTabAction,
-                onMoveTab: onMoveTabAction,
-                onSplitAction: handleSplitAction
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
+
+        Group {
+            if chromePolicy.showsPaneHeader {
+                VStack(spacing: 10) {
+                    header
+                    surfaceHost
+                }
+                .padding(10)
+                .background(NativeTheme.surface)
+                .clipShape(.rect(cornerRadius: 14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(isFocused ? NativeTheme.accent.opacity(0.8) : NativeTheme.border, lineWidth: isFocused ? 2 : 1)
+                )
+            } else {
+                surfaceHost
+            }
         }
-        .padding(10)
-        .background(NativeTheme.surface)
-        .clipShape(.rect(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(isFocused ? NativeTheme.accent.opacity(0.8) : NativeTheme.border, lineWidth: isFocused ? 2 : 1)
+    }
+
+    private var surfaceHost: some View {
+        GhosttySurfaceHost(
+            model: model,
+            isFocused: isFocused,
+            chromePolicy: .workspaceMinimal
         )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var header: some View {

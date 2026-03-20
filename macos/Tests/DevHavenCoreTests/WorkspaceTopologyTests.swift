@@ -7,7 +7,7 @@ final class WorkspaceTopologyTests: XCTestCase {
 
         XCTAssertEqual(session.tabs.count, 1)
         XCTAssertEqual(session.selectedTab?.id, session.selectedTabId)
-        XCTAssertEqual(session.selectedTab?.title, "终端 1")
+        XCTAssertEqual(session.selectedTab?.title, "终端1")
         XCTAssertEqual(session.selectedTab?.leaves.count, 1)
         XCTAssertEqual(session.selectedPane?.request.projectPath, "/tmp/devhaven")
         XCTAssertEqual(session.selectedPane?.request.workspaceId, "workspace:test")
@@ -23,7 +23,7 @@ final class WorkspaceTopologyTests: XCTestCase {
         XCTAssertEqual(session.tabs[0].id, firstTabID)
         XCTAssertEqual(session.tabs[1].id, secondTab.id)
         XCTAssertEqual(session.selectedTabId, secondTab.id)
-        XCTAssertEqual(session.selectedTab?.title, "终端 2")
+        XCTAssertEqual(session.selectedTab?.title, "终端2")
     }
 
     func testSplitFocusedPaneCreatesNewLeafAndFocusesIt() {

@@ -23,6 +23,12 @@ struct WorkspaceShellView: View {
                 .background(NativeTheme.window)
         }
         .background(NativeTheme.window)
+        .onAppear {
+            WorkspaceLaunchDiagnostics.shared.recordShellMounted(
+                activeProjectPath: viewModel.activeWorkspaceProjectPath,
+                openSessionCount: viewModel.openWorkspaceSessions.count
+            )
+        }
         .sheet(isPresented: $isProjectPickerPresented) {
             WorkspaceProjectPickerView(
                 projects: viewModel.availableWorkspaceProjects,
@@ -52,7 +58,7 @@ struct WorkspaceShellView: View {
                         WorkspaceHostView(
                             viewModel: viewModel,
                             project: project,
-                            workspace: session.workspaceState
+                            workspace: session.controller
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(session.projectPath == viewModel.activeWorkspaceProjectPath ? 1 : 0)

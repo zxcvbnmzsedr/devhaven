@@ -9,6 +9,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let projectDocumentLoader: @Sendable (String) throws -> ProjectDocumentSnapshot
     @ObservationIgnored private let gitDailyCollector: @Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult]
     @ObservationIgnored private let gitDailyCollectorAsync: @Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult]
+    @ObservationIgnored private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
@@ -82,12 +83,14 @@ public final class NativeAppViewModel {
         projectDocumentLoader: (@Sendable (String) throws -> ProjectDocumentSnapshot)? = nil,
         gitDailyCollector: (@Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult])? = nil,
         gitDailyCollectorAsync: (@Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult])? = nil,
+        workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics = .shared,
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil
     ) {
         self.store = store
         self.projectDocumentLoader = projectDocumentLoader ?? loadProjectDocumentFromDisk
         self.gitDailyCollector = gitDailyCollector ?? collectGitDaily
         self.gitDailyCollectorAsync = gitDailyCollectorAsync ?? collectGitDailyAsync
+        self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
         self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.snapshot = NativeAppSnapshot()
         self.selectedProjectPath = nil
@@ -157,19 +160,27 @@ public final class NativeAppViewModel {
         return visibleProjects.filter { !openedPaths.contains($0.path) }
     }
 
-    public var activeWorkspaceState: WorkspaceSessionState? {
+    public var activeWorkspaceController: GhosttyWorkspaceController? {
         guard let activeWorkspaceProjectPath else {
             return nil
         }
-        return openWorkspaceSessions.first(where: { $0.projectPath == activeWorkspaceProjectPath })?.workspaceState
+        return openWorkspaceSessions.first(where: { $0.projectPath == activeWorkspaceProjectPath })?.controller
+    }
+
+    public var activeWorkspaceState: WorkspaceSessionState? {
+        activeWorkspaceController?.sessionState
     }
 
     public var activeWorkspaceLaunchRequest: WorkspaceTerminalLaunchRequest? {
-        activeWorkspaceState?.selectedPane?.request
+        activeWorkspaceController?.selectedPane?.request
     }
 
     public var isWorkspacePresented: Bool {
-        activeWorkspaceProjectPath != nil && activeWorkspaceState != nil
+        activeWorkspaceProjectPath != nil && activeWorkspaceController != nil
+    }
+
+    public var canSplitActiveWorkspace: Bool {
+        activeWorkspaceController?.selectedPane != nil
     }
 
     public var directoryRows: [DirectoryRow] {
@@ -375,6 +386,12 @@ public final class NativeAppViewModel {
         openWorkspaceSessionIfNeeded(for: path)
         activeWorkspaceProjectPath = path
         isDetailPanelPresented = false
+        if let controller = activeWorkspaceController {
+            workspaceLaunchDiagnostics.recordEntryRequested(
+                workspace: controller.sessionState,
+                openSessionCount: openWorkspaceSessions.count
+            )
+        }
         scheduleSelectedProjectDocumentRefresh()
     }
 
@@ -417,117 +434,83 @@ public final class NativeAppViewModel {
     }
 
     public func createWorkspaceTab(in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            _ = state.createTab()
-        }
+        _ = workspaceController(for: projectPath)?.createTab()
     }
 
     public func selectWorkspaceTab(_ tabID: String, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.selectTab(tabID)
-        }
+        workspaceController(for: projectPath)?.selectTab(tabID)
     }
 
     public func moveWorkspaceTab(_ tabID: String, by amount: Int, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.moveTab(id: tabID, by: amount)
-        }
+        workspaceController(for: projectPath)?.moveTab(id: tabID, by: amount)
     }
 
     public func closeWorkspaceTab(_ tabID: String, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.closeTab(tabID)
-        }
+        workspaceController(for: projectPath)?.closeTab(tabID)
     }
 
     public func closeWorkspaceOtherTabs(keeping tabID: String, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.closeOtherTabs(keeping: tabID)
-        }
+        workspaceController(for: projectPath)?.closeOtherTabs(keeping: tabID)
     }
 
     public func closeWorkspaceTabsToRight(of tabID: String, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.closeTabsToRight(of: tabID)
-        }
+        workspaceController(for: projectPath)?.closeTabsToRight(of: tabID)
     }
 
     public func gotoPreviousWorkspaceTab(in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.gotoPreviousTab()
-        }
+        workspaceController(for: projectPath)?.gotoPreviousTab()
     }
 
     public func gotoNextWorkspaceTab(in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.gotoNextTab()
-        }
+        workspaceController(for: projectPath)?.gotoNextTab()
     }
 
     public func gotoLastWorkspaceTab(in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.gotoLastTab()
-        }
+        workspaceController(for: projectPath)?.gotoLastTab()
     }
 
     public func gotoWorkspaceTab(at index: Int, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.gotoTab(at: index)
-        }
+        workspaceController(for: projectPath)?.gotoTab(at: index)
     }
 
     public func splitWorkspaceFocusedPane(direction: WorkspacePaneSplitDirection, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            _ = state.splitFocusedPane(direction: direction)
-        }
+        _ = workspaceController(for: projectPath)?.splitFocusedPane(direction: direction)
+    }
+
+    public func splitActiveWorkspaceRight() {
+        splitWorkspaceFocusedPane(direction: .right)
     }
 
     public func focusWorkspacePane(_ paneID: String, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.focusPane(paneID)
-        }
+        workspaceController(for: projectPath)?.focusPane(paneID)
     }
 
     public func focusWorkspacePane(direction: WorkspacePaneFocusDirection, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.focusPane(direction: direction)
-        }
+        workspaceController(for: projectPath)?.focusPane(direction: direction)
     }
 
     public func closeWorkspacePane(_ paneID: String?, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.closePane(paneID)
-        }
+        workspaceController(for: projectPath)?.closePane(paneID)
     }
 
     public func resizeWorkspaceFocusedPane(direction: WorkspacePaneSplitDirection, amount: UInt16, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.resizeFocusedPane(direction: direction, amount: amount)
-        }
+        workspaceController(for: projectPath)?.resizeFocusedPane(direction: direction, amount: amount)
     }
 
     public func equalizeWorkspaceSplits(in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.equalizeSelectedTabSplits()
-        }
+        workspaceController(for: projectPath)?.equalizeSelectedTabSplits()
     }
 
     public func toggleWorkspaceFocusedPaneZoom(in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.toggleZoomOnFocusedPane()
-        }
+        workspaceController(for: projectPath)?.toggleZoomOnFocusedPane()
     }
 
     public func setWorkspaceSelectedTabSplitRatio(at path: WorkspacePaneTree.Path, ratio: Double, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.setSelectedTabSplitRatio(at: path, ratio: ratio)
-        }
+        workspaceController(for: projectPath)?.setSelectedTabSplitRatio(at: path, ratio: ratio)
     }
 
     public func updateWorkspaceTabTitle(_ title: String, for tabID: String, in projectPath: String? = nil) {
-        updateWorkspaceState(for: projectPath) { state in
-            state.updateTitle(for: tabID, title: title)
-        }
+        workspaceController(for: projectPath)?.updateTitle(for: tabID, title: title)
     }
 
     public func openWorkspaceInTerminal(_ projectPath: String? = nil) throws {
@@ -909,24 +892,17 @@ public final class NativeAppViewModel {
         openWorkspaceSessions.append(
             OpenWorkspaceSessionState(
                 projectPath: path,
-                workspaceState: WorkspaceSessionState(projectPath: path)
+                controller: GhosttyWorkspaceController(projectPath: path)
             )
         )
     }
 
-    private func updateWorkspaceState(
-        for projectPath: String? = nil,
-        _ body: (inout WorkspaceSessionState) -> Void
-    ) {
+    private func workspaceController(for projectPath: String? = nil) -> GhosttyWorkspaceController? {
         let targetProjectPath = projectPath ?? activeWorkspaceProjectPath
-        guard let targetProjectPath,
-              let index = openWorkspaceSessions.firstIndex(where: { $0.projectPath == targetProjectPath })
-        else {
-            return
+        guard let targetProjectPath else {
+            return nil
         }
-        var state = openWorkspaceSessions[index].workspaceState
-        body(&state)
-        openWorkspaceSessions[index].workspaceState = state
+        return openWorkspaceSessions.first(where: { $0.projectPath == targetProjectPath })?.controller
     }
 }
 

@@ -57,7 +57,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
     func testGhosttyPrintableInputDoesNotDuplicateCharacters() throws {
         try requireSmokeEnabled()
 
-        let (_, view) = try makeInteractiveSurfaceView()
+        let view = try makeInteractiveSurfaceView()
 
         view.keyDown(with: makeKeyEvent(characters: "z", charactersIgnoringModifiers: "z", keyCode: 6))
         view.keyDown(with: makeKeyEvent(characters: "v", charactersIgnoringModifiers: "v", keyCode: 9))
@@ -71,7 +71,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
     func testGhosttyPromptInputDoesNotAppendPromptRedrawArtifactsForPwd() throws {
         try requireSmokeEnabled()
 
-        let (_, view) = try makeInteractiveSurfaceView()
+        let view = try makeInteractiveSurfaceView()
 
         let events = [
             makeKeyEvent(characters: "p", charactersIgnoringModifiers: "p", keyCode: 35),
@@ -101,7 +101,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
     func testGhosttyMarkedTextPreeditDoesNotCommitIntermediateComposition() throws {
         try requireSmokeEnabled()
 
-        let (_, view) = try makeInteractiveSurfaceView()
+        let view = try makeInteractiveSurfaceView()
 
         let textInputClient: NSTextInputClient = view
 
@@ -122,7 +122,8 @@ final class GhosttySurfaceHostTests: XCTestCase {
     func testGhosttyControlDExitTearsDownSurfaceWithoutLockingHost() throws {
         try requireSmokeEnabled()
 
-        let (model, view) = try makeInteractiveSurfaceView()
+        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let view = try makeInteractiveSurfaceView(model: model)
 
         view.debugHandleProcessClosed(processAlive: false)
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
@@ -132,10 +133,10 @@ final class GhosttySurfaceHostTests: XCTestCase {
         XCTAssertEqual(model.terminalStatusText, "终端已退出")
     }
 
-    private func makeInteractiveSurfaceView() throws -> (GhosttySurfaceHostModel, GhosttyTerminalSurfaceView) {
+    private func makeInteractiveSurfaceView(model: GhosttySurfaceHostModel? = nil) throws -> GhosttyTerminalSurfaceView {
         try requireSmokeEnabled()
 
-        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let model = model ?? GhosttySurfaceHostModel(request: makeRequest())
         let view = model.acquireSurfaceView()
         guard view.surface != nil else {
             throw XCTSkip("当前 xctest 进程下 Ghostty surface 创建失败：\(model.initializationError ?? "未知错误")")
@@ -149,7 +150,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
         window.makeFirstResponder(view)
         window.displayIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
-        return (model, view)
+        return view
     }
 
     private func requireSmokeEnabled() throws {

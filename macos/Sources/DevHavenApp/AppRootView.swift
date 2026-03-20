@@ -6,13 +6,20 @@ struct AppRootView: View {
     @Bindable var viewModel: NativeAppViewModel
 
     var body: some View {
+        let chromePolicy = WorkspaceChromePolicy.resolve(isWorkspacePresented: viewModel.isWorkspacePresented)
+        let contentVisibilityPolicy = AppRootContentVisibilityPolicy.resolve(
+            isWorkspacePresented: viewModel.isWorkspacePresented
+        )
+
         ZStack(alignment: .trailing) {
             HStack(spacing: 0) {
-                ProjectSidebarView(viewModel: viewModel)
-                    .frame(width: 240)
-                    .background(NativeTheme.sidebar)
+                if chromePolicy.showsGlobalSidebar {
+                    ProjectSidebarView(viewModel: viewModel)
+                        .frame(width: 240)
+                        .background(NativeTheme.sidebar)
+                }
 
-                primaryContent
+                primaryContent(contentVisibilityPolicy: contentVisibilityPolicy)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(NativeTheme.window)
             }
@@ -78,12 +85,20 @@ struct AppRootView: View {
     }
 
     @ViewBuilder
-    private var primaryContent: some View {
-        if viewModel.isWorkspacePresented {
-            WorkspaceShellView(viewModel: viewModel)
-        } else {
+    private func primaryContent(contentVisibilityPolicy: AppRootContentVisibilityPolicy) -> some View {
+        ZStack {
             MainContentView(viewModel: viewModel)
+                .opacity(contentVisibilityPolicy.mainContentOpacity)
+                .allowsHitTesting(contentVisibilityPolicy.mainContentAllowsHitTesting)
+                .accessibilityHidden(contentVisibilityPolicy.mainContentOpacity == 0)
+
+            WorkspaceShellView(viewModel: viewModel)
+                .opacity(contentVisibilityPolicy.workspaceContentOpacity)
+                .allowsHitTesting(contentVisibilityPolicy.workspaceContentAllowsHitTesting)
+                .accessibilityHidden(contentVisibilityPolicy.workspaceContentOpacity == 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(NativeTheme.window)
     }
 }
 

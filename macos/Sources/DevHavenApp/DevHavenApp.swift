@@ -33,6 +33,14 @@ struct DevHavenApp: App {
                     viewModel.revealRecycleBin()
                 }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("向右分屏") {
+                    _ = viewModel.activeWorkspaceController?.splitFocusedPane(direction: .right)
+                }
+                .keyboardShortcut("d", modifiers: [.command])
+                .disabled(viewModel.activeWorkspaceController?.selectedPane == nil)
             }
         }
     }

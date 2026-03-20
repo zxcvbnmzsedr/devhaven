@@ -4,7 +4,8 @@ import XCTest
 @MainActor
 final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
     func testEnterWorkspaceTracksActiveProjectAndCreatesSingleTabSinglePaneSession() {
-        let viewModel = makeViewModel()
+        let diagnostics = DiagnosticsCapture()
+        let viewModel = makeViewModel(diagnostics: diagnostics.diagnostics)
         let project = makeProject()
         viewModel.snapshot.projects = [project]
         viewModel.isDetailPanelPresented = true
@@ -14,10 +15,23 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedProjectPath, project.path)
         XCTAssertEqual(viewModel.activeWorkspaceProjectPath, project.path)
         XCTAssertEqual(viewModel.activeWorkspaceProject?.path, project.path)
+        XCTAssertIdentical(viewModel.activeWorkspaceController, viewModel.openWorkspaceSessions.first?.controller)
         XCTAssertFalse(viewModel.isDetailPanelPresented)
         XCTAssertEqual(viewModel.activeWorkspaceState?.tabs.count, 1)
         XCTAssertEqual(viewModel.activeWorkspaceState?.selectedTab?.leaves.count, 1)
         XCTAssertEqual(viewModel.activeWorkspaceLaunchRequest?.projectPath, project.path)
+        XCTAssertEqual(
+            diagnostics.events,
+            [
+                .entryRequested(
+                    workspaceId: try! XCTUnwrap(viewModel.activeWorkspaceState?.workspaceId),
+                    projectPath: project.path,
+                    openSessionCount: 1,
+                    tabCount: 1,
+                    paneCount: 1
+                ),
+            ]
+        )
     }
 
 
@@ -197,6 +211,17 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         XCTAssertFalse(viewModel.isWorkspacePresented)
     }
 
+    func testSplitActiveWorkspaceRightAddsPaneToSelectedTab() {
+        let viewModel = makeViewModel()
+        let project = makeProject()
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        viewModel.splitActiveWorkspaceRight()
+
+        XCTAssertEqual(viewModel.activeWorkspaceState?.selectedTab?.leaves.count, 2)
+    }
+
     func testOpenWorkspaceInTerminalRunsOpenCommandForActiveProjectPath() throws {
         let capture = CommandCapture()
         let viewModel = makeViewModel { executable, arguments in
@@ -227,6 +252,7 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
     }
 
     private func makeViewModel(
+        diagnostics: WorkspaceLaunchDiagnostics = .shared,
         terminalCommandRunner: @escaping @Sendable (String, [String]) throws -> Void = { _, _ in }
     ) -> NativeAppViewModel {
         NativeAppViewModel(
@@ -234,6 +260,7 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
             projectDocumentLoader: { _ in ProjectDocumentSnapshot(notes: nil, todoItems: [], readmeFallback: nil) },
             gitDailyCollector: { _, _ in [] },
             gitDailyCollectorAsync: { _, _, _ in [] },
+            workspaceLaunchDiagnostics: diagnostics,
             terminalCommandRunner: terminalCommandRunner
         )
     }
@@ -277,4 +304,17 @@ private enum TestTerminalRunnerError: LocalizedError {
             return "terminal launch failed"
         }
     }
+}
+
+@MainActor
+private final class DiagnosticsCapture {
+    var events = [WorkspaceLaunchDiagnosticEvent]()
+
+    lazy var diagnostics = WorkspaceLaunchDiagnostics(
+        now: { 1_000 },
+        logSink: { _ in },
+        eventSink: { [weak self] event in
+            self?.events.append(event)
+        }
+    )
 }
