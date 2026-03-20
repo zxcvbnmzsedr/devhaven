@@ -28,31 +28,41 @@ struct WorkspaceSplitTreeView: View {
                 paneView(for: zoomedPane, isZoomed: true)
                     .id(zoomedPane.id)
             } else if let root = tab.tree.root {
-                SubtreeView(
-                    node: root,
-                    path: WorkspacePaneTree.Path(components: []),
-                    tab: tab,
-                    isTabSelected: isTabSelected,
-                    surfaceModelForPane: surfaceModelForPane,
-                    onFocusPane: onFocusPane,
-                    onClosePane: onClosePane,
-                    onSplitPane: onSplitPane,
-                    onFocusDirection: onFocusDirection,
-                    onResizePane: onResizePane,
-                    onEqualize: onEqualize,
-                    onToggleZoom: onToggleZoom,
-                    onSurfaceExit: onSurfaceExit,
-                    onUpdateTabTitle: onUpdateTabTitle,
-                    onNewTab: onNewTab,
-                    onCloseTabAction: onCloseTabAction,
-                    onGotoTabAction: onGotoTabAction,
-                    onMoveTabAction: onMoveTabAction,
-                    onSetSplitRatio: onSetSplitRatio
-                )
-                .id(root.structuralIdentity)
+                rootView(for: root)
             } else {
                 EmptyView()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func rootView(for root: WorkspacePaneTree.Node) -> some View {
+        let subtree = SubtreeView(
+            node: root,
+            path: WorkspacePaneTree.Path(components: []),
+            tab: tab,
+            isTabSelected: isTabSelected,
+            surfaceModelForPane: surfaceModelForPane,
+            onFocusPane: onFocusPane,
+            onClosePane: onClosePane,
+            onSplitPane: onSplitPane,
+            onFocusDirection: onFocusDirection,
+            onResizePane: onResizePane,
+            onEqualize: onEqualize,
+            onToggleZoom: onToggleZoom,
+            onSurfaceExit: onSurfaceExit,
+            onUpdateTabTitle: onUpdateTabTitle,
+            onNewTab: onNewTab,
+            onCloseTabAction: onCloseTabAction,
+            onGotoTabAction: onGotoTabAction,
+            onMoveTabAction: onMoveTabAction,
+            onSetSplitRatio: onSetSplitRatio
+        )
+
+        if WorkspaceSplitTreeViewKeyPolicy.shouldKeyRootByStructuralIdentity {
+            subtree.id(root.structuralIdentity)
+        } else {
+            subtree
         }
     }
 
@@ -124,61 +134,71 @@ struct WorkspaceSplitTreeView: View {
                 .id(pane.id)
 
             case let .split(split):
-                WorkspaceSplitView(
-                    direction: split.direction,
-                    ratio: split.ratio,
-                    onRatioChange: { ratio in
-                        onSetSplitRatio(path, ratio)
-                    },
-                    onEqualize: {
-                        onEqualize(tab.focusedPaneId)
-                    }
-                ) {
-                    SubtreeView(
-                        node: split.left,
-                        path: WorkspacePaneTree.Path(components: path.components + [.left]),
-                        tab: tab,
-                        isTabSelected: isTabSelected,
-                        surfaceModelForPane: surfaceModelForPane,
-                        onFocusPane: onFocusPane,
-                        onClosePane: onClosePane,
-                        onSplitPane: onSplitPane,
-                        onFocusDirection: onFocusDirection,
-                        onResizePane: onResizePane,
-                        onEqualize: onEqualize,
-                        onToggleZoom: onToggleZoom,
-                        onSurfaceExit: onSurfaceExit,
-                        onUpdateTabTitle: onUpdateTabTitle,
-                        onNewTab: onNewTab,
-                        onCloseTabAction: onCloseTabAction,
-                        onGotoTabAction: onGotoTabAction,
-                        onMoveTabAction: onMoveTabAction,
-                        onSetSplitRatio: onSetSplitRatio
-                    )
-                } trailing: {
-                    SubtreeView(
-                        node: split.right,
-                        path: WorkspacePaneTree.Path(components: path.components + [.right]),
-                        tab: tab,
-                        isTabSelected: isTabSelected,
-                        surfaceModelForPane: surfaceModelForPane,
-                        onFocusPane: onFocusPane,
-                        onClosePane: onClosePane,
-                        onSplitPane: onSplitPane,
-                        onFocusDirection: onFocusDirection,
-                        onResizePane: onResizePane,
-                        onEqualize: onEqualize,
-                        onToggleZoom: onToggleZoom,
-                        onSurfaceExit: onSurfaceExit,
-                        onUpdateTabTitle: onUpdateTabTitle,
-                        onNewTab: onNewTab,
-                        onCloseTabAction: onCloseTabAction,
-                        onGotoTabAction: onGotoTabAction,
-                        onMoveTabAction: onMoveTabAction,
-                        onSetSplitRatio: onSetSplitRatio
-                    )
+                splitSubtreeView(for: split)
+            }
+        }
+
+        @ViewBuilder
+        private func splitSubtreeView(for split: WorkspaceSplitState) -> some View {
+            let splitView = WorkspaceSplitView(
+                direction: split.direction,
+                ratio: split.ratio,
+                onRatioChange: { ratio in
+                    onSetSplitRatio(path, ratio)
+                },
+                onEqualize: {
+                    onEqualize(tab.focusedPaneId)
                 }
-                .id(node.structuralIdentity)
+            ) {
+                SubtreeView(
+                    node: split.left,
+                    path: WorkspacePaneTree.Path(components: path.components + [.left]),
+                    tab: tab,
+                    isTabSelected: isTabSelected,
+                    surfaceModelForPane: surfaceModelForPane,
+                    onFocusPane: onFocusPane,
+                    onClosePane: onClosePane,
+                    onSplitPane: onSplitPane,
+                    onFocusDirection: onFocusDirection,
+                    onResizePane: onResizePane,
+                    onEqualize: onEqualize,
+                    onToggleZoom: onToggleZoom,
+                    onSurfaceExit: onSurfaceExit,
+                    onUpdateTabTitle: onUpdateTabTitle,
+                    onNewTab: onNewTab,
+                    onCloseTabAction: onCloseTabAction,
+                    onGotoTabAction: onGotoTabAction,
+                    onMoveTabAction: onMoveTabAction,
+                    onSetSplitRatio: onSetSplitRatio
+                )
+            } trailing: {
+                SubtreeView(
+                    node: split.right,
+                    path: WorkspacePaneTree.Path(components: path.components + [.right]),
+                    tab: tab,
+                    isTabSelected: isTabSelected,
+                    surfaceModelForPane: surfaceModelForPane,
+                    onFocusPane: onFocusPane,
+                    onClosePane: onClosePane,
+                    onSplitPane: onSplitPane,
+                    onFocusDirection: onFocusDirection,
+                    onResizePane: onResizePane,
+                    onEqualize: onEqualize,
+                    onToggleZoom: onToggleZoom,
+                    onSurfaceExit: onSurfaceExit,
+                    onUpdateTabTitle: onUpdateTabTitle,
+                    onNewTab: onNewTab,
+                    onCloseTabAction: onCloseTabAction,
+                    onGotoTabAction: onGotoTabAction,
+                    onMoveTabAction: onMoveTabAction,
+                    onSetSplitRatio: onSetSplitRatio
+                )
+            }
+
+            if WorkspaceSplitTreeViewKeyPolicy.shouldKeySplitSubtreeByStructuralIdentity {
+                splitView.id(node.structuralIdentity)
+            } else {
+                splitView
             }
         }
     }

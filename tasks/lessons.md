@@ -1,3 +1,4 @@
+- 参考 supacode 迁 split/render 细节时，先确认 split tree 叶子里持有的到底是稳定终端 NSView 还是只是 pane 数据；若真实 Ghostty surface owner 在 tree 外部 store，就不要再给 root / split subtree 挂 structural-identity `.id(...)` 强制 remount，否则单 pane -> 双 pane 时很容易把已有 pane 内容一起重建掉。
 - 对“当前 pane 应该保持焦点”这类 UI 语义，不能直接把持续态 `preferredFocus == true` 映射成每次刷新都执行的 `requestFocus()`；焦点同步应该按 **false -> true** 的边沿触发建模，否则分屏拖动、tab 重绘这类普通更新也会不断重放副作用，表现成闪烁。
 - 对 SwiftUI + Ghostty 的原生 workspace，不能把 `requestFocus()` 这类强副作用放进 `updateNSView` / 通用状态同步链；分屏 live resize 会持续触发 view update，若每帧都重复抢 first responder，用户就会感知为拖动闪烁。稳定做法是把“是否允许抢焦点”收口成独立策略，并在拖拽事件进行中显式跳过。
 - 原生 Swift 首页如果把筛选点击直接绑到 `@MainActor` 上的同步文档读取与整份 snapshot reload，会立刻放大点击卡顿；后续同类性能问题优先先查“筛选是否重复读项目文档”“收藏/设置保存是否又触发 `load()` 全量重载”。

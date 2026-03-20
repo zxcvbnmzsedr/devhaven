@@ -1,5 +1,45 @@
 # 本次任务清单
 
+## 修复 Swift 原生 workspace 单 pane 分屏后原内容消失（2026-03-20）
+
+- [x] 复现并定位单 pane -> 双 pane 分屏时原 pane 内容丢失的直接原因
+- [x] 先补失败测试，锁定 split 后原 pane 会话必须保留
+- [x] 以最少改动修复分屏状态机 / 投影逻辑，并同步必要文档
+- [x] 完成定向验证，回填 Review（直接原因 / 设计诱因 / 修复 / 长期建议 / 证据）
+
+## Review（修复 Swift 原生 workspace 单 pane 分屏后原内容消失）
+
+- 直接原因：`WorkspaceSplitTreeView.swift` 在 03-20 对齐 supacode 时，把 root subtree 和每个 split subtree 都挂上了 `.id(root.structuralIdentity)` / `.id(node.structuralIdentity)`。对 DevHaven 当前这条主线来说，pane 内容并不是像 supacode 那样直接把 `GhosttySurfaceView` 本体存在 split tree 里，而是通过 `WorkspaceTerminalSessionStore` 额外持有 `GhosttySurfaceHostModel` / `GhosttyTerminalSurfaceView`。结果是一旦从单 pane 切成双 pane，SwiftUI 会把原 subtree 当成“整棵树换了”而强制 remount，原 pane 对应的 Ghostty 宿主会被整块重建，用户体感就是“1 屏分到 2 屏后，原来那屏内容瞬间消失”。
+- 是否存在设计层诱因：存在。这次问题不是 split 状态机本身算错了，而是**直接照搬 supacode 的 structural identity 挂载策略，却忽略了两边 leaf owner 完全不同**：supacode 的 leaf 就是稳定的 `GhosttySurfaceView` 实例，结构性重挂相对安全；DevHaven 这里 leaf 只是 pane 数据，真实终端宿主由外部 store 持有，因此 subtree 容器不该再按结构显式 re-key。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `WorkspaceSplitTreeViewKeyPolicy.swift`，显式把这条渲染边界写死：当前 DevHaven 原生 workspace 不允许 root / split subtree 因 structural identity 被强制 remount。
+  2. `WorkspaceSplitTreeView.swift` 改为通过该 policy 生成 root subtree；默认不再给 root subtree 和 split subtree 挂 `.id(...structuralIdentity)`，只保留 leaf pane 自己的 `.id(pane.id)`，让已有 pane 继续按 pane ID 复用。
+  3. 新增 `WorkspaceSplitTreeViewKeyPolicyTests.swift`，用 RED -> GREEN 锁住“root / split subtree 默认都不应因结构变化被强制 remount”这条回归边界。
+- 长期改进建议：后续如果还要继续借鉴 supacode 的 split/render 主线，必须先分清“树里持有的是稳定终端 NSView，还是只持有 pane 数据投影”。凡是 DevHaven 这种 **surface owner 在 tree 外部 store** 的链路，都不要再直接照抄 structural identity re-key 策略；否则 split、zoom、tab 切换时都可能重新踩到 pane 内容瞬时消失的问题。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter WorkspaceSplitTreeViewKeyPolicyTests` 首次失败，明确报错 `cannot find 'WorkspaceSplitTreeViewKeyPolicy' in scope`。
+  - 定向测试：`swift test --package-path macos --filter 'WorkspaceTopologyTests|GhosttyWorkspaceControllerTests|WorkspaceTerminalSessionStoreTests|WorkspaceSplitTreeViewKeyPolicyTests'` 通过（18 tests, 0 failures）。
+  - 全量测试：`swift test --package-path macos` 通过（105 tests passed，5 tests skipped，0 failures）。
+  - 构建 / diff 校验：`swift build --package-path macos && git diff --check` 通过。
+  - 注意：本轮**没有 fresh 的实机录屏或截图证据**；当前闭环是“根因 + 回归测试 + 全量测试/构建”。是否已完全符合你的手感，还需要你本机再做一次“单 pane -> 双 pane”实操确认。
+
+## 提交 Swift 原生 workspace 分屏修复（2026-03-20）
+
+- [x] 基于最终 diff 做 fresh 验证
+- [x] 暂存分屏修复相关源码与文档
+- [x] 完成 git commit，并记录提交号与验证证据
+
+## Review（提交 Swift 原生 workspace 分屏修复）
+
+- 提交范围：`WorkspaceSplitTreeView.swift` 的 split subtree 挂载策略、`WorkspaceSplitTreeViewKeyPolicy.swift` 新增渲染边界、`WorkspaceSplitTreeViewKeyPolicyTests.swift` 回归测试，以及 `AGENTS.md` / `tasks/lessons.md` / `tasks/todo.md` 同步。
+- fresh 验证证据：
+  - `swift test --package-path macos` 通过（105 tests passed，5 tests skipped，0 failures）
+  - `swift build --package-path macos` 通过
+  - `git diff --check` 通过（无输出）
+- 提交信息：`fix(macos): 修复原生 workspace 分屏内容丢失`
+- 提交号：`c84a0d4`
+- 保留状态：本轮仅执行本地 commit，未 push。
+
 ## 提交 Swift 原生 worktree 迁移改动（2026-03-20）
 
 - [x] 基于本回合 fresh 验证结果复核提交范围
