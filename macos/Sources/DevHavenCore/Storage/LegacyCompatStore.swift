@@ -192,6 +192,15 @@ public final class LegacyCompatStore {
         }
     }
 
+    public func updateProjects(_ projects: [Project]) throws {
+        let data = try encoder.encode(projects)
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let root = object as? [Any] else {
+            throw LegacyCompatStoreError.invalidJSONArray(projectsFileURL)
+        }
+        try saveProjectsDocument(ProjectsDocument(root: root))
+    }
+
     private func loadProjects() throws -> [Project] {
         let fileURL = projectsFileURL
         guard fileManager.fileExists(atPath: fileURL.path) else {

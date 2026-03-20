@@ -35,6 +35,11 @@ struct AppRootView: View {
                     .frame(width: 360)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+
+            if let state = viewModel.worktreeInteractionState {
+                WorktreeInteractionOverlayView(state: state)
+                    .transition(.opacity)
+            }
         }
         .background(NativeTheme.window.ignoresSafeArea())
         .background(

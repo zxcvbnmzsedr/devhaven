@@ -101,3 +101,6 @@
 - 如果 split drag 在完成 resize 节流后依然明显闪，接下来优先补的不是更多 `preferredFocus` 条件，而是 **window activity + surface occlusion + scroll wrapper** 这条 supacode 主线：只靠 SwiftUI 的 `opacity/allowsHitTesting` 并不能让 Ghostty surface 真正进入不可见态，必须显式同步 `setOcclusion(...)`，并把 representable 根节点换成和 supacode 一样的 `GhosttySurfaceScrollView`。
 - 当用户拿 **Ghostty / Supacode** 作为“为什么别的快、这里慢”的对照时，不能只停在“你的 shell 很重”这种单点解释；必须继续比较 **宿主的终端 owner、state reuse、首屏呈现边界**，先分清“首次冷启动慢”还是“已有终端复用快”，再决定是否需要改产品主线。
 - 做 Swift 原生 terminal owner 迁移时，先核对 **SwiftPM target 边界**；像 `GhosttySurfaceHostModel` 这类明显属于 `DevHavenApp` 的类型，不能为了“看起来更底层”就塞回 `DevHavenCore`，否则很快会撞上依赖方向错误，被迫二次重规划。
+- 当 Swift 原生 workspace 需要把 worktree 当成一等终端 session 打开时，不能继续假设 `activeWorkspaceProjectPath` / `openWorkspaceProjects` 只会命中 `snapshot.projects` 里的根项目；必须显式区分“根项目路径”和“实际 session 路径”，并为 worktree 构造稳定的虚拟项目投影，否则左侧层级列表和右侧 Ghostty host 很快就会因为找不到 `Project` 而断链。
+- 迁移 Tauri 的 worktree 功能到 Swift 原生时，不要一上来硬搬 Rust 的后台队列 / 事件总线；更稳的第一步是先把 Git 命令、`.devhaven` 复制、`setup` 命令和 `Project.worktrees` 持久化收口成原生 service，再在 ViewModel 层补一层全局 progress state 给 UI 消费。
+- 对“父项目下嵌套 worktree 子项”的 workspace 左侧列表，关闭父项目不能只删根 session；还要同步清掉所有 `rootProjectPath` 指向它的 worktree session，否则右侧会留下孤儿 Ghostty host，而左侧层级又已经不存在对应父节点。

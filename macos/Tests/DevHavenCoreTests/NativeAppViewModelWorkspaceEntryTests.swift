@@ -251,9 +251,165 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         XCTAssertEqual(viewModel.errorMessage, "terminal launch failed")
     }
 
+    func testOpenWorkspaceWorktreeCreatesVirtualSessionUnderRootProject() throws {
+        let viewModel = makeViewModel(worktreeService: TestWorktreeService())
+        let worktree = makeWorktree(path: "/tmp/devhaven-feature", branch: "feature/demo")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path, worktree.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, worktree.path)
+        XCTAssertEqual(viewModel.activeWorkspaceProject?.path, worktree.path)
+        XCTAssertEqual(viewModel.activeWorkspaceProject?.id, "worktree:\(worktree.path)")
+        XCTAssertEqual(viewModel.openWorkspaceRootProjectPaths, [project.path])
+        XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.worktrees.map(\.path), [worktree.path])
+    }
+
+    func testCreateWorkspaceWorktreeTracksCreatingProgressAndAutoOpensReadySession() async throws {
+        let service = TestWorktreeService()
+        service.managedPath = "/tmp/.devhaven/worktrees/devhaven/feature/auto-open"
+        service.createResult = NativeWorktreeCreateResult(
+            worktreePath: "/tmp/.devhaven/worktrees/devhaven/feature/auto-open",
+            branch: "feature/auto-open",
+            baseBranch: "develop",
+            warning: nil
+        )
+        service.createProgress = [
+            NativeWorktreeProgress(
+                worktreePath: "/tmp/.devhaven/worktrees/devhaven/feature/auto-open",
+                branch: "feature/auto-open",
+                baseBranch: "develop",
+                step: .checkingBranch,
+                message: "执行中：校验分支与基线可用性..."
+            ),
+            NativeWorktreeProgress(
+                worktreePath: "/tmp/.devhaven/worktrees/devhaven/feature/auto-open",
+                branch: "feature/auto-open",
+                baseBranch: "develop",
+                step: .ready,
+                message: "创建完成"
+            ),
+        ]
+        let viewModel = makeViewModel(worktreeService: service)
+        let project = makeProject(path: "/tmp/devhaven")
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        try await viewModel.createWorkspaceWorktree(
+            from: project.path,
+            branch: "feature/auto-open",
+            createBranch: true,
+            baseBranch: "develop",
+            autoOpen: true
+        )
+
+        let tracked = try XCTUnwrap(viewModel.workspaceSidebarGroups.first?.worktrees.first)
+        XCTAssertEqual(tracked.path, "/tmp/.devhaven/worktrees/devhaven/feature/auto-open")
+        XCTAssertEqual(tracked.branch, "feature/auto-open")
+        XCTAssertEqual(tracked.status, "ready")
+        XCTAssertEqual(tracked.initStep, "ready")
+        XCTAssertNil(viewModel.worktreeInteractionState)
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, tracked.path)
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path, tracked.path])
+    }
+
+    func testCreateWorkspaceWorktreeFailureMarksTrackedWorktreeAsFailedAndClearsInteractionLock() async throws {
+        let service = TestWorktreeService()
+        service.managedPath = "/tmp/.devhaven/worktrees/devhaven/feature/fail"
+        service.createProgress = [
+            NativeWorktreeProgress(
+                worktreePath: "/tmp/.devhaven/worktrees/devhaven/feature/fail",
+                branch: "feature/fail",
+                baseBranch: "develop",
+                step: .checkingBranch,
+                message: "执行中：校验分支与基线可用性..."
+            )
+        ]
+        service.createError = NativeWorktreeError.invalidBranch("分支不存在或不可用，请检查分支名称")
+        let viewModel = makeViewModel(worktreeService: service)
+        let project = makeProject(path: "/tmp/devhaven")
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        await XCTAssertThrowsErrorAsync {
+            try await viewModel.createWorkspaceWorktree(
+                from: project.path,
+                branch: "feature/fail",
+                createBranch: true,
+                baseBranch: "develop",
+                autoOpen: false
+            )
+        }
+
+        let tracked = try XCTUnwrap(viewModel.workspaceSidebarGroups.first?.worktrees.first)
+        XCTAssertEqual(tracked.status, "failed")
+        XCTAssertEqual(tracked.initStep, "failed")
+        XCTAssertEqual(tracked.initError, "分支不存在或不可用，请检查分支名称")
+        XCTAssertNil(viewModel.worktreeInteractionState)
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path])
+    }
+
+    func testDeleteWorkspaceWorktreeRemovesTrackedItemAndClosesOpenedSession() async throws {
+        let service = TestWorktreeService()
+        let worktree = makeWorktree(
+            path: "/tmp/devhaven-feature",
+            branch: "feature/delete",
+            baseBranch: "develop",
+            status: "ready",
+            initStep: "ready"
+        )
+        let viewModel = makeViewModel(worktreeService: service)
+        let project = makeProject(path: "/tmp/devhaven", worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        try await viewModel.deleteWorkspaceWorktree(worktree.path, from: project.path)
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path])
+        XCTAssertTrue(viewModel.workspaceSidebarGroups.first?.worktrees.isEmpty ?? false)
+        XCTAssertEqual(service.removedRequests.first?.worktreePath, worktree.path)
+        XCTAssertTrue(service.removedRequests.first?.shouldDeleteBranch == true)
+    }
+
+    func testRefreshProjectWorktreesMergesGitStateIntoTrackedItems() async throws {
+        let service = TestWorktreeService()
+        service.listWorktreesResult = [
+            NativeGitWorktree(path: "/tmp/devhaven-existing", branch: "feature/existing"),
+            NativeGitWorktree(path: "/tmp/devhaven-new", branch: "feature/new"),
+        ]
+        let project = makeProject(
+            path: "/tmp/devhaven",
+            worktrees: [
+                makeWorktree(
+                    path: "/tmp/devhaven-existing",
+                    branch: "feature/existing",
+                    status: "failed",
+                    initStep: "failed",
+                    initError: "旧错误"
+                )
+            ]
+        )
+        let viewModel = makeViewModel(worktreeService: service)
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        try await viewModel.refreshProjectWorktrees(project.path)
+
+        let worktrees = try XCTUnwrap(viewModel.workspaceSidebarGroups.first?.worktrees)
+        XCTAssertEqual(worktrees.map(\.path), ["/tmp/devhaven-existing", "/tmp/devhaven-new"])
+        XCTAssertEqual(worktrees.first?.status, "failed")
+        XCTAssertEqual(worktrees.first?.initError, "旧错误")
+        XCTAssertEqual(worktrees.last?.status, nil)
+    }
+
     private func makeViewModel(
         diagnostics: WorkspaceLaunchDiagnostics = .shared,
-        terminalCommandRunner: @escaping @Sendable (String, [String]) throws -> Void = { _, _ in }
+        terminalCommandRunner: @escaping @Sendable (String, [String]) throws -> Void = { _, _ in },
+        worktreeService: any NativeWorktreeServicing = NativeGitWorktreeService()
     ) -> NativeAppViewModel {
         NativeAppViewModel(
             store: LegacyCompatStore(homeDirectoryURL: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)),
@@ -261,14 +417,16 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
             gitDailyCollector: { _, _ in [] },
             gitDailyCollectorAsync: { _, _, _ in [] },
             workspaceLaunchDiagnostics: diagnostics,
-            terminalCommandRunner: terminalCommandRunner
+            terminalCommandRunner: terminalCommandRunner,
+            worktreeService: worktreeService
         )
     }
 
     private func makeProject(
         id: String = "project-1",
         name: String = "DevHaven",
-        path: String = "/tmp/devhaven"
+        path: String = "/tmp/devhaven",
+        worktrees: [ProjectWorktree] = []
     ) -> Project {
         Project(
             id: id,
@@ -276,7 +434,7 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
             path: path,
             tags: [],
             scripts: [],
-            worktrees: [],
+            worktrees: worktrees,
             mtime: 1,
             size: 0,
             checksum: "checksum",
@@ -286,6 +444,31 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
             gitDaily: nil,
             created: 1,
             checked: 1
+        )
+    }
+
+    private func makeWorktree(
+        path: String,
+        branch: String,
+        baseBranch: String? = nil,
+        status: String? = nil,
+        initStep: String? = nil,
+        initError: String? = nil
+    ) -> ProjectWorktree {
+        ProjectWorktree(
+            id: "worktree:\(path)",
+            name: URL(fileURLWithPath: path).lastPathComponent,
+            path: path,
+            branch: branch,
+            baseBranch: baseBranch,
+            inheritConfig: true,
+            created: 1,
+            status: status,
+            initStep: initStep,
+            initMessage: nil,
+            initError: initError,
+            initJobId: nil,
+            updatedAt: 1
         )
     }
 }
@@ -306,6 +489,54 @@ private enum TestTerminalRunnerError: LocalizedError {
     }
 }
 
+private final class TestWorktreeService: NativeWorktreeServicing, @unchecked Sendable {
+    var managedPath = "/tmp/.devhaven/worktrees/devhaven/feature/demo"
+    var listBranchesResult = [
+        NativeGitBranch(name: "main", isMain: true),
+        NativeGitBranch(name: "develop", isMain: false),
+    ]
+    var listWorktreesResult = [NativeGitWorktree]()
+    var createProgress = [NativeWorktreeProgress]()
+    var createResult = NativeWorktreeCreateResult(
+        worktreePath: "/tmp/.devhaven/worktrees/devhaven/feature/demo",
+        branch: "feature/demo",
+        baseBranch: "develop",
+        warning: nil
+    )
+    var createError: Error?
+    var removedRequests = [NativeWorktreeRemoveRequest]()
+
+    func managedWorktreePath(for sourceProjectPath: String, branch: String) throws -> String {
+        managedPath
+    }
+
+    func listBranches(at projectPath: String) throws -> [NativeGitBranch] {
+        listBranchesResult
+    }
+
+    func listWorktrees(at projectPath: String) throws -> [NativeGitWorktree] {
+        listWorktreesResult
+    }
+
+    func createWorktree(
+        _ request: NativeWorktreeCreateRequest,
+        progress: @escaping @Sendable (NativeWorktreeProgress) -> Void
+    ) throws -> NativeWorktreeCreateResult {
+        for update in createProgress {
+            progress(update)
+        }
+        if let createError {
+            throw createError
+        }
+        return createResult
+    }
+
+    func removeWorktree(_ request: NativeWorktreeRemoveRequest) throws -> NativeWorktreeRemoveResult {
+        removedRequests.append(request)
+        return NativeWorktreeRemoveResult(warning: nil)
+    }
+}
+
 @MainActor
 private final class DiagnosticsCapture {
     var events = [WorkspaceLaunchDiagnosticEvent]()
@@ -317,4 +548,18 @@ private final class DiagnosticsCapture {
             self?.events.append(event)
         }
     )
+}
+
+@MainActor
+private func XCTAssertThrowsErrorAsync(
+    _ expression: @escaping () async throws -> Void,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        try await expression()
+        XCTFail("预期抛出错误，但实际未抛出", file: file, line: line)
+    } catch {
+        // expected
+    }
 }

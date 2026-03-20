@@ -1,5 +1,42 @@
 # 本次任务清单
 
+## 提交 Swift 原生 worktree 迁移改动（2026-03-20）
+
+- [x] 基于本回合 fresh 验证结果复核提交范围
+- [x] 暂存本轮 worktree 原生迁移相关文件
+- [x] 提交 commit，保留当前 worktree 与分支
+
+## Review（提交 Swift 原生 worktree 迁移改动）
+
+- 提交范围：原生 worktree 迁移主链，包括 `NativeGitWorktreeService.swift`、`NativeWorktreeModels.swift`、`NativeAppViewModel.swift` 的 Git/worktree 状态机与持久化更新，`WorkspaceProjectListView.swift` / `WorkspaceShellView.swift` / `WorkspaceWorktreeDialogView.swift` / `WorktreeInteractionOverlayView.swift` 的左侧层级列表、创建弹窗、删除确认与全局遮罩，以及对应测试、AGENTS/tasks 同步。
+- fresh 验证证据：
+  - `swift test --package-path macos --filter 'NativeWorktreeServiceTests|NativeAppViewModelWorkspaceEntryTests'` 通过（21 tests, 0 failures）
+  - `swift test --package-path macos` 通过（103 tests passed，5 tests skipped，0 failures）
+  - `swift build --package-path macos` 通过
+  - `git diff --check` 通过（无输出）
+- 提交信息：`feat(macos): 迁移原生 worktree 工作流`（`a1c3b4c`）
+- 保留状态：当前仅完成本地 commit，**未 push**，当前 worktree / 分支保留。
+
+## 迁移 Swift 原生 worktree 完整闭环（2026-03-20）
+
+- [x] 先补 worktree 服务 / ViewModel 的失败测试，锁定创建、刷新、打开、删除、重试与全局遮罩预期
+- [x] 在 `DevHavenCore` 实现原生 Git worktree 服务、`projects.json` 持久化更新与 ViewModel 状态机
+- [x] 在 `DevHavenApp` 实现左侧父项目/子 worktree UI、创建弹窗与全局进度遮罩
+- [x] 同步 `AGENTS.md` / `tasks/lessons.md` 并完成定向测试、全量测试、构建与 diff 校验
+
+## Review（迁移 Swift 原生 worktree 完整闭环）
+
+- 结果范围：已把 Tauri 版 worktree 主路径迁入 Swift 原生 workspace。现在 `WorkspaceShellView.swift` 左侧会按父项目显示 worktree 子项，支持刷新、创建/打开已有、失败重试、删除与删除确认；右侧会把 worktree 作为独立 workspace session 挂载到现有 Ghostty 终端区。创建/重试期间 `AppRootView.swift` 会显示全局 `WorktreeInteractionOverlayView.swift` 遮罩。
+- Core 侧收口：新增 `macos/Sources/DevHavenCore/Models/NativeWorktreeModels.swift` 与 `Storage/NativeGitWorktreeService.swift`，直接执行本地 `git branch --list`、`git worktree list/add/remove`、`git branch -d`，并对齐 Tauri 的 `checking_branch / creating_worktree / preparing_environment / syncing / ready / failed` 进度语义；同时把 `.devhaven` 复制与 `.devhaven/config.json` 中 `setup` 命令执行一起迁入原生主线。`LegacyCompatStore.swift` 新增 `updateProjects(_:)`，`NativeAppViewModel.swift` 现负责 `Project.worktrees` 持久化、worktree 虚拟项目投影、父项目关闭时联动关闭子 worktree session、以及全局 worktree 进度状态。
+- 设计诱因：这轮不是单点 bug，而是此前 Swift 原生 workspace 仍停在“只支持项目 session，不支持 worktree 子层级与原生 Git 管理”的半迁移状态。若继续让 `activeWorkspaceProject`、左侧列表和右侧 host 只认识根项目路径，就无法把 worktree 当成一等 workspace session 打开，也无法在不依赖 Tauri 命令桥的前提下迁移创建/删除闭环。当前方案通过 `OpenWorkspaceSessionState.rootProjectPath` + worktree 虚拟项目投影，把“左侧父子层级”和“右侧独立终端 session”这两个视角收敛到同一套原生状态机里；未发现新的明显系统设计缺陷。
+- 风险与后续：当前原生 worktree 创建链已经支持全局遮罩和进度文案，但还没有复刻 Tauri 那套后台队列 / 事件总线 / interaction-lock 广播；这轮采用的是 Swift 本地单任务收口。后续若要继续对齐 control plane 或布局持久化，应继续沿 `NativeWorktreeModels.swift` / `NativeGitWorktreeService.swift` 这层扩展，不要重新把逻辑塞回 SwiftUI view。
+- 验证证据：
+  - 定向测试：`swift test --package-path macos --filter 'NativeWorktreeServiceTests|NativeAppViewModelWorkspaceEntryTests'` 通过（21 tests, 0 failures）。
+  - 全量测试：`swift test --package-path macos` 通过（103 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+  - 注意：`swift test` / `swift build` 期间仍会出现 Ghostty 静态库的既有 linker warning（`_ImFontConfig_ImFontConfig` / `_ImGuiStyle_ImGuiStyle`），但本轮所有测试与构建命令的退出码均为 0，且这不是本次 worktree 迁移新增问题。
+
 ## 检查当前变更并提交（2026-03-20）
 
 - [x] 审阅当前 diff、文档、测试与任务记录，确认本轮提交主题
