@@ -17,9 +17,32 @@ permissions:
 jobs:
   build-macos-native:
     runs-on: macos-latest
+    env:
+      GHOSTTY_SOURCE_REF: da10707f93104c5466cd4e64b80ff48f789238a0
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Zig
+        run: brew install zig
+
+      - name: Checkout Ghostty source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ghostty_dir="$RUNNER_TEMP/ghostty"
+          rm -rf "$ghostty_dir"
+          git init "$ghostty_dir"
+          git -C "$ghostty_dir" remote add origin https://github.com/ghostty-org/ghostty.git
+          git -C "$ghostty_dir" fetch --depth 1 origin "$GHOSTTY_SOURCE_REF"
+          git -C "$ghostty_dir" checkout --detach FETCH_HEAD
+
+      - name: Bootstrap Ghostty vendor
+        shell: bash
+        run: |
+          set -euo pipefail
+          ghostty_dir="$RUNNER_TEMP/ghostty"
+          bash macos/scripts/setup-ghostty-framework.sh --source "$ghostty_dir"
 
       - name: Swift test
         run: swift test --package-path macos

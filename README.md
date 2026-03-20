@@ -94,6 +94,8 @@ swift test --package-path macos
 bash macos/scripts/build-native-app.sh --release
 ```
 
+> 说明：`macos/Vendor/` 不会入库；GitHub Release workflow 会先下载并构建固定版本的 Ghostty 源码（当前 pin 到 `da10707f93104c5466cd4e64b80ff48f789238a0`），再执行 `swift test` 和原生打包。
+
 ### macOS 特别说明
 
 3.0.0 起默认发布产物为 **macOS 原生 `.app`**。如果遇到“无法打开应用”的安全提示，可以移除隔离属性：
