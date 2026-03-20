@@ -6,7 +6,7 @@ struct WorkspaceHostView: View {
     @Bindable var viewModel: NativeAppViewModel
     let project: Project
     let workspace: GhosttyWorkspaceController
-    @StateObject private var surfaceRegistry = WorkspaceSurfaceRegistry()
+    let terminalSessionStore: WorkspaceTerminalSessionStore
     @State private var windowActivity: WindowActivityState = .inactive
 
     var body: some View {
@@ -98,17 +98,14 @@ struct WorkspaceHostView: View {
             .frame(width: 0, height: 0)
         }
         .onAppear {
-            surfaceRegistry.syncRetainedPaneIDs(retainedPaneIDs)
+            terminalSessionStore.syncRetainedPaneIDs(retainedPaneIDs)
             WorkspaceLaunchDiagnostics.shared.recordHostMounted(
                 workspace: workspace.sessionState,
                 isActive: project.path == viewModel.activeWorkspaceProjectPath
             )
         }
         .onChange(of: retainedPaneIDs) { _, paneIDs in
-            surfaceRegistry.syncRetainedPaneIDs(paneIDs)
-        }
-        .onDisappear {
-            surfaceRegistry.releaseAll()
+            terminalSessionStore.syncRetainedPaneIDs(paneIDs)
         }
     }
 
@@ -194,7 +191,7 @@ struct WorkspaceHostView: View {
     }
 
     private func surfaceModel(for pane: WorkspacePaneState) -> GhosttySurfaceHostModel {
-        let model = surfaceRegistry.model(
+        let model = terminalSessionStore.model(
             for: pane,
             onFocusChange: { focused in
                 guard focused else { return }

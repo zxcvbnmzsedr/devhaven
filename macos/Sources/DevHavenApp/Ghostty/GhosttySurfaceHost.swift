@@ -220,16 +220,47 @@ struct GhosttySurfaceHost: View {
                         .stroke(model.appearance.borderColor, lineWidth: 1)
                 )
             } else {
-                GhosttyTerminalView(model: model, isFocused: isFocused)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(model.appearance.backgroundColor)
-                    .clipShape(.rect(cornerRadius: 14))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(model.appearance.borderColor, lineWidth: 1)
-                    )
+                ZStack(alignment: .topLeading) {
+                    GhosttyTerminalView(model: model, isFocused: isFocused)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(model.appearance.backgroundColor)
+                        .clipShape(.rect(cornerRadius: 14))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(model.appearance.borderColor, lineWidth: 1)
+                        )
+
+                    if WorkspaceTerminalStartupPresentationPolicy.shouldShowOverlay(
+                        hasInitializationError: model.initializationError != nil,
+                        processState: model.processState,
+                        hasSurfaceView: model.hasPreparedSurfaceView
+                    ) {
+                        startupOverlay
+                            .padding(14)
+                            .allowsHitTesting(false)
+                    }
+                }
             }
         }
+    }
+
+    private var startupOverlay: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("正在启动 shell...")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(model.appearance.primaryTextColor)
+            Text("终端已创建，正在等待登录 shell 初始化完成。")
+                .font(.caption)
+                .foregroundStyle(model.appearance.secondaryTextColor)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(model.appearance.overlayBackground)
+        .clipShape(.rect(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(model.appearance.borderColor, lineWidth: 1)
+        )
     }
 
     private func statusChip(title: String, background: Color, monospaced: Bool = false) -> some View {
@@ -254,6 +285,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
     @Published var rendererHealthy = true
     @Published var appearance: GhosttySurfaceAppearance = .fallback
     @Published var processState: GhosttySurfaceProcessState = .starting
+    @Published private(set) var hasPreparedSurfaceView = false
 
     private let appRuntime: GhosttyAppRuntime
     private let onFocusChange: ((Bool) -> Void)?
@@ -307,6 +339,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
 
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
         if let ownedSurfaceView {
+            hasPreparedSurfaceView = true
             workspaceLaunchDiagnostics.recordSurfaceReused(request: request)
             applyCachedSurfaceActivity(to: ownedSurfaceView)
             requestFocusIfNeeded(for: ownedSurfaceView, preferredFocus: preferredFocus)
@@ -351,6 +384,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
             self?.onFocusChange?(focused)
         }
         ownedSurfaceView = view
+        hasPreparedSurfaceView = view.initializationError == nil
         if let error = view.initializationError {
             workspaceLaunchDiagnostics.recordSurfaceCreationFinished(
                 request: request,
@@ -412,6 +446,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
     func releaseSurface() {
         ownedSurfaceView?.tearDown()
         ownedSurfaceView = nil
+        hasPreparedSurfaceView = false
         lastPreferredFocus = false
         lastSurfaceIsVisible = false
         lastSurfaceIsFocused = false
@@ -424,6 +459,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
 
         ownedSurfaceView?.tearDown()
         ownedSurfaceView = nil
+        hasPreparedSurfaceView = false
         lastPreferredFocus = false
         lastSurfaceIsVisible = false
         lastSurfaceIsFocused = false

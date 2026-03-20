@@ -4,6 +4,7 @@ import DevHavenCore
 struct WorkspaceShellView: View {
     @Bindable var viewModel: NativeAppViewModel
     @State private var isProjectPickerPresented = false
+    @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -24,10 +25,22 @@ struct WorkspaceShellView: View {
         }
         .background(NativeTheme.window)
         .onAppear {
+            syncTerminalStores()
+            warmActiveWorkspace()
             WorkspaceLaunchDiagnostics.shared.recordShellMounted(
                 activeProjectPath: viewModel.activeWorkspaceProjectPath,
                 openSessionCount: viewModel.openWorkspaceSessions.count
             )
+        }
+        .onChange(of: viewModel.openWorkspaceProjectPaths) { _, _ in
+            syncTerminalStores()
+            warmActiveWorkspace()
+        }
+        .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
+            warmActiveWorkspace()
+        }
+        .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
+            warmActiveWorkspace()
         }
         .sheet(isPresented: $isProjectPickerPresented) {
             WorkspaceProjectPickerView(
@@ -58,7 +71,8 @@ struct WorkspaceShellView: View {
                         WorkspaceHostView(
                             viewModel: viewModel,
                             project: project,
-                            workspace: session.controller
+                            workspace: session.controller,
+                            terminalSessionStore: terminalStoreRegistry.store(for: session.projectPath)
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .opacity(session.projectPath == viewModel.activeWorkspaceProjectPath ? 1 : 0)
@@ -68,5 +82,16 @@ struct WorkspaceShellView: View {
                 }
             }
         }
+    }
+
+    private func syncTerminalStores() {
+        terminalStoreRegistry.syncRetainedProjectPaths(Set(viewModel.openWorkspaceProjectPaths))
+    }
+
+    private func warmActiveWorkspace() {
+        _ = terminalStoreRegistry.warmActiveWorkspaceSession(
+            sessions: viewModel.openWorkspaceSessions,
+            activeProjectPath: viewModel.activeWorkspaceProjectPath
+        )
     }
 }

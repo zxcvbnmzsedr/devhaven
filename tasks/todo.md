@@ -1,5 +1,81 @@
 # 本次任务清单
 
+## 检查当前变更并提交（2026-03-20）
+
+- [x] 审阅当前 diff、文档、测试与任务记录，确认本轮提交主题
+- [x] 基于新鲜命令执行验证并检查输出
+- [x] 整理提交信息并完成 `git commit`
+
+## Review（检查当前变更并提交）
+
+- 提交范围：当前变更集中在 Swift 原生 workspace 终端首开主线，包括 project-level terminal session store / registry、active workspace eager warm-up、Ghostty surface 启动 overlay、对应测试、设计文档与 AGENTS/tasks 同步。
+- 验证证据：`swift test --package-path macos` 通过（95 tests passed，5 tests skipped，0 failures）；`swift build --package-path macos` 通过；`git diff --check` 通过（无输出）。
+- 风险提示：`WorkspaceTerminalStartupPresentationPolicy` 当前实际以 `hasPreparedSurfaceView` 控制 overlay 消失时机，因此它更接近“surface 已准备好”而不是“首个 shell prompt 已出现”；文案写的是“正在启动 shell...”，后续如果要把提示严格对齐到 shell readiness，还需要补更稳定的 readiness 信号。
+- 提交信息：`feat(macos): 收口原生 workspace 终端首开 owner`（`4146fd8`）。
+
+## 设计与实施 DevHaven 原生终端首开加速（2026-03-20）
+
+- [x] 复盘 DevHaven / Supacode / 本机 Ghostty 的当前终端启动链与现有证据
+- [x] 通过单轮澄清问题收口“快”的目标口径与兼容边界
+- [x] 提出 2-3 个产品/实现方案并给出推荐方案
+- [x] 产出设计文档与实施计划，待用户确认后进入 TDD 实施
+- [x] 先补 project-level terminal owner / startup overlay 的定向测试
+- [x] 实现 `WorkspaceTerminalStoreRegistry` / `WorkspaceTerminalSessionStore`，把 terminal owner 从 host-local 上提到 workspace shell 级
+- [x] 补 active project / selected pane eager warm-up，以及“pane 先可见、shell 后就绪”的启动中展示
+- [x] 同步更新 `AGENTS.md` / `tasks/lessons.md` 并完成 build / test / diff 验证
+
+## Review（设计与实施 DevHaven 原生终端首开加速）
+
+- 直接原因：前一轮诊断已经证明，**首次真正看到 prompt 的长耗时仍主要来自用户自己的 login shell 初始化**；但用户继续拿 Ghostty / Supacode 作为对照后，当前 Swift 原生版还暴露出第二个问题——**终端 owner 仍然过于下沉在 `WorkspaceHostView` 内部，首屏呈现又和 shell readiness 绑得过紧**。这会导致 DevHaven 即使 workspace 壳已经出现，也要等到 surface/shell 真正 attach 好之后，用户才“感觉终端出来了”；而 Ghostty / Supacode 的体感更像是先把 pane 和 terminal state 稳住，再等待 shell 就绪。
+- 是否存在设计层诱因：存在。原主线的 `WorkspaceSurfaceRegistry` 只是 host-local owner，虽然已经能解决 split/tree 重排时的误释放，但还不是真正的 project-level terminal owner；与此同时，启动期 UI 也缺少一层明确的“shell 正在起来”展示，于是用户只能把“还没看到终端内容”整体感知成“DevHaven 很慢”。除此之外，**未发现新的明显系统设计缺陷**；本轮没有去篡改 login shell 语义，也没有引入 DevHaven 专属 fast shell。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenApp/WorkspaceTerminalSessionStore.swift`，把 `pane.id -> GhosttySurfaceHostModel` 的稳定复用能力从 host-local 收口成 session store，并提供 `warmSelectedPane(...)` / `syncRetainedPaneIDs(...)` / `releaseAll()`。
+  2. 新增 `WorkspaceTerminalStoreRegistry`，由 `WorkspaceShellView.swift` 按 `projectPath` 持有与复用 store；`WorkspaceHostView.swift` 只消费外部传入的 `terminalSessionStore`，不再自己 `@StateObject` 一个 registry，也不再在 `onDisappear` 里整批 `releaseAll()`。
+  3. `WorkspaceShellView.swift` 现在会在 `.onAppear`、`openWorkspaceProjectPaths` 变化、`activeWorkspaceProjectPath` 变化、`activeWorkspaceLaunchRequest?.paneId` 变化时，对当前激活项目的 selected pane 执行 eager warm-up，让 active workspace 更接近 Ghostty / Supacode 的 state reuse 边界。
+  4. 新增 `WorkspaceTerminalStartupPresentationPolicy.swift`，并在 `GhosttySurfaceHost.swift` / `GhosttySurfaceHostModel` 中补 `hasPreparedSurfaceView` 与启动中 overlay；当前策略是**pane 先可见，shell 后就绪**，直接展示“正在启动 shell...”，而不是解析 prompt 文本或发明 DevHaven 专属快启模式。
+- 长期改进建议：
+  1. 当前这轮只把 DevHaven 的 owner / 首屏呈现边界向 Ghostty / Supacode 靠拢，**没有改变首次 login shell 的真实耗时来源**；如果后续仍追求更快的首个 prompt，根因仍要回到用户 `~/.zprofile` / `~/.zshrc` 初始化成本。
+  2. 如果还要继续追平 Ghostty / Supacode 的“已打开项目切回速度”，下一步优先继续沿 **terminal state reuse / eager warm-up** 深挖，而不是回头做 prompt 文本解析、特供 fast shell 或其他补丁式方案。
+- 已产出文档：
+  1. `docs/plans/2026-03-20-devhaven-swift-native-terminal-fast-entry-design.md`
+  2. `docs/plans/2026-03-20-devhaven-swift-native-terminal-fast-entry-plan.md`
+- 验证证据：
+  - 定向测试：`swift test --package-path macos --filter WorkspaceTerminalSessionStoreTests` 通过（3/3）；`swift test --package-path macos --filter WorkspaceTerminalStoreRegistryTests` 通过（3/3）；`swift test --package-path macos --filter WorkspaceTerminalStartupPresentationPolicyTests` 通过（4/4）。
+  - 全量测试：`swift test --package-path macos` 通过（95 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+  - GUI 体验：**本轮仍没有 fresh 的手工实机截图/录屏证据**；当前只能确认代码、测试与构建已闭环，是否达到你主观上“像 Ghostty / Supacode 一样快”的体感，仍需要你本机再实际进入 workspace 验证一次。
+
+## 诊断“打开项目到终端 prompt 首次渲染很慢”（2026-03-20）
+
+- [x] 复盘现有 Swift 原生 workspace / Ghostty / shell 启动诊断链，确认排查边界
+- [x] 对照当前代码与日志埋点，重建“打开项目 -> host 挂载 -> surface 创建 -> shell prompt 渲染”的调用链
+- [x] 在目标目录与对照目录上做最小耗时采样，区分慢点在 workspace 恢复、Ghostty surface 创建、login shell 还是 prompt/git 计算
+- [x] 汇总结论，明确直接原因、设计层诱因、当前建议与后续验证办法
+
+## Review（诊断“打开项目到终端 prompt 首次渲染很慢”）
+
+- 直接原因：慢点不在 DevHaven 打开项目 / 挂载 workspace / 创建 Ghostty surface，而在 **Ghostty 拉起的用户交互式 zsh 登录链**。针对目标项目 `/Users/zhaotianzeng/Documents/business/douyin/fission-front` 的统一日志显示：`entry -> surface-start` 仅约 **57ms**，`surface-start -> surface-finish` 约 **30ms**，`entry -> host-mounted` 总计约 **121ms**；也就是说 DevHaven 自己在 0.12s 左右就把工作区和终端 surface 准备好了。后面你体感到的“等很久才看到 `zhaotianzeng@Mac-mini … main` prompt”，主要是 shell 自己还在跑初始化。
+- 是否存在设计层诱因：存在，但边界很清楚。当前 Swift 原生终端直接把“何时出现首个 prompt”交给用户自己的 login shell 决定，应用侧只负责把 cwd 和环境变量交给 Ghostty，并不会再注入额外 wrapper / setup 命令。因此只要用户的 `~/.zprofile` / `~/.zshrc` 很重，DevHaven 内看到的首屏就会一起变慢。除此之外，**未发现明显系统设计缺陷**；至少这次证据表明，Ghostty surface 创建本身不是瓶颈。
+- 当前结论：
+  1. `GhosttyRuntime.createSurface(...)` 只是把 `workingDirectory=request.projectPath` 与少量 `DEVHAVEN_*` 环境变量传给 `ghostty_surface_new(...)`，没有额外项目级 setup。
+  2. 目标项目的真实 workspace-launch 日志：`14:16:25.893` entry、`14:16:25.950` surface-start、`14:16:25.980` surface-finish、`14:16:26.014` host-mounted；DevHaven 侧没有秒级耗时。
+  3. 同目录交互式 shell 采样里，`zsh -il` 首个 prompt 约 **1.97s ~ 2.18s**；而几乎不加载用户配置的 `zsh -dfi` 只要 **4ms**，说明耗时几乎全在用户 shell 配置。
+  4. `zsh -i` 首个 prompt 约 **1.64s**，`zsh -il` 约 **1.97s**，说明 login shell 额外增加了约 **330ms**；这部分主要来自 `~/.zprofile`。
+  5. `zprof` 显示初始化热点主要是：`nvm` 累计约 **669ms**、`nvm_auto` 约 **335ms**、`compinit` 约 **267ms**、`compdump` 约 **70ms**、`_omz_source` 约 **71ms**。其中 `nvm` 在 `~/.zprofile:20-29` 和 `~/.zshrc:189-193` 被重复加载，并且两处都执行了 `nvm use default`。
+  6. 目标仓库的 Git 查询并不慢：`git status --porcelain=v2 --branch` 约 **14ms**，首次 `git status --short --branch` 也只有 **54ms** 左右，所以 prompt 里那段 ` main` 不是主瓶颈。
+  7. 继续把 `TERM_PROGRAM` 分别伪装成 `DevHaven / ghostty / Supacode` 后，同目录 `zsh -il` 首个 prompt 平均仍分别约 **2043ms / 1930ms / 1966ms**，差异在噪声范围内，说明宿主名字本身不是主因。
+  8. Supacode 代码里 `WorktreeTerminalManager.state(for:)` 会按 `worktree.id` 复用既有 terminal state；因此如果体感比较基于“切回已有 worktree/终端”，它天然比“首次新建 shell”更快，这和当前 DevHaven 首次打开项目的慢感不是同一口径。
+- 长期改进建议：
+  1. 如果你的目标是“DevHaven 里首个 prompt 尽快出来”，优先优化 `~/.zprofile` / `~/.zshrc`：先去掉 **重复的 nvm 初始化**，再评估是否把 `nvm use default`、`compinit`、Byobu/OrbStack 这类重初始化延后或按需执行。
+  2. 如果你的目标是“只让 DevHaven 快”，则需要产品层做边界选择：要么继续忠实复用用户 login shell（兼容性最好，但吃满用户 shell 开销），要么给 DevHaven 配一条更轻的终端启动模式（例如非 login shell / 精简 rc）。这不是 Ghostty surface 的性能问题，而是 shell 策略选择。
+- 验证证据：
+  - 统一日志：`/usr/bin/log show --style compact --predicate 'subsystem == "DevHavenNative" AND category == "WorkspaceLaunch"' --last 6h | tail -n 120`，目标项目日志显示 `entryElapsedMs=121` 即已 host-mounted。
+  - 交互 prompt 采样：自定义 Python PTY 脚本在目标目录测得 `zsh -il` prompt 约 **2184.1ms**；三次采样分别约 **2332.3 / 2020.6 / 1984.1ms**。
+  - 基线对照：同目录 `zsh -dfi` prompt 约 **4.0ms**；`zsh -i` 约 **1640.4ms**，`zsh -il` 约 **1969.1ms**。
+  - zsh profile：临时 `ZDOTDIR` + `zmodload zsh/zprof` 采样显示 `nvm / nvm_auto / compinit` 为主要热点。
+  - Git 对照：目标项目 `git status --porcelain=v2 --branch` 平均约 **14.0ms**，说明仓库 Git prompt 不是主瓶颈。
+
 ## 修复原生终端无法鼠标选中文本（2026-03-20）
 
 - [x] 梳理 Ghostty / SwiftUI / AppKit 事件链，确认文本选择命中路径与拦截点

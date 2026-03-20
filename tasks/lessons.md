@@ -99,3 +99,5 @@
 - 当目标明确是把 SwiftUI + Ghostty 的分屏拖动链向 supacode 靠拢时，只把 `updateNSView` 改成 no-op 往往还不够；还要继续把 raw surface 从 SwiftUI representable 根节点后面隔一层稳定容器，并把 `focusDidChange` / `moveFocus` 这类焦点同步收口成 surface 自己的职责，避免布局链继续直接碰 raw surface。
 - 如果 split drag 在完成 identity 稳定化、representable no-op、focus transition 和稳定容器后仍然闪，下一步要优先对照 supacode 的 **surface resize 节流**，而不是继续堆新的焦点条件：`ghostty_surface_set_size(...)` 对 live resize 很敏感，必须至少做到“相同 backing size 不重复 resize、极小网格先跳过 resize”，否则终端仍会在 divider 拖动时闪烁。
 - 如果 split drag 在完成 resize 节流后依然明显闪，接下来优先补的不是更多 `preferredFocus` 条件，而是 **window activity + surface occlusion + scroll wrapper** 这条 supacode 主线：只靠 SwiftUI 的 `opacity/allowsHitTesting` 并不能让 Ghostty surface 真正进入不可见态，必须显式同步 `setOcclusion(...)`，并把 representable 根节点换成和 supacode 一样的 `GhosttySurfaceScrollView`。
+- 当用户拿 **Ghostty / Supacode** 作为“为什么别的快、这里慢”的对照时，不能只停在“你的 shell 很重”这种单点解释；必须继续比较 **宿主的终端 owner、state reuse、首屏呈现边界**，先分清“首次冷启动慢”还是“已有终端复用快”，再决定是否需要改产品主线。
+- 做 Swift 原生 terminal owner 迁移时，先核对 **SwiftPM target 边界**；像 `GhosttySurfaceHostModel` 这类明显属于 `DevHavenApp` 的类型，不能为了“看起来更底层”就塞回 `DevHavenCore`，否则很快会撞上依赖方向错误，被迫二次重规划。
