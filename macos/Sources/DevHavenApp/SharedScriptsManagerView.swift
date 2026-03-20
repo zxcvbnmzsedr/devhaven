@@ -90,7 +90,7 @@ struct SharedScriptsManagerView: View {
                     Text("通用脚本管理")
                         .font(.headline)
                         .foregroundStyle(NativeTheme.textPrimary)
-                    Text("直接读写 `manifest.json` 与脚本文件，保持与 Tauri 版数据兼容。")
+                    Text("直接读写 `manifest.json` 与脚本文件，保持与历史数据格式兼容。")
                         .font(.caption)
                         .foregroundStyle(NativeTheme.textSecondary)
                 }
@@ -238,7 +238,7 @@ struct SharedScriptsManagerView: View {
     }
 
     private func paramsCard(script: SharedScriptManifestScript, index: Int) -> some View {
-        settingsPanel(title: "参数定义", description: "对齐 Tauri 的参数模型，支持 key / label / 类型 / 默认值 / 描述。") {
+        settingsPanel(title: "参数定义", description: "对齐历史参数模型，支持 key / label / 类型 / 默认值 / 描述。") {
             if script.params.isEmpty {
                 statusPlaceholder("当前没有参数。")
             } else {

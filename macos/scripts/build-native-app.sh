@@ -3,34 +3,31 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MACOS_DIR="$(dirname "$SCRIPT_DIR")"
-REPO_DIR="$(dirname "$MACOS_DIR")"
-TAURI_CONFIG_PATH="$REPO_DIR/src-tauri/tauri.conf.json"
+APP_METADATA_PATH="$MACOS_DIR/Resources/AppMetadata.json"
 
 CONFIGURATION="release"
 OUTPUT_DIR=""
 OPEN_OUTPUT_DIR=1
 
-read_tauri_field() {
+read_metadata_field() {
   local field="$1"
-  if [[ ! -f "$TAURI_CONFIG_PATH" ]]; then
+  if [[ ! -f "$APP_METADATA_PATH" ]]; then
     return 0
   fi
-  sed -n "s/.*\"$field\": *\"\\([^\"]*\\)\".*/\\1/p" "$TAURI_CONFIG_PATH" | head -n 1
+  plutil -extract "$field" raw -o - "$APP_METADATA_PATH" 2>/dev/null || true
 }
 
-PRODUCT_NAME="$(read_tauri_field "productName")"
-PRODUCT_NAME="${PRODUCT_NAME:-DevHaven}"
-DEFAULT_APP_NAME="$PRODUCT_NAME Native"
-DEFAULT_VERSION="$(read_tauri_field "version")"
+DEFAULT_APP_NAME="$(read_metadata_field productName)"
+DEFAULT_APP_NAME="${DEFAULT_APP_NAME:-DevHaven}"
+DEFAULT_VERSION="$(read_metadata_field version)"
 DEFAULT_VERSION="${DEFAULT_VERSION:-0.1.0}"
-DEFAULT_IDENTIFIER="$(read_tauri_field "identifier")"
-DEFAULT_IDENTIFIER="${DEFAULT_IDENTIFIER:+${DEFAULT_IDENTIFIER}.native}"
-DEFAULT_IDENTIFIER="${DEFAULT_IDENTIFIER:-local.devhaven.native}"
+DEFAULT_IDENTIFIER="$(read_metadata_field bundleIdentifier)"
+DEFAULT_IDENTIFIER="${DEFAULT_IDENTIFIER:-com.devhaven}"
 
 APP_NAME="${DEVHAVEN_NATIVE_APP_NAME:-$DEFAULT_APP_NAME}"
 BUNDLE_IDENTIFIER="${DEVHAVEN_NATIVE_BUNDLE_ID:-$DEFAULT_IDENTIFIER}"
 BUNDLE_VERSION="${DEVHAVEN_NATIVE_VERSION:-$DEFAULT_VERSION}"
-ICON_SOURCE="$REPO_DIR/src-tauri/icons/icon.icns"
+ICON_SOURCE="$MACOS_DIR/Resources/DevHaven.icns"
 
 usage() {
   cat <<USAGE

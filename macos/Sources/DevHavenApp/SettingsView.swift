@@ -28,7 +28,7 @@ struct SettingsView: View {
         var description: String {
             switch self {
             case .general:
-                return "应用阶段说明与浏览器访问端口。"
+                return "应用版本、发布边界与兼容说明。"
             case .terminal:
                 return "终端渲染与主题显示配置。"
             case .scripts:
@@ -48,7 +48,6 @@ struct SettingsView: View {
     @State private var terminalSingleTheme: String
     @State private var terminalLightTheme: String
     @State private var terminalDarkTheme: String
-    @State private var viteDevPortInput: String
     @State private var gitIdentities: [GitIdentity]
     @State private var activeCategory: Category = .general
 
@@ -63,7 +62,6 @@ struct SettingsView: View {
         _terminalSingleTheme = State(initialValue: parsed.singleTheme)
         _terminalLightTheme = State(initialValue: parsed.lightTheme)
         _terminalDarkTheme = State(initialValue: parsed.darkTheme)
-        _viteDevPortInput = State(initialValue: String(settings.viteDevPort))
         _gitIdentities = State(initialValue: settings.gitIdentities)
     }
 
@@ -188,25 +186,15 @@ struct SettingsView: View {
 
     private var generalContent: some View {
         Group {
-            settingsCard(title: "版本与阶段", description: "当前原生版以追平 Tauri 主界面为主，暂不覆盖终端工作区与脚本中心。") {
+            settingsCard(title: "版本与阶段", description: "当前仓库已切换为纯 macOS 原生主线，旧的 React / Tauri 兼容源码已移除。") {
                 HStack(spacing: 10) {
                     infoBadge(title: "当前版本", value: versionLabel)
                     infoBadge(title: "运行范围", value: "仅 macOS")
                 }
             }
 
-            settingsCard(title: "浏览器访问端口", description: "用于浏览器访问 DevHaven 的端口；修改后需重启应用或开发服务。") {
-                labeledField(title: "端口") {
-                    TextField("1420", text: $viteDevPortInput)
-                        .textFieldStyle(.plain)
-                        .foregroundStyle(NativeTheme.textPrimary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(NativeTheme.elevated)
-                        .clipShape(.rect(cornerRadius: 12))
-                        .frame(maxWidth: 220)
-                }
-                Text("当前原生版继续沿用 `app_state.json` 里的 `viteDevPort` 字段，便于与旧数据保持兼容。")
+            settingsCard(title: "仓库边界", description: "3.0.0 起 GitHub Release 只发布 macOS 原生 `.app`。") {
+                Text("仓库内仅保留 `macos/` 原生应用主线；旧的 React / Vite / Tauri 源码与对应打包入口已从仓库移除。数据文件仍继续兼容 `~/.devhaven/*`。")
                     .font(.caption)
                     .foregroundStyle(NativeTheme.textSecondary)
             }
@@ -391,14 +379,6 @@ struct SettingsView: View {
         return trimmed.isEmpty ? "~/.devhaven/scripts" : trimmed
     }
 
-    private var normalizedViteDevPort: Int {
-        let trimmed = viteDevPortInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let value = Int(trimmed), (1...65535).contains(value) else {
-            return originalSettings.viteDevPort
-        }
-        return value
-    }
-
     private var nextSettings: AppSettings {
         AppSettings(
             editorOpenTool: originalSettings.editorOpenTool,
@@ -408,7 +388,7 @@ struct SettingsView: View {
             gitIdentities: normalizedGitIdentities,
             projectListViewMode: originalSettings.projectListViewMode,
             sharedScriptsRoot: sharedScriptsRoot,
-            viteDevPort: normalizedViteDevPort,
+            viteDevPort: originalSettings.viteDevPort,
             webEnabled: originalSettings.webEnabled,
             webBindHost: originalSettings.webBindHost,
             webBindPort: originalSettings.webBindPort
@@ -425,7 +405,6 @@ struct SettingsView: View {
     private var isDirty: Bool {
         canonicalThemeSetting(nextSettings.terminalTheme) != canonicalThemeSetting(originalSettings.terminalTheme)
             || nextSettings.terminalUseWebglRenderer != originalSettings.terminalUseWebglRenderer
-            || nextSettings.viteDevPort != originalSettings.viteDevPort
             || normalizedGitIdentities != originalSettings.gitIdentities.filter {
                 !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !$0.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
