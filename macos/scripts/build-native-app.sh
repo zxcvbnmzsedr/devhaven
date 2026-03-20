@@ -8,6 +8,7 @@ APP_METADATA_PATH="$MACOS_DIR/Resources/AppMetadata.json"
 CONFIGURATION="release"
 OUTPUT_DIR=""
 OPEN_OUTPUT_DIR=1
+SWIFT_TRIPLE="${DEVHAVEN_NATIVE_TRIPLE:-}"
 
 read_metadata_field() {
   local field="$1"
@@ -44,12 +45,14 @@ usage() {
   --app-name <name>       自定义 `.app` 名称（默认：$DEFAULT_APP_NAME）
   --bundle-id <id>        自定义 bundle identifier（默认：$DEFAULT_IDENTIFIER）
   --version <version>     自定义 CFBundleShortVersionString（默认：$DEFAULT_VERSION）
+  --triple <triple>       指定 Swift 构建 triple（默认：跟随当前运行环境；也可用 DEVHAVEN_NATIVE_TRIPLE）
   --no-open               构建完成后不执行 open
   --help                  显示帮助
 
 典型用法：
   bash macos/scripts/build-native-app.sh
   bash macos/scripts/build-native-app.sh --debug --no-open
+  bash macos/scripts/build-native-app.sh --release --triple x86_64-apple-macosx14.0 --no-open
   bash macos/scripts/build-native-app.sh --output-dir ./tmp/native-app
 USAGE
 }
@@ -102,6 +105,11 @@ while [[ $# -gt 0 ]]; do
       BUNDLE_VERSION="$2"
       shift 2
       ;;
+    --triple)
+      [[ $# -ge 2 ]] || fail "--triple 需要参数"
+      SWIFT_TRIPLE="$2"
+      shift 2
+      ;;
     --no-open)
       OPEN_OUTPUT_DIR=0
       shift
@@ -137,13 +145,18 @@ command -v plutil >/dev/null 2>&1 || fail "未检测到 plutil"
 command -v codesign >/dev/null 2>&1 || fail "未检测到 codesign"
 command -v ditto >/dev/null 2>&1 || fail "未检测到 ditto"
 
+SWIFT_BUILD_ARGS=(-c "$CONFIGURATION" --package-path "$MACOS_DIR")
+if [[ -n "$SWIFT_TRIPLE" ]]; then
+  SWIFT_BUILD_ARGS+=(--triple "$SWIFT_TRIPLE")
+fi
+
 log "验证 Ghostty vendor 完整性"
 bash "$SCRIPT_DIR/setup-ghostty-framework.sh" --verify-only
 
-log "开始构建 Swift 原生版（configuration=${CONFIGURATION}）"
-swift build -c "$CONFIGURATION" --package-path "$MACOS_DIR"
+log "开始构建 Swift 原生版（configuration=${CONFIGURATION}${SWIFT_TRIPLE:+, triple=$SWIFT_TRIPLE}）"
+swift build "${SWIFT_BUILD_ARGS[@]}"
 
-BIN_DIR="$(swift build -c "$CONFIGURATION" --package-path "$MACOS_DIR" --show-bin-path)"
+BIN_DIR="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
 EXECUTABLE_PATH="$BIN_DIR/DevHavenApp"
 RESOURCE_BUNDLE_PATH="$BIN_DIR/DevHavenNative_DevHavenApp.bundle"
 

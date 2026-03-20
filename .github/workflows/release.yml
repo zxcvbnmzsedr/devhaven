@@ -22,8 +22,10 @@ jobs:
         include:
           - arch: arm64
             runner: macos-26
+            swift_triple: ""
           - arch: x86_64
-            runner: macos-15-intel
+            runner: macos-26
+            swift_triple: x86_64-apple-macosx14.0
 
     runs-on: ${{ matrix.runner }}
     env:
@@ -57,9 +59,16 @@ jobs:
           bash macos/scripts/setup-ghostty-framework.sh --source "$ghostty_dir"
 
       - name: Swift test
+        if: ${{ matrix.arch == 'arm64' }}
         run: swift test --package-path macos
 
+      - name: Validate x86_64 compile
+        if: ${{ matrix.arch == 'x86_64' }}
+        run: swift build --package-path macos -c debug --triple "${{ matrix.swift_triple }}"
+
       - name: Build native app
+        env:
+          DEVHAVEN_NATIVE_TRIPLE: ${{ matrix.swift_triple }}
         run: bash macos/scripts/build-native-app.sh --release --no-open --output-dir "$RUNNER_TEMP/native-app"
 
       - name: Archive native app

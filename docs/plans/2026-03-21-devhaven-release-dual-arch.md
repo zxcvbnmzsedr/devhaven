@@ -4,7 +4,7 @@
 
 **Goal:** 让 GitHub release workflow 同时产出 macOS arm64 与 x86_64 两个安装包。
 
-**Architecture:** 保持 `macos/scripts/build-native-app.sh` 继续按“当前 runner 原生架构”构建，不在脚本里引入额外架构分支；把双架构控制收口到 `.github/workflows/release.yml` 的 matrix，由不同 runner 分别产出 arm64 与 Intel 包，并用不同的 release asset 名称上传，避免互相覆盖。
+**Architecture:** 保持 Ghostty bootstrap 继续依赖 `macos-26` 上的较新 Xcode 工具链；双架构控制收口到 `.github/workflows/release.yml` 的 matrix，其中 `arm64` 继续走原生 runner 架构，`x86_64` 改为在同一个 `macos-26` runner 上通过 `--triple x86_64-apple-macosx14.0` 交叉构建。release asset 继续用不同文件名上传，避免互相覆盖。
 
 **Tech Stack:** GitHub Actions、Swift Package Manager、GhosttyKit xcframework、macOS GitHub-hosted runners
 
@@ -20,7 +20,7 @@
 
 明确：
 - `arm64` 使用 `macos-26`
-- `x86_64` 使用 `macos-15-intel`
+- `x86_64` 也使用 `macos-26`，但通过 `x86_64-apple-macosx14.0` triple 交叉构建
 - release asset 以 `DevHaven-macos-<arch>.zip` 命名
 
 **Step 2: 同步项目发布主链文档**
@@ -36,7 +36,7 @@
 
 把 `build-macos-native` 改成：
 - `arm64 / macos-26`
-- `x86_64 / macos-15-intel`
+- `x86_64 / macos-26 + x86_64-apple-macosx14.0`
 
 **Step 2: 让打包产物带架构后缀**
 
@@ -46,12 +46,12 @@
 zip_path="$RUNNER_TEMP/DevHaven-macos-${{ matrix.arch }}.zip"
 ```
 
-**Step 3: 保持现有 bootstrap / test / build 主链不变**
+**Step 3: 收口 x86_64 的验证边界**
 
-不要在这轮引入新的脚本参数或跨架构打包逻辑；继续复用：
-- `setup-ghostty-framework.sh`
-- `swift test --package-path macos`
-- `build-native-app.sh`
+由于 arm runner 不能直接执行 x86_64 test bundle，这一轮把 x86_64 验证限定为“能成功编译和打包”，具体是：
+- `arm64` 继续跑 `swift test --package-path macos`
+- `x86_64` 改跑 `swift build --package-path macos -c debug --triple x86_64-apple-macosx14.0`
+- `build-native-app.sh` 新增可选 `--triple` / `DEVHAVEN_NATIVE_TRIPLE`
 
 ### Task 3: 验证 workflow 与 x86_64 构建能力
 

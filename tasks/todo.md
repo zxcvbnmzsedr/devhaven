@@ -113,3 +113,27 @@
   - `swift build --package-path macos -c release --triple x86_64-apple-macosx14.0` → 通过。
   - `file /Users/zhaotianzeng/WebstormProjects/DevHaven/macos/.build/x86_64-apple-macosx/release/DevHavenApp` → 输出 `Mach-O 64-bit executable x86_64`。
   - `git diff --check` → 通过。
+
+## 修复 dual-arch release 中 Intel hosted runner 编译失败（2026-03-21）
+
+- [x] 拉取失败 run `23365597633` 的 x86_64 job 日志并确认失败步骤
+- [x] 对照 arm64 成功链与 Ghostty 上游要求定位根因
+- [x] 改为 `macos-26` 上交叉构建 x86_64，并重新验证 workflow / 本地打包
+
+## Review（Intel hosted runner 编译失败）
+
+- 直接原因：失败 run `23365597633` 里的 `build-macos-native (x86_64, macos-15-intel)` 在 `Bootstrap Ghostty vendor` 阶段失败；日志显示该 job 使用的是 `Xcode 16.4 (Build version 16F6)`，并在 `cd /Users/runner/work/_temp/ghostty/macos && xcodebuild -target Ghostty -configuration ReleaseLocal` 时以 `code 65` 退出。arm64 job 同一时间跑在 `macos-26` 上则成功，说明失败点不在 DevHaven 自己的 Swift 包，而在 Ghostty 上游 bootstrap 所依赖的 Intel runner 工具链。
+- 设计层诱因：上一轮把“目标 CPU 架构”直接等同于“必须使用同构 GitHub runner”。这对纯 Swift 可执行文件未必是必须的，但对 Ghostty 这种先用较新 Xcode 构建 vendor、再由下游应用复用产物的链路，会把“目标架构”和“可用工具链版本”错误耦合在一起。
+- 当前修复：
+  - release workflow 仍保留 `arm64` / `x86_64` 双产物，但二者都改在 `macos-26` 上跑；
+  - `x86_64` 产物不再依赖 `macos-15-intel`，而是通过 `x86_64-apple-macosx14.0` triple 在 `macos-26` 上交叉构建；
+  - `build-native-app.sh` 新增可选 `--triple` / `DEVHAVEN_NATIVE_TRIPLE`，用于让 workflow 在不分叉主脚本的前提下产出 x86_64 `.app`；
+  - `x86_64` 这条 CI 验证改为“编译+打包验证”，不再尝试在 arm runner 上执行 x86_64 test bundle。
+- 长期建议：只要上游 vendor bootstrap 对 Xcode 主版本敏感，就不要再把“构建 x86_64 目标”简单理解成“必须用 Intel hosted runner”。先看可用工具链，再决定是同构 runner、交叉编译，还是自托管机器。
+- 验证证据：
+  - `gh run view 23365597633 --job 67978750279 --log` → 确认失败 job 为 `build-macos-native (x86_64, macos-15-intel)`，失败步骤是 `Bootstrap Ghostty vendor`。
+  - 同日志中的 `Print Xcode version` → 明确显示 `Xcode 16.4 / Build version 16F6`。
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); puts "yaml ok"'` → 通过，输出 `yaml ok`。
+  - `swift test --package-path macos` → 通过，`107 tests, 5 skipped, 0 failures`。
+  - `bash macos/scripts/build-native-app.sh --release --no-open --triple x86_64-apple-macosx14.0 --output-dir /tmp/devhaven-native-app-x86-cross-verify` → 通过。
+  - `file /tmp/devhaven-native-app-x86-cross-verify/DevHaven.app/Contents/MacOS/DevHavenApp` → 输出 `Mach-O 64-bit executable x86_64`。

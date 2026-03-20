@@ -11,3 +11,5 @@
 - 手工组装 SwiftPM 可执行应用时，不要把运行时资源解析继续托付给 `Bundle.module` 的默认行为；打包脚本把资源 bundle 放在哪里，运行时代码就应该显式按最终 `.app` 布局去找，否则 release 产物很容易只在启动期才暴露崩溃。
 - `.app` 根目录不是放 SwiftPM 资源 bundle 的安全兜底位点；即便那样能“碰巧”让 `Bundle.module` 工作，`codesign --verify --deep --strict` 也会因为 bundle root 出现未封装内容而失败。
 - 当 GitHub release 要同时发多个 macOS 架构时，不要继续沿用单 runner + 通用 asset 文件名；应把“runner 架构”和“release asset 命名”一起显式化，否则多 job 上传时要么互相覆盖，要么让用户无法判断包对应的 CPU 架构。
+- GitHub-hosted Intel runner 不等于“适合构建 Intel 目标”；如果上游依赖（这里是 Ghostty）已经要求更高版本的 Xcode，而 GitHub 当前可用 Intel runner 只有较老工具链，就应改成在较新 Apple Silicon runner 上用 `--triple x86_64-apple-macosx14.0` 交叉构建，而不是继续把 CPU 架构和 runner 机型绑死。
+- 在 Apple Silicon 主机上跑 `swift test --triple x86_64-apple-macosx14.0` 时，测试二进制可以编出来，但默认无法直接执行 x86_64 test bundle；CI 若仍运行在 arm64 runner，上游验证边界应明确收口为“x86_64 编译/打包成功”，不要误把“可编译”当成“可在当前 runner 上直接执行测试”。
