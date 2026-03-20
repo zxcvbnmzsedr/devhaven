@@ -8,3 +8,5 @@
 - 对 Ghostty 这类会读取 Git 元数据的上游工程，CI 不能偷懒只下源码归档再 `zig build`；必须保留真实 Git checkout（至少是 fetch 到固定 commit），否则上游构建脚本可能因缺失仓库上下文而直接 panic。
 - 当上游原生依赖（这里是 Ghostty）对 Xcode 主版本有隐含要求时，`macos-latest` 不是稳定真相源；需要显式固定到合适的 runner（这里是 `macos-26`），并把 `xcodebuild -version` 打到日志里，避免只看到 `code 65` 却不知道 runner 实际工具链。
 - 对“历史文档痕迹”类清理，不要只删代码目录；还要同步检查 `docs/plans/`、旧版 `docs/releases/`、`work.md`、`PLAN.md`、`tasks/todo.md`、`tasks/lessons.md` 是否仍在讲已经不存在的技术栈。
+- 手工组装 SwiftPM 可执行应用时，不要把运行时资源解析继续托付给 `Bundle.module` 的默认行为；打包脚本把资源 bundle 放在哪里，运行时代码就应该显式按最终 `.app` 布局去找，否则 release 产物很容易只在启动期才暴露崩溃。
+- `.app` 根目录不是放 SwiftPM 资源 bundle 的安全兜底位点；即便那样能“碰巧”让 `Bundle.module` 工作，`codesign --verify --deep --strict` 也会因为 bundle root 出现未封装内容而失败。

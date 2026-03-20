@@ -62,3 +62,27 @@
 - 设计层诱因：上一轮只把“CI 缺失 Ghostty vendor bootstrap”补齐了，但没有把 GitHub runner 的 Xcode 主版本与当前 Ghostty 上游的构建要求一起锁定；结果变成“vendor 链路对了，工具链版本又漂移了”。
 - 当前修复：`.github/workflows/release.yml` 已把 release runner 从 `macos-latest` 改成 `macos-26`，并新增 `Print Xcode version` 步骤输出 `xcodebuild -version`，用于让日志直接暴露实际工具链版本。
 - 长期建议：后续只要升级 Ghostty commit 或切换 GitHub runner 标签，都要把“上游 commit pin / runner OS / Xcode 主版本 / 本地验证环境”作为同一组约束维护，而不是只盯单个脚本。
+
+## 修复 GitHub workflow 产物启动即崩（2026-03-20）
+
+- [x] 对照 crash log 与 Supacode 打包方式定位资源加载断裂点
+- [x] 调整 `GhosttyAppRuntime` 的资源 bundle 定位逻辑并补回归测试
+- [x] 验证原生测试、`.app` 布局、原生打包与启动 smoke test
+
+## Review（GitHub workflow 产物启动即崩）
+
+- 直接原因：GitHub workflow 产出的 `.app` 在启动时崩在 `static NSBundle.module` 初始化，说明运行时没有按 SwiftPM 期望的方式找到 `DevHavenNative_DevHavenApp.bundle`。`build-native-app.sh` 会把该 bundle 复制到 `DevHaven.app/Contents/Resources/`，但旧版 `GhosttyAppRuntime` 仍直接依赖 `Bundle.module`，导致打包后的应用在初始化 `GhosttyResources/ghostty` 时触发断言并直接崩溃。
+- 设计层诱因：当前 release 仍是“SwiftPM executable + 手工组装 `.app`”模式，资源拷贝路径由打包脚本掌控，而运行时资源定位却交给 `Bundle.module` 的默认实现；也就是**打包布局真相源**和**运行时资源查找真相源**分裂了。未发现更大的系统设计缺陷，问题集中在这一处边界没有显式收口。
+- 当前修复：
+  - `GhosttyAppRuntime` 新增显式资源 bundle 定位逻辑，优先解析 `Bundle.main.resourceURL/DevHavenNative_DevHavenApp.bundle`，并兼容测试环境下的 sibling bundle fallback；
+  - 新增 `GhosttyAppRuntimeBundleLocatorTests`，锁定“打包产物优先从 `Contents/Resources` 取 bundle”和“测试环境可从同级目录 fallback”两条路径；
+  - 新增 `macos/scripts/test-native-app-layout.sh`，持续检查 `.app` 中资源 bundle 的实际落点；
+  - 保持资源 bundle 放在 `Contents/Resources/`，不再尝试复制到 `.app` 根目录，避免 `codesign --verify --deep --strict` 报 `unsealed contents present in the bundle root`。
+- Supacode 对照：Supacode 走 `xcodebuild archive/exportArchive`，资源通过 Xcode `PBXResourcesBuildPhase` 进入 `Contents/Resources/`，运行时直接按 `Bundle.main.resourceURL/...` 读取 `ghostty` / `terminfo` / `git-wt`。这次修复本质上是把 DevHaven 的运行时资源解析边界也收口到同样稳定的 app resources 语义上，而不是继续赌 `Bundle.module` 在手工组装 `.app` 时能自动对齐。
+- 长期建议：如果后续继续沿用 SwiftPM executable + 手工 `.app` 组装路线，凡是要在发布版读取的资源，都应像这次一样显式绑定到最终 app 布局；不要让“构建时生成 bundle”和“运行时查找 bundle”分属两套默认约定。
+- 验证证据：
+  - `swift test --package-path macos` → 通过，`107 tests, 5 skipped, 0 failures`。
+  - `bash macos/scripts/test-native-app-layout.sh` → 通过，确认资源 bundle 位于 `DevHaven.app/Contents/Resources/DevHavenNative_DevHavenApp.bundle`，且 app 根目录不存在非法副本。
+  - `bash macos/scripts/build-native-app.sh --release --no-open --output-dir /tmp/devhaven-native-app-verify-launch-fix` → 通过，产物为 `/tmp/devhaven-native-app-verify-launch-fix/DevHaven.app`，脚本内 `codesign --verify --deep --strict` 通过。
+  - 启动 smoke test：直接执行 `/tmp/devhaven-native-app-verify-launch-fix/DevHaven.app/Contents/MacOS/DevHavenApp`，5 秒后进程仍存活，输出 `STATUS=running_after_5s`，未再出现启动即崩。
+  - 额外核对：Supacode 安装产物 `/Applications/supacode.app/Contents/Resources/` 下确实存在 `ghostty`、`terminfo`、`git-wt`，与本次对照结论一致。
