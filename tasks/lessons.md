@@ -10,3 +10,4 @@
 - 对“历史文档痕迹”类清理，不要只删代码目录；还要同步检查 `docs/plans/`、旧版 `docs/releases/`、`work.md`、`PLAN.md`、`tasks/todo.md`、`tasks/lessons.md` 是否仍在讲已经不存在的技术栈。
 - 手工组装 SwiftPM 可执行应用时，不要把运行时资源解析继续托付给 `Bundle.module` 的默认行为；打包脚本把资源 bundle 放在哪里，运行时代码就应该显式按最终 `.app` 布局去找，否则 release 产物很容易只在启动期才暴露崩溃。
 - `.app` 根目录不是放 SwiftPM 资源 bundle 的安全兜底位点；即便那样能“碰巧”让 `Bundle.module` 工作，`codesign --verify --deep --strict` 也会因为 bundle root 出现未封装内容而失败。
+- 当 GitHub release 要同时发多个 macOS 架构时，不要继续沿用单 runner + 通用 asset 文件名；应把“runner 架构”和“release asset 命名”一起显式化，否则多 job 上传时要么互相覆盖，要么让用户无法判断包对应的 CPU 架构。

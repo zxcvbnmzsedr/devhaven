@@ -16,7 +16,16 @@ permissions:
 
 jobs:
   build-macos-native:
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-26
+          - arch: x86_64
+            runner: macos-15-intel
+
+    runs-on: ${{ matrix.runner }}
     env:
       GHOSTTY_SOURCE_REF: da10707f93104c5466cd4e64b80ff48f789238a0
 
@@ -63,7 +72,7 @@ jobs:
             echo "未找到原生 .app 产物" >&2
             exit 1
           fi
-          zip_path="$RUNNER_TEMP/$(basename "$app_path" .app)-macos.zip"
+          zip_path="$RUNNER_TEMP/DevHaven-macos-${{ matrix.arch }}.zip"
           ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
           echo "app_path=$app_path" >> "$GITHUB_OUTPUT"
           echo "zip_path=$zip_path" >> "$GITHUB_OUTPUT"

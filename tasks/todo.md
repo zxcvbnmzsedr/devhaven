@@ -53,8 +53,8 @@
 - [x] 拉取最新失败 run 并定位实际失败 step
 - [x] 确认 root cause 为 runner Xcode 版本落后而非 vendor bootstrap 逻辑错误
 - [x] 将 release workflow 切到 `macos-26` 并增加 Xcode 版本诊断输出
-- [ ] commit / push 并重打 `v3.0.0` 触发新的 release run
-- [ ] 检查新 run 是否成功起跑
+- [x] commit / push 并重打 `v3.0.0` 触发新的 release run
+- [x] 检查新 run 是否成功起跑
 
 ## Review（GitHub Actions Xcode toolchain 对齐）
 
@@ -62,6 +62,10 @@
 - 设计层诱因：上一轮只把“CI 缺失 Ghostty vendor bootstrap”补齐了，但没有把 GitHub runner 的 Xcode 主版本与当前 Ghostty 上游的构建要求一起锁定；结果变成“vendor 链路对了，工具链版本又漂移了”。
 - 当前修复：`.github/workflows/release.yml` 已把 release runner 从 `macos-latest` 改成 `macos-26`，并新增 `Print Xcode version` 步骤输出 `xcodebuild -version`，用于让日志直接暴露实际工具链版本。
 - 长期建议：后续只要升级 Ghostty commit 或切换 GitHub runner 标签，都要把“上游 commit pin / runner OS / Xcode 主版本 / 本地验证环境”作为同一组约束维护，而不是只盯单个脚本。
+- 新进展（2026-03-20）：
+  - `git push origin main` → 已成功把修复提交 `dd46da5` 推到远端。
+  - `git tag -fa v3.0.0 -m "v3.0.0"` + `git push origin refs/tags/v3.0.0 --force` → 已成功把 `v3.0.0` 重指到 `dd46da5` 并推送远端。
+  - `gh run list --workflow release.yml --limit 5 ...` → 新 run `23346369319` 已于 `2026-03-20T14:03:39Z` 起跑，当前 URL：`https://github.com/zxcvbnmzsedr/devhaven/actions/runs/23346369319`。
 
 ## 修复 GitHub workflow 产物启动即崩（2026-03-20）
 
@@ -85,4 +89,27 @@
   - `bash macos/scripts/test-native-app-layout.sh` → 通过，确认资源 bundle 位于 `DevHaven.app/Contents/Resources/DevHavenNative_DevHavenApp.bundle`，且 app 根目录不存在非法副本。
   - `bash macos/scripts/build-native-app.sh --release --no-open --output-dir /tmp/devhaven-native-app-verify-launch-fix` → 通过，产物为 `/tmp/devhaven-native-app-verify-launch-fix/DevHaven.app`，脚本内 `codesign --verify --deep --strict` 通过。
   - 启动 smoke test：直接执行 `/tmp/devhaven-native-app-verify-launch-fix/DevHaven.app/Contents/MacOS/DevHavenApp`，5 秒后进程仍存活，输出 `STATUS=running_after_5s`，未再出现启动即崩。
-  - 额外核对：Supacode 安装产物 `/Applications/supacode.app/Contents/Resources/` 下确实存在 `ghostty`、`terminfo`、`git-wt`，与本次对照结论一致。
+- 额外核对：Supacode 安装产物 `/Applications/supacode.app/Contents/Resources/` 下确实存在 `ghostty`、`terminfo`、`git-wt`，与本次对照结论一致。
+
+## 扩展 GitHub release 为 arm64 + x86_64 双产物（2026-03-21）
+
+- [x] 确认当前单产物 release 只会跟随 runner 架构输出 arm64
+- [x] 设计 dual-arch release 方案并记录到 `docs/plans/2026-03-21-devhaven-release-dual-arch.md`
+- [x] 修改 `.github/workflows/release.yml` 为 arm64 / x86_64 matrix
+- [x] 同步更新 `AGENTS.md` 的发布主链说明
+- [x] 校验 workflow YAML 与本地 x86_64 构建验证
+
+## Review（GitHub release dual-arch）
+
+- 直接原因：当前 `.github/workflows/release.yml` 只有单个 `build-macos-native` job，且固定 `runs-on: macos-26`；`build-native-app.sh` 又直接调用不带 `--triple` 的 `swift build`，所以 release 产物天然跟随 runner 架构，只会产出 `arm64` 包。
+- 设计层诱因：发布链原先把“目标架构”隐式绑定在 runner 上，但 release asset 名称却没有编码架构信息。这种做法在单 runner 时代问题不明显，一旦扩成多架构发布，构建真相源和发布资产命名就会发生冲突。
+- 当前修复：
+  - `.github/workflows/release.yml` 现在改为 matrix，同时跑 `arm64/macos-26` 与 `x86_64/macos-15-intel`；
+  - 保持 `setup-ghostty-framework.sh`、`swift test --package-path macos`、`build-native-app.sh` 主链不变，不在本轮给脚本再加一套额外架构分支；
+  - release asset 名称改成 `DevHaven-macos-arm64.zip` 和 `DevHaven-macos-x86_64.zip`，避免两个 job 互相覆盖。
+- 长期建议：后续如果要继续做 universal 包，再单独评估“matrix 双包”与“lipo 合包”谁是正式发行策略；在这之前，不要把 runner 架构、target triple 和 release asset 命名继续混在一起。
+- 验证证据：
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); puts "yaml ok"'` → 通过，输出 `yaml ok`。
+  - `swift build --package-path macos -c release --triple x86_64-apple-macosx14.0` → 通过。
+  - `file /Users/zhaotianzeng/WebstormProjects/DevHaven/macos/.build/x86_64-apple-macosx/release/DevHavenApp` → 输出 `Mach-O 64-bit executable x86_64`。
+  - `git diff --check` → 通过。
