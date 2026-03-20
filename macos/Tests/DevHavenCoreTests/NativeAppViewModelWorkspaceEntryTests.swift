@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
-    func testEnterWorkspaceTracksActiveProjectAndClosesDetailPanel() {
+    func testEnterWorkspaceTracksActiveProjectAndCreatesSingleTabSinglePaneSession() {
         let viewModel = makeViewModel()
         let project = makeProject()
         viewModel.snapshot.projects = [project]
@@ -15,9 +15,172 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         XCTAssertEqual(viewModel.activeWorkspaceProjectPath, project.path)
         XCTAssertEqual(viewModel.activeWorkspaceProject?.path, project.path)
         XCTAssertFalse(viewModel.isDetailPanelPresented)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.tabs.count, 1)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.selectedTab?.leaves.count, 1)
+        XCTAssertEqual(viewModel.activeWorkspaceLaunchRequest?.projectPath, project.path)
     }
 
-    func testExitWorkspaceClearsActiveWorkspaceProject() {
+
+    func testEnteringMultipleProjectsKeepsOpenWorkspaceListAndActivatesLatestProject() {
+        let viewModel = makeViewModel()
+        let alpha = makeProject(id: "project-1", name: "Alpha", path: "/tmp/alpha")
+        let beta = makeProject(id: "project-2", name: "Beta", path: "/tmp/beta")
+        viewModel.snapshot.projects = [alpha, beta]
+
+        viewModel.enterWorkspace(alpha.path)
+        viewModel.enterWorkspace(beta.path)
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [alpha.path, beta.path])
+        XCTAssertEqual(viewModel.openWorkspaceProjects.map(\.path), [alpha.path, beta.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, beta.path)
+        XCTAssertEqual(viewModel.activeWorkspaceProject?.path, beta.path)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.projectPath, beta.path)
+    }
+
+    func testEnteringAlreadyOpenedProjectDoesNotDuplicateWorkspaceSession() {
+        let viewModel = makeViewModel()
+        let alpha = makeProject(id: "project-1", name: "Alpha", path: "/tmp/alpha")
+        let beta = makeProject(id: "project-2", name: "Beta", path: "/tmp/beta")
+        viewModel.snapshot.projects = [alpha, beta]
+
+        viewModel.enterWorkspace(alpha.path)
+        viewModel.enterWorkspace(beta.path)
+        viewModel.enterWorkspace(alpha.path)
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [alpha.path, beta.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, alpha.path)
+    }
+
+    func testWorkspaceAvailableProjectsExcludeAlreadyOpenedSessions() {
+        let viewModel = makeViewModel()
+        let alpha = makeProject(id: "project-1", name: "Alpha", path: "/tmp/alpha")
+        let beta = makeProject(id: "project-2", name: "Beta", path: "/tmp/beta")
+        let gamma = makeProject(id: "project-3", name: "Gamma", path: "/tmp/gamma")
+        viewModel.snapshot.projects = [alpha, beta, gamma]
+
+        viewModel.enterWorkspace(alpha.path)
+        viewModel.enterWorkspace(beta.path)
+
+        XCTAssertEqual(viewModel.availableWorkspaceProjects.map(\.path), [gamma.path])
+    }
+
+    func testSelectingAnotherProjectWhileWorkspaceIsOpenKeepsOpenedSessionsAlive() {
+        let viewModel = makeViewModel()
+        let alpha = makeProject(id: "project-1", name: "Alpha", path: "/tmp/alpha")
+        let beta = makeProject(id: "project-2", name: "Beta", path: "/tmp/beta")
+        let gamma = makeProject(id: "project-3", name: "Gamma", path: "/tmp/gamma")
+        viewModel.snapshot.projects = [alpha, beta, gamma]
+
+        viewModel.enterWorkspace(alpha.path)
+        viewModel.enterWorkspace(beta.path)
+
+        viewModel.selectProject(gamma.path)
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [alpha.path, beta.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, beta.path)
+        XCTAssertEqual(viewModel.selectedProjectPath, gamma.path)
+        XCTAssertTrue(viewModel.isDetailPanelPresented)
+    }
+
+    func testSwitchingActiveWorkspaceProjectPreservesEachProjectsTopology() throws {
+        let viewModel = makeViewModel()
+        let alpha = makeProject(id: "project-1", name: "Alpha", path: "/tmp/alpha")
+        let beta = makeProject(id: "project-2", name: "Beta", path: "/tmp/beta")
+        viewModel.snapshot.projects = [alpha, beta]
+
+        viewModel.enterWorkspace(alpha.path)
+        viewModel.createWorkspaceTab()
+        viewModel.selectWorkspaceTab(try XCTUnwrap(viewModel.activeWorkspaceState?.tabs.first?.id))
+        viewModel.splitWorkspaceFocusedPane(direction: .right)
+        let alphaTabCount = viewModel.activeWorkspaceState?.tabs.count
+        let alphaPaneCount = viewModel.activeWorkspaceState?.selectedTab?.leaves.count
+
+        viewModel.enterWorkspace(beta.path)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.projectPath, beta.path)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.tabs.count, 1)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.selectedTab?.leaves.count, 1)
+
+        viewModel.activateWorkspaceProject(alpha.path)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.projectPath, alpha.path)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.tabs.count, alphaTabCount)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.selectedTab?.leaves.count, alphaPaneCount)
+    }
+
+    func testClosingWorkspaceProjectFallsBackToRemainingProjectAndLastCloseExitsWorkspace() {
+        let viewModel = makeViewModel()
+        let alpha = makeProject(id: "project-1", name: "Alpha", path: "/tmp/alpha")
+        let beta = makeProject(id: "project-2", name: "Beta", path: "/tmp/beta")
+        viewModel.snapshot.projects = [alpha, beta]
+
+        viewModel.enterWorkspace(alpha.path)
+        viewModel.enterWorkspace(beta.path)
+
+        viewModel.closeWorkspaceProject(beta.path)
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [alpha.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, alpha.path)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.projectPath, alpha.path)
+
+        viewModel.closeWorkspaceProject(alpha.path)
+        XCTAssertTrue(viewModel.openWorkspaceProjectPaths.isEmpty)
+        XCTAssertTrue(viewModel.openWorkspaceProjects.isEmpty)
+        XCTAssertNil(viewModel.activeWorkspaceProjectPath)
+        XCTAssertNil(viewModel.activeWorkspaceState)
+        XCTAssertFalse(viewModel.isWorkspacePresented)
+    }
+
+    func testWorkspaceTabAndPaneActionsMutateActiveWorkspaceState() throws {
+        let viewModel = makeViewModel()
+        let project = makeProject()
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        let firstTabID = try XCTUnwrap(viewModel.activeWorkspaceState?.selectedTab?.id)
+        let firstPaneID = try XCTUnwrap(viewModel.activeWorkspaceState?.selectedPane?.id)
+
+        viewModel.createWorkspaceTab()
+        let secondTabID = try XCTUnwrap(viewModel.activeWorkspaceState?.selectedTab?.id)
+        XCTAssertNotEqual(secondTabID, firstTabID)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.tabs.count, 2)
+
+        viewModel.selectWorkspaceTab(firstTabID)
+        viewModel.splitWorkspaceFocusedPane(direction: .right)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.selectedTab?.leaves.count, 2)
+        XCTAssertNotEqual(viewModel.activeWorkspaceState?.selectedTab?.focusedPaneId, firstPaneID)
+
+        let focusedPaneID = try XCTUnwrap(viewModel.activeWorkspaceState?.selectedTab?.focusedPaneId)
+        viewModel.closeWorkspacePane(focusedPaneID)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.selectedTab?.leaves.count, 1)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.selectedTab?.focusedPaneId, firstPaneID)
+    }
+
+    func testExitWorkspacePreservesOpenSessionsForLaterReentry() {
+        let viewModel = makeViewModel()
+        let alpha = makeProject(id: "project-1", name: "Alpha", path: "/tmp/alpha")
+        let beta = makeProject(id: "project-2", name: "Beta", path: "/tmp/beta")
+        viewModel.snapshot.projects = [alpha, beta]
+
+        viewModel.enterWorkspace(alpha.path)
+        viewModel.enterWorkspace(beta.path)
+
+        viewModel.exitWorkspace()
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [alpha.path, beta.path])
+        XCTAssertNil(viewModel.activeWorkspaceProjectPath)
+        XCTAssertNil(viewModel.activeWorkspaceState)
+        XCTAssertFalse(viewModel.isWorkspacePresented)
+
+        viewModel.selectProject(alpha.path)
+        XCTAssertFalse(viewModel.isWorkspacePresented)
+        XCTAssertTrue(viewModel.isDetailPanelPresented)
+
+        viewModel.enterWorkspace(alpha.path)
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [alpha.path, beta.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, alpha.path)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.projectPath, alpha.path)
+        XCTAssertTrue(viewModel.isWorkspacePresented)
+    }
+
+    func testExitWorkspaceKeepsSingleProjectSessionAvailableForReentry() {
         let viewModel = makeViewModel()
         let project = makeProject()
         viewModel.snapshot.projects = [project]
@@ -25,8 +188,13 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
 
         viewModel.exitWorkspace()
 
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path])
+        XCTAssertEqual(viewModel.openWorkspaceProjects.map(\.path), [project.path])
         XCTAssertNil(viewModel.activeWorkspaceProjectPath)
         XCTAssertNil(viewModel.activeWorkspaceProject)
+        XCTAssertNil(viewModel.activeWorkspaceState)
+        XCTAssertNil(viewModel.activeWorkspaceLaunchRequest)
+        XCTAssertFalse(viewModel.isWorkspacePresented)
     }
 
     func testOpenWorkspaceInTerminalRunsOpenCommandForActiveProjectPath() throws {
@@ -70,11 +238,15 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         )
     }
 
-    private func makeProject() -> Project {
+    private func makeProject(
+        id: String = "project-1",
+        name: String = "DevHaven",
+        path: String = "/tmp/devhaven"
+    ) -> Project {
         Project(
-            id: "project-1",
-            name: "DevHaven",
-            path: "/tmp/devhaven",
+            id: id,
+            name: name,
+            path: path,
             tags: [],
             scripts: [],
             worktrees: [],

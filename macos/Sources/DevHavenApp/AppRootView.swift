@@ -79,26 +79,8 @@ struct AppRootView: View {
 
     @ViewBuilder
     private var primaryContent: some View {
-        if let workspaceProject = viewModel.activeWorkspaceProject {
-            if let launchRequest = viewModel.activeWorkspaceLaunchRequest {
-                WorkspaceHostView(
-                    project: workspaceProject,
-                    launchRequest: launchRequest,
-                    onOpenInTerminal: {
-                        do {
-                            try viewModel.openActiveWorkspaceInTerminal()
-                        } catch {
-                            // 错误已经由 ViewModel 收口到 errorMessage，避免重复提示
-                        }
-                    },
-                    onBack: {
-                        viewModel.exitWorkspace()
-                    },
-                    onShowDetails: {
-                        viewModel.selectProject(workspaceProject.path)
-                    }
-                )
-            }
+        if viewModel.isWorkspacePresented {
+            WorkspaceShellView(viewModel: viewModel)
         } else {
             MainContentView(viewModel: viewModel)
         }

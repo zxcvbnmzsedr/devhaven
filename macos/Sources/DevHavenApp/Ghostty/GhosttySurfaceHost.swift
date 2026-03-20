@@ -138,23 +138,64 @@ enum GhosttySurfaceHostError: LocalizedError {
         case let .runtimeUnavailable(message):
             return message
         case .appCreationFailed:
-            return "Ghostty app runtime 创建失败。"
+            return "Ghostty 应用级运行时创建失败。"
         case .configCreationFailed:
             return "Ghostty config 创建失败。"
         case .surfaceCreationFailed:
-            return "Ghostty surface 创建失败。"
+            return "Ghostty 终端实例创建失败。"
         }
     }
 }
 
 struct GhosttySurfaceHost: View {
     let request: WorkspaceTerminalLaunchRequest
+    let isFocused: Bool
+    let onFocusChange: ((Bool) -> Void)?
+    let onSurfaceExit: (() -> Void)?
+    let onTabTitleChange: ((String) -> Void)?
+    let onNewTab: (() -> Bool)?
+    let onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)?
+    let onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)?
+    let onMoveTab: ((ghostty_action_move_tab_s) -> Bool)?
+    let onSplitAction: ((GhosttySplitAction) -> Bool)?
 
     @StateObject private var model: GhosttySurfaceHostModel
 
-    init(request: WorkspaceTerminalLaunchRequest) {
+    init(
+        request: WorkspaceTerminalLaunchRequest,
+        isFocused: Bool = false,
+        onFocusChange: ((Bool) -> Void)? = nil,
+        onSurfaceExit: (() -> Void)? = nil,
+        onTabTitleChange: ((String) -> Void)? = nil,
+        onNewTab: (() -> Bool)? = nil,
+        onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)? = nil,
+        onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
+        onMoveTab: ((ghostty_action_move_tab_s) -> Bool)? = nil,
+        onSplitAction: ((GhosttySplitAction) -> Bool)? = nil
+    ) {
         self.request = request
-        _model = StateObject(wrappedValue: GhosttySurfaceHostModel(request: request))
+        self.isFocused = isFocused
+        self.onFocusChange = onFocusChange
+        self.onSurfaceExit = onSurfaceExit
+        self.onTabTitleChange = onTabTitleChange
+        self.onNewTab = onNewTab
+        self.onCloseTab = onCloseTab
+        self.onGotoTab = onGotoTab
+        self.onMoveTab = onMoveTab
+        self.onSplitAction = onSplitAction
+        _model = StateObject(
+            wrappedValue: GhosttySurfaceHostModel(
+                request: request,
+                onFocusChange: onFocusChange,
+                onSurfaceExit: onSurfaceExit,
+                onTabTitleChange: onTabTitleChange,
+                onNewTab: onNewTab,
+                onCloseTab: onCloseTab,
+                onGotoTab: onGotoTab,
+                onMoveTab: onMoveTab,
+                onSplitAction: onSplitAction
+            )
+        )
     }
 
     var body: some View {
@@ -195,10 +236,10 @@ struct GhosttySurfaceHost: View {
                 )
             } else if model.processState == .exited {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Ghostty shell 已退出")
+                    Text("Ghostty 终端已退出")
                         .font(.headline)
                         .foregroundStyle(model.appearance.primaryTextColor)
-                    Text("Ctrl+D 或 shell exit 后，当前 pane 只释放 surface，本次不再销毁 app 级 runtime；workspace 仍可继续操作。")
+                    Text("Ctrl+D 或终端退出后，当前窗格只会释放当前终端实例，本次不再销毁应用级运行时；工作区仍可继续操作。")
                         .font(.caption)
                         .foregroundStyle(model.appearance.secondaryTextColor)
                 }
@@ -211,7 +252,7 @@ struct GhosttySurfaceHost: View {
                         .stroke(model.appearance.borderColor, lineWidth: 1)
                 )
             } else {
-                GhosttyTerminalView(model: model)
+                GhosttyTerminalView(model: model, isFocused: isFocused)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(model.appearance.backgroundColor)
                     .clipShape(.rect(cornerRadius: 14))
@@ -250,14 +291,38 @@ final class GhosttySurfaceHostModel: ObservableObject {
     @Published var processState: GhosttySurfaceProcessState = .starting
 
     private let appRuntime: GhosttyAppRuntime
+    private let onFocusChange: ((Bool) -> Void)?
+    private let onSurfaceExit: (() -> Void)?
+    private let onTabTitleChange: ((String) -> Void)?
+    private let onNewTab: (() -> Bool)?
+    private let onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)?
+    private let onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)?
+    private let onMoveTab: ((ghostty_action_move_tab_s) -> Bool)?
+    private let onSplitAction: ((GhosttySplitAction) -> Bool)?
     private var ownedSurfaceView: GhosttyTerminalSurfaceView?
 
     init(
         request: WorkspaceTerminalLaunchRequest,
+        onFocusChange: ((Bool) -> Void)? = nil,
+        onSurfaceExit: (() -> Void)? = nil,
+        onTabTitleChange: ((String) -> Void)? = nil,
+        onNewTab: (() -> Bool)? = nil,
+        onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)? = nil,
+        onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
+        onMoveTab: ((ghostty_action_move_tab_s) -> Bool)? = nil,
+        onSplitAction: ((GhosttySplitAction) -> Bool)? = nil,
         appRuntime: GhosttyAppRuntime = .shared
     ) {
         self.request = request
         self.appRuntime = appRuntime
+        self.onFocusChange = onFocusChange
+        self.onSurfaceExit = onSurfaceExit
+        self.onTabTitleChange = onTabTitleChange
+        self.onNewTab = onNewTab
+        self.onCloseTab = onCloseTab
+        self.onGotoTab = onGotoTab
+        self.onMoveTab = onMoveTab
+        self.onSplitAction = onSplitAction
         self.terminalRuntime = appRuntime.runtime
         self.surfaceWorkingDirectory = request.projectPath
         self.appearance = terminalRuntime?.appearance ?? .fallback
@@ -265,8 +330,11 @@ final class GhosttySurfaceHostModel: ObservableObject {
         self.processState = initializationError == nil ? .running : .failed
     }
 
-    func acquireSurfaceView() -> GhosttyTerminalSurfaceView {
+    func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
         if let ownedSurfaceView {
+            if preferredFocus {
+                ownedSurfaceView.requestFocus()
+            }
             return ownedSurfaceView
         }
 
@@ -277,6 +345,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
         let bridge = GhosttySurfaceBridge()
         bridge.onTitleChange = { [weak self] title in
             self?.surfaceTitle = title
+            self?.onTabTitleChange?(title)
         }
         bridge.onWorkingDirectoryChange = { [weak self] path in
             self?.surfaceWorkingDirectory = path
@@ -290,6 +359,11 @@ final class GhosttySurfaceHostModel: ObservableObject {
         bridge.onCloseRequest = { [weak self] processAlive in
             self?.handleProcessExit(processAlive: processAlive)
         }
+        bridge.onNewTab = onNewTab
+        bridge.onCloseTab = onCloseTab
+        bridge.onGotoTab = onGotoTab
+        bridge.onMoveTab = onMoveTab
+        bridge.onSplitAction = onSplitAction
 
         let view = GhosttyTerminalSurfaceView(
             runtime: terminalRuntime,
@@ -297,16 +371,24 @@ final class GhosttySurfaceHostModel: ObservableObject {
             bridge: bridge,
             extraEnvironment: request.environment
         )
+        view.onFocusChange = { [weak self] focused in
+            self?.onFocusChange?(focused)
+        }
         ownedSurfaceView = view
         if let error = view.initializationError {
             initializationError = error.localizedDescription
             processState = .failed
+        } else if preferredFocus {
+            view.requestFocus()
         }
         return view
     }
 
-    func applyLatestModelState() {
+    func applyLatestModelState(preferredFocus: Bool = false) {
         ownedSurfaceView?.applyLatestModelState()
+        if preferredFocus {
+            ownedSurfaceView?.requestFocus()
+        }
     }
 
     func releaseSurface() {
@@ -323,6 +405,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
         ownedSurfaceView = nil
         rendererHealthy = true
         processState = .exited
+        onSurfaceExit?()
     }
 
     var terminalStatusText: String {
@@ -330,9 +413,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
         case .starting:
             return "Ghostty 启动中"
         case .running:
-            return rendererHealthy ? "Ghostty renderer 正常" : "Ghostty renderer 异常"
+            return rendererHealthy ? "Ghostty 渲染器正常" : "Ghostty 渲染器异常"
         case .exited:
-            return "Shell 已退出"
+            return "终端已退出"
         case .failed:
             return "Ghostty 初始化失败"
         }

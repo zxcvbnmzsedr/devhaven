@@ -81,3 +81,8 @@
 
 - 当用户明确反馈“原生版 UI 差距太大，需要复刻 Tauri 版本”时，不能继续沿用系统默认 `NavigationSplitView` 三栏范式做小修小补；应立即回到现有 React 入口与真实截图，按 **左侧 Sidebar + 中央 MainContent + 右侧 overlay Detail Drawer** 的信息架构重建原生主布局。
 - 以后做原生迁移时，如果用户已经明确选择“尽量保留现有信息架构”，就不要擅自把界面改造成更像系统样板 app 的布局；先追平现有产品结构，再谈更原生的局部优化。
+- 在 SwiftUI + Ghostty 的原生 workspace 里，标签页切换不能靠“只渲染当前选中 tab”实现；如果非选中 tab 被卸载，`GhosttySurfaceHost.onDisappear -> releaseSurface()` 会把后台终端直接销毁。稳定做法是保活所有 tab，只把非选中项做透明隐藏并禁交互。
+- 在 SwiftUI + Ghostty 的原生 workspace 里，项目切换和标签页切换属于同一类生命周期问题；如果通过“只渲染当前 active project/workspace”来切换项目，`WorkspaceHostView` 的 `onDisappear` 一样会把后台 Ghostty surface 提前释放。稳定做法是保活所有已打开项目对应的 workspace host，只把非激活项隐藏并禁交互。
+- 对“支持同时打开多个项目”这类需求，不能只把底层状态模型做成 `openWorkspaceSessions` 就算完成；还必须在 workspace 壳里提供**继续打开其他项目的真实入口**，否则用户仍要先退出当前 workspace 才能打开第二个项目，产品语义并没有真正闭环。
+- 对 workspace 的“返回上一页”操作，不能等价实现成“关闭所有已打开会话”；返回只是暂时离开 workspace 视图，不应清空 `openWorkspaceSessions`。否则用户回到主列表再双击进入时，会误以为原本已打开的项目被系统吞掉了。
+- 当前 `xctest` 宿主下，`ghostty_surface_new(...)` 可能直接失败并返回 nil；后续写 Ghostty smoke 时，必须先区分“surface 根本没创建成功”和“已创建但交互回归”，否则很容易把 GUI 宿主限制误判成输入/分屏逻辑 bug。

@@ -1899,5 +1899,109 @@
   - Ghostty smoke：`DEVHAVEN_RUN_GHOSTTY_SMOKE=1 DEVHAVEN_PROJECT_PATH="$PWD" swift test --package-path macos --filter GhosttySurfaceHostTests` 通过，6/6 通过，时间 2026-03-19 21:06。
   - 全量测试：`swift test --package-path macos` 通过，33 tests passed，5 tests skipped，0 failures，时间 2026-03-19 21:07。
   - 构建与 diff 校验：`swift build --package-path macos` 通过；`git diff --check` 通过。
-  - 提交结果：已创建 commit `0c8a8d3`，message 为 `feat(swift): replace ghostty bootstrap flow with shared runtime`。
+  - 提交结果：已创建 commit `6cf8b1b`，message 为 `feat(swift): replace ghostty bootstrap flow with shared runtime`。
 
+## 实现 Swift 原生 workspace 的 Tab + Pane（2026-03-20）
+
+- [x] 盘点当前单 session workspace / Ghostty shared runtime 现状与标签页/窗格缺口
+- [x] 对照参考实现整理可选方案并确认本轮边界
+- [x] 输出设计文档并等待用户确认
+- [x] 设计通过后补实施计划，再进入编码
+- [x] 在 DevHavenCore 落下 workspace topology 真相源，并把 NativeAppViewModel 改为直接驱动标签页/分屏状态
+- [x] 在 DevHavenApp 落下标签栏 / 递归 split 布局 / Ghostty pane 宿主，并接通 Ghostty tab/split action 回调
+- [x] 同步 AGENTS / lessons / 测试，并完成验证闭环
+
+## 对齐 Swift 原生 workspace 外层壳到 Tauri 信息架构（2026-03-20）
+
+- [x] 对齐 Tauri 版 workspace 的信息架构，确认本轮先做“左侧已打开项目列表 + 右侧终端区”
+- [x] 产出设计/实施文档，收口 A1 方案边界
+- [x] 先补 ViewModel 失败测试，锁定多已打开项目 / 激活项目 / 关闭回退行为
+- [x] 扩展 NativeAppViewModel 为多 workspace 会话状态
+- [x] 新增 WorkspaceShell / WorkspaceProjectList，并把 AppRoot 接到新的外层壳
+- [x] 运行完整验证并同步 AGENTS / tasks / lessons / memory
+
+## Review（对齐 Swift 原生 workspace 外层壳到 Tauri 信息架构）
+
+- 直接原因：当前 Swift 原生 workspace 虽然已经有 tab + pane，但外层信息架构仍停在“单项目 header + 整块终端区”，和 Tauri 的“左侧已打开项目列表 + 右侧终端区”不一致；这会让多项目切换缺少稳定落点，也让右侧终端区无法承载与 Tauri 同构的已打开项目语义。
+- 是否存在设计层诱因：存在。此前 `NativeAppViewModel` 只有单一 `activeWorkspaceState` 视角，workspace 入口也默认把“当前正在看的项目”与“唯一挂载的 workspace host”绑死；如果继续靠替换单个 `WorkspaceHostView` 来切项目，就会和切 tab 时一样重踩 `GhosttySurfaceHost.onDisappear -> releaseSurface()`，把后台终端提前销毁。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 在 `macos/Sources/DevHavenCore/Models/OpenWorkspaceSessionState.swift` 新增多项目已打开会话模型，并把 `NativeAppViewModel.swift` 扩成 `openWorkspaceSessions + activeWorkspaceProjectPath` 双层状态：`activeWorkspaceState` 退化为从激活项目派生，而不是唯一真相源。
+  2. `enterWorkspace(_:)` / `activateWorkspaceProject(_:)` / `closeWorkspaceProject(_:)` / `exitWorkspace()` 统一改成按项目维度管理已打开 workspace；tab/pane action 也补上 `projectPath` 作用域，保证切项目后各自 topology 不串。
+  3. `AppRootView.swift` 进入 workspace 后改挂 `WorkspaceShellView.swift`；左侧 `WorkspaceProjectListView.swift` 负责“已打开项目”列表与返回主列表，右侧通过 `ZStack + ForEach(openWorkspaceSessions)` 同时挂住所有 `WorkspaceHostView`，仅把非激活项目隐藏并禁交互。
+  4. `AGENTS.md`、`tasks/lessons.md` 与 memory 已同步更新：原生 workspace 当前真相源已收口为 `OpenWorkspaceSessionState + WorkspaceShellView + WorkspaceProjectListView`，并明确“项目切换不能卸载非激活 Ghostty host”这条新稳定边界。
+- 长期改进建议：后续继续补 worktree、布局持久化、控制面原生投影时，不要把多项目 workspace 壳职责重新塞回 `WorkspaceHostView` 或单一 `activeWorkspaceState`；应继续保持“外层壳负责多项目已打开列表与激活切换，单项目 host 只负责右侧终端主区”这条边界。
+- 验证证据：
+  - `swift test --package-path macos --filter WorkspaceTopologyTests`：8/8 通过。
+  - `swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests`：8/8 通过。
+  - `swift test --package-path macos --filter GhosttySurfaceBridgeTabPaneTests`：2/2 通过。
+  - `DEVHAVEN_RUN_GHOSTTY_SMOKE=1 DEVHAVEN_PROJECT_PATH="$PWD" swift test --package-path macos --filter GhosttySurfaceHostTests`：6/6 通过。
+  - `swift test --package-path macos`：51 tests passed，5 tests skipped，0 failures。
+  - `swift build --package-path macos`：通过。
+  - `git diff --check`：通过。
+
+## 补齐 Swift 原生 workspace 的多项目同时打开入口（2026-03-20）
+
+- [x] 复核当前 A1 外层壳下“同时打开多个项目”的真实缺口
+- [x] 先补失败测试，锁定多项目去重、可继续打开项目列表与非破坏性选择行为
+- [x] 在 workspace 左侧补“打开项目”入口，并落地项目选择器
+- [x] 同步 AGENTS / lessons / memory，并完成 fresh 验证
+
+## Review（补齐 Swift 原生 workspace 的多项目同时打开入口）
+
+- 直接原因：虽然上一轮已经把外层壳做成“左侧已打开项目列表 + 右侧终端区”，但**用户仍然缺少在 workspace 内继续打开第二个项目的真实入口**。换句话说，底层状态模型已经允许多个 `openWorkspaceSessions` 并存，但 UI 上还没有“把另一个项目加入左侧已打开列表”的路径，所以产品语义还没真正闭环。
+- 是否存在设计层诱因：存在。此前我们把“已经支持多项目”理解成“状态结构允许多会话”，但没有继续检查用户路径是否真的走得通；同时 `selectProject(_:)` 在 workspace 已打开时还会清空 `openWorkspaceSessions`，这会把“选另一个项目看详情”和“关闭当前所有已打开项目”混成一个动作。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 在 `NativeAppViewModel.swift` 新增 `availableWorkspaceProjects`，明确区分“左侧已经打开的项目”和“当前还能继续加入 workspace 的项目”；并补测试锁定“重复打开同一项目不产生重复 session”。
+  2. 新增 `WorkspaceProjectPickerView.swift`，提供 workspace 内部的项目选择器：支持搜索项目名/路径/标签，并把选中的项目直接加入左侧已打开列表。
+  3. `WorkspaceProjectListView.swift` 头部新增加号入口，`WorkspaceShellView.swift` 负责弹出 picker sheet 并在选择后调用 `enterWorkspace(_:)`，从而真正支持“当前还在 workspace 里时继续打开别的项目”。
+  4. `selectProject(_:)` 改成**非破坏性选择**：当 workspace 已经打开时，选中一个尚未加入 workspace 的项目只会切换详情面板目标，不再清空既有 `openWorkspaceSessions`。
+- 长期改进建议：后续如果继续对齐 Tauri 版多项目体验，优先继续保持“多项目能力 = 状态模型 + 可见入口 + 不破坏已有会话”三件事一起成立；不要再次只做底层状态，不补真实交互入口。
+- 验证证据：
+  - `swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests`：12/12 通过。
+  - `swift test --package-path macos --filter WorkspaceTopologyTests`：8/8 通过。
+  - `swift test --package-path macos --filter GhosttySurfaceBridgeTabPaneTests`：2/2 通过。
+  - `DEVHAVEN_RUN_GHOSTTY_SMOKE=1 DEVHAVEN_PROJECT_PATH="$PWD" swift test --package-path macos --filter GhosttySurfaceHostTests`：6/6 通过。
+  - `swift test --package-path macos`：51 tests passed，5 tests skipped，0 failures。
+  - `swift build --package-path macos`：通过。
+  - `git diff --check`：通过。
+
+## 修复返回主列表后 workspace 已打开项目丢失（2026-03-20）
+
+- [x] 复现“返回上一页后再次进入，已打开项目丢失”的真实路径，并确认根因
+- [x] 先补失败测试，锁定返回主列表后保留已打开会话的约束
+- [x] 只做最小修复，保留返回主列表语义但不清空 workspace 会话
+- [x] 同步 AGENTS / lessons / memory，并完成 fresh 验证
+
+## Review（修复返回主列表后 workspace 已打开项目丢失）
+
+- 直接原因：workspace 左侧“返回”按钮当前调用的是 `exitWorkspace()`，而旧实现把它做成了“清空全部 `openWorkspaceSessions` + 退出 workspace”。这就把**返回主列表**误实现成了**关闭整个工作区**，所以用户从主列表再次双击进入时，之前同时打开的项目自然全部丢失。
+- 是否存在设计层诱因：存在。此前我们只把“退出 workspace”理解成视图层切换，没有继续区分“临时离开 workspace 页面”和“真正关闭所有已打开项目”这两个产品语义；再叠加 `selectProject(_:)` 对已打开 workspace 的破坏性处理，就更容易让用户在主列表和 workspace 之间来回跳时丢失上下文。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 先用 TDD 补失败测试：`NativeAppViewModelWorkspaceEntryTests` 新增返回主列表后保留 `openWorkspaceSessions`、再次 `enterWorkspace(_:)` 可恢复原已打开项目集合的约束。
+  2. `NativeAppViewModel.exitWorkspace()` 改成只清空 `activeWorkspaceProjectPath`、隐藏 workspace 视图，不再清空 `openWorkspaceSessions`。
+  3. `selectProject(_:)` 进一步收口为“仅当 workspace 正在展示时，选中已打开项目才直接激活 workspace”；如果当前只是回到主列表，则继续按普通项目详情处理，避免单击列表时意外把用户拉回 workspace。
+- 长期改进建议：后续如果再引入“关闭全部已打开项目”能力，建议单独提供明确动作，不要复用“返回主列表”；凡是带有导航语义的按钮，都应先确认它到底是“隐藏视图”还是“销毁状态”。
+- 验证证据：
+  - `swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests`：12/12 通过。
+  - `swift test --package-path macos`：51 tests passed，5 tests skipped，0 failures。
+  - `DEVHAVEN_RUN_GHOSTTY_SMOKE=1 DEVHAVEN_PROJECT_PATH="$PWD" swift test --package-path macos --filter GhosttySurfaceHostTests`：6/6 通过。
+  - `swift build --package-path macos`：通过。
+  - `git diff --check`：通过。
+
+
+## Review（实现 Swift 原生 workspace 的 Tab + Pane）
+
+- 直接原因：当前 Swift 原生 workspace 之所以只能停在“单 session 单 pane”，不是 Ghostty runtime 不够，而是 **workspace 自身没有一层独立于 Ghostty 的 topology 真相源**。此前 `NativeAppViewModel` 只有 `activeWorkspaceLaunchRequest`，`WorkspaceHostView` 也只会渲染一个 `GhosttySurfaceHost`，因此标签页、分屏、焦点切换、缩放/均分都没有稳定的状态落点；一旦继续往 `GhosttySurfaceHost` 或 `GhosttyRuntime` 里塞 tab/pane 逻辑，就会把 app 级 runtime、terminal surface 和 workspace 编排重新缠死。
+- 是否存在设计层诱因：存在，而且有两条很关键。第一，workspace 之前把“当前项目是否在终端里打开”偷换成“当前只有一个 launch request”，导致多标签页/多窗格没有数据结构可以承载；第二，Ghostty integration 虽然已经 Supacode 化成 shared runtime，但如果 tab 切换时仍通过卸载非选中 SwiftUI view 来“切换内容”，会触发 `onDisappear -> releaseSurface()`，让非激活标签页里的终端直接被销毁。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 在 `macos/Sources/DevHavenCore/Models/WorkspaceTopologyModels.swift` 新增 `WorkspaceSessionState / WorkspaceTabState / WorkspacePaneTree / WorkspaceSplitState`，把标签页、窗格树、focused pane、zoom、split ratio 等都收口成 workspace 真相源。
+  2. `NativeAppViewModel.swift` 改为直接持有 `activeWorkspaceState`，并补齐新建/切换/移动/关闭标签页、分屏、焦点切换、缩放、均分、ratio 更新、标题同步等 action；`activeWorkspaceLaunchRequest` 退化为“当前选中 pane 的派生结果”。
+  3. `GhosttySurfaceBridge.swift` 继续扩展成 tab/split action 桥：把 `new_tab / close_tab / goto_tab / move_tab / new_split / goto_split / resize_split / equalize_splits / toggle_split_zoom` 统一转成 workspace 层 closure。
+  4. `WorkspaceHostView.swift`、`WorkspaceTabBarView.swift`、`WorkspaceSplitTreeView.swift`、`WorkspaceSplitView.swift`、`WorkspaceTerminalPaneView.swift` 组成新的原生 workspace UI；其中 `WorkspaceHostView` 通过 `ZStack + ForEach(all tabs)` 挂住所有标签页，只把非选中 tab 设为透明且禁交互，避免切 tab 时误释放 Ghostty surface。
+  5. `GhosttySurfaceHostTests` 同步收口为“能创建 surface 就跑交互 smoke；若当前 xctest 宿主下 `ghostty_surface_new(...)` 直接失败，则自动 skip 交互 smoke，并断言初始化错误路径被正确暴露”，避免把当前 GUI 宿主限制误判成 tab/pane 逻辑回归。
+- 长期改进建议：后续若继续补原生 workspace，不要把布局持久化、worktree、控制面投影直接塞回 `GhosttySurfaceHost`；应继续沿“`WorkspaceSessionState` 管 topology，Ghostty shared runtime 只管 app 级终端能力”的边界推进。另一个长期点是：如果后面需要稳定的原生 smoke / UI 自动化，最好补一条真正以 app 窗口宿主运行的集成测试链，而不是继续把 `xctest` 进程里 `ghostty_surface_new(...)` 的成败当唯一真相。
+- 验证证据：
+  - 纯 topology：`swift test --package-path macos --filter WorkspaceTopologyTests` 通过（8/8）。
+  - ViewModel workspace 状态：`swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests` 通过（12/12）。
+  - Ghostty action 桥：`swift test --package-path macos --filter GhosttySurfaceBridgeTabPaneTests` 通过（2/2）。
+  - Ghostty smoke：`DEVHAVEN_RUN_GHOSTTY_SMOKE=1 DEVHAVEN_PROJECT_PATH="$PWD" swift test --package-path macos --filter GhosttySurfaceHostTests` 通过（6/6）。

@@ -10,6 +10,7 @@ final class GhosttyTerminalSurfaceView: NSView {
     let request: WorkspaceTerminalLaunchRequest
     let bridge: GhosttySurfaceBridge
     let extraEnvironment: [String: String]
+    var onFocusChange: ((Bool) -> Void)?
 
     nonisolated(unsafe) private(set) var surface: ghostty_surface_t?
     private var surfaceRef: GhosttyRuntime.SurfaceReference?
@@ -108,6 +109,7 @@ final class GhosttyTerminalSurfaceView: NSView {
         let result = super.becomeFirstResponder()
         if result, let surface {
             ghostty_surface_set_focus(surface, true)
+            onFocusChange?(true)
         }
         return result
     }
@@ -116,8 +118,13 @@ final class GhosttyTerminalSurfaceView: NSView {
         let result = super.resignFirstResponder()
         if result, let surface {
             ghostty_surface_set_focus(surface, false)
+            onFocusChange?(false)
         }
         return result
+    }
+
+    func requestFocus() {
+        window?.makeFirstResponder(self)
     }
 
     override func mouseDown(with event: NSEvent) {
