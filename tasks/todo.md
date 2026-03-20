@@ -1,5 +1,44 @@
 # 本次任务清单
 
+## 整理并提交当前原生构建脚本改动（2026-03-20）
+
+- [x] 核对当前 diff、文档与脚本内容，确认本轮提交主题
+- [x] 基于 fresh 命令执行验证并检查输出
+- [x] 暂存本轮构建脚本相关文件并完成 git commit
+- [x] 回填 Review，记录提交号与验证证据
+
+## Review（整理并提交当前原生构建脚本改动）
+
+- 提交范围：`macos/scripts/build-native-app.sh` 新增原生 `.app` 本地打包脚本，并同步 `AGENTS.md`、`tasks/lessons.md`、`tasks/todo.md` 记录脚本入口、需求边界与验证证据。
+- fresh 验证证据：
+  - `bash macos/scripts/build-native-app.sh --debug --no-open` 通过，输出 `APP_PATH=/Users/zhaotianzeng/.devhaven/worktrees/DevHaven/swift/macos/.build/native-app/debug/DevHaven Native.app` 与 `OUTPUT_DIR=/Users/zhaotianzeng/.devhaven/worktrees/DevHaven/swift/macos/.build/native-app/debug`
+  - `git diff --check` 通过（无输出）
+- 提交信息：`build(macos): 新增原生 app 本地打包脚本`
+- 保留状态：当前仅完成本地 commit，未 push。
+
+## 新增 Swift 原生 App 本地构建脚本（2026-03-20）
+
+- [x] 先用命令级红灯验证锁定“当前缺少可复用的原生 App 构建脚本”
+- [x] 新增 `macos/scripts/build-native-app.sh`，只负责本地构建 `.app` 到稳定输出目录并打开产物目录
+- [x] 同步 `AGENTS.md` / `tasks/lessons.md`，记录脚本入口与“不要默认安装到 /Applications”边界
+- [x] 运行脚本完成绿灯验证，并在 Review 里记录产物路径与命令证据
+
+## Review（新增 Swift 原生 App 本地构建脚本）
+
+- 结果范围：新增 `macos/scripts/build-native-app.sh`，默认执行 `setup-ghostty-framework.sh --verify-only`、`swift build`、`.app` 封装、ad-hoc 签名，并把产物稳定输出到 `macos/.build/native-app/<debug|release>/`；默认行为是 `open` 产物目录，而不是安装到 `/Applications`。同时已同步 `AGENTS.md` 与 `tasks/lessons.md`，把这条新脚本入口和“只要本地产物目录”的需求边界记录下来。
+- 直接原因：当前 `macos/` 原生子工程只有 SwiftPM executable + resources bundle，没有现成的 `.app` 组装脚本；每次要手工拼 `Contents/MacOS/DevHavenApp`、`Contents/Resources/DevHavenNative_DevHavenApp.bundle`、`Info.plist` 和 `codesign`，既重复又容易漏掉资源 bundle。
+- 是否存在设计层诱因：存在。Swift 原生主线目前仍以 `Package.swift` 的 executable target 为真相源，而不是 Xcode/Tauri 那类天然产出 `.app` 的打包链；如果不补 repo 内稳定脚本，这条“手工从二进制 + bundle 拼回 `.app`”的知识会持续散落在对话或临时命令里。除此之外，未发现新的明显系统设计缺陷。
+- 当前方案：
+  1. 用 `macos/scripts/build-native-app.sh` 收口本地原生 App 打包流程，支持 `--debug/--release`、`--output-dir`、`--app-name`、`--bundle-id`、`--version` 与 `--no-open`。
+  2. 默认复用 `src-tauri/tauri.conf.json` 的 `productName/version/identifier` 作为命名基线，并自动改成原生版的 `Name + Native` / `identifier + .native`。
+  3. 默认只打开产物目录，不做 `/Applications` 安装；需要本地验证或交给用户手动处理时，直接用输出目录里的 `.app` 即可。
+- 长期改进建议：如果后续 Swift 原生版要进入正式分发链，下一步应继续补独立的 release/notarization 打包脚本或 Xcode archive 流程；当前这条脚本只解决“本地稳定构建 `.app` 并打开目录”的开发态诉求，不应误当成最终分发方案。
+- 验证证据：
+  - 红灯阶段：`git cat-file -e HEAD:macos/scripts/build-native-app.sh` 失败，报错 `fatal: path 'macos/scripts/build-native-app.sh' exists on disk, but not in 'HEAD'`，证明基线里确实没有这条脚本。
+  - 绿灯阶段：`bash macos/scripts/build-native-app.sh --debug --no-open` 通过，输出 `APP_PATH=/Users/zhaotianzeng/.devhaven/worktrees/DevHaven/swift/macos/.build/native-app/debug/DevHaven Native.app` 与 `OUTPUT_DIR=/Users/zhaotianzeng/.devhaven/worktrees/DevHaven/swift/macos/.build/native-app/debug`；同一命令过程中 `codesign --verify --deep --strict` 已通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+  - 注意：本轮为了避免在自动验证里弹 Finder，只用 `--no-open` 做了无 GUI 绿灯验证；脚本默认路径仍会在不带 `--no-open` 时执行 `open "$OUTPUT_DIR"`。
+
 ## 修复 Swift 原生 workspace 单 pane 分屏后原内容消失（2026-03-20）
 
 - [x] 复现并定位单 pane -> 双 pane 分屏时原 pane 内容丢失的直接原因
