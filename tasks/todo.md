@@ -47,3 +47,18 @@
     - `bash macos/scripts/build-native-app.sh --release --no-open --output-dir "$RUNNER_TEMP/native-app"`
   - 上述整条链路 → 通过，`105 tests, 5 skipped, 0 failures`，并产出 `/tmp/devhaven-workflow-verify-git-36433/.runner-temp/native-app/DevHaven.app`。
   - `git diff --check` → 通过。
+
+## 修复 GitHub Actions 上 Ghostty 在 Xcode 16.4 编译失败（2026-03-20）
+
+- [x] 拉取最新失败 run 并定位实际失败 step
+- [x] 确认 root cause 为 runner Xcode 版本落后而非 vendor bootstrap 逻辑错误
+- [x] 将 release workflow 切到 `macos-26` 并增加 Xcode 版本诊断输出
+- [ ] commit / push 并重打 `v3.0.0` 触发新的 release run
+- [ ] 检查新 run 是否成功起跑
+
+## Review（GitHub Actions Xcode toolchain 对齐）
+
+- 直接原因：最新失败 run `23343818716` 虽然已经成功完成 Ghostty 源码 checkout，但在 `Bootstrap Ghostty vendor` 阶段执行 `cd /Users/runner/work/_temp/ghostty/macos && xcodebuild -target Ghostty -configuration ReleaseLocal` 时退出 `code 65`，日志明确显示使用的是 `/Applications/Xcode_16.4.app/...`。
+- 设计层诱因：上一轮只把“CI 缺失 Ghostty vendor bootstrap”补齐了，但没有把 GitHub runner 的 Xcode 主版本与当前 Ghostty 上游的构建要求一起锁定；结果变成“vendor 链路对了，工具链版本又漂移了”。
+- 当前修复：`.github/workflows/release.yml` 已把 release runner 从 `macos-latest` 改成 `macos-26`，并新增 `Print Xcode version` 步骤输出 `xcodebuild -version`，用于让日志直接暴露实际工具链版本。
+- 长期建议：后续只要升级 Ghostty commit 或切换 GitHub runner 标签，都要把“上游 commit pin / runner OS / Xcode 主版本 / 本地验证环境”作为同一组约束维护，而不是只盯单个脚本。

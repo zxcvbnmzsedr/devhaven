@@ -16,12 +16,15 @@ permissions:
 
 jobs:
   build-macos-native:
-    runs-on: macos-latest
+    runs-on: macos-26
     env:
       GHOSTTY_SOURCE_REF: da10707f93104c5466cd4e64b80ff48f789238a0
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Print Xcode version
+        run: xcodebuild -version
 
       - name: Install Zig
         run: brew install zig
