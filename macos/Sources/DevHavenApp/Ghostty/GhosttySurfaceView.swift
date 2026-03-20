@@ -666,7 +666,8 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     private func sendMousePosition(_ event: NSEvent) {
         guard let surface else { return }
-        let point = convert(event.locationInWindow, from: nil)
+        let localPoint = convert(event.locationInWindow, from: nil)
+        let point = GhosttySurfaceMousePosition.map(localPoint: localPoint, boundsHeight: bounds.height)
         ghostty_surface_mouse_pos(surface, point.x, point.y, event.ghosttyMods)
     }
 

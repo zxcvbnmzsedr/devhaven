@@ -9,6 +9,7 @@
 - 对“更新统计”这类会遍历大量 Git 仓库的长任务，仅仅改成后台执行还不够；如果没有阶段/进度提示，用户仍会觉得“按钮一直在转，不知道在干嘛”。稳定做法是同时补：进度文案、合理并发度，以及单仓超时保护，避免少数异常仓库把整轮刷新无限拖住。
 - 对 Swift 原生预览（`swift run` / Xcode 调试）这类启动链，不能默认相信 `WindowGroup` 会自动把应用提升为 active/frontmost；如果窗口能看到但输入框普遍拿不到焦点，优先先查“当前进程是否真的成为 key/active app”，并把激活逻辑统一收口在窗口挂载层，而不是去给每个 `TextField` 分散补焦点补丁。
 - 在 AppKit 内嵌 Ghostty 时，宿主外观不要再硬编码另一套终端主题；如果用户要求“和 Ghostty 配置保持一致”，应直接把 `background/background-opacity` 等基础样式从 Ghostty config 读取出来，并在 config/color change action 到来时同步更新宿主 chrome。
+- 对 Ghostty / AppKit 的鼠标事件接线，不能只把 `convert(event.locationInWindow, from: nil)` 的局部坐标原样透传给底层；要先核对 Ghostty 期望的坐标原点。像文本选择这类行为若看似“事件都到了却选不中”，优先检查 **Y 轴是否需要按 `bounds.height - point.y` 翻转**，并把坐标映射抽成独立 helper 锁回归。
 - 对 Ghostty 这类原生终端，`keyDown` 不能简化成“拿 `event.characters` 直接发给底层”；否则 `interpretKeyEvents` / `insertText` 会和手工 text 发送双写，出现 `ls -> lsls` 一类重复回显。稳定做法是 translation event + `interpretKeyEvents` + `insertText` accumulator，再决定发 key 还是 text。
 - `Ctrl+D` / shell exit 这类 close-surface 场景不能只把 pane 留在失败态；收到进程关闭回调后，上层宿主必须显式 `tearDown()` + `shutdown()` 并切到 exited UI，保证 workspace 仍可继续操作。
 - 对 Ghostty / AppKit 终端输入链，不能只用“直接调 `keyDown` 的 ASCII smoke”来判断输入已经稳定；真实用户桌面输入常常还会经过 `NSTextInputClient` / `setMarkedText` / preedit。若这层没接，中文输入法或输入法英文态都可能把 `p -> pw -> pwd` 这类预编辑中间态错误提交成重复文本。

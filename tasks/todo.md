@@ -1,5 +1,29 @@
 # 本次任务清单
 
+## 修复原生终端无法鼠标选中文本（2026-03-20）
+
+- [x] 梳理 Ghostty / SwiftUI / AppKit 事件链，确认文本选择命中路径与拦截点
+- [x] 补最小复现或失败验证，锁定根因
+- [x] 以最少改动修复文本选择，并同步更新必要文档
+- [x] 完成定向验证，回填 Review（原因 / 设计诱因 / 修复 / 长期建议 / 证据）
+
+## Review（修复原生终端无法鼠标选中文本）
+
+- 直接原因：当前 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceView.swift::sendMousePosition(_:)` 把 AppKit 本地坐标直接传给了 `ghostty_surface_mouse_pos(...)`，但 Ghostty 终端坐标的 Y 轴期望和 AppKit 本地坐标相反。对照 `/Users/zhaotianzeng/Documents/business/tianzeng/supacode/supacode/Infrastructure/Ghostty/GhosttySurfaceView.swift` 后，可以看到 supacode 在发送鼠标位置前会先做 `bounds.height - point.y` 翻转；DevHaven 当前漏掉了这一步，所以鼠标点击/拖拽会落到错误的终端行，表现成“看得到文本，但鼠标选不中内容”。
+- 是否存在设计层诱因：存在，但比较轻。问题不在 Ghostty runtime 或 workspace 架构本身，而在**终端坐标转换逻辑被内联在事件发送处**，对照 supacode 做接线时很容易只抄到 `convert(event.locationInWindow, from: nil)`，漏掉更关键的坐标系翻转。除此之外，未发现明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceMousePosition.swift`，把 AppKit 本地点位 -> Ghostty 终端点位的映射单独收口成 `GhosttySurfaceMousePosition.map(...)`。
+  2. `GhosttySurfaceView.swift::sendMousePosition(_:)` 改为复用该 helper，在发送给 Ghostty 前统一执行 `bounds.height - localPoint.y`。
+  3. 新增 `macos/Tests/DevHavenAppTests/GhosttySurfaceMousePositionTests.swift` 锁定回归，避免后续继续在鼠标事件链里把 Y 轴翻转漏掉。
+- 长期改进建议：后续如果继续对齐 supacode 的鼠标/选择/上下文菜单链路，不要再在 `mouseDown/mouseDragged/scrollWheel` 里分别散落坐标换算；应继续把“AppKit 坐标 -> Ghostty 坐标/scroll mods/button”收口成一组小 helper，减少这种接线型回归。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter GhosttySurfaceMousePositionTests` 首次失败，明确报错 `cannot find 'GhosttySurfaceMousePosition' in scope`。
+  - 定向测试：`swift test --package-path macos --filter GhosttySurfaceMousePositionTests` 通过（1/1）。
+  - 全量测试：`swift test --package-path macos` 通过（85 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+  - 真实 GUI 验证：**本轮还没有 fresh 的手动实机证据**；目前只能确认根因对照和代码/测试层都已对齐 supacode，是否已完全恢复鼠标选中，需要你本机再拖选一次确认。
+
 ## 修复 workspace 分屏拖动闪烁（四次修正，2026-03-20）
 
 - [x] 直接对照 supacode 迁移 split wrapper / window activity / occlusion / scroll wrapper 主线
