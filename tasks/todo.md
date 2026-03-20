@@ -1,5 +1,106 @@
 # 本次任务清单
 
+## 修复 workspace 分屏拖动闪烁（四次修正，2026-03-20）
+
+- [x] 直接对照 supacode 迁移 split wrapper / window activity / occlusion / scroll wrapper 主线
+- [x] 先补失败测试，锁定 surface activity 可见性 / 焦点策略与新 wrapper 存在性
+- [x] 继续按 supacode 主线迁移缺失代码，并最小适配 DevHaven 当前 workspace 模型
+- [x] 同步更新 AGENTS / tasks / lessons，并完成定向测试、全量测试 / 构建 / diff 校验
+
+## Review（修复 workspace 分屏拖动闪烁四次修正）
+
+- 直接原因：这轮继续对照 supacode 后，确认 DevHaven 还缺的是**真正的 AppKit terminal wrapper / window activity / occlusion 主线**，而不只是 focus 条件判断。当前 DevHaven 之前仍有三处关键偏差：
+  1. `GhosttyTerminalView.swift` 还在用自定义 `GhosttySurfaceContainerView`，没有像 supacode 那样走 `GhosttySurfaceScrollView`；
+  2. workspace 没有类似 `WindowFocusObserverView.swift + surfaceActivity` 的统一可见性/焦点同步，隐藏 tab / 隐藏 workspace / window 非 key 时，并不会显式把 Ghostty surface 标记为 occluded；
+  3. `WorkspaceSplitView.swift` 的 divider 仍是 DevHaven 自己的实现，没有直接复用 supacode 那条更稳定的 split wrapper 行为。
+  这意味着：即使前面已经压住了 identity 抖动、普通 SwiftUI update 和焦点回抢，**Ghostty surface 仍然可能在拖 divider 时处于“窗口可见但真实 pane 不可见 / divider 正在拖但 surface 还在照常活跃渲染”的状态**，这会继续表现成严重闪烁。
+- 是否存在设计层诱因：存在。前几轮虽然已经开始往 supacode 靠，但 DevHaven 还停留在“SwiftUI 负责可见性，Ghostty 只管自己画”的半迁移状态；而 supacode 的稳定做法是把 **window key/occlusion、tab 可见性、surface occlusion、scroll wrapper** 一起收回到 dedicated AppKit terminal 层。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案（这轮尽量直接照抄 supacode 主线）：
+  1. 新增 `WorkspaceSurfaceActivityPolicy.swift`，直接把 supacode `surfaceActivity` 那套可见/聚焦判定抽成纯策略：workspace 不可见、tab 未选中、window 不可见或非 key 时，surface 会被明确同步为不可见/不聚焦。
+  2. 新增 `WindowFocusObserverView.swift`，直接监听 `NSWindow.didBecomeKey / didResignKey / didChangeOcclusionState`，把窗口活动态桥回 SwiftUI。
+  3. 新增 `GhosttySurfaceScrollView.swift`，把 supacode 的 scroll wrapper 主线搬进来；`GhosttyTerminalView.swift` 现已不再用 `GhosttySurfaceContainerView` 作为 representable 根节点，而是直接改走 `GhosttySurfaceScrollView`。
+  4. `GhosttySurfaceView.swift` 现已补齐 `scrollWrapper / lastScrollbar / setOcclusion / updateScrollbar / currentCellSize / updateSurfaceSize / performBindingAction` 这条 wrapper 所需接口；`GhosttySurfaceBridge.swift` 也补接了 `GHOSTTY_ACTION_SCROLLBAR`。
+  5. `GhosttySurfaceHost.swift` 新增缓存式 `syncSurfaceActivity(...) / restoreWindowResponderIfNeeded()`，确保 surface 创建前后都能吃到可见性/焦点真相，而不是只在 `isFocused` 变化时做半套同步。
+  6. `WorkspaceHostView.swift` 现在会按当前 active workspace、selected tab、focused pane 和 window activity 为每个 pane model 显式同步 `isVisible / isFocused`；同时 `WorkspaceSplitView.swift` 也已改成更接近 supacode 的 split wrapper 实现，不再沿用上一版自定义 drag ratio 链。
+- 长期改进建议：如果你这轮实机后**还闪**，下一步就不要再停在“局部对齐”了，应继续把 `GhosttySurfaceView.swift` 整个文件按 supacode 做更完整的全量对照，包括 `updateScreenObservers / applyWindowBackgroundAppearance / mouseEnteredExited / localEventMonitor / accessibility` 等剩余差异，直到 terminal leaf 基本变成 supacode 那套 dedicated AppKit surface。
+- 验证证据：
+  - 红灯阶段：新增 `WorkspaceSurfaceActivityPolicyTests` 与 `GhosttySurfaceScrollViewTests` 后，首次运行 `swift test --package-path macos --filter 'WorkspaceSurfaceActivityPolicyTests|GhosttySurfaceScrollViewTests'` 编译失败，明确报错 `cannot find 'WorkspaceSurfaceActivityPolicy' in scope` / `cannot find 'GhosttySurfaceScrollView' in scope`。
+  - 定向测试：`swift test --package-path macos --filter 'WorkspaceSurfaceActivityPolicyTests|GhosttySurfaceScrollViewTests'` 通过（5/5）。
+  - 全量测试：`swift test --package-path macos` 通过（84 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+  - 真实 GUI 验证：用户在四次修正后实机拖 divider 反馈 **“不闪烁了”**，说明这轮 `window activity + surface occlusion + scroll wrapper + split wrapper` 直移已经命中当前主要闪烁来源。
+
+## 修复 workspace 分屏拖动闪烁（三次修正，2026-03-20）
+
+- [x] 重新对照 supacode 的 surface resize / scroll wrapper / occlusion 主线，确认当前仍闪烁的根因候选
+- [x] 先补失败测试，锁定 live resize 期间不应对相同 backing size 重复 resize、也不应在极小网格下继续触发 resize
+- [x] 继续按 supacode 主线收口 Ghostty surface wrapper / resize 行为，避免拖 divider 时反复触发 Ghostty 重绘
+- [x] 同步更新 AGENTS / tasks / lessons，并完成定向测试、全量测试 / 构建 / diff 校验
+
+## Review（修复 workspace 分屏拖动闪烁三次修正）
+
+- 直接原因：前两轮已经把 **identity 抖动** 和 **焦点回抢** 基本摘掉了，但当前 `GhosttySurfaceView.swift::updateSurfaceMetrics()` 仍和 supacode 有一个关键差异：它会在每次 `layout/viewDidMoveToWindow/viewDidChangeBackingProperties` 时都直接调用 `ghostty_surface_set_size(...)`，**不管 backing size 是否真的变化**，也不管当前 divider drag 是否把 pane 暂时拖到极小网格。分屏拖动会持续触发 SwiftUI/AppKit layout，这就把 Ghostty surface 变成“每一帧都强制 resize 一次”，用户感知就是终端闪烁；supacode 的稳定主线则会缓存 `lastBackingSize`，并在网格过小时直接跳过本次 resize。
+- 是否存在设计层诱因：存在。当前 DevHaven 虽然已经对齐了 supacode 的容器和 focus 主线，但 **surface resize 仍停留在“只要 layout 就 set_size”** 的旧实现，没有把“真实尺寸变化”和“普通布局回调”分开建模；这会让 live resize 把同尺寸重复 resize、极小尺寸 resize 也一并放大成 renderer 级副作用。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceResizePolicy.swift`，把“何时允许对 Ghostty surface 执行 resize”收口为纯策略：相同 backing size 直接跳过；若 cell size 已知且当前网格小于 `5x2`，也跳过本次 resize。
+  2. `GhosttySurfaceView.swift` 现已补齐 `lastBackingSize` 与 `backingCellSizeInPixels`，`updateSurfaceMetrics()` 先做 content scale 同步，再按 `GhosttySurfaceResizePolicy` 判定是否真的调用 `ghostty_surface_set_size(...)`，不再把每次 layout 都放大成 renderer resize。
+  3. 同步对齐 supacode 的一层 AppKit 细节：surface view 设为 `wantsLayer = true`，并在 `viewDidChangeBackingProperties()` 里关闭 layer 隐式动画、同步 `contentsScale`，减少 live resize / backing change 时的额外闪烁。
+- 长期改进建议：如果这一轮后实机仍有残余闪烁，下一步不要回退去继续堆焦点判断；应继续沿 supacode 主线补齐 `GhosttySurfaceScrollView / scrollbar / setOcclusion(...)`，把“surface 可见性、滚动包装、窗口 occlusion”也收回 dedicated AppKit 层，而不是再让 SwiftUI 布局链直接碰 raw surface。
+- 验证证据：
+  - 红灯阶段：新增 `GhosttySurfaceResizePolicyTests` 后，首次运行 `swift test --package-path macos --filter GhosttySurfaceResizePolicyTests` 编译失败，明确报错 `cannot find 'GhosttySurfaceResizePolicy' in scope` / `cannot find 'GhosttySurfaceResizeDecision' in scope`。
+  - 定向测试：`swift test --package-path macos --filter GhosttySurfaceResizePolicyTests` 通过（4/4）。
+  - 全量测试：`swift test --package-path macos` 通过（79 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+  - 运行级边界：**还没有这一轮三次修正后的真实 GUI 拖 divider 体感验证**；当前只能确认代码、测试与构建层面的对齐已完成，是否彻底不闪仍需你实机再拖一次确认。
+
+## 修复 workspace 分屏拖动闪烁（2026-03-20）
+
+- [x] 先复盘 split drag -> SwiftUI 更新 -> Ghostty 焦点/渲染链路，确认闪烁触发点
+- [x] 先补失败测试，锁定 live resize 期间不应重复抢焦点的约束
+- [x] 以最少改动修复分屏拖动闪烁，并同步更新任务记录
+- [x] 运行定向测试、全量测试/构建与 diff 校验，并补 Review
+
+## Review（修复 workspace 分屏拖动闪烁）
+
+- 直接原因：当前 Swift 原生 workspace 在分屏拖动时，`WorkspaceSplitView.swift` 会持续通过 `onRatioChange` 触发整棵 pane 树刷新；刷新后 `GhosttyTerminalView.swift::updateNSView` 又会进入 `GhosttySurfaceHostModel.applyLatestModelState(preferredFocus:)`。此前这里只要 `preferredFocus == true` 就无条件 `requestFocus()`，等于**拖动分割条的每一帧都让已聚焦 pane 再抢一次 first responder**。这会把 live resize 和终端焦点回抢叠在一起，用户感知就是拖动时闪烁。
+- 是否存在设计层诱因：存在。当前 pane 聚焦语义被混进了“任何 SwiftUI update 都要做的通用同步”里，导致布局更新、副作用和真实焦点切换没有拆开。这样一来，只要分屏比例变化、tab 隐藏/显示或其它普通刷新命中了 `updateNSView`，就可能重复触发不必要的焦点请求。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceFocusRequestPolicy.swift`，把“此刻是否允许请求焦点”收口成纯策略，明确 live drag 期间不抢焦点、已聚焦 surface 不重复抢焦点。
+  2. `GhosttySurfaceHost.swift` 改为通过 `requestFocusIfNeeded(...)` 统一处理 `acquireSurfaceView` / `applyLatestModelState` 两条路径，不再在每次 update 中无条件 `requestFocus()`。
+  3. `GhosttySurfaceView.swift` 暴露 `isCurrentlyFocused`，让 host model 能基于当前 responder 状态做幂等判断，而不是盲目抢焦点。
+- 长期改进建议：后续如果继续补 workspace 的 live resize / lazy attach / tab 切换，继续保持同一条边界：**布局刷新只做布局刷新，焦点副作用必须单独判定触发条件**。不要再把 `requestFocus()` 这类强副作用塞回 `updateNSView` 的通用同步链里。
+- 验证证据：
+  - 红灯阶段：新增 `swift test --package-path macos --filter GhosttySurfaceFocusRequestPolicyTests` 首次运行失败，明确报错 `cannot find 'GhosttySurfaceFocusRequestPolicy' in scope`。
+  - 定向测试：`swift test --package-path macos --filter GhosttySurfaceFocusRequestPolicyTests` 通过（4/4）。
+  - 全量测试：`swift test --package-path macos` 通过（70 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+
+## 修复 workspace 分屏拖动闪烁（二次修正，2026-03-20）
+
+- [x] 重新核对拖动链路，确认上一版修复为何仍会重复触发焦点请求
+- [x] 先补失败测试，锁定 preferredFocus 连续为 true 时不应重复 requestFocus 的约束
+- [x] 以最少改动修复分屏拖动闪烁二次回归，并同步更新任务记录
+- [x] 运行定向测试、全量测试/构建与 diff 校验，并补 Review
+
+## Review（修复 workspace 分屏拖动闪烁二次修正）
+
+- 直接原因：上一版只判断了“当前事件是不是拖拽事件”和“当前 surface 是否已经 focused”，但**漏掉了 `preferredFocus` 在拖动全过程里一直保持为 true** 这一层。结果是：即使某一帧 `NSApp.currentEvent` 不是 `leftMouseDragged`，`GhosttyTerminalView.swift::updateNSView` 仍会反复进入 `applyLatestModelState(preferredFocus: true)`，而 `GhosttySurfaceHost.swift` 也就仍有机会在同一段拖动周期里重复 `requestFocus()`。用户继续反馈“还是闪”，说明上一版只是缩小了触发窗口，还没有真正把重复焦点请求从状态同步链里摘干净。
+- 是否存在设计层诱因：存在。根因不是单一事件类型判断漏了，而是**把“当前 pane 需要成为焦点”错误建模成了一个持续态，而不是边沿事件**。只要把持续态 `preferredFocus == true` 直接映射成副作用 `requestFocus()`，任何普通重绘都会再次触发焦点请求。除此之外，未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. 扩展 `GhosttySurfaceFocusRequestPolicy.swift`，新增 `wasPreferredFocus` 约束：只有当 pane 的期望聚焦状态发生 **false -> true** 转换时，才允许触发 `requestFocus()`。
+  2. `GhosttySurfaceHost.swift` 新增 `lastPreferredFocus`，在 `acquireSurfaceView(...)` / `applyLatestModelState(...)` 里统一按“边沿触发”做焦点同步，而不是每次 `preferredFocus == true` 都执行副作用。
+  3. `releaseSurface()` 与进程退出路径现在都会重置 `lastPreferredFocus`，避免 surface 重建后沿用旧状态，导致真正需要聚焦时又被错误跳过。
+- 长期改进建议：后续如果再补窗口激活恢复、tab 切换或 workspace re-entry，不要继续往 `updateNSView` 里堆条件分支；更稳的方向是把“焦点意图变化”单独建模成显式 transition 或 action，让视图刷新链只负责尺寸/内容同步。
+- 验证证据：
+  - 红灯阶段：修改测试后重新运行 `swift test --package-path macos --filter GhosttySurfaceFocusRequestPolicyTests`，首次编译失败，明确报错 `extra argument 'wasPreferredFocus' in call`，说明新约束先红。
+  - 定向测试：`swift test --package-path macos --filter GhosttySurfaceFocusRequestPolicyTests` 通过（6/6）。
+  - 全量测试：`swift test --package-path macos` 通过（72 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过（无输出）。
+
 ## 修复 split 时旧 pane 被重新初始化（2026-03-20）
 
 - [x] 先根据 workspace-launch 日志与当前 SwiftUI / Ghostty 生命周期重放，确认旧 pane 重建的触发点
@@ -2190,3 +2291,120 @@
   - ViewModel workspace 状态：`swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests` 通过（12/12）。
   - Ghostty action 桥：`swift test --package-path macos --filter GhosttySurfaceBridgeTabPaneTests` 通过（2/2）。
   - Ghostty smoke：`DEVHAVEN_RUN_GHOSTTY_SMOKE=1 DEVHAVEN_PROJECT_PATH="$PWD" swift test --package-path macos --filter GhosttySurfaceHostTests` 通过（6/6）。
+
+## 对比当前 Swift 原生实现与 supacode 差异（2026-03-20）
+
+- [x] 先做 memory 快速检索，确认当前 Swift worktree 与 supacode 对照背景
+- [x] 检查 DevHaven swift 与 supacode 的对应模块和目录结构
+- [x] 提炼架构、能力边界、交互与运行时上的关键差异
+- [x] 追加 Review，给出结论与证据
+- [x] 检查 DevHaven swift 与 supacode 的对应模块和目录结构
+- [x] 提炼架构、能力边界、交互与运行时上的关键差异
+- [x] 追加 Review，给出结论与证据
+
+## Review（对比当前 Swift 原生实现与 supacode 差异）
+
+- 直接结论：如果只看 Ghostty 接入骨架与 tab/split 主干，当前 DevHaven Swift 已经明显对齐到 supacode 风格；但如果看完整原生终端产品层，差异仍然不小。更稳妥的估算是：**Ghostty 内核接入约 60%~70% 接近，完整终端产品完成度约 35%~45% 接近**。
+- 关键原因：
+  1. 当前 DevHaven 已具备 supacode 风格的 app 级共享 `GhosttyRuntime`、独立 `GhosttySurfaceView` / `GhosttySurfaceBridge`、以及独立于 Ghostty 的 workspace tab/pane topology。
+  2. 但 supacode 还有一整层 DevHaven 目前没有原生补齐的终端产品能力：`WorktreeTerminalManager` 全局命令/事件流、`WorktreeTerminalState` 的 run script / setup script / notifications / task status、search command、命令面板联动、拖拽重排 split、以及更成熟的 tab bar / focus / occlusion 同步。
+  3. 两者产品语义也不同：DevHaven 当前原生端是“多项目 workspace 壳 + 单项目右侧终端主区”，supacode 则是“worktree 作为一等公民的终端 orchestrator”。
+- 是否存在设计层诱因：未发现“当前偏差来自实现失误”的单一设计缺陷，更多是**阶段目标不同**。DevHaven 当前主线明显先保住 Ghostty shared runtime、tab/split MVP、多项目 workspace 壳与生命周期稳定；supacode 则已经把终端周边 orchestration 做成更完整的平台层。
+- 当前对比结论：
+  1. **已接近的部分**：Ghostty shared runtime、surface/bridge/view 分层、Ghostty action -> 宿主 topology 回推、tab/split/zoom/equalize 主行为。
+  2. **明显落后的部分**：worktree 级 terminal manager、run/setup script、search/command palette、desktop notifications、drag-drop pane 重排、终端命令体系、窗口焦点/可见性同步。
+  3. **不是简单落后而是目标不同的部分**：DevHaven 当前已有多项目 workspace 左侧项目壳；supacode 更偏 repository/worktree orchestration，而不是当前这种“项目列表 + workspace shell”语义。
+- 验证证据：
+  - DevHaven：`macos/Sources/DevHavenApp/Ghostty/*`、`WorkspaceShellView.swift`、`WorkspaceHostView.swift`、`WorkspaceSplitTreeView.swift`、`WorkspaceSplitView.swift`、`WorkspaceSurfaceRegistry.swift`、`macos/Sources/DevHavenCore/{Models/ViewModels}`。
+  - supacode：`supacode/Features/Terminal/BusinessLogic/WorktreeTerminalManager.swift`、`Models/WorktreeTerminalState.swift`、`Models/SplitTree.swift`、`Views/TerminalSplitTreeView.swift`、`Commands/TerminalCommands.swift`、`Infrastructure/Ghostty/*`。
+
+## 分析 workspace 拖动闪烁为何 supacode 不会（2026-03-20）
+
+- [x] 检查 current split drag -> representable/update/focus 链路
+- [x] 对照 supacode 的 split/tree/focus/terminal representable 实现
+- [x] 汇总当前最可能根因与证据，不先盲修
+
+## Review（分析 workspace 拖动闪烁为何 supacode 不会）
+
+- 直接原因（高置信代码判断）：当前 DevHaven 在 split drag 期间，拖动不只是纯布局更新，还会把每一帧比例变化继续传进 `NSViewRepresentable.updateNSView -> GhosttySurfaceHostModel.applyLatestModelState()`。而 `applyLatestModelState()` 里仍会调用 `ownedSurfaceView?.applyLatestModelState()`，后者继续 `ghostty_surface_set_content_scale` / `ghostty_surface_set_size`。与此同时，`GhosttyTerminalSurfaceView` 自己在 `layout()` / `viewDidMoveToWindow()` / `viewDidChangeBackingProperties()` 里也会更新 surface metrics，导致拖动时终端 surface 很可能被重复做尺寸同步与重绘，用户体感就是闪烁。
+- 为什么 supacode 没这个问题：supacode 的拖动主线更接近“纯几何更新”。`TerminalSplitTreeView.swift` 用 `.id(node.structuralIdentity)` 稳定 subtree 身份，而且 `structuralIdentity` 显式忽略 split ratio，只看节点结构与 leaf view 身份；`GhosttyTerminalView.swift::updateNSView` 还是 no-op。也就是说，supacode 在拖动时基本只让 AppKit 视图因为 frame 改变而 layout，不会额外再走一遍宿主层的 model sync / focus sync。
+- 当前最关键差异：
+  1. DevHaven 的 `WorkspaceSplitView` 每次拖动都 `onRatioChange` 回写 topology，`WorkspaceSplitTreeView` 递归用 `AnyView` 重建整棵树；
+  2. DevHaven 的 `GhosttyTerminalView.updateNSView` 不是 no-op，而是主动继续调 `applyLatestModelState(preferredFocus:)`；
+  3. supacode 的 terminal tree 直接持有稳定 `GhosttySurfaceView`，并用 structural identity 避免 ratio 变化造成 subtree identity 抖动。
+- 是否存在设计层诱因：存在。当前 DevHaven 还没有把“split 拖动时的纯布局变化”和“终端 host 的运行态同步/焦点副作用”彻底拆开；之前的 `GhosttySurfaceFocusRequestPolicy` 只压住了重复抢焦点这一条副作用，但拖动仍会穿透到 representable update 与 surface metrics 同步链，因此 flicker 还可能继续存在。未发现 supacode 依赖特殊 Ghostty 黑魔法；核心差异仍在宿主层更新边界。
+- 下一步最小验证建议：
+  1. 给 `GhosttySurfaceHostModel.applyLatestModelState()`、`GhosttyTerminalSurfaceView.updateSurfaceMetrics()` 和 `GhosttyTerminalView.updateNSView()` 打一次 drag 期日志，确认一次拖动手势内到底触发了多少次 update/resize；
+  2. 优先验证“拖动期间让 `updateNSView` 不再主动 `applyLatestModelState()`，只保留 AppKit layout 路径更新尺寸”是否能消掉闪烁；
+  3. 若仍有残留，再继续对齐 supacode 那种 structural identity 稳定策略，把 ratio 改变从 subtree identity 里彻底剥离。
+- 证据文件：`macos/Sources/DevHavenApp/{WorkspaceSplitTreeView,WorkspaceSplitView}.swift`、`macos/Sources/DevHavenApp/Ghostty/{GhosttyTerminalView,GhosttySurfaceHost,GhosttySurfaceView,GhosttySurfaceFocusRequestPolicy}.swift`；对照 `supacode/Features/Terminal/{Views/TerminalSplitTreeView,Models/SplitTree}.swift` 与 `supacode/Infrastructure/Ghostty/GhosttyTerminalView.swift`。
+
+## 直接对齐 supacode terminal 内核首批收口（2026-03-20）
+
+- [x] 写设计文档与实现计划，确认本轮只迁 terminal 内核主线，不动多项目 workspace 外壳
+- [x] 先补失败测试，锁定 split tree structural identity 忽略 ratio
+- [x] 先补失败测试，锁定 representable update 默认不再主动 sync host
+- [x] 最小实现 supacode 风格 structural identity + no-op update 边界
+- [x] 同步 AGENTS / lessons / todo，并完成测试、构建与 diff 校验
+
+## Review（直接对齐 supacode terminal 内核首批收口）
+
+- 直接原因：当前 Swift 原生 workspace 的分屏拖动之所以仍然会闪，不只是旧的焦点回抢；更关键的问题是 **drag 期间 ratio 变化会继续穿透到 `GhosttyTerminalView.updateNSView -> GhosttySurfaceHostModel.applyLatestModelState -> GhosttyTerminalSurfaceView.updateSurfaceMetrics` 这条同步链**。这样一次 divider drag 同时叠加了布局变化与主动 terminal sync / resize，体感就会明显闪烁。对照 `/Users/zhaotianzeng/Documents/business/tianzeng/supacode` 后，确认 supacode 的成熟路径是：split tree 对 ratio 变化保持 structural identity 稳定，`GhosttyTerminalView.updateNSView(...)` 默认为 no-op，终端主要只响应真实 AppKit layout，而不是每次 SwiftUI update 都主动同步 host。
+- 是否存在设计层诱因：存在。当前 DevHaven 之前一直把“split 拖动的纯布局变化”和“terminal host 运行态同步”混在一起，导致每次比例变化都可能把 representable update、host sync、surface resize 一起拖进来。此前的 `GhosttySurfaceFocusRequestPolicy` 只解决了“重复 requestFocus”这一个副作用，但没有切断 drag -> host sync 这条更大的更新链。除此之外，未发现新的明显系统设计缺陷。
+- 当前收口方案：
+  1. 在 `macos/Sources/DevHavenCore/Models/WorkspaceTopologyModels.swift` 为 `WorkspacePaneTree` / `Node` 新增 **structural identity**，显式忽略 split ratio，只保留 split direction + 子节点结构 + leaf pane id，对齐 supacode 的 subtree 身份稳定策略。
+  2. `macos/Sources/DevHavenApp/WorkspaceSplitTreeView.swift` 现在会把 root/subtree 绑定到上述 structural identity，并给 leaf pane 绑定稳定 `pane.id`，减少 ratio 变化时的 subtree 身份抖动。
+  3. 新增 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceRepresentableUpdatePolicy.swift`，并把 `GhosttyTerminalView.swift` 的 `updateNSView(...)` 收口成默认 no-op；不再让普通 SwiftUI update 主动触发 `applyLatestModelState(...)`。
+  4. 为避免 no-op update 误伤 tab/pane 切换焦点，`GhosttySurfaceHost.swift` 新增 `syncPreferredFocusTransition(...)`，把焦点同步从“每次 update 都可能触发”改成“只在 `isFocused` 真正变化时显式触发”，更接近 supacode 由选中态驱动的 focus 主线。
+  5. 同步补了设计文档 / 实施计划，并在 `AGENTS.md`、`tasks/lessons.md` 里回写“当目标明确是向成熟 supacode 靠近时，不再继续发明本地 split/render 变体”的新边界。
+- 长期改进建议：
+  1. 如果下一轮还要继续向 supacode 靠拢，优先继续迁它的 terminal leaf/render 主线，而不是重新把 host sync 塞回 `updateNSView`。
+  2. 若拖动仍有残余闪烁，下一步应继续对齐 supacode 的 terminal tree 持有方式（更稳定的 surface-first leaf），而不是重新回退到条件分支补丁。
+  3. 本轮虽然已把最关键的同步边界改成 supacode 风格，但**还没有真实 GUI 拖动录屏级验证证据**；后续需要在本机 app 窗口里手动拖一次 split，确认体感是否已收敛。
+- 验证证据：
+  - 红灯阶段：
+    - `swift test --package-path macos --filter WorkspaceTopologyTests` 首次失败，明确报错 `WorkspacePaneTree` 缺少 `structuralIdentity`。
+    - `swift test --package-path macos --filter GhosttySurfaceRepresentableUpdatePolicyTests` 首次失败，明确报错 `GhosttySurfaceRepresentableUpdatePolicy` 不存在。
+  - 定向测试：
+    - `swift test --package-path macos --filter WorkspaceTopologyTests` 通过（9/9）。
+    - `swift test --package-path macos --filter GhosttySurfaceRepresentableUpdatePolicyTests` 通过（1/1）。
+  - 全量测试：`swift test --package-path macos` 通过（74 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过。
+
+## 继续执行 B：对齐 supacode 的 terminal 容器与焦点主线（2026-03-20）
+
+- [x] 复核当前与 supacode 的剩余关键差异，确认下一步优先迁移 surface wrapper + focus 主线
+- [ ] 先补失败测试，锁定 terminal 容器 wrapper 的稳定挂载与布局语义
+- [ ] 最小实现 GhosttySurfaceContainerView，并让 representable 改走 wrapper
+- [ ] 对齐 supacode 的 focusDidChange / moveFocus 主线，并完成验证与文档同步
+- [x] 先补失败测试，锁定 terminal 容器 wrapper 的稳定挂载与布局语义
+- [x] 最小实现 GhosttySurfaceContainerView，并让 representable 改走 wrapper
+- [x] 对齐 supacode 的 focusDidChange / moveFocus 主线，并完成验证与文档同步
+
+## Review（继续执行 B：对齐 supacode 的 terminal 容器与焦点主线）
+
+- 直接原因：上一轮虽然已经把 `GhosttyTerminalView.updateNSView(...)` 收口成默认 no-op，并补了 split tree structural identity，但用户实测拖动仍然闪，说明问题不只在 representable update。对照 supacode 后，剩余最显著的差异有两条：
+  1. DevHaven 仍让 `GhosttyTerminalSurfaceView` 直接作为 SwiftUI representable 根节点，SwiftUI 布局变化会直接作用到 raw surface；
+  2. 当前 surface 仍缺 supacode 那条更完整的 `focusDidChange` / `moveFocus` 焦点同步主线。
+  这意味着即使 `updateNSView` 已经 no-op，live resize 时 raw surface 仍可能直接被 SwiftUI/AppKit 根布局链频繁牵动，焦点同步也没有完全回到 surface 自己的职责边界。
+- 是否存在设计层诱因：存在。此前 DevHaven 只是部分对齐 supacode，把“宿主 update 不主动 sync”收口了，但还没继续把 **representable 根节点与 raw surface 解耦**，也没把焦点同步彻底压回 dedicated surface。结果就是 split drag 期间仍可能让 SwiftUI 布局链直接碰到 terminal 最底层 view。除此之外，未发现新的明显系统设计缺陷。
+- 当前收口方案：
+  1. 新增 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceContainerView.swift`，作为 supacode `GhosttySurfaceScrollView` 的当前最小对齐版本：representable 现在不再直接返回 raw `GhosttyTerminalSurfaceView`，而是返回稳定的 AppKit 容器，由容器在 layout 时承载并调整 surface 尺寸。
+  2. `macos/Sources/DevHavenApp/Ghostty/GhosttyTerminalView.swift` 改为通过上述 container 承载 surface，并在必要时更新容器内持有的 surface view；`updateNSView(...)` 继续保持默认 no-op。
+  3. `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceHost.swift` 暴露 `currentSurfaceView`，让容器层在不触发额外 host sync 的前提下拿到稳定 surface。
+  4. `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceView.swift` 继续对齐 supacode，新增 `focused` / `lastSurfaceFocus`、`focusDidChange(_:)`、`setSurfaceFocus(_:)` 与 `moveFocus(to:from:delay:)`，把焦点切换职责尽量收回 surface 本身，避免继续散落在宿主与窗口链里。
+  5. `macos/Sources/DevHavenApp/WorkspaceSplitTreeView.swift` 进一步去掉 `AnyView` 递归拼装方式，改成更接近 supacode 的 typed `SubtreeView` 递归渲染，减少 split subtree 因类型擦除导致的身份抖动。
+- 长期改进建议：
+  1. 如果用户再次反馈拖动仍闪，下一步就不要再补 condition，而应继续沿 supacode 把 terminal tree 叶子节点改成更 surface-first 的持有方式，进一步减少 `pane -> hostModel -> surfaceView` 这层映射。
+  2. 真正要完全对齐 supacode，后续还应继续补 `setOcclusion(...)`、scroll wrapper 的真实 scrollbar/surface size 同步与窗口级 focus/visibility 主线。
+  3. 本轮依然缺少真实 GUI 录屏级验证；代码和测试都已对齐到更接近 supacode 的边界，但仍需要用户在本机实际拖 divider 再确认体感。
+- 验证证据：
+  - 红灯阶段：`swift test --package-path macos --filter GhosttySurfaceContainerViewTests` 首次失败，明确报错 `GhosttySurfaceContainerView` 不存在。
+  - 定向测试：
+    - `swift test --package-path macos --filter GhosttySurfaceContainerViewTests` 通过（1/1）。
+    - `swift test --package-path macos --filter GhosttySurfaceRepresentableUpdatePolicyTests` 通过（1/1）。
+    - `swift test --package-path macos --filter WorkspaceTopologyTests` 通过（9/9）。
+  - 全量测试：`swift test --package-path macos` 通过（75 tests passed，5 tests skipped，0 failures）。
+  - 构建验证：`swift build --package-path macos` 通过。
+  - diff 校验：`git diff --check` 通过。

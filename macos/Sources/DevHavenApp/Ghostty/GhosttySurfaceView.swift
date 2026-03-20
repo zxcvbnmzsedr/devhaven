@@ -3,9 +3,16 @@ import Carbon
 import CoreText
 import GhosttyKit
 import DevHavenCore
+import QuartzCore
 
 @MainActor
 final class GhosttyTerminalSurfaceView: NSView {
+    private struct ScrollbarState {
+        let total: UInt64
+        let offset: UInt64
+        let length: UInt64
+    }
+
     let runtime: GhosttyRuntime
     let request: WorkspaceTerminalLaunchRequest
     let bridge: GhosttySurfaceBridge
@@ -15,11 +22,28 @@ final class GhosttyTerminalSurfaceView: NSView {
     nonisolated(unsafe) private(set) var surface: ghostty_surface_t?
     private var surfaceRef: GhosttyRuntime.SurfaceReference?
     private var cellSize: NSSize = .zero
+    private var backingCellSizeInPixels: NSSize = .zero
+    private var lastBackingSize: NSSize = .zero
     private var trackingAreaRef: NSTrackingArea?
     private var keyTextAccumulator: [String]?
     private var markedText = NSMutableAttributedString()
     private var lastPerformKeyEvent: TimeInterval?
+    private var focused = false
+    private var lastScrollbar: ScrollbarState?
+    private var lastOcclusion: Bool?
+    private var lastSurfaceFocus: Bool?
     var initializationError: Error?
+    weak var scrollWrapper: GhosttySurfaceScrollView? {
+        didSet {
+            if let lastScrollbar {
+                scrollWrapper?.updateScrollbar(
+                    total: lastScrollbar.total,
+                    offset: lastScrollbar.offset,
+                    length: lastScrollbar.length
+                )
+            }
+        }
+    }
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -47,6 +71,7 @@ final class GhosttyTerminalSurfaceView: NSView {
         } catch {
             initializationError = error
         }
+        wantsLayer = true
     }
 
     @available(*, unavailable)
@@ -69,6 +94,10 @@ final class GhosttyTerminalSurfaceView: NSView {
         }
         bridge.surface = nil
         bridge.surfaceView = nil
+        scrollWrapper = nil
+        lastScrollbar = nil
+        lastOcclusion = nil
+        lastSurfaceFocus = nil
     }
 
     func applyLatestModelState() {
@@ -102,29 +131,79 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
+        if let window {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.contentsScale = window.backingScaleFactor
+            CATransaction.commit()
+        }
         updateSurfaceMetrics()
     }
 
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
-        if result, let surface {
-            ghostty_surface_set_focus(surface, true)
-            onFocusChange?(true)
+        if result {
+            focusDidChange(true)
         }
         return result
     }
 
     override func resignFirstResponder() -> Bool {
         let result = super.resignFirstResponder()
-        if result, let surface {
-            ghostty_surface_set_focus(surface, false)
-            onFocusChange?(false)
+        if result {
+            focusDidChange(false)
         }
         return result
     }
 
+    func focusDidChange(_ focused: Bool) {
+        guard surface != nil else { return }
+        guard self.focused != focused else { return }
+        self.focused = focused
+        setSurfaceFocus(focused)
+        onFocusChange?(focused)
+    }
+
+    private func setSurfaceFocus(_ focused: Bool) {
+        guard let surface else { return }
+        guard lastSurfaceFocus != focused else { return }
+        lastSurfaceFocus = focused
+        ghostty_surface_set_focus(surface, focused)
+    }
+
     func requestFocus() {
-        window?.makeFirstResponder(self)
+        Self.moveFocus(to: self)
+    }
+
+    func setOcclusion(_ visible: Bool) {
+        guard let surface else { return }
+        guard lastOcclusion != visible else { return }
+        lastOcclusion = visible
+        ghostty_surface_set_occlusion(surface, visible)
+    }
+
+    static func moveFocus(
+        to view: GhosttyTerminalSurfaceView,
+        from previous: GhosttyTerminalSurfaceView? = nil,
+        delay: TimeInterval? = nil
+    ) {
+        let maxDelay: TimeInterval = 0.5
+        let currentDelay = delay ?? 0
+        guard currentDelay < maxDelay else { return }
+        let nextDelay: TimeInterval = if let delay { delay * 2 } else { 0.05 }
+        Task { @MainActor in
+            if let delay {
+                try? await ContinuousClock().sleep(for: .seconds(delay))
+            }
+            guard let window = view.window else {
+                moveFocus(to: view, from: previous, delay: nextDelay)
+                return
+            }
+            if let previous, previous !== view {
+                _ = previous.resignFirstResponder()
+            }
+            window.makeFirstResponder(view)
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -275,7 +354,7 @@ final class GhosttyTerminalSurfaceView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
         guard let surface else { return false }
-        guard isSurfaceFocused else { return false }
+        guard focused else { return false }
 
         if let bindingFlags = bindingFlags(for: event, surface: surface) {
             if shouldAttemptMenu(for: bindingFlags),
@@ -481,7 +560,22 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     func updateCellSize(_ backingCellSize: NSSize) {
+        backingCellSizeInPixels = backingCellSize
         cellSize = convertFromBacking(backingCellSize)
+        scrollWrapper?.updateSurfaceSize()
+    }
+
+    func updateScrollbar(total: UInt64, offset: UInt64, length: UInt64) {
+        lastScrollbar = ScrollbarState(total: total, offset: offset, length: length)
+        scrollWrapper?.updateScrollbar(total: total, offset: offset, length: length)
+    }
+
+    func currentCellSize() -> NSSize {
+        cellSize
+    }
+
+    func updateSurfaceSize() {
+        updateSurfaceMetrics()
     }
 
     private func updateSurfaceMetrics() {
@@ -489,11 +583,15 @@ final class GhosttyTerminalSurfaceView: NSView {
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         ghostty_surface_set_content_scale(surface, scale, scale)
         let backingSize = convertToBacking(bounds.size)
-        ghostty_surface_set_size(
-            surface,
-            UInt32(max(1, Int(backingSize.width))),
-            UInt32(max(1, Int(backingSize.height)))
-        )
+        guard let decision = GhosttySurfaceResizePolicy.resizeDecision(
+            lastBackingSize: lastBackingSize,
+            newBackingSize: backingSize,
+            cellSizeInPixels: backingCellSizeInPixels
+        ) else {
+            return
+        }
+        lastBackingSize = backingSize
+        ghostty_surface_set_size(surface, decision.width, decision.height)
     }
 
     private func sendKeyAction(
@@ -637,7 +735,11 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     private var isSurfaceFocused: Bool {
-        window?.firstResponder === self
+        focused
+    }
+
+    var isCurrentlyFocused: Bool {
+        isSurfaceFocused
     }
 
     private func bindingFlags(
@@ -692,7 +794,7 @@ final class GhosttyTerminalSurfaceView: NSView {
         return !isAll && !isPerformable && isConsumed
     }
 
-    private func performBindingAction(_ action: String) {
+    func performBindingAction(_ action: String) {
         guard let surface else { return }
         _ = action.withCString { pointer in
             ghostty_surface_binding_action(

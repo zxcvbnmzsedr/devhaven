@@ -7,6 +7,7 @@ struct WorkspaceHostView: View {
     let project: Project
     let workspace: GhosttyWorkspaceController
     @StateObject private var surfaceRegistry = WorkspaceSurfaceRegistry()
+    @State private var windowActivity: WindowActivityState = .inactive
 
     var body: some View {
         let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
@@ -90,6 +91,12 @@ struct WorkspaceHostView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(NativeTheme.window)
+        .background {
+            WindowFocusObserverView { activity in
+                windowActivity = activity
+            }
+            .frame(width: 0, height: 0)
+        }
         .onAppear {
             surfaceRegistry.syncRetainedPaneIDs(retainedPaneIDs)
             WorkspaceLaunchDiagnostics.shared.recordHostMounted(
@@ -187,7 +194,7 @@ struct WorkspaceHostView: View {
     }
 
     private func surfaceModel(for pane: WorkspacePaneState) -> GhosttySurfaceHostModel {
-        surfaceRegistry.model(
+        let model = surfaceRegistry.model(
             for: pane,
             onFocusChange: { focused in
                 guard focused else { return }
@@ -217,6 +224,23 @@ struct WorkspaceHostView: View {
                 return self.handleSplitAction(action, paneID: pane.id)
             }
         )
+        let activity = WorkspaceSurfaceActivityPolicy.activity(
+            isWorkspaceVisible: isWorkspaceVisible,
+            isSelectedTab: pane.request.tabId == workspace.selectedTabId,
+            windowIsVisible: windowActivity.isVisible,
+            windowIsKey: windowActivity.isKeyWindow,
+            focusedPaneID: workspace.tabs.first(where: { $0.id == pane.request.tabId })?.focusedPaneId,
+            paneID: pane.id
+        )
+        model.syncSurfaceActivity(isVisible: activity.isVisible, isFocused: activity.isFocused)
+        if activity.isFocused {
+            model.restoreWindowResponderIfNeeded()
+        }
+        return model
+    }
+
+    private var isWorkspaceVisible: Bool {
+        viewModel.isWorkspacePresented && project.path == viewModel.activeWorkspaceProjectPath
     }
 
     private func handleSplitAction(_ action: GhosttySplitAction, paneID: String) -> Bool {

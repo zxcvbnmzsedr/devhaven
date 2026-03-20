@@ -110,4 +110,17 @@ final class WorkspaceTopologyTests: XCTestCase {
         session.focusPane(direction: .right)
         XCTAssertEqual(session.selectedTab?.focusedPaneId, rightPaneID)
     }
+
+    func testSplitTreeStructuralIdentityIgnoresRatioChanges() {
+        var session = WorkspaceSessionState(projectPath: "/tmp/devhaven", workspaceId: "workspace:test")
+        _ = session.splitFocusedPane(direction: .right)
+
+        let identityBefore = session.selectedTab?.tree.structuralIdentity
+        XCTAssertNotNil(identityBefore)
+
+        session.setSelectedTabSplitRatio(at: WorkspacePaneTree.Path(components: []), ratio: 0.72)
+
+        let identityAfter = session.selectedTab?.tree.structuralIdentity
+        XCTAssertEqual(identityBefore, identityAfter)
+    }
 }

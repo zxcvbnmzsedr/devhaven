@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import DevHavenCore
 
@@ -5,83 +6,162 @@ struct WorkspaceSplitView<Leading: View, Trailing: View>: View {
     let direction: WorkspaceSplitAxis
     let ratio: Double
     let onRatioChange: (Double) -> Void
+    let onEqualize: () -> Void
     let leading: Leading
     let trailing: Trailing
 
-    @State private var dragStartRatio: Double?
+    private let minSize: CGFloat = 10
+    private let splitterVisibleSize: CGFloat = 1
+    private let splitterInvisibleSize: CGFloat = 6
 
     init(
         direction: WorkspaceSplitAxis,
         ratio: Double,
         onRatioChange: @escaping (Double) -> Void,
+        onEqualize: @escaping () -> Void = {},
         @ViewBuilder leading: () -> Leading,
         @ViewBuilder trailing: () -> Trailing
     ) {
         self.direction = direction
         self.ratio = ratio
         self.onRatioChange = onRatioChange
+        self.onEqualize = onEqualize
         self.leading = leading()
         self.trailing = trailing()
     }
 
     var body: some View {
         GeometryReader { geometry in
-            if direction == .horizontal {
-                let total = max(geometry.size.width, 1)
-                let divider = dividerThickness
-                let primary = max(0, (total * ratio) - (divider / 2))
-                let secondary = max(0, total - primary - divider)
-                HStack(spacing: 0) {
-                    leading
-                        .frame(width: primary)
-                    dividerHandle(totalLength: total, horizontal: true)
-                    trailing
-                        .frame(width: secondary)
-                }
-            } else {
-                let total = max(geometry.size.height, 1)
-                let divider = dividerThickness
-                let primary = max(0, (total * ratio) - (divider / 2))
-                let secondary = max(0, total - primary - divider)
-                VStack(spacing: 0) {
-                    leading
-                        .frame(height: primary)
-                    dividerHandle(totalLength: total, horizontal: false)
-                    trailing
-                        .frame(height: secondary)
+            let leadingRect = leadingRect(for: geometry.size)
+            let trailingRect = trailingRect(for: geometry.size, leadingRect: leadingRect)
+            let splitterPoint = splitterPoint(for: geometry.size, leadingRect: leadingRect)
+
+            ZStack(alignment: .topLeading) {
+                leading
+                    .frame(width: leadingRect.size.width, height: leadingRect.size.height)
+                    .offset(x: leadingRect.origin.x, y: leadingRect.origin.y)
+                trailing
+                    .frame(width: trailingRect.size.width, height: trailingRect.size.height)
+                    .offset(x: trailingRect.origin.x, y: trailingRect.origin.y)
+                SplitDivider(
+                    direction: direction,
+                    visibleSize: splitterVisibleSize,
+                    invisibleSize: splitterInvisibleSize
+                )
+                .position(splitterPoint)
+                .gesture(dragGesture(geometry.size))
+                .onTapGesture(count: 2) {
+                    onEqualize()
                 }
             }
         }
     }
 
-    private var dividerThickness: CGFloat {
-        8
+    private func dragGesture(_ size: CGSize) -> some Gesture {
+        DragGesture()
+            .onChanged { gesture in
+                switch direction {
+                case .horizontal:
+                    let new = min(max(minSize, gesture.location.x), size.width - minSize)
+                    onRatioChange(Double(new / size.width))
+                case .vertical:
+                    let new = min(max(minSize, gesture.location.y), size.height - minSize)
+                    onRatioChange(Double(new / size.height))
+                }
+            }
     }
 
-    private func dividerHandle(totalLength: CGFloat, horizontal: Bool) -> some View {
-        Rectangle()
-            .fill(NativeTheme.border.opacity(0.9))
-            .frame(width: horizontal ? dividerThickness : nil, height: horizontal ? nil : dividerThickness)
-            .overlay(
-                Capsule(style: .continuous)
-                    .fill(NativeTheme.textSecondary.opacity(0.55))
-                    .frame(width: horizontal ? 3 : 28, height: horizontal ? 28 : 3)
-            )
+    private func leadingRect(for size: CGSize) -> CGRect {
+        var result = CGRect(origin: .zero, size: size)
+        switch direction {
+        case .horizontal:
+            result.size.width *= ratio
+            result.size.width -= splitterVisibleSize / 2
+        case .vertical:
+            result.size.height *= ratio
+            result.size.height -= splitterVisibleSize / 2
+        }
+        return result
+    }
+
+    private func trailingRect(for size: CGSize, leadingRect: CGRect) -> CGRect {
+        var result = CGRect(origin: .zero, size: size)
+        switch direction {
+        case .horizontal:
+            result.origin.x += leadingRect.size.width
+            result.origin.x += splitterVisibleSize / 2
+            result.size.width -= result.origin.x
+        case .vertical:
+            result.origin.y += leadingRect.size.height
+            result.origin.y += splitterVisibleSize / 2
+            result.size.height -= result.origin.y
+        }
+        return result
+    }
+
+    private func splitterPoint(for size: CGSize, leadingRect: CGRect) -> CGPoint {
+        switch direction {
+        case .horizontal:
+            return CGPoint(x: leadingRect.size.width, y: size.height / 2)
+        case .vertical:
+            return CGPoint(x: size.width / 2, y: leadingRect.size.height)
+        }
+    }
+
+    private struct SplitDivider: View {
+        let direction: WorkspaceSplitAxis
+        let visibleSize: CGFloat
+        let invisibleSize: CGFloat
+        @State private var isHovered = false
+
+        var body: some View {
+            ZStack {
+                Rectangle()
+                    .fill(NativeTheme.border.opacity(0.9))
+                    .frame(width: visibleWidth, height: visibleHeight)
+            }
+            .frame(width: hitboxWidth, height: hitboxHeight)
             .contentShape(.rect)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let base = dragStartRatio ?? ratio
-                        if dragStartRatio == nil {
-                            dragStartRatio = ratio
-                        }
-                        let offset = horizontal ? value.translation.width : value.translation.height
-                        let updated = min(max(base + (offset / totalLength), 0.1), 0.9)
-                        onRatioChange(updated)
-                    }
-                    .onEnded { _ in
-                        dragStartRatio = nil
-                    }
-            )
+            .onHover { hovering in
+                guard hovering != isHovered else { return }
+                isHovered = hovering
+                if hovering {
+                    hoverCursor.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .onDisappear {
+                if isHovered {
+                    isHovered = false
+                    NSCursor.pop()
+                }
+            }
+        }
+
+        private var hoverCursor: NSCursor {
+            switch direction {
+            case .horizontal:
+                return .resizeLeftRight
+            case .vertical:
+                return .resizeUpDown
+            }
+        }
+
+        private var visibleWidth: CGFloat? {
+            direction == .horizontal ? visibleSize : nil
+        }
+
+        private var visibleHeight: CGFloat? {
+            direction == .vertical ? visibleSize : nil
+        }
+
+        private var hitboxWidth: CGFloat? {
+            direction == .horizontal ? visibleSize + invisibleSize : nil
+        }
+
+        private var hitboxHeight: CGFloat? {
+            direction == .vertical ? visibleSize + invisibleSize : nil
+        }
     }
 }

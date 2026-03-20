@@ -113,6 +113,44 @@ public struct WorkspacePaneTree: Equatable, Sendable {
         return split
     }
 
+    public var structuralIdentity: StructuralIdentity {
+        StructuralIdentity(self)
+    }
+
+    public struct StructuralIdentity: Hashable, Sendable {
+        private let root: Node?
+        private let zoomedPaneId: String?
+
+        init(_ tree: WorkspacePaneTree) {
+            self.root = tree.root
+            self.zoomedPaneId = tree.zoomedPaneId
+        }
+
+        public static func == (lhs: Self, rhs: Self) -> Bool {
+            areNodesStructurallyEqual(lhs.root, rhs.root) && lhs.zoomedPaneId == rhs.zoomedPaneId
+        }
+
+        public func hash(into hasher: inout Hasher) {
+            hasher.combine(0)
+            if let root {
+                root.hashStructure(into: &hasher)
+            }
+            hasher.combine(1)
+            hasher.combine(zoomedPaneId)
+        }
+
+        private static func areNodesStructurallyEqual(_ lhs: Node?, _ rhs: Node?) -> Bool {
+            switch (lhs, rhs) {
+            case (nil, nil):
+                return true
+            case let (left?, right?):
+                return left.isStructurallyEqual(to: right)
+            default:
+                return false
+            }
+        }
+    }
+
     public func find(paneID: String?) -> WorkspacePaneState? {
         guard let paneID, let root else { return nil }
         return root.find(paneID: paneID)
@@ -288,6 +326,52 @@ public struct WorkspacePaneTree: Equatable, Sendable {
 }
 
 extension WorkspacePaneTree.Node {
+    public var structuralIdentity: StructuralIdentity {
+        StructuralIdentity(self)
+    }
+
+    public struct StructuralIdentity: Hashable, Sendable {
+        private let node: WorkspacePaneTree.Node
+
+        init(_ node: WorkspacePaneTree.Node) {
+            self.node = node
+        }
+
+        public static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.node.isStructurallyEqual(to: rhs.node)
+        }
+
+        public func hash(into hasher: inout Hasher) {
+            node.hashStructure(into: &hasher)
+        }
+    }
+
+    fileprivate func isStructurallyEqual(to other: WorkspacePaneTree.Node) -> Bool {
+        switch (self, other) {
+        case let (.leaf(leftPane), .leaf(rightPane)):
+            return leftPane.id == rightPane.id
+        case let (.split(leftSplit), .split(rightSplit)):
+            return leftSplit.direction == rightSplit.direction
+                && leftSplit.left.isStructurallyEqual(to: rightSplit.left)
+                && leftSplit.right.isStructurallyEqual(to: rightSplit.right)
+        default:
+            return false
+        }
+    }
+
+    fileprivate func hashStructure(into hasher: inout Hasher) {
+        switch self {
+        case let .leaf(pane):
+            hasher.combine(0)
+            hasher.combine(pane.id)
+        case let .split(split):
+            hasher.combine(1)
+            hasher.combine(split.direction)
+            split.left.hashStructure(into: &hasher)
+            split.right.hashStructure(into: &hasher)
+        }
+    }
+
     func leaves() -> [WorkspacePaneState] {
         switch self {
         case let .leaf(pane):

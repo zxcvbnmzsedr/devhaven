@@ -1,3 +1,5 @@
+- 对“当前 pane 应该保持焦点”这类 UI 语义，不能直接把持续态 `preferredFocus == true` 映射成每次刷新都执行的 `requestFocus()`；焦点同步应该按 **false -> true** 的边沿触发建模，否则分屏拖动、tab 重绘这类普通更新也会不断重放副作用，表现成闪烁。
+- 对 SwiftUI + Ghostty 的原生 workspace，不能把 `requestFocus()` 这类强副作用放进 `updateNSView` / 通用状态同步链；分屏 live resize 会持续触发 view update，若每帧都重复抢 first responder，用户就会感知为拖动闪烁。稳定做法是把“是否允许抢焦点”收口成独立策略，并在拖拽事件进行中显式跳过。
 - 原生 Swift 首页如果把筛选点击直接绑到 `@MainActor` 上的同步文档读取与整份 snapshot reload，会立刻放大点击卡顿；后续同类性能问题优先先查“筛选是否重复读项目文档”“收藏/设置保存是否又触发 `load()` 全量重载”。
 - 当 `@MainActor` ViewModel 需要在选中项目后读取磁盘文档时，不能继续同步 `read -> decode -> apply` 一把梭；应优先做成“命中缓存立即展示，未命中则先切选中态/打开抽屉，再后台异步加载，并用 revision/token 挡住旧请求回写”，否则快速切项目时很容易出现点击闷顿或旧项目内容串屏。
 - 在 macOS SwiftUI 里，顶部纯图标 `Button` 即使没有业务 active 态，也可能因为进入了窗口初始焦点链而显示出蓝色 focus ring；如果产品要复刻 Web/Tauri 风格的“静态图标按钮”，需要显式决定它是否参与焦点（例如 `focusable(false)`），不能把系统焦点高亮误当成选中态。
@@ -92,3 +94,7 @@
 
 - 当 Swift 原生 workspace 已经进入多项目 + 多 tab/pane 阶段时，不要再让 `NativeAppViewModel` 直接持有和改写 pane tree；应尽快抽成 `GhosttyWorkspaceController` 这类 dedicated owner，只让 ViewModel 管项目级导航，终端布局层只对外暴露 projection。
 - 在 SwiftUI + Ghostty 终端里，**pane view 的 `onDisappear` 不能直接等价为“pane 已关闭”**；split/tree 重排、tab 切换、项目切换都可能触发 view 生命周期变化。稳定做法是引入 `WorkspaceSurfaceRegistry` 这类按 pane ID 持有 host model 的 owner，只在 pane 真正从 topology 中移除时才释放 surface。
+- 当用户明确收口为“向成熟的 supacode 靠近，不需要自己再发明一套”时，不要继续在现有 split/render/focus 链上补丁式修修补补；应直接迁移 supacode 已稳定的 terminal 内核主线，只保留 DevHaven 自己的外层项目壳与业务语义。
+- 当目标明确是把 SwiftUI + Ghostty 的分屏拖动链向 supacode 靠拢时，只把 `updateNSView` 改成 no-op 往往还不够；还要继续把 raw surface 从 SwiftUI representable 根节点后面隔一层稳定容器，并把 `focusDidChange` / `moveFocus` 这类焦点同步收口成 surface 自己的职责，避免布局链继续直接碰 raw surface。
+- 如果 split drag 在完成 identity 稳定化、representable no-op、focus transition 和稳定容器后仍然闪，下一步要优先对照 supacode 的 **surface resize 节流**，而不是继续堆新的焦点条件：`ghostty_surface_set_size(...)` 对 live resize 很敏感，必须至少做到“相同 backing size 不重复 resize、极小网格先跳过 resize”，否则终端仍会在 divider 拖动时闪烁。
+- 如果 split drag 在完成 resize 节流后依然明显闪，接下来优先补的不是更多 `preferredFocus` 条件，而是 **window activity + surface occlusion + scroll wrapper** 这条 supacode 主线：只靠 SwiftUI 的 `opacity/allowsHitTesting` 并不能让 Ghostty surface 真正进入不可见态，必须显式同步 `setOcclusion(...)`，并把 representable 根节点换成和 supacode 一样的 `GhosttySurfaceScrollView`。

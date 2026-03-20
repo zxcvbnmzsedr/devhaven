@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import GhosttyKit
 import DevHavenCore
@@ -265,6 +266,13 @@ final class GhosttySurfaceHostModel: ObservableObject {
     private let onSplitAction: ((GhosttySplitAction) -> Bool)?
     private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
     private var ownedSurfaceView: GhosttyTerminalSurfaceView?
+    private var lastPreferredFocus = false
+    private var lastSurfaceIsVisible = false
+    private var lastSurfaceIsFocused = false
+
+    var currentSurfaceView: GhosttyTerminalSurfaceView? {
+        ownedSurfaceView
+    }
 
     init(
         request: WorkspaceTerminalLaunchRequest,
@@ -300,9 +308,8 @@ final class GhosttySurfaceHostModel: ObservableObject {
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
         if let ownedSurfaceView {
             workspaceLaunchDiagnostics.recordSurfaceReused(request: request)
-            if preferredFocus {
-                ownedSurfaceView.requestFocus()
-            }
+            applyCachedSurfaceActivity(to: ownedSurfaceView)
+            requestFocusIfNeeded(for: ownedSurfaceView, preferredFocus: preferredFocus)
             return ownedSurfaceView
         }
 
@@ -358,23 +365,56 @@ final class GhosttySurfaceHostModel: ObservableObject {
                 status: .success,
                 errorDescription: nil
             )
-            if preferredFocus {
-                view.requestFocus()
-            }
+            applyCachedSurfaceActivity(to: view)
+            requestFocusIfNeeded(for: view, preferredFocus: preferredFocus)
         }
         return view
     }
 
     func applyLatestModelState(preferredFocus: Bool = false) {
         ownedSurfaceView?.applyLatestModelState()
-        if preferredFocus {
-            ownedSurfaceView?.requestFocus()
+        syncPreferredFocusTransition(preferredFocus: preferredFocus)
+    }
+
+    func syncPreferredFocusTransition(preferredFocus: Bool) {
+        guard let ownedSurfaceView else {
+            lastPreferredFocus = preferredFocus
+            return
         }
+        requestFocusIfNeeded(for: ownedSurfaceView, preferredFocus: preferredFocus)
+    }
+
+    func syncSurfaceActivity(isVisible: Bool, isFocused: Bool) {
+        lastSurfaceIsVisible = isVisible
+        lastSurfaceIsFocused = isFocused
+        guard let ownedSurfaceView else {
+            return
+        }
+        applyCachedSurfaceActivity(to: ownedSurfaceView)
+    }
+
+    func restoreWindowResponderIfNeeded() {
+        guard lastSurfaceIsFocused, let ownedSurfaceView else {
+            return
+        }
+        guard let window = ownedSurfaceView.window else {
+            return
+        }
+        guard window.firstResponder is GhosttyTerminalSurfaceView else {
+            return
+        }
+        guard window.firstResponder !== ownedSurfaceView else {
+            return
+        }
+        window.makeFirstResponder(ownedSurfaceView)
     }
 
     func releaseSurface() {
         ownedSurfaceView?.tearDown()
         ownedSurfaceView = nil
+        lastPreferredFocus = false
+        lastSurfaceIsVisible = false
+        lastSurfaceIsFocused = false
     }
 
     private func handleProcessExit(processAlive: Bool) {
@@ -384,9 +424,34 @@ final class GhosttySurfaceHostModel: ObservableObject {
 
         ownedSurfaceView?.tearDown()
         ownedSurfaceView = nil
+        lastPreferredFocus = false
+        lastSurfaceIsVisible = false
+        lastSurfaceIsFocused = false
         rendererHealthy = true
         processState = .exited
         onSurfaceExit?()
+    }
+
+    private func requestFocusIfNeeded(
+        for view: GhosttyTerminalSurfaceView,
+        preferredFocus: Bool
+    ) {
+        guard GhosttySurfaceFocusRequestPolicy.shouldRequestFocus(
+            preferredFocus: preferredFocus,
+            wasPreferredFocus: lastPreferredFocus,
+            isSurfaceFocused: view.isCurrentlyFocused,
+            currentEventType: NSApp.currentEvent?.type
+        ) else {
+            lastPreferredFocus = preferredFocus
+            return
+        }
+        lastPreferredFocus = preferredFocus
+        view.requestFocus()
+    }
+
+    private func applyCachedSurfaceActivity(to view: GhosttyTerminalSurfaceView) {
+        view.setOcclusion(lastSurfaceIsVisible)
+        view.focusDidChange(lastSurfaceIsFocused)
     }
 
     var terminalStatusText: String {

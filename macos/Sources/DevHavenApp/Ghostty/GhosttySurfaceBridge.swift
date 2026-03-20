@@ -71,6 +71,15 @@ final class GhosttySurfaceBridge {
             onRendererHealthChange?(healthy)
             return true
 
+        case GHOSTTY_ACTION_SCROLLBAR:
+            let scroll = action.action.scrollbar
+            surfaceView?.updateScrollbar(
+                total: scroll.total,
+                offset: scroll.offset,
+                length: scroll.len
+            )
+            return true
+
         case GHOSTTY_ACTION_CONFIG_CHANGE:
             let appearance = GhosttySurfaceAppearance(config: action.action.config_change.config)
             state.appearance = appearance
