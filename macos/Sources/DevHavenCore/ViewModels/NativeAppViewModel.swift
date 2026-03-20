@@ -1,0 +1,1420 @@
+import Foundation
+import Observation
+
+@MainActor
+@Observable
+public final class NativeAppViewModel {
+    @ObservationIgnored private let store: LegacyCompatStore
+    @ObservationIgnored private var projectDocumentCache = [String: ProjectDocumentSnapshot]()
+    @ObservationIgnored private let projectDocumentLoader: @Sendable (String) throws -> ProjectDocumentSnapshot
+    @ObservationIgnored private let gitDailyCollector: @Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult]
+    @ObservationIgnored private let gitDailyCollectorAsync: @Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult]
+    @ObservationIgnored private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
+    @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
+    @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
+    @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var projectDocumentLoadRevision = 0
+
+    public struct DirectoryRow: Identifiable, Equatable {
+        public let id: String
+        public let path: String?
+        public let title: String
+        public let count: Int
+        public let isSystemEntry: Bool
+
+        public init(path: String?, title: String, count: Int, isSystemEntry: Bool = false) {
+            self.id = path ?? title
+            self.path = path
+            self.title = title
+            self.count = count
+            self.isSystemEntry = isSystemEntry
+        }
+    }
+
+    public struct TagRow: Identifiable, Equatable {
+        public let id: String
+        public let name: String?
+        public let title: String
+        public let count: Int
+        public let colorHex: String?
+
+        public init(name: String?, title: String, count: Int, colorHex: String? = nil) {
+            self.id = name ?? title
+            self.name = name
+            self.title = title
+            self.count = count
+            self.colorHex = colorHex
+        }
+    }
+
+    public struct CLISessionItem: Identifiable, Equatable {
+        public let id: String
+        public let title: String
+        public let subtitle: String
+        public let statusText: String
+    }
+
+    public var snapshot: NativeAppSnapshot
+    public var selectedProjectPath: String?
+    public var openWorkspaceSessions: [OpenWorkspaceSessionState]
+    public var activeWorkspaceProjectPath: String?
+    public var searchQuery: String
+    public var selectedDirectory: String?
+    public var selectedTag: String?
+    public var selectedHeatmapDateKey: String?
+    public var selectedDateFilter: NativeDateFilter
+    public var selectedGitFilter: NativeGitFilter
+    public var isLoading: Bool
+    public var isRefreshingGitStatistics: Bool
+    public var gitStatisticsProgressText: String?
+    public var isProjectDocumentLoading: Bool
+    public var errorMessage: String?
+    public var isDashboardPresented: Bool
+    public var isSettingsPresented: Bool
+    public var isRecycleBinPresented: Bool
+    public var isDetailPanelPresented: Bool
+    public var worktreeInteractionState: WorktreeInteractionState?
+    public var notesDraft: String
+    public var todoDraft: String
+    public var todoItems: [TodoItem]
+    public var readmeFallback: MarkdownDocument?
+    public var hasLoadedInitialData: Bool
+
+    public init(
+        store: LegacyCompatStore = LegacyCompatStore(),
+        projectDocumentLoader: (@Sendable (String) throws -> ProjectDocumentSnapshot)? = nil,
+        gitDailyCollector: (@Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult])? = nil,
+        gitDailyCollectorAsync: (@Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult])? = nil,
+        workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics = .shared,
+        terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
+        worktreeService: (any NativeWorktreeServicing)? = nil
+    ) {
+        self.store = store
+        self.projectDocumentLoader = projectDocumentLoader ?? loadProjectDocumentFromDisk
+        self.gitDailyCollector = gitDailyCollector ?? collectGitDaily
+        self.gitDailyCollectorAsync = gitDailyCollectorAsync ?? collectGitDailyAsync
+        self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
+        self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
+        self.worktreeService = worktreeService ?? NativeGitWorktreeService()
+        self.snapshot = NativeAppSnapshot()
+        self.selectedProjectPath = nil
+        self.openWorkspaceSessions = []
+        self.activeWorkspaceProjectPath = nil
+        self.searchQuery = ""
+        self.selectedDirectory = nil
+        self.selectedTag = nil
+        self.selectedHeatmapDateKey = nil
+        self.selectedDateFilter = .all
+        self.selectedGitFilter = .all
+        self.isLoading = false
+        self.isRefreshingGitStatistics = false
+        self.gitStatisticsProgressText = nil
+        self.isProjectDocumentLoading = false
+        self.errorMessage = nil
+        self.isDashboardPresented = false
+        self.isSettingsPresented = false
+        self.isRecycleBinPresented = false
+        self.isDetailPanelPresented = false
+        self.worktreeInteractionState = nil
+        self.notesDraft = ""
+        self.todoDraft = ""
+        self.todoItems = []
+        self.readmeFallback = nil
+        self.hasLoadedInitialData = false
+    }
+
+    public var projectListViewMode: ProjectListViewMode {
+        snapshot.appState.settings.projectListViewMode
+    }
+
+    public var visibleProjects: [Project] {
+        let hidden = Set(snapshot.appState.recycleBin)
+        return snapshot.projects.filter { !hidden.contains($0.path) }
+    }
+
+    public var filteredProjects: [Project] {
+        visibleProjects.filter(matchesAllFilters)
+    }
+
+    public var selectedProject: Project? {
+        guard let selectedProjectPath else {
+            return filteredProjects.first ?? visibleProjects.first
+        }
+        return resolveDisplayProject(for: selectedProjectPath)
+    }
+
+    public var activeWorkspaceProject: Project? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return resolveDisplayProject(for: activeWorkspaceProjectPath)
+    }
+
+    public var openWorkspaceProjectPaths: [String] {
+        openWorkspaceSessions.map(\.projectPath)
+    }
+
+    public var openWorkspaceRootProjectPaths: [String] {
+        openWorkspaceSessions
+            .filter { $0.rootProjectPath == $0.projectPath }
+            .map(\.projectPath)
+    }
+
+    public var openWorkspaceProjects: [Project] {
+        openWorkspaceSessions.compactMap { resolveDisplayProject(for: $0.projectPath, rootProjectPath: $0.rootProjectPath) }
+    }
+
+    public var availableWorkspaceProjects: [Project] {
+        let openedPaths = Set(openWorkspaceRootProjectPaths)
+        return visibleProjects.filter { !openedPaths.contains($0.path) }
+    }
+
+    public var workspaceSidebarGroups: [WorkspaceSidebarProjectGroup] {
+        openWorkspaceRootProjectPaths.compactMap { rootPath in
+            guard let rootProject = snapshot.projects.first(where: { $0.path == rootPath }) else {
+                return nil
+            }
+            let worktrees = rootProject.worktrees.map { worktree in
+                WorkspaceSidebarWorktreeItem(
+                    rootProjectPath: rootPath,
+                    worktree: worktree,
+                    isOpen: openWorkspaceProjectPaths.contains(worktree.path),
+                    isActive: activeWorkspaceProjectPath == worktree.path
+                )
+            }
+            return WorkspaceSidebarProjectGroup(
+                rootProject: rootProject,
+                worktrees: worktrees,
+                isActive: activeWorkspaceProjectPath == rootPath
+            )
+        }
+    }
+
+    public var activeWorkspaceController: GhosttyWorkspaceController? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return openWorkspaceSessions.first(where: { $0.projectPath == activeWorkspaceProjectPath })?.controller
+    }
+
+    public var activeWorkspaceState: WorkspaceSessionState? {
+        activeWorkspaceController?.sessionState
+    }
+
+    public var activeWorkspaceLaunchRequest: WorkspaceTerminalLaunchRequest? {
+        activeWorkspaceController?.selectedPane?.request
+    }
+
+    public var isWorkspacePresented: Bool {
+        activeWorkspaceProjectPath != nil && activeWorkspaceController != nil
+    }
+
+    public var canSplitActiveWorkspace: Bool {
+        activeWorkspaceController?.selectedPane != nil
+    }
+
+    public var directoryRows: [DirectoryRow] {
+        var rows: [DirectoryRow] = [DirectoryRow(path: nil, title: "全部", count: visibleProjects.count, isSystemEntry: true)]
+        rows.append(
+            contentsOf: snapshot.appState.directories.map { directory in
+                DirectoryRow(
+                    path: directory,
+                    title: URL(fileURLWithPath: directory).lastPathComponent,
+                    count: visibleProjects.filter { $0.path.hasPrefix(directory) }.count
+                )
+            }
+        )
+        return rows
+    }
+
+    public var tagRows: [TagRow] {
+        var counts = [String: Int]()
+        for project in visibleProjects {
+            for tag in project.tags {
+                counts[tag, default: 0] += 1
+            }
+        }
+
+        var rows: [TagRow] = [TagRow(name: nil, title: "全部", count: visibleProjects.count)]
+        rows.append(
+            contentsOf: snapshot.appState.tags
+                .sorted { (counts[$0.name] ?? 0) > (counts[$1.name] ?? 0) }
+                .map { tag in
+                    TagRow(
+                        name: tag.name,
+                        title: tag.name,
+                        count: counts[tag.name] ?? 0,
+                        colorHex: hexColor(for: tag.color)
+                    )
+                }
+        )
+        return rows
+    }
+
+    public var sidebarHeatmapDays: [GitHeatmapDay] {
+        buildGitHeatmapDays(projects: visibleProjects, days: GitDashboardRange.threeMonths.days)
+    }
+
+    public var isHeatmapFilterActive: Bool {
+        selectedHeatmapDateKey != nil
+    }
+
+    public var heatmapActiveProjects: [GitActiveProject] {
+        guard let selectedHeatmapDateKey else {
+            return []
+        }
+        return buildGitActiveProjects(on: selectedHeatmapDateKey, projects: visibleProjects)
+    }
+
+    public var selectedHeatmapSummary: String? {
+        guard let selectedHeatmapDateKey else {
+            return nil
+        }
+        let totalCommits = heatmapActiveProjects.reduce(into: 0) { $0 += $1.commitCount }
+        return "\(selectedHeatmapDateKey) · \(heatmapActiveProjects.count) 个活跃项目 · \(totalCommits) 次提交"
+    }
+
+    public var gitStatisticsLastUpdated: Date? {
+        visibleProjects
+            .map(\.checked)
+            .filter { $0 != .zero }
+            .max()
+            .flatMap(swiftDateToDate)
+    }
+
+    public var cliSessionItems: [CLISessionItem] {
+        let running = visibleProjects.filter { !($0.worktrees.isEmpty && $0.scripts.isEmpty) }.prefix(4)
+        return running.map { project in
+            CLISessionItem(
+                id: project.id,
+                title: project.name,
+                subtitle: URL(fileURLWithPath: project.path).lastPathComponent,
+                statusText: project.worktrees.isEmpty ? "配置中" : "已关联"
+            )
+        }
+    }
+
+    public var recycleBinItems: [RecycleBinItem] {
+        snapshot.appState.recycleBin.map { path in
+            if let project = snapshot.projects.first(where: { $0.path == path }) {
+                return RecycleBinItem(path: path, name: project.name, missing: false)
+            }
+            return RecycleBinItem(path: path, name: URL(fileURLWithPath: path).lastPathComponent, missing: true)
+        }
+    }
+
+    public func load() {
+        isLoading = true
+        defer {
+            isLoading = false
+            hasLoadedInitialData = true
+        }
+
+        do {
+            projectDocumentCache.removeAll()
+            snapshot = try store.loadSnapshot()
+            alignSelectionAfterReload()
+            scheduleSelectedProjectDocumentRefresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func refresh() {
+        load()
+    }
+
+    @discardableResult
+    public func refreshGitStatistics() throws -> GitStatisticsRefreshSummary {
+        let targetProjects = visibleProjects.filter { $0.gitCommits > 0 }
+        guard !targetProjects.isEmpty else {
+            return GitStatisticsRefreshSummary(requestedRepositories: 0, updatedRepositories: 0, failedRepositories: 0)
+        }
+
+        isRefreshingGitStatistics = true
+        defer { isRefreshingGitStatistics = false }
+
+        let results = gitDailyCollector(targetProjects.map(\.path), snapshot.appState.settings.gitIdentities)
+        try store.updateProjectsGitDaily(results)
+        load()
+
+        return makeGitStatisticsRefreshSummary(from: results)
+    }
+
+    public func refreshGitStatisticsAsync() async throws -> GitStatisticsRefreshSummary {
+        let targetProjects = visibleProjects.filter { $0.gitCommits > 0 }
+        guard !targetProjects.isEmpty else {
+            return GitStatisticsRefreshSummary(requestedRepositories: 0, updatedRepositories: 0, failedRepositories: 0)
+        }
+
+        isRefreshingGitStatistics = true
+        gitStatisticsProgressText = "正在扫描 \(targetProjects.count) 个 Git 仓库..."
+        defer {
+            isRefreshingGitStatistics = false
+            gitStatisticsProgressText = nil
+        }
+
+        let paths = targetProjects.map(\.path)
+        let identities = snapshot.appState.settings.gitIdentities
+        let collector = gitDailyCollectorAsync
+        let results = await collector(paths, identities) { completed, total in
+            await MainActor.run {
+                if completed < total {
+                    self.gitStatisticsProgressText = "正在扫描 \(completed)/\(total) 个 Git 仓库..."
+                } else {
+                    self.gitStatisticsProgressText = "正在写入统计结果..."
+                }
+            }
+        }
+
+        gitStatisticsProgressText = "正在写入统计结果..."
+        try store.updateProjectsGitDaily(results)
+        gitStatisticsProgressText = "正在刷新项目列表..."
+        load()
+
+        return makeGitStatisticsRefreshSummary(from: results)
+    }
+
+    private func makeGitStatisticsRefreshSummary(from results: [GitDailyRefreshResult]) -> GitStatisticsRefreshSummary {
+        let failedRepositories = results.reduce(into: 0) { partialResult, result in
+            if result.error != nil {
+                partialResult += 1
+            }
+        }
+        let updatedRepositories = results.reduce(into: 0) { partialResult, result in
+            if result.error == nil {
+                partialResult += 1
+            }
+        }
+        return GitStatisticsRefreshSummary(
+            requestedRepositories: results.count,
+            updatedRepositories: updatedRepositories,
+            failedRepositories: failedRepositories
+        )
+    }
+
+    public func selectProject(_ path: String?) {
+        if path == selectedProjectPath, isDetailPanelPresented == (path != nil) {
+            return
+        }
+        if let path {
+            if activeWorkspaceProjectPath != nil, openWorkspaceProjectPaths.contains(path) {
+                activeWorkspaceProjectPath = path
+                isDetailPanelPresented = false
+            } else {
+                isDetailPanelPresented = true
+            }
+        } else {
+            isDetailPanelPresented = false
+        }
+        selectedProjectPath = path
+        scheduleSelectedProjectDocumentRefresh()
+    }
+
+    public func enterWorkspace(_ path: String) {
+        selectedProjectPath = path
+        openWorkspaceSessionIfNeeded(for: path, rootProjectPath: path)
+        activeWorkspaceProjectPath = path
+        isDetailPanelPresented = false
+        if let controller = activeWorkspaceController {
+            workspaceLaunchDiagnostics.recordEntryRequested(
+                workspace: controller.sessionState,
+                openSessionCount: openWorkspaceSessions.count
+            )
+        }
+        scheduleSelectedProjectDocumentRefresh()
+    }
+
+    public func activateWorkspaceProject(_ path: String) {
+        guard openWorkspaceProjectPaths.contains(path) else {
+            return
+        }
+        activeWorkspaceProjectPath = path
+        selectedProjectPath = path
+        isDetailPanelPresented = false
+        scheduleSelectedProjectDocumentRefresh()
+    }
+
+    public func closeWorkspaceProject(_ path: String) {
+        guard let index = openWorkspaceSessions.firstIndex(where: { $0.projectPath == path }) else {
+            return
+        }
+
+        let rootProjectPath = openWorkspaceSessions[index].rootProjectPath
+        let removedPaths: Set<String>
+        if rootProjectPath == path {
+            removedPaths = Set(openWorkspaceSessions.filter { $0.rootProjectPath == path }.map(\.projectPath))
+            openWorkspaceSessions.removeAll { removedPaths.contains($0.projectPath) }
+        } else {
+            removedPaths = Set([path])
+            openWorkspaceSessions.remove(at: index)
+        }
+
+        if openWorkspaceSessions.isEmpty {
+            activeWorkspaceProjectPath = nil
+            isDetailPanelPresented = false
+            return
+        }
+
+        if let currentActiveWorkspaceProjectPath = activeWorkspaceProjectPath, removedPaths.contains(currentActiveWorkspaceProjectPath) {
+            let fallbackIndex = min(index, openWorkspaceSessions.count - 1)
+            let fallbackPath = openWorkspaceSessions[fallbackIndex].projectPath
+            activeWorkspaceProjectPath = fallbackPath
+            selectedProjectPath = fallbackPath
+            isDetailPanelPresented = false
+            scheduleSelectedProjectDocumentRefresh()
+        }
+    }
+
+    public func exitWorkspace() {
+        activeWorkspaceProjectPath = nil
+        isDetailPanelPresented = false
+    }
+
+    public func openWorkspaceWorktree(_ worktreePath: String, from rootProjectPath: String) {
+        guard let rootProject = snapshot.projects.first(where: { $0.path == rootProjectPath }) else {
+            errorMessage = NativeWorktreeError.invalidProject("项目不存在或已移除").localizedDescription
+            return
+        }
+        guard let worktree = rootProject.worktrees.first(where: { $0.path == worktreePath }) else {
+            errorMessage = NativeWorktreeError.invalidPath("worktree 不存在或已移除").localizedDescription
+            return
+        }
+        if worktree.status == "creating" {
+            errorMessage = "该 worktree 正在创建中，请稍候"
+            return
+        }
+        if worktree.status == "failed" {
+            errorMessage = worktree.initError ?? "该 worktree 创建失败，请先重试"
+            return
+        }
+        selectedProjectPath = worktree.path
+        openWorkspaceSessionIfNeeded(for: worktree.path, rootProjectPath: rootProjectPath)
+        activeWorkspaceProjectPath = worktree.path
+        isDetailPanelPresented = false
+        scheduleSelectedProjectDocumentRefresh()
+    }
+
+    public func createWorkspaceTab(in projectPath: String? = nil) {
+        _ = workspaceController(for: projectPath)?.createTab()
+    }
+
+    public func selectWorkspaceTab(_ tabID: String, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.selectTab(tabID)
+    }
+
+    public func moveWorkspaceTab(_ tabID: String, by amount: Int, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.moveTab(id: tabID, by: amount)
+    }
+
+    public func closeWorkspaceTab(_ tabID: String, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.closeTab(tabID)
+    }
+
+    public func closeWorkspaceOtherTabs(keeping tabID: String, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.closeOtherTabs(keeping: tabID)
+    }
+
+    public func closeWorkspaceTabsToRight(of tabID: String, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.closeTabsToRight(of: tabID)
+    }
+
+    public func gotoPreviousWorkspaceTab(in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.gotoPreviousTab()
+    }
+
+    public func gotoNextWorkspaceTab(in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.gotoNextTab()
+    }
+
+    public func gotoLastWorkspaceTab(in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.gotoLastTab()
+    }
+
+    public func gotoWorkspaceTab(at index: Int, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.gotoTab(at: index)
+    }
+
+    public func splitWorkspaceFocusedPane(direction: WorkspacePaneSplitDirection, in projectPath: String? = nil) {
+        _ = workspaceController(for: projectPath)?.splitFocusedPane(direction: direction)
+    }
+
+    public func splitActiveWorkspaceRight() {
+        splitWorkspaceFocusedPane(direction: .right)
+    }
+
+    public func focusWorkspacePane(_ paneID: String, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.focusPane(paneID)
+    }
+
+    public func focusWorkspacePane(direction: WorkspacePaneFocusDirection, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.focusPane(direction: direction)
+    }
+
+    public func closeWorkspacePane(_ paneID: String?, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.closePane(paneID)
+    }
+
+    public func resizeWorkspaceFocusedPane(direction: WorkspacePaneSplitDirection, amount: UInt16, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.resizeFocusedPane(direction: direction, amount: amount)
+    }
+
+    public func equalizeWorkspaceSplits(in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.equalizeSelectedTabSplits()
+    }
+
+    public func toggleWorkspaceFocusedPaneZoom(in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.toggleZoomOnFocusedPane()
+    }
+
+    public func setWorkspaceSelectedTabSplitRatio(at path: WorkspacePaneTree.Path, ratio: Double, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.setSelectedTabSplitRatio(at: path, ratio: ratio)
+    }
+
+    public func updateWorkspaceTabTitle(_ title: String, for tabID: String, in projectPath: String? = nil) {
+        workspaceController(for: projectPath)?.updateTitle(for: tabID, title: title)
+    }
+
+    public func openWorkspaceInTerminal(_ projectPath: String? = nil) throws {
+        let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath
+        guard let resolvedProjectPath,
+              let project = resolveDisplayProject(for: resolvedProjectPath)
+        else {
+            let error = WorkspaceTerminalCommandError.noActiveWorkspace
+            errorMessage = error.localizedDescription
+            throw error
+        }
+
+        do {
+            try terminalCommandRunner("/usr/bin/open", ["-a", "Terminal", project.path])
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
+    }
+
+    public func openActiveWorkspaceInTerminal() throws {
+        try openWorkspaceInTerminal()
+    }
+
+    public func managedWorktreePathPreview(for rootProjectPath: String, branch: String) throws -> String {
+        try worktreeService.managedWorktreePath(for: rootProjectPath, branch: branch)
+    }
+
+    public func listWorkspaceBranches(for rootProjectPath: String) async throws -> [NativeGitBranch] {
+        try await Task.detached(priority: .userInitiated) {
+            try self.worktreeService.listBranches(at: rootProjectPath)
+        }.value
+    }
+
+    public func listProjectWorktrees(for rootProjectPath: String) async throws -> [NativeGitWorktree] {
+        try await Task.detached(priority: .userInitiated) {
+            try self.worktreeService.listWorktrees(at: rootProjectPath)
+        }.value
+    }
+
+    public func refreshProjectWorktrees(_ rootProjectPath: String) async throws {
+        let gitWorktrees = try await listProjectWorktrees(for: rootProjectPath)
+        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+            throw NativeWorktreeError.invalidProject("项目不存在或已移除")
+        }
+        var projects = snapshot.projects
+        projects[projectIndex].worktrees = buildSyncedWorktrees(
+            existingWorktrees: projects[projectIndex].worktrees,
+            gitWorktrees: gitWorktrees
+        )
+        try persistProjects(projects)
+    }
+
+    public func addExistingWorkspaceWorktree(
+        from rootProjectPath: String,
+        worktreePath: String,
+        branch: String,
+        autoOpen: Bool
+    ) throws {
+        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+            throw NativeWorktreeError.invalidProject("项目不存在或已移除")
+        }
+
+        let now = swiftDateFromDate(Date())
+        let nextWorktree = buildReadyWorktree(path: worktreePath, branch: branch, now: now)
+        var projects = snapshot.projects
+        var project = projects[projectIndex]
+        if let existingIndex = project.worktrees.firstIndex(where: { normalizePathForCompare($0.path) == normalizePathForCompare(worktreePath) }) {
+            project.worktrees[existingIndex] = nextWorktree
+        } else {
+            project.worktrees.append(nextWorktree)
+            project.worktrees.sort { $0.path < $1.path }
+        }
+        projects[projectIndex] = project
+        try persistProjects(projects)
+
+        if autoOpen {
+            openWorkspaceWorktree(worktreePath, from: rootProjectPath)
+        }
+    }
+
+    public func createWorkspaceWorktree(
+        from rootProjectPath: String,
+        branch: String,
+        createBranch: Bool,
+        baseBranch: String?,
+        autoOpen: Bool,
+        targetPath: String? = nil
+    ) async throws {
+        guard worktreeInteractionState == nil else {
+            throw NativeWorktreeError.operationInProgress("已有 worktree 创建任务正在进行中，请稍候")
+        }
+        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+            throw NativeWorktreeError.invalidProject("项目不存在或已移除")
+        }
+
+        let request = NativeWorktreeCreateRequest(
+            sourceProjectPath: rootProjectPath,
+            branch: branch,
+            createBranch: createBranch,
+            baseBranch: baseBranch,
+            targetPath: targetPath
+        )
+        let previewPath = try worktreeService.managedWorktreePath(for: rootProjectPath, branch: branch)
+        let now = swiftDateFromDate(Date())
+        let creatingWorktree = ProjectWorktree(
+            id: createWorktreeProjectID(path: previewPath),
+            name: resolveWorktreeName(previewPath),
+            path: previewPath,
+            branch: branch.trimmingCharacters(in: .whitespacesAndNewlines),
+            baseBranch: createBranch ? baseBranch?.trimmingCharacters(in: .whitespacesAndNewlines) : nil,
+            inheritConfig: true,
+            created: now,
+            status: "creating",
+            initStep: NativeWorktreeInitStep.pending.rawValue,
+            initMessage: "已创建任务，准备开始…",
+            initError: nil,
+            initJobId: UUID().uuidString,
+            updatedAt: now
+        )
+
+        var projects = snapshot.projects
+        upsertWorktree(&projects[projectIndex].worktrees, worktree: creatingWorktree)
+        try persistProjects(projects)
+        worktreeInteractionState = WorktreeInteractionState(
+            rootProjectPath: rootProjectPath,
+            branch: creatingWorktree.branch,
+            baseBranch: creatingWorktree.baseBranch,
+            worktreePath: creatingWorktree.path,
+            step: .pending,
+            message: "准备创建 worktree..."
+        )
+
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try self.worktreeService.createWorktree(request) { progress in
+                    Task { @MainActor in
+                        self.applyWorktreeProgress(progress, rootProjectPath: rootProjectPath)
+                    }
+                }
+            }.value
+
+            await MainActor.run {
+                self.finishCreateWorkspaceWorktree(
+                    result,
+                    rootProjectPath: rootProjectPath,
+                    autoOpen: autoOpen
+                )
+            }
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            markWorktreeAsFailed(worktreePath: previewPath, rootProjectPath: rootProjectPath, errorMessage: message)
+            worktreeInteractionState = nil
+            errorMessage = message
+            throw error
+        }
+    }
+
+    public func retryWorkspaceWorktree(_ worktreePath: String, from rootProjectPath: String) async throws {
+        guard let worktree = snapshot.projects.first(where: { $0.path == rootProjectPath })?.worktrees.first(where: {
+            normalizePathForCompare($0.path) == normalizePathForCompare(worktreePath)
+        }) else {
+            throw NativeWorktreeError.invalidPath("worktree 不存在或已移除")
+        }
+
+        try await createWorkspaceWorktree(
+            from: rootProjectPath,
+            branch: worktree.branch,
+            createBranch: (worktree.baseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false),
+            baseBranch: worktree.baseBranch,
+            autoOpen: false,
+            targetPath: worktree.path
+        )
+    }
+
+    public func deleteWorkspaceWorktree(_ worktreePath: String, from rootProjectPath: String) async throws {
+        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+            throw NativeWorktreeError.invalidProject("项目不存在或已移除")
+        }
+        guard let worktree = snapshot.projects[projectIndex].worktrees.first(where: {
+            normalizePathForCompare($0.path) == normalizePathForCompare(worktreePath)
+        }) else {
+            throw NativeWorktreeError.invalidPath("worktree 不存在或已移除")
+        }
+        if worktree.status == "creating" {
+            throw NativeWorktreeError.operationInProgress("该 worktree 正在创建中，无法删除")
+        }
+
+        let result = try await Task.detached(priority: .userInitiated) {
+            try self.worktreeService.removeWorktree(
+                NativeWorktreeRemoveRequest(
+                    sourceProjectPath: rootProjectPath,
+                    worktreePath: worktree.path,
+                    branch: worktree.branch,
+                    shouldDeleteBranch: (worktree.baseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                )
+            )
+        }.value
+
+        var projects = snapshot.projects
+        projects[projectIndex].worktrees.removeAll { normalizePathForCompare($0.path) == normalizePathForCompare(worktree.path) }
+        closeWorkspaceProject(worktree.path)
+        try persistProjects(projects)
+        if let warning = result.warning, !warning.isEmpty {
+            errorMessage = warning
+        }
+    }
+
+    public func closeDetailPanel() {
+        isDetailPanelPresented = false
+    }
+
+    public func selectDirectory(_ path: String?) {
+        selectedDirectory = path
+        reconcileSelectionAfterFilterChange()
+    }
+
+    public func selectTag(_ name: String?) {
+        selectedTag = name
+        reconcileSelectionAfterFilterChange()
+    }
+
+    public func selectHeatmapDate(_ dateKey: String?) {
+        selectedHeatmapDateKey = dateKey
+        reconcileSelectionAfterFilterChange()
+    }
+
+    public func clearHeatmapDateFilter() {
+        selectedHeatmapDateKey = nil
+        reconcileSelectionAfterFilterChange()
+    }
+
+    public func updateDateFilter(_ filter: NativeDateFilter) {
+        selectedDateFilter = filter
+        reconcileSelectionAfterFilterChange()
+    }
+
+    public func updateGitFilter(_ filter: NativeGitFilter) {
+        selectedGitFilter = filter
+        reconcileSelectionAfterFilterChange()
+    }
+
+    public func updateProjectListViewMode(_ mode: ProjectListViewMode) {
+        guard snapshot.appState.settings.projectListViewMode != mode else {
+            return
+        }
+        var nextSettings = snapshot.appState.settings
+        nextSettings.projectListViewMode = mode
+        saveSettings(nextSettings)
+    }
+
+    public func dismissError() {
+        errorMessage = nil
+    }
+
+    public func addTodoItem() {
+        let text = todoDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        todoItems.append(TodoItem(text: text, done: false))
+        todoDraft = ""
+    }
+
+    public func toggleTodo(id: TodoItem.ID) {
+        guard let index = todoItems.firstIndex(where: { $0.id == id }) else { return }
+        todoItems[index].done.toggle()
+    }
+
+    public func removeTodo(id: TodoItem.ID) {
+        todoItems.removeAll { $0.id == id }
+    }
+
+    public func saveNotes() {
+        guard let project = selectedProject else { return }
+        do {
+            let value = notesDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notesDraft
+            try store.writeNotes(value, for: project.path)
+            let document = ProjectDocumentSnapshot(
+                notes: value,
+                todoItems: todoItems,
+                readmeFallback: readmeFallback
+            )
+            projectDocumentCache[project.path] = document
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func saveTodo() {
+        guard let project = selectedProject else { return }
+        do {
+            try store.writeTodoItems(todoItems, for: project.path)
+            let document = ProjectDocumentSnapshot(
+                notes: notesDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notesDraft,
+                todoItems: todoItems,
+                readmeFallback: readmeFallback
+            )
+            projectDocumentCache[project.path] = document
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func moveProjectToRecycleBin(_ path: String) {
+        do {
+            let nextPaths = Array(Set(snapshot.appState.recycleBin + [path])).sorted()
+            try store.updateRecycleBin(nextPaths)
+            snapshot.appState.recycleBin = nextPaths
+            if selectedProjectPath == path {
+                isDetailPanelPresented = false
+            }
+            reconcileSelectionAfterFilterChange()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func toggleProjectFavorite(_ path: String) {
+        var favorites = Set(snapshot.appState.favoriteProjectPaths)
+        if favorites.contains(path) {
+            favorites.remove(path)
+        } else {
+            favorites.insert(path)
+        }
+        let nextFavoritePaths = favorites.sorted()
+        do {
+            try store.updateFavoriteProjectPaths(nextFavoritePaths)
+            snapshot.appState.favoriteProjectPaths = nextFavoritePaths
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func restoreProjectFromRecycleBin(_ path: String) {
+        do {
+            let nextPaths = snapshot.appState.recycleBin.filter { $0 != path }
+            try store.updateRecycleBin(nextPaths)
+            snapshot.appState.recycleBin = nextPaths
+            reconcileSelectionAfterFilterChange()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func saveSettings(_ settings: AppSettings) {
+        do {
+            try store.updateSettings(settings)
+            snapshot.appState.settings = settings
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    public func revealSettings() {
+        isSettingsPresented = true
+    }
+
+    public func revealDashboard() {
+        isDashboardPresented = true
+    }
+
+    public func revealRecycleBin() {
+        isRecycleBinPresented = true
+    }
+
+    public func hideDashboard() {
+        isDashboardPresented = false
+    }
+
+    public func hideSettings() {
+        isSettingsPresented = false
+    }
+
+    public func hideRecycleBin() {
+        isRecycleBinPresented = false
+    }
+
+    public struct RecycleBinItem: Identifiable, Equatable {
+        public var id: String { path }
+        public var path: String
+        public var name: String
+        public var missing: Bool
+    }
+
+    private func alignSelectionAfterReload() {
+        let rootProjectPaths = Set(snapshot.projects.map(\.path))
+        openWorkspaceSessions.removeAll { session in
+            !rootProjectPaths.contains(session.rootProjectPath) || resolveDisplayProject(for: session.projectPath, rootProjectPath: session.rootProjectPath) == nil
+        }
+        if let activeWorkspaceProjectPath, !openWorkspaceProjectPaths.contains(activeWorkspaceProjectPath) {
+            self.activeWorkspaceProjectPath = openWorkspaceSessions.last?.projectPath
+        }
+        if let activeWorkspaceProjectPath {
+            selectedProjectPath = activeWorkspaceProjectPath
+            return
+        }
+        let availablePaths = Set(filteredProjects.map(\.path))
+        if let selectedProjectPath, availablePaths.contains(selectedProjectPath) {
+            return
+        }
+        selectedProjectPath = filteredProjects.first?.path ?? visibleProjects.first?.path
+    }
+
+    private func reconcileSelectionAfterFilterChange() {
+        let previousSelectedPath = selectedProjectPath
+        alignSelectionAfterReload()
+        guard selectedProjectPath != previousSelectedPath else {
+            return
+        }
+        scheduleSelectedProjectDocumentRefresh()
+    }
+
+    private func scheduleSelectedProjectDocumentRefresh() {
+        projectDocumentLoadTask?.cancel()
+        projectDocumentLoadTask = nil
+        projectDocumentLoadRevision &+= 1
+        let revision = projectDocumentLoadRevision
+
+        guard let project = selectedProject else {
+            isProjectDocumentLoading = false
+            clearDisplayedProjectDocument(preserveTodoDraft: false)
+            return
+        }
+
+        if let cached = projectDocumentCache[project.path] {
+            isProjectDocumentLoading = false
+            applyProjectDocument(cached)
+            return
+        }
+
+        isProjectDocumentLoading = true
+        clearDisplayedProjectDocument(preserveTodoDraft: true)
+
+        let projectPath = project.path
+        let loader = projectDocumentLoader
+        let backgroundTask = Task.detached(priority: .userInitiated) {
+            do {
+                return ProjectDocumentLoadOutcome.success(try loader(projectPath))
+            } catch {
+                return .failure(error.localizedDescription)
+            }
+        }
+
+        projectDocumentLoadTask = Task { @MainActor [weak self] in
+            let outcome = await withTaskCancellationHandler(operation: {
+                await backgroundTask.value
+            }, onCancel: {
+                backgroundTask.cancel()
+            })
+            guard !Task.isCancelled, let self else {
+                return
+            }
+            guard revision == self.projectDocumentLoadRevision else {
+                return
+            }
+
+            self.projectDocumentLoadTask = nil
+            self.isProjectDocumentLoading = false
+
+            switch outcome {
+            case let .success(document):
+                self.projectDocumentCache[projectPath] = document
+                self.applyProjectDocument(document)
+            case let .failure(message):
+                self.errorMessage = message
+                self.clearDisplayedProjectDocument(preserveTodoDraft: true)
+            }
+        }
+    }
+
+    private func clearDisplayedProjectDocument(preserveTodoDraft: Bool) {
+        notesDraft = ""
+        if !preserveTodoDraft {
+            todoDraft = ""
+        }
+        todoItems = []
+        readmeFallback = nil
+    }
+
+    private func applyProjectDocument(_ document: ProjectDocumentSnapshot) {
+        notesDraft = document.notes ?? ""
+        todoItems = document.todoItems
+        readmeFallback = document.readmeFallback
+    }
+
+    private func matchesAllFilters(project: Project) -> Bool {
+        if let selectedDirectory, !project.path.hasPrefix(selectedDirectory) {
+            return false
+        }
+        if let selectedHeatmapDateKey {
+            if gitCommitCount(on: selectedHeatmapDateKey, project: project) <= 0 {
+                return false
+            }
+        } else if let selectedTag, !project.tags.contains(selectedTag) {
+            return false
+        }
+        switch selectedGitFilter {
+        case .all:
+            break
+        case .gitOnly where project.gitCommits <= 0:
+            return false
+        case .nonGitOnly where project.gitCommits > 0:
+            return false
+        default:
+            break
+        }
+        if !matchesDateFilter(project: project) {
+            return false
+        }
+
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return true
+        }
+        return project.name.lowercased().contains(query)
+            || project.path.lowercased().contains(query)
+            || project.tags.contains(where: { $0.lowercased().contains(query) })
+            || (project.gitLastCommitMessage?.lowercased().contains(query) ?? false)
+    }
+
+    private func matchesDateFilter(project: Project) -> Bool {
+        guard selectedDateFilter != .all else {
+            return true
+        }
+        guard let date = swiftDateToDate(project.mtime) else {
+            return false
+        }
+        let now = Date()
+        let interval: TimeInterval = selectedDateFilter == .lastDay ? 24 * 60 * 60 : 7 * 24 * 60 * 60
+        return now.timeIntervalSince(date) <= interval
+    }
+
+    public func gitDashboardSummary(for range: GitDashboardRange) -> GitDashboardSummary {
+        buildGitDashboardSummary(projects: visibleProjects, tagCount: snapshot.appState.tags.count, range: range)
+    }
+
+    public func gitDashboardDailyActivities(for range: GitDashboardRange) -> [GitDashboardDailyActivity] {
+        buildGitDashboardDailyActivities(projects: visibleProjects, range: range)
+    }
+
+    public func gitDashboardProjectActivities(for range: GitDashboardRange) -> [GitDashboardProjectActivity] {
+        buildGitDashboardProjectActivities(projects: visibleProjects, range: range)
+    }
+
+    public func gitDashboardHeatmapDays(for range: GitDashboardRange) -> [GitHeatmapDay] {
+        buildGitHeatmapDays(projects: visibleProjects, days: range.days)
+    }
+
+    private nonisolated static func runTerminalCommand(executable: String, arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            throw WorkspaceTerminalCommandError.launchFailed("打开 Terminal 失败，退出码 \(process.terminationStatus)。")
+        }
+    }
+
+    private func openWorkspaceSessionIfNeeded(for path: String, rootProjectPath: String) {
+        guard !openWorkspaceProjectPaths.contains(path) else {
+            return
+        }
+        openWorkspaceSessions.append(
+            OpenWorkspaceSessionState(
+                projectPath: path,
+                rootProjectPath: rootProjectPath,
+                controller: GhosttyWorkspaceController(projectPath: path)
+            )
+        )
+    }
+
+    private func workspaceController(for projectPath: String? = nil) -> GhosttyWorkspaceController? {
+        let targetProjectPath = projectPath ?? activeWorkspaceProjectPath
+        guard let targetProjectPath else {
+            return nil
+        }
+        return openWorkspaceSessions.first(where: { $0.projectPath == targetProjectPath })?.controller
+    }
+
+    private func resolveDisplayProject(for path: String, rootProjectPath: String? = nil) -> Project? {
+        if let project = snapshot.projects.first(where: { $0.path == path }) {
+            return project
+        }
+
+        let rootProject: Project?
+        if let rootProjectPath {
+            rootProject = snapshot.projects.first(where: { $0.path == rootProjectPath })
+        } else {
+            rootProject = snapshot.projects.first(where: { project in
+                project.worktrees.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(path) })
+            })
+        }
+
+        guard let rootProject,
+              let worktree = rootProject.worktrees.first(where: { normalizePathForCompare($0.path) == normalizePathForCompare(path) })
+        else {
+            return nil
+        }
+        return buildWorktreeVirtualProject(sourceProject: rootProject, worktree: worktree)
+    }
+
+    private func persistProjects(_ projects: [Project]) throws {
+        try store.updateProjects(projects)
+        snapshot.projects = projects
+        alignSelectionAfterReload()
+        scheduleSelectedProjectDocumentRefresh()
+    }
+
+    private func applyWorktreeProgress(_ progress: NativeWorktreeProgress, rootProjectPath: String) {
+        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+            return
+        }
+        let now = swiftDateFromDate(Date())
+        let current = snapshot.projects[projectIndex].worktrees.first(where: {
+            normalizePathForCompare($0.path) == normalizePathForCompare(progress.worktreePath)
+        })
+        let nextWorktree = ProjectWorktree(
+            id: current?.id ?? createWorktreeProjectID(path: progress.worktreePath),
+            name: current?.name ?? resolveWorktreeName(progress.worktreePath),
+            path: progress.worktreePath,
+            branch: progress.branch,
+            baseBranch: current?.baseBranch ?? progress.baseBranch,
+            inheritConfig: current?.inheritConfig ?? true,
+            created: current?.created ?? now,
+            status: progress.step == .ready ? "ready" : progress.step == .failed ? "failed" : "creating",
+            initStep: progress.step.rawValue,
+            initMessage: progress.message,
+            initError: progress.error,
+            initJobId: current?.initJobId,
+            updatedAt: now
+        )
+        var projects = snapshot.projects
+        upsertWorktree(&projects[projectIndex].worktrees, worktree: nextWorktree)
+        try? persistProjects(projects)
+        worktreeInteractionState = WorktreeInteractionState(
+            rootProjectPath: rootProjectPath,
+            branch: progress.branch,
+            baseBranch: progress.baseBranch,
+            worktreePath: progress.worktreePath,
+            step: progress.step,
+            message: progress.message
+        )
+    }
+
+    private func finishCreateWorkspaceWorktree(
+        _ result: NativeWorktreeCreateResult,
+        rootProjectPath: String,
+        autoOpen: Bool
+    ) {
+        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+            worktreeInteractionState = nil
+            return
+        }
+
+        let now = swiftDateFromDate(Date())
+        let current = snapshot.projects[projectIndex].worktrees.first(where: {
+            normalizePathForCompare($0.path) == normalizePathForCompare(result.worktreePath)
+        })
+        let readyWorktree = ProjectWorktree(
+            id: current?.id ?? createWorktreeProjectID(path: result.worktreePath),
+            name: current?.name ?? resolveWorktreeName(result.worktreePath),
+            path: result.worktreePath,
+            branch: result.branch,
+            baseBranch: current?.baseBranch ?? result.baseBranch,
+            inheritConfig: current?.inheritConfig ?? true,
+            created: current?.created ?? now,
+            status: "ready",
+            initStep: NativeWorktreeInitStep.ready.rawValue,
+            initMessage: result.warning == nil ? "创建完成" : "创建完成（环境初始化存在告警）",
+            initError: result.warning,
+            initJobId: current?.initJobId,
+            updatedAt: now
+        )
+        var projects = snapshot.projects
+        upsertWorktree(&projects[projectIndex].worktrees, worktree: readyWorktree)
+        try? persistProjects(projects)
+        worktreeInteractionState = nil
+
+        if autoOpen {
+            openWorkspaceWorktree(result.worktreePath, from: rootProjectPath)
+        }
+        if let warning = result.warning, !warning.isEmpty {
+            errorMessage = warning
+        }
+    }
+
+    private func markWorktreeAsFailed(worktreePath: String, rootProjectPath: String, errorMessage: String) {
+        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+            return
+        }
+        let now = swiftDateFromDate(Date())
+        guard let current = snapshot.projects[projectIndex].worktrees.first(where: {
+            normalizePathForCompare($0.path) == normalizePathForCompare(worktreePath)
+        }) else {
+            return
+        }
+        let failedWorktree = ProjectWorktree(
+            id: current.id,
+            name: current.name,
+            path: current.path,
+            branch: current.branch,
+            baseBranch: current.baseBranch,
+            inheritConfig: current.inheritConfig,
+            created: current.created,
+            status: "failed",
+            initStep: NativeWorktreeInitStep.failed.rawValue,
+            initMessage: errorMessage,
+            initError: errorMessage,
+            initJobId: current.initJobId,
+            updatedAt: now
+        )
+        var projects = snapshot.projects
+        upsertWorktree(&projects[projectIndex].worktrees, worktree: failedWorktree)
+        try? persistProjects(projects)
+    }
+
+    private func upsertWorktree(_ worktrees: inout [ProjectWorktree], worktree: ProjectWorktree) {
+        if let index = worktrees.firstIndex(where: { normalizePathForCompare($0.path) == normalizePathForCompare(worktree.path) }) {
+            worktrees[index] = worktree
+        } else {
+            worktrees.append(worktree)
+            worktrees.sort { $0.path < $1.path }
+        }
+    }
+}
+
+enum WorkspaceTerminalCommandError: LocalizedError {
+    case noActiveWorkspace
+    case launchFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noActiveWorkspace:
+            return "当前没有可打开的工作区。"
+        case let .launchFailed(message):
+            return message
+        }
+    }
+}
+
+private enum ProjectDocumentLoadOutcome: Sendable {
+    case success(ProjectDocumentSnapshot)
+    case failure(String)
+}
+
+private func loadProjectDocumentFromDisk(_ projectPath: String) throws -> ProjectDocumentSnapshot {
+    try LegacyCompatStore().loadProjectDocument(at: projectPath)
+}
+
+private func normalizePathForCompare(_ path: String) -> String {
+    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return ""
+    }
+    var normalized = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+        .replacingOccurrences(of: "\\", with: "/")
+    while normalized.count > 1 && normalized.hasSuffix("/") {
+        normalized.removeLast()
+    }
+    return normalized
+}
+
+private func createWorktreeProjectID(path: String) -> String {
+    "worktree:\(path)"
+}
+
+private func resolveWorktreeName(_ path: String) -> String {
+    URL(fileURLWithPath: path).lastPathComponent
+}
+
+private func buildReadyWorktree(path: String, branch: String, now: SwiftDate) -> ProjectWorktree {
+    ProjectWorktree(
+        id: createWorktreeProjectID(path: path),
+        name: resolveWorktreeName(path),
+        path: path,
+        branch: branch,
+        inheritConfig: true,
+        created: now,
+        status: "ready",
+        initStep: NativeWorktreeInitStep.ready.rawValue,
+        initMessage: "已添加现有 worktree",
+        initError: nil,
+        initJobId: nil,
+        updatedAt: now
+    )
+}
+
+private func buildWorktreeVirtualProject(sourceProject: Project, worktree: ProjectWorktree) -> Project {
+    let now = swiftDateFromDate(Date())
+    return Project(
+        id: createWorktreeProjectID(path: worktree.path),
+        name: worktree.name,
+        path: worktree.path,
+        tags: sourceProject.tags,
+        scripts: sourceProject.scripts,
+        worktrees: [],
+        mtime: sourceProject.mtime,
+        size: sourceProject.size,
+        checksum: "worktree:\(worktree.path)",
+        gitCommits: sourceProject.gitCommits,
+        gitLastCommit: sourceProject.gitLastCommit,
+        gitLastCommitMessage: sourceProject.gitLastCommitMessage,
+        gitDaily: sourceProject.gitDaily,
+        created: worktree.created,
+        checked: now
+    )
+}
+
+private func buildSyncedWorktrees(existingWorktrees: [ProjectWorktree], gitWorktrees: [NativeGitWorktree]) -> [ProjectWorktree] {
+    let existingByPath = Dictionary(uniqueKeysWithValues: existingWorktrees.map { (normalizePathForCompare($0.path), $0) })
+    let now = swiftDateFromDate(Date())
+    return gitWorktrees
+        .map { item -> ProjectWorktree in
+            let existing = existingByPath[normalizePathForCompare(item.path)]
+            return ProjectWorktree(
+                id: existing?.id ?? createWorktreeProjectID(path: item.path),
+                name: existing?.name ?? resolveWorktreeName(item.path),
+                path: item.path,
+                branch: item.branch,
+                baseBranch: existing?.baseBranch,
+                inheritConfig: existing?.inheritConfig ?? true,
+                created: existing?.created ?? now,
+                status: existing?.status,
+                initStep: existing?.initStep,
+                initMessage: existing?.initMessage,
+                initError: existing?.initError,
+                initJobId: existing?.initJobId,
+                updatedAt: existing?.updatedAt
+            )
+        }
+        .sorted { $0.path < $1.path }
+}
+
+private func swiftDateFromDate(_ date: Date) -> SwiftDate {
+    date.timeIntervalSinceReferenceDate
+}
+
+private func hexColor(for color: ColorData) -> String {
+    let r = Int(max(0, min(255, round(color.r * 255))))
+    let g = Int(max(0, min(255, round(color.g * 255))))
+    let b = Int(max(0, min(255, round(color.b * 255))))
+    return String(format: "#%02X%02X%02X", r, g, b)
+}

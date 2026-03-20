@@ -1,3 +1,22 @@
+- 当用户要的是“Swift 原生版本地构建产物目录”，不要默认把辅助脚本做成 `/Applications` 安装链；应先区分“只生成 `.app` 并打开输出目录”和“安装到系统 Applications”两种目标，前者只需要稳定输出目录、bundle 签名和 `open` 目录即可。
+- 参考 supacode 迁 split/render 细节时，先确认 split tree 叶子里持有的到底是稳定终端 NSView 还是只是 pane 数据；若真实 Ghostty surface owner 在 tree 外部 store，就不要再给 root / split subtree 挂 structural-identity `.id(...)` 强制 remount，否则单 pane -> 双 pane 时很容易把已有 pane 内容一起重建掉。
+- 对“当前 pane 应该保持焦点”这类 UI 语义，不能直接把持续态 `preferredFocus == true` 映射成每次刷新都执行的 `requestFocus()`；焦点同步应该按 **false -> true** 的边沿触发建模，否则分屏拖动、tab 重绘这类普通更新也会不断重放副作用，表现成闪烁。
+- 对 SwiftUI + Ghostty 的原生 workspace，不能把 `requestFocus()` 这类强副作用放进 `updateNSView` / 通用状态同步链；分屏 live resize 会持续触发 view update，若每帧都重复抢 first responder，用户就会感知为拖动闪烁。稳定做法是把“是否允许抢焦点”收口成独立策略，并在拖拽事件进行中显式跳过。
+- 原生 Swift 首页如果把筛选点击直接绑到 `@MainActor` 上的同步文档读取与整份 snapshot reload，会立刻放大点击卡顿；后续同类性能问题优先先查“筛选是否重复读项目文档”“收藏/设置保存是否又触发 `load()` 全量重载”。
+- 当 `@MainActor` ViewModel 需要在选中项目后读取磁盘文档时，不能继续同步 `read -> decode -> apply` 一把梭；应优先做成“命中缓存立即展示，未命中则先切选中态/打开抽屉，再后台异步加载，并用 revision/token 挡住旧请求回写”，否则快速切项目时很容易出现点击闷顿或旧项目内容串屏。
+- 在 macOS SwiftUI 里，顶部纯图标 `Button` 即使没有业务 active 态，也可能因为进入了窗口初始焦点链而显示出蓝色 focus ring；如果产品要复刻 Web/Tauri 风格的“静态图标按钮”，需要显式决定它是否参与焦点（例如 `focusable(false)`），不能把系统焦点高亮误当成选中态。
+- 做原生 Dashboard / heatmap 这类信息密度高的面板时，不能先按“大屏设计稿”写死 `minWidth`、固定列数和固定并排布局；sheet/弹窗实际宽度一旦比预期小，就会直接出现左侧裁切、卡片看似空白、筛选按钮缺一截。应优先做成按实际宽度切换列数/堆叠方向的响应式布局，并让热力图月份标签与网格共享同一条横向滚动坐标系。
+- 在 macOS 原生壳里，只要按钮会触发 `git log` / 扫描目录 / 读写大 JSON 这类重任务，就不能继续直接从 SwiftUI 按钮同步调用 `@MainActor` ViewModel 方法；哪怕 UI 上有“更新中...”文案，也会把整个窗口卡死。稳定做法是把重聚合放到 `Task.detached` 等后台任务里，再回主线程做状态提交。
+- attached sheet 在 macOS 上也是一扇真实窗口；如果用户希望它“默认更宽一点，还能手动拖大拖小”，就要显式配置该 window 的 `minSize`、`initialSize` 和 `.resizable`，不能只指望 SwiftUI 根据内容自动推导出合适的窗口尺寸。
+- 对“更新统计”这类会遍历大量 Git 仓库的长任务，仅仅改成后台执行还不够；如果没有阶段/进度提示，用户仍会觉得“按钮一直在转，不知道在干嘛”。稳定做法是同时补：进度文案、合理并发度，以及单仓超时保护，避免少数异常仓库把整轮刷新无限拖住。
+- 对 Swift 原生预览（`swift run` / Xcode 调试）这类启动链，不能默认相信 `WindowGroup` 会自动把应用提升为 active/frontmost；如果窗口能看到但输入框普遍拿不到焦点，优先先查“当前进程是否真的成为 key/active app”，并把激活逻辑统一收口在窗口挂载层，而不是去给每个 `TextField` 分散补焦点补丁。
+- 在 AppKit 内嵌 Ghostty 时，宿主外观不要再硬编码另一套终端主题；如果用户要求“和 Ghostty 配置保持一致”，应直接把 `background/background-opacity` 等基础样式从 Ghostty config 读取出来，并在 config/color change action 到来时同步更新宿主 chrome。
+- 对 Ghostty / AppKit 的鼠标事件接线，不能只把 `convert(event.locationInWindow, from: nil)` 的局部坐标原样透传给底层；要先核对 Ghostty 期望的坐标原点。像文本选择这类行为若看似“事件都到了却选不中”，优先检查 **Y 轴是否需要按 `bounds.height - point.y` 翻转**，并把坐标映射抽成独立 helper 锁回归。
+- 对 Ghostty 这类原生终端，`keyDown` 不能简化成“拿 `event.characters` 直接发给底层”；否则 `interpretKeyEvents` / `insertText` 会和手工 text 发送双写，出现 `ls -> lsls` 一类重复回显。稳定做法是 translation event + `interpretKeyEvents` + `insertText` accumulator，再决定发 key 还是 text。
+- `Ctrl+D` / shell exit 这类 close-surface 场景不能只把 pane 留在失败态；收到进程关闭回调后，上层宿主必须显式 `tearDown()` + `shutdown()` 并切到 exited UI，保证 workspace 仍可继续操作。
+- 对 Ghostty / AppKit 终端输入链，不能只用“直接调 `keyDown` 的 ASCII smoke”来判断输入已经稳定；真实用户桌面输入常常还会经过 `NSTextInputClient` / `setMarkedText` / preedit。若这层没接，中文输入法或输入法英文态都可能把 `p -> pw -> pwd` 这类预编辑中间态错误提交成重复文本。
+- 当 Ghostty / AppKit 终端的复杂度已经同时碰到 `keyDown`、`NSTextInputClient`、preedit、keybinding 和 runtime observer 时，不要继续在宿主 host 文件里补丁式修复；应尽快收敛成 dedicated `GhosttySurfaceView.swift`，让 SwiftUI host、Ghostty runtime 和 AppKit 输入协议各守边界。
+- 涉及原生终端 smoke 时，不要把断言直接绑定到 `pwd` 输出 cwd、prompt 主题或其他 shell 展示细节；更稳的做法是锁住“输入只回显一次、没有 `ppwd/pwdd/pwdpwd/command not found` 这类伪影”这类稳定不变量。
 # Lessons Learned
 
 - 当终端侧新增“运行配置”能力时，必须先对齐详情面板已有的配置模型与交互（通用脚本插入、模板参数快照、校验逻辑），避免出现两套不一致的配置语义。
@@ -62,3 +81,28 @@
 
 - 只要产品要求“点击系统通知后返回应用并跳到具体工作区”，就不能继续用 `osascript display notification` 这类无回调的代发方案；它会把通知来源显示成“脚本编辑器”，点击后也只会打开 Script Editor，无法保留 DevHaven 的导航上下文。
 - 以后处理桌面端通知时，必须同时检查两件事：**通知归属是不是应用本体**、**点击事件能不能拿回 `projectPath/workspaceId/paneId` 这类上下文**。只解决“能弹出来”而不解决“点了去哪”，等同于通知链路没闭环。
+
+## 2026-03-19 macOS 原生 UI 复刻 Tauri 主界面教训
+
+- 当用户明确反馈“原生版 UI 差距太大，需要复刻 Tauri 版本”时，不能继续沿用系统默认 `NavigationSplitView` 三栏范式做小修小补；应立即回到现有 React 入口与真实截图，按 **左侧 Sidebar + 中央 MainContent + 右侧 overlay Detail Drawer** 的信息架构重建原生主布局。
+- 以后做原生迁移时，如果用户已经明确选择“尽量保留现有信息架构”，就不要擅自把界面改造成更像系统样板 app 的布局；先追平现有产品结构，再谈更原生的局部优化。
+- 在 SwiftUI + Ghostty 的原生 workspace 里，标签页切换不能靠“只渲染当前选中 tab”实现；如果非选中 tab 被卸载，`GhosttySurfaceHost.onDisappear -> releaseSurface()` 会把后台终端直接销毁。稳定做法是保活所有 tab，只把非选中项做透明隐藏并禁交互。
+- 在 SwiftUI + Ghostty 的原生 workspace 里，项目切换和标签页切换属于同一类生命周期问题；如果通过“只渲染当前 active project/workspace”来切换项目，`WorkspaceHostView` 的 `onDisappear` 一样会把后台 Ghostty surface 提前释放。稳定做法是保活所有已打开项目对应的 workspace host，只把非激活项隐藏并禁交互。
+- 当用户明确要求“进入 workspace 后不要再看到目录栏，终端区直接显示终端”时，不能继续把项目标题、路径、统计 chip、pane 工具条塞回终端主区；这些信息若仍有必要，应该留在 workspace 壳层或后续单独入口，终端区默认只保留 Ghostty 本体。
+- workspace tab 标题如果是 topology 真相的一部分，就不要再让 shell/renderer 的 `title` 或 `pwd` 事件反向覆盖它；像“终端1/2/3/4”这种稳定编号，应由 workspace 自己生成并保持，避免 UI 很快又退化成路径或 prompt 文案。
+- 当用户明确要求 `⌘D` 这类 IDE 风格快捷键时，先确认这条命令到底应该由 Ghostty binding 负责，还是由应用壳层 command menu 负责；如果当前原生壳压根没接线，就直接在 app/workspace 层补入口，不要误把“没实现”当成底层终端 bug。
+- 对“支持同时打开多个项目”这类需求，不能只把底层状态模型做成 `openWorkspaceSessions` 就算完成；还必须在 workspace 壳里提供**继续打开其他项目的真实入口**，否则用户仍要先退出当前 workspace 才能打开第二个项目，产品语义并没有真正闭环。
+- 对 workspace 的“返回上一页”操作，不能等价实现成“关闭所有已打开会话”；返回只是暂时离开 workspace 视图，不应清空 `openWorkspaceSessions`。否则用户回到主列表再双击进入时，会误以为原本已打开的项目被系统吞掉了。
+- 当前 `xctest` 宿主下，`ghostty_surface_new(...)` 可能直接失败并返回 nil；后续写 Ghostty smoke 时，必须先区分“surface 根本没创建成功”和“已创建但交互回归”，否则很容易把 GUI 宿主限制误判成输入/分屏逻辑 bug。
+
+- 当 Swift 原生 workspace 已经进入多项目 + 多 tab/pane 阶段时，不要再让 `NativeAppViewModel` 直接持有和改写 pane tree；应尽快抽成 `GhosttyWorkspaceController` 这类 dedicated owner，只让 ViewModel 管项目级导航，终端布局层只对外暴露 projection。
+- 在 SwiftUI + Ghostty 终端里，**pane view 的 `onDisappear` 不能直接等价为“pane 已关闭”**；split/tree 重排、tab 切换、项目切换都可能触发 view 生命周期变化。稳定做法是引入 `WorkspaceSurfaceRegistry` 这类按 pane ID 持有 host model 的 owner，只在 pane 真正从 topology 中移除时才释放 surface。
+- 当用户明确收口为“向成熟的 supacode 靠近，不需要自己再发明一套”时，不要继续在现有 split/render/focus 链上补丁式修修补补；应直接迁移 supacode 已稳定的 terminal 内核主线，只保留 DevHaven 自己的外层项目壳与业务语义。
+- 当目标明确是把 SwiftUI + Ghostty 的分屏拖动链向 supacode 靠拢时，只把 `updateNSView` 改成 no-op 往往还不够；还要继续把 raw surface 从 SwiftUI representable 根节点后面隔一层稳定容器，并把 `focusDidChange` / `moveFocus` 这类焦点同步收口成 surface 自己的职责，避免布局链继续直接碰 raw surface。
+- 如果 split drag 在完成 identity 稳定化、representable no-op、focus transition 和稳定容器后仍然闪，下一步要优先对照 supacode 的 **surface resize 节流**，而不是继续堆新的焦点条件：`ghostty_surface_set_size(...)` 对 live resize 很敏感，必须至少做到“相同 backing size 不重复 resize、极小网格先跳过 resize”，否则终端仍会在 divider 拖动时闪烁。
+- 如果 split drag 在完成 resize 节流后依然明显闪，接下来优先补的不是更多 `preferredFocus` 条件，而是 **window activity + surface occlusion + scroll wrapper** 这条 supacode 主线：只靠 SwiftUI 的 `opacity/allowsHitTesting` 并不能让 Ghostty surface 真正进入不可见态，必须显式同步 `setOcclusion(...)`，并把 representable 根节点换成和 supacode 一样的 `GhosttySurfaceScrollView`。
+- 当用户拿 **Ghostty / Supacode** 作为“为什么别的快、这里慢”的对照时，不能只停在“你的 shell 很重”这种单点解释；必须继续比较 **宿主的终端 owner、state reuse、首屏呈现边界**，先分清“首次冷启动慢”还是“已有终端复用快”，再决定是否需要改产品主线。
+- 做 Swift 原生 terminal owner 迁移时，先核对 **SwiftPM target 边界**；像 `GhosttySurfaceHostModel` 这类明显属于 `DevHavenApp` 的类型，不能为了“看起来更底层”就塞回 `DevHavenCore`，否则很快会撞上依赖方向错误，被迫二次重规划。
+- 当 Swift 原生 workspace 需要把 worktree 当成一等终端 session 打开时，不能继续假设 `activeWorkspaceProjectPath` / `openWorkspaceProjects` 只会命中 `snapshot.projects` 里的根项目；必须显式区分“根项目路径”和“实际 session 路径”，并为 worktree 构造稳定的虚拟项目投影，否则左侧层级列表和右侧 Ghostty host 很快就会因为找不到 `Project` 而断链。
+- 迁移 Tauri 的 worktree 功能到 Swift 原生时，不要一上来硬搬 Rust 的后台队列 / 事件总线；更稳的第一步是先把 Git 命令、`.devhaven` 复制、`setup` 命令和 `Project.worktrees` 持久化收口成原生 service，再在 ViewModel 层补一层全局 progress state 给 UI 消费。
+- 对“父项目下嵌套 worktree 子项”的 workspace 左侧列表，关闭父项目不能只删根 session；还要同步清掉所有 `rootProjectPath` 指向它的 worktree session，否则右侧会留下孤儿 Ghostty host，而左侧层级又已经不存在对应父节点。
