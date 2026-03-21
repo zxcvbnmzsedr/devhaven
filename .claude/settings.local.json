@@ -55,7 +55,8 @@
       "Bash(python3:*)",
       "Bash(npx eslint:*)",
       "mcp__serena__find_file",
-      "mcp__open-websearch__search"
+      "mcp__open-websearch__search",
+      "mcp__serena__read_memory"
     ]
   }
 }
