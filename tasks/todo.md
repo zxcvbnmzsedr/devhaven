@@ -1,5 +1,26 @@
 # 本次任务清单
 
+## 删除工作区侧栏项目卡片上的 worktree 数量徽标（2026-03-21）
+
+- [x] 记录最小设计与实施计划
+- [x] 先补失败测试，锁定项目卡片不再显示 worktree 数量
+- [x] 以最小改动删除数量徽标并保留 worktree 列表
+- [x] 运行定向验证并追加 Review
+
+## Review（删除工作区侧栏项目卡片上的 worktree 数量徽标）
+
+- 直接原因：`WorkspaceProjectListView.swift` 里的私有 `ProjectGroupView.projectCard` 之前会在项目卡片右侧用 `group.worktrees.count` 渲染一个数量徽标，因此用户在 `DevHaven` 项目旁会看到 `1`。
+- 设计层诱因：这是一个局部 UI 信息密度问题，不是数据流或状态分裂问题。`worktree` 数量和下方列表已经同时表达了相同信息，造成冗余展示；未发现明显系统设计缺陷。
+- 当前修复：
+  - 删除 `ProjectGroupView.projectCard` 中基于 `group.worktrees.count` 的数量徽标视图；
+  - 保留 `ForEach(group.worktrees)` 列表、hover 操作按钮、卡片样式和交互不变；
+  - 新增 `WorkspaceProjectListViewTests`，用源码级回归测试锁定“列表仍在，但数量徽标逻辑已删除”。
+- 长期建议：后续如果还要继续收敛侧栏信息密度，优先先检查“同一信息是否已经在下一级列表或 hover 操作中表达”，避免再叠加纯统计型徽标。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter WorkspaceProjectListViewTests/testProjectCardDoesNotRenderWorktreeCountBadge` → 修复前失败，报 `项目卡片不应再使用 group.worktrees.count 渲染数量徽标`。
+  - 定向绿灯：`swift test --package-path macos --filter WorkspaceProjectListViewTests/testProjectCardDoesNotRenderWorktreeCountBadge` → 通过，`1 test, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
 ## 修复 worktree 下 ./dev 因 Ghostty vendor 缺失而启动失败（2026-03-21）
 
 - [x] 复现 worktree 下 `./dev` 的 Ghostty vendor 校验失败，并确认触发条件
