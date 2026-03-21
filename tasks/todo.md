@@ -1104,3 +1104,51 @@
 - [x] 记录待监控的 GitHub Actions run 与当前基线状态
 - [ ] 持续轮询 run 状态直到结束
 - [ ] 汇总成功/失败结论、关键步骤结果与下一步建议
+
+## 删除主界面设置左边的按钮（2026-03-21）
+
+- [x] 确认用户要删除的是主界面工具栏中设置左边的按钮，并锁定最小改动范围
+- [x] 先修改失败测试，锁定工具栏不再渲染该按钮
+- [x] 以最小改动删除 `MainContentView` 中对应按钮
+- [x] 运行定向验证并在 `tasks/todo.md` 追加 Review
+
+## Review（删除主界面设置左边的按钮）
+
+- 需求结论：按用户确认的方案 A，仅删除主界面顶部工具栏中位于“设置”左边的 `square.split.2x1` 按钮，不新增替代入口，也不调整菜单或快捷键。
+- 直接原因：该按钮当前只占用顶部操作位，用户已明确表示“用不着”，因此按最少修改原则直接移除即可。
+- 设计层诱因：未发现明显系统设计缺陷。本次更像是一次明确的 UI 收口，而不是由状态分裂或模块耦合引出的故障修复。
+- 当前修复：
+  1. 先把 `MainContentViewTests` 中对应断言改成“工具栏不再出现该按钮”，并先跑出失败测试锁定需求；
+  2. 从 `macos/Sources/DevHavenApp/MainContentView.swift` 的 `toolbar` 中删除 `toolbarIcon("square.split.2x1", action: { DetailPanelCloseAction.perform(for: viewModel) })`；
+  3. 保持仪表盘、设置、搜索、筛选与视图模式切换逻辑不变，不顺带改动详情面板关闭行为。
+- 长期建议：如果后续还要继续精简顶部工具栏，优先按“高频核心操作优先、低频动作收口到上下文入口”的原则处理，避免再把边缘操作塞回主工具栏。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter MainContentViewTests/testToolbarDoesNotExposeRedundantDetailPanelButtonNextToSettings` → 修复前失败，`XCTAssertFalse failed`，说明源码里当时仍存在该按钮；
+  - 定向绿灯：`swift test --package-path macos --filter MainContentViewTests` → 通过，`4 tests, 0 failures`；
+  - 编译验证：`swift build --package-path macos --target DevHavenApp` → 通过；
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/MainContentView.swift macos/Tests/DevHavenAppTests/MainContentViewTests.swift tasks/todo.md` → 通过。
+- 额外说明：本次按用户明确授权，直接在 `main` 分支完成这类小改动，没有创建额外 worktree。
+
+## 实现主界面“进入工作区”快捷按钮（2026-03-21）
+
+- [x] 明确本次只改主界面工具栏与 workspace 入口逻辑，不扩散到其它工作区交互
+- [x] 先补失败测试，锁定“已有 workspace 时恢复、无 workspace 时创建快速 CLI 会话”和工具栏按钮位置
+- [x] 以最小改动实现 `NativeAppViewModel` 统一入口与 `MainContentView` 新按钮
+- [x] 运行定向验证并在 `tasks/todo.md` 追加 Review
+
+## Review（实现主界面“进入工作区”快捷按钮）
+
+- 需求结论：在主界面顶部工具栏中，为设置按钮左边新增一个“进入工作区”快捷按钮；点击时若已有打开的 workspace，则优先恢复该 workspace；若当前没有任何已打开 workspace，则直接创建快速 CLI 会话。
+- 直接原因：当前主界面只有“双击项目进入工作区”这条入口；当用户只是想回到已打开的 workspace，或者临时开一个 CLI 会话时，缺少显式的全局快捷操作。
+- 设计层诱因：存在轻微的交互入口分散。workspace 的会话状态与恢复能力本来已经集中在 `NativeAppViewModel`，但主界面工具栏没有对应的统一入口，导致“状态已存在、入口却缺失”。未发现明显更大的系统设计缺陷。
+- 当前修复：
+  1. 在 `macos/Sources/DevHavenApp/MainContentView.swift` 的工具栏中新增 `terminal` 图标按钮，并固定放在设置按钮左边；
+  2. 在 `macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift` 中新增 `enterOrResumeWorkspace()`，统一收口“恢复当前活动 workspace / 恢复已打开 session / 创建快速 CLI 会话”三种进入逻辑；
+  3. 当 `activeWorkspaceProjectPath` 为空时，优先恢复当前仍指向已打开 session 的 `selectedProjectPath`，否则回退到最后一个已打开 session，再无 session 时才调用 `openQuickTerminal()`；
+  4. 在 `MainContentViewTests` 与 `NativeAppViewModelWorkspaceEntryTests` 中补充回归测试，锁定按钮位置和入口分支行为。
+- 长期建议：后续若主界面继续增加全局动作，优先把“已有状态的恢复入口”统一收口到 ViewModel 的显式 action，而不是把分支判断散落在多个 SwiftUI 视图中。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceEntryTests/testEnterOrResumeWorkspace|MainContentViewTests/testToolbarPlacesWorkspaceEntryButtonToTheLeftOfSettings'` → 修复前失败，`NativeAppViewModel` 缺少 `enterOrResumeWorkspace`，说明统一入口尚未实现；
+  - 定向绿灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceEntryTests|MainContentViewTests'` → 通过，`27 tests, 0 failures`；
+  - 编译验证：`swift build --package-path macos --target DevHavenApp` → 通过；
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/MainContentView.swift macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift macos/Tests/DevHavenAppTests/MainContentViewTests.swift macos/Tests/DevHavenCoreTests/NativeAppViewModelWorkspaceEntryTests.swift tasks/todo.md` → 通过。

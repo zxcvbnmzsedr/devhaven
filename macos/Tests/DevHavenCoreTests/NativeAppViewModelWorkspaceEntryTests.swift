@@ -251,6 +251,36 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         XCTAssertFalse(viewModel.isWorkspacePresented)
     }
 
+    func testEnterOrResumeWorkspaceRestoresLastOpenSessionAfterExit() {
+        let viewModel = makeViewModel()
+        let alpha = makeProject(id: "project-1", name: "Alpha", path: "/tmp/alpha")
+        let beta = makeProject(id: "project-2", name: "Beta", path: "/tmp/beta")
+        viewModel.snapshot.projects = [alpha, beta]
+        viewModel.enterWorkspace(alpha.path)
+        viewModel.enterWorkspace(beta.path)
+        viewModel.exitWorkspace()
+
+        viewModel.enterOrResumeWorkspace()
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [alpha.path, beta.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, beta.path)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.projectPath, beta.path)
+        XCTAssertTrue(viewModel.isWorkspacePresented)
+    }
+
+    func testEnterOrResumeWorkspaceCreatesQuickTerminalWhenNoSessionExists() {
+        let viewModel = makeViewModel()
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+
+        viewModel.enterOrResumeWorkspace()
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [homePath])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, homePath)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.projectPath, homePath)
+        XCTAssertTrue(viewModel.openWorkspaceSessions.first?.isQuickTerminal ?? false)
+        XCTAssertTrue(viewModel.isWorkspacePresented)
+    }
+
     func testSplitActiveWorkspaceRightAddsPaneToSelectedTab() {
         let viewModel = makeViewModel()
         let project = makeProject()

@@ -485,6 +485,24 @@ public final class NativeAppViewModel {
         scheduleSelectedProjectDocumentRefresh()
     }
 
+    public func enterOrResumeWorkspace() {
+        if let activeWorkspaceProjectPath,
+           openWorkspaceProjectPaths.contains(activeWorkspaceProjectPath) {
+            activateWorkspaceProject(activeWorkspaceProjectPath)
+            return
+        }
+        if let selectedProjectPath,
+           openWorkspaceProjectPaths.contains(selectedProjectPath) {
+            activateWorkspaceProject(selectedProjectPath)
+            return
+        }
+        if let fallbackProjectPath = openWorkspaceSessions.last?.projectPath {
+            activateWorkspaceProject(fallbackProjectPath)
+            return
+        }
+        openQuickTerminal()
+    }
+
     public func openQuickTerminal() {
         let homePath = FileManager.default.homeDirectoryForCurrentUser.path
         openWorkspaceSessionIfNeeded(for: homePath, rootProjectPath: homePath, isQuickTerminal: true)

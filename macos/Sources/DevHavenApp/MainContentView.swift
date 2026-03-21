@@ -48,7 +48,7 @@ struct MainContentView: View {
     private var toolbar: some View {
         HStack(spacing: 10) {
             toolbarIcon("waveform.path.ecg", action: { viewModel.revealDashboard() })
-            toolbarIcon("square.split.2x1", action: { DetailPanelCloseAction.perform(for: viewModel) })
+            toolbarIcon("terminal", action: { viewModel.enterOrResumeWorkspace() })
             toolbarIcon("gearshape", action: { viewModel.revealSettings() })
 
             HStack(spacing: 8) {
