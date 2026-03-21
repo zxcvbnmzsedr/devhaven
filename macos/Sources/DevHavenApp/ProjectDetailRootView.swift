@@ -4,6 +4,7 @@ import DevHavenCore
 
 struct ProjectDetailRootView: View {
     @Bindable var viewModel: NativeAppViewModel
+    let onClose: () -> Void
 
     var body: some View {
         if let project = viewModel.selectedProject {
@@ -21,7 +22,7 @@ struct ProjectDetailRootView: View {
                         }
                         Spacer()
                         Button {
-                            viewModel.closeDetailPanel()
+                            onClose()
                         } label: {
                             Image(systemName: "xmark")
                                 .font(.caption.weight(.bold))
@@ -188,7 +189,8 @@ struct ProjectDetailRootView: View {
 
                     section("Markdown") {
                         if let readme = viewModel.readmeFallback {
-                            Text(readme.content)
+                            let markdownPresentation = ProjectDetailMarkdownPresentationPolicy.resolve(readme: readme)
+                            Text(markdownPresentation.previewContent)
                                 .font(.caption)
                                 .foregroundStyle(NativeTheme.textPrimary)
                                 .textSelection(.enabled)
@@ -196,6 +198,11 @@ struct ProjectDetailRootView: View {
                                 .padding(12)
                                 .background(Color.white.opacity(0.04))
                                 .clipShape(.rect(cornerRadius: 10))
+                            if markdownPresentation.isTruncated {
+                                Text("完整 README 仍会保留在“用 README 初始化”路径里，详情面板只显示轻量预览，避免打开/关闭时一次性排版整份长文档。")
+                                    .font(.caption2)
+                                    .foregroundStyle(NativeTheme.textSecondary)
+                            }
                         } else {
                             Text("未发现备注，也未找到 README.md 作为回退参考")
                                 .font(.caption)

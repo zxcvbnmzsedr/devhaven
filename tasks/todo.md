@@ -1,5 +1,78 @@
 # 本次任务清单
 
+## 整理剩余未提交改动并规划下一次 commit（2026-03-21）
+
+- [x] 收集当前剩余未提交/未跟踪文件及 diff 摘要
+- [x] 按功能主题判断这些改动是否闭环、是否具备测试/文档配套
+- [x] 给出推荐的下一次 commit 拆分方案、顺序与注意事项
+
+## Review（整理剩余未提交改动并规划下一次 commit）
+
+- 当前剩余未提交改动可分成 4 类：
+  1. **项目详情面板关闭/打开卡顿修复主线**：
+     - `macos/Sources/DevHavenApp/AppRootView.swift`
+     - `macos/Sources/DevHavenApp/MainContentView.swift`
+     - `macos/Sources/DevHavenApp/ProjectDetailRootView.swift`
+     - `macos/Sources/DevHavenApp/DetailPanelCloseAction.swift`
+     - `macos/Sources/DevHavenApp/ProjectDetailMarkdownPresentationPolicy.swift`
+     - `macos/Tests/DevHavenAppTests/ProjectDetailPanelCloseActionTests.swift`
+     - `macos/Tests/DevHavenAppTests/ProjectDetailRootViewTests.swift`
+     - `docs/plans/2026-03-21-close-project-detail-panel-freeze.md`
+     - `macos/Tests/DevHavenAppTests/MainContentViewTests.swift`（其中只有一条 close helper 相关断言，文件内还混有其它主题测试）
+  2. **已完成功能的补录计划文档**：
+     - `docs/plans/2026-03-21-direct-projects-virtual-directory-design.md`
+     - `docs/plans/2026-03-21-direct-projects-virtual-directory.md`
+     - `docs/plans/2026-03-21-recycle-bin-restore-design.md`
+     - `docs/plans/2026-03-21-recycle-bin-restore.md`
+  3. **尚未实现、只有计划的功能**：
+     - `docs/plans/2026-03-21-refresh-project-freeze.md`
+  4. **本地环境文件**：
+     - `.claude/settings.local.json`
+- 推荐拆分：
+  - **下一次功能 commit（推荐优先）**：提交“项目详情面板关闭/打开卡顿修复主线”。如果想要历史最干净，可进一步拆成：
+    1. `fix(detail-panel): 关闭前释放 responder`
+    2. `perf(detail-panel): 详情面板只预览 README`
+    但若希望一次性收口用户体感上的“详情面板转圈/卡顿”，也可以合并成一个 detail-panel commit。
+  - **之后的 docs-only commit**：单独提交 direct projects / recycle bin 两组补录计划文档，不要和运行时代码混在一起。
+  - **暂缓提交**：`docs/plans/2026-03-21-refresh-project-freeze.md`，因为当前没有对应实现与验证证据，单独提交容易让仓库里出现“计划先落地但代码未开始”的悬空状态。
+  - **不要提交**：`.claude/settings.local.json`，这是本地环境配置。
+- 注意事项：
+  - `MainContentViewTests.swift` 目前把“回收站恢复提示”“直连项目移除入口”“detail panel close helper”三类断言混在同一个新文件里；若要让下一次 detail-panel commit 边界更清晰，最好先把 close helper 相关测试拆到独立文件，再提交。
+  - `tasks/todo.md` 当前这部分改动只是为了记录整理结论，本身不建议单独成 commit；应跟随你最终选定的功能/文档提交一起落地。
+
+## 提交项目详情面板卡顿修复主线（2026-03-21）
+
+- [x] 明确本次 commit 只包含 detail panel close / README 轻量预览主线，排除 `.claude/settings.local.json` 与未实现计划文档
+- [x] 补齐 `ProjectDetailPanelCloseActionTests` 的测试前置条件，避免 `AppRootView.task` 自动 `load()` 把手工注入的测试状态冲掉
+- [x] 运行本次提交范围对应的验证命令
+- [x] 执行 git commit
+
+## Review（提交项目详情面板卡顿修复主线）
+
+- 提交主题：`fix(detail-panel): avoid project detail panel freeze`
+- 提交范围：
+  - `macos/Sources/DevHavenApp/AppRootView.swift`
+  - `macos/Sources/DevHavenApp/MainContentView.swift`
+  - `macos/Sources/DevHavenApp/ProjectDetailRootView.swift`
+  - `macos/Sources/DevHavenApp/DetailPanelCloseAction.swift`
+  - `macos/Sources/DevHavenApp/ProjectDetailMarkdownPresentationPolicy.swift`
+  - `macos/Tests/DevHavenAppTests/ProjectDetailPanelCloseActionTests.swift`
+  - `macos/Tests/DevHavenAppTests/ProjectDetailRootViewTests.swift`
+  - `docs/plans/2026-03-21-close-project-detail-panel-freeze.md`
+  - `tasks/todo.md`
+- 本次额外收口：
+  - `ProjectDetailPanelCloseActionTests.swift` 里显式设置 `viewModel.hasLoadedInitialData = true`，因为 `AppRootView` 的 `.task` 会在首次挂载时自动调用 `load()`；若不先阻止这条启动链，测试里手工注入的项目/详情状态会被空 store 快照覆盖，导致根本渲染不出详情面板内的 `TextEditor`。
+- 提交时明确排除：
+  - `.claude/settings.local.json`：本地环境配置
+  - `docs/plans/2026-03-21-direct-projects-virtual-directory*`
+  - `docs/plans/2026-03-21-recycle-bin-restore*`
+  - `docs/plans/2026-03-21-refresh-project-freeze.md`
+  - `macos/Tests/DevHavenAppTests/MainContentViewTests.swift`：仍混有其它主题断言，留待对应功能提交时单独收口
+- 提交前验证证据：
+  - `swift test --package-path macos --filter 'ProjectDetailPanelCloseActionTests|ProjectDetailRootViewTests'` → 通过，`2 tests, 0 failures`
+  - `swift build --package-path macos --target DevHavenApp` → 通过
+  - `git diff --check -- macos/Sources/DevHavenApp/AppRootView.swift macos/Sources/DevHavenApp/MainContentView.swift macos/Sources/DevHavenApp/ProjectDetailRootView.swift macos/Sources/DevHavenApp/DetailPanelCloseAction.swift macos/Sources/DevHavenApp/ProjectDetailMarkdownPresentationPolicy.swift macos/Tests/DevHavenAppTests/ProjectDetailPanelCloseActionTests.swift macos/Tests/DevHavenAppTests/ProjectDetailRootViewTests.swift docs/plans/2026-03-21-close-project-detail-panel-freeze.md tasks/todo.md` → 通过
+
 ## 提交 quick terminal 会话列表改动（2026-03-21）
 
 - [x] 确认本次只提交 quick terminal 会话列表相关文件，不混入其他进行中的工作区改动

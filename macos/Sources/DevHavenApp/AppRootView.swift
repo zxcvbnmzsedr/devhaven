@@ -28,10 +28,13 @@ struct AppRootView: View {
                 Color.black.opacity(0.25)
                     .ignoresSafeArea()
                     .onTapGesture {
-                        viewModel.closeDetailPanel()
+                        DetailPanelCloseAction.perform(for: viewModel)
                     }
 
-                ProjectDetailRootView(viewModel: viewModel)
+                ProjectDetailRootView(
+                    viewModel: viewModel,
+                    onClose: { DetailPanelCloseAction.perform(for: viewModel) }
+                )
                     .frame(width: 360)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
