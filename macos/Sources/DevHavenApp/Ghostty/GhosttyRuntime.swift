@@ -31,8 +31,7 @@ final class GhosttyRuntime {
         }
 
         self.config = config
-        ghostty_config_load_default_files(config)
-        ghostty_config_load_recursive_files(config)
+        Self.loadPreferredConfigFiles(config)
         ghostty_config_finalize(config)
         appearance = GhosttySurfaceAppearance(config: config)
 
@@ -73,6 +72,68 @@ final class GhosttyRuntime {
         self.app = app
         let runtimeBits = UInt(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         installObservers(runtimeBits: runtimeBits)
+    }
+
+    static func preferredConfigFileURLs(
+        fileManager: FileManager = .default,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [URL] {
+        let devHavenURLs = devHavenConfigFileURLs(
+            fileManager: fileManager,
+            homeDirectoryURL: homeDirectoryURL
+        )
+        if !devHavenURLs.isEmpty {
+            return devHavenURLs
+        }
+        return standaloneGhosttyConfigFileURLs(
+            fileManager: fileManager,
+            homeDirectoryURL: homeDirectoryURL
+        )
+    }
+
+    private static func devHavenConfigFileURLs(
+        fileManager: FileManager = .default,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [URL] {
+        let configDirectoryURL = homeDirectoryURL
+            .appending(path: ".devhaven", directoryHint: .isDirectory)
+            .appending(path: "ghostty", directoryHint: .isDirectory)
+        let candidates = [
+            configDirectoryURL.appending(path: "config", directoryHint: .notDirectory),
+            configDirectoryURL.appending(path: "config.ghostty", directoryHint: .notDirectory),
+        ]
+        return candidates.filter { fileManager.fileExists(atPath: $0.path) }
+    }
+
+    private static func standaloneGhosttyConfigFileURLs(
+        fileManager: FileManager = .default,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> [URL] {
+        let configDirectoryURL = homeDirectoryURL
+            .appending(path: "Library/Application Support/com.mitchellh.ghostty", directoryHint: .isDirectory)
+        let candidates = [
+            configDirectoryURL.appending(path: "config", directoryHint: .notDirectory),
+            configDirectoryURL.appending(path: "config.ghostty", directoryHint: .notDirectory),
+        ]
+        return candidates.filter { fileManager.fileExists(atPath: $0.path) }
+    }
+
+    private static func loadPreferredConfigFiles(
+        _ config: ghostty_config_t,
+        fileManager: FileManager = .default,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) {
+        // 优先使用 DevHaven 自己的配置；如果用户还没为 DevHaven 单独建配置，
+        // 则回退到既有 Ghostty 配置，避免升级后突然丢失主题/键位等用户习惯。
+        for configURL in preferredConfigFileURLs(
+            fileManager: fileManager,
+            homeDirectoryURL: homeDirectoryURL
+        ) {
+            configURL.path.withCString { pointer in
+                ghostty_config_load_file(config, pointer)
+            }
+        }
+        ghostty_config_load_recursive_files(config)
     }
 
     deinit {
@@ -265,10 +326,7 @@ final class GhosttyRuntime {
         guard let bridge = bridge(from: userdata), let surface = bridge.surface else {
             return
         }
-        let pasteboard = (location == GHOSTTY_CLIPBOARD_SELECTION)
-            ? NSPasteboard(name: NSPasteboard.Name("com.devhaven.ghostty.selection"))
-            : NSPasteboard.general
-        let string = pasteboard.string(forType: .string) ?? ""
+        let string = NSPasteboard.ghostty(location)?.getOpinionatedStringContents() ?? ""
         string.withCString { pointer in
             ghostty_surface_complete_clipboard_request(surface, pointer, state, false)
         }
@@ -297,9 +355,9 @@ final class GhosttyRuntime {
         guard len > 0, let content, bridge(from: userdata) != nil else {
             return
         }
-        let pasteboard = (location == GHOSTTY_CLIPBOARD_SELECTION)
-            ? NSPasteboard(name: NSPasteboard.Name("com.devhaven.ghostty.selection"))
-            : NSPasteboard.general
+        guard let pasteboard = NSPasteboard.ghostty(location) else {
+            return
+        }
         pasteboard.clearContents()
         for index in 0..<len {
             let item = content[index]

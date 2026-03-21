@@ -5,13 +5,27 @@ private struct GhosttySurfaceRepresentable: NSViewRepresentable {
     let isFocused: Bool
 
     func makeNSView(context: Context) -> GhosttySurfaceScrollView {
-        GhosttySurfaceScrollView(surfaceView: model.acquireSurfaceView(preferredFocus: isFocused))
+        GhosttySurfaceScrollView(
+            surfaceView: GhosttySurfaceRepresentableUpdatePolicy.resolvedSurfaceView(
+                for: model,
+                preferredFocus: isFocused
+            ),
+            onSurfaceAttached: {
+                model.surfaceViewDidAttach(preferredFocus: isFocused)
+            }
+        )
     }
 
     func updateNSView(_ nsView: GhosttySurfaceScrollView, context: Context) {
-        if let currentSurfaceView = model.currentSurfaceView,
-           nsView.surfaceView !== currentSurfaceView {
-            nsView.setSurfaceView(currentSurfaceView)
+        nsView.setSurfaceAttachmentHandler {
+            model.surfaceViewDidAttach(preferredFocus: isFocused)
+        }
+        let resolvedSurfaceView = GhosttySurfaceRepresentableUpdatePolicy.resolvedSurfaceView(
+            for: model,
+            preferredFocus: isFocused
+        )
+        if nsView.surfaceView !== resolvedSurfaceView {
+            nsView.setSurfaceView(resolvedSurfaceView)
         }
         guard GhosttySurfaceRepresentableUpdatePolicy.shouldApplyLatestModelStateOnUpdate else {
             return

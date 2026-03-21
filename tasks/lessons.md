@@ -1,5 +1,9 @@
 # Lessons Learned
 
+- 如果用户补充“只有先点过 pane 拿到真实焦点才会复现”，优先怀疑的是 AppKit `window.firstResponder` / responder chain，而不只是 Ghostty 自己的 visible/focus cache；这类“点击后才触发”的分屏丢失问题，通常要把 responder 身份也纳入 reuse 生命周期一起清理。
+- 对这类“复用同一个原生 `NSView`，但会在 split/tree 重排时重新挂到别的容器”的 GUI 问题，**reset cache 只是前半段**；真正的 `occlusion / focus / resize` replay 必须发生在新容器完成 `addSubview/layout` 之后。若在 `acquireSurfaceView()` 这类“还没真正 attach”阶段就提前重放，只会把信号发给旧容器时序，用户体感仍然会是 pane 空白或内容丢失。
+- 对 Ghostty 这类复用原生 `NSView` 的终端宿主，修掉“split/tree 重排时不要释放 surface”还不够；如果旧 pane 会被挂到新的 AppKit 容器上，还必须把 `occlusion / focus / backing size` 这类 attachment-sensitive cache 在复用前清空并重放，否则会出现“surface 还活着，但旧 pane 偶发空白/不显示”的假死现象。
+- 当嵌入式终端准备把配置真相源从“复用用户现有 Ghostty 配置”收口到“应用私有配置目录”时，不能静默切断旧路径；如果没有迁移向导、显式开关或 fallback，用户现有 theme/keybind/font 设置会直接像回归一样消失。
 - 对 DevHaven 这种显式确认后的 “删除 worktree” 操作，不能直接透传裸 `git worktree remove`；Git 默认会因 modified / untracked 文件拒删并抛出原始 fatal。要么在服务层显式使用 `--force` 对齐产品语义，要么在 UI 先做 dirty-state 预检并给出清晰分支。
 - 当用户已经明确要求“切到 Swift 原生打包主线”时，不要只删 Tauri 打包入口；要继续检查 release workflow、版本真相源、README、AGENTS 和设置页文案是否仍残留旧栈语义。
 - 当用户进一步明确要求“源文件都删除”时，必须连同旧的 React / Vite / Tauri / Rust 兼容源码、Node 构建配置、历史实施文档与旧 release note 一起清理，避免仓库结构和产品口径继续分裂。
@@ -15,3 +19,4 @@
 - GitHub-hosted Intel runner 不等于“适合构建 Intel 目标”；如果上游依赖（这里是 Ghostty）已经要求更高版本的 Xcode，而 GitHub 当前可用 Intel runner 只有较老工具链，就应改成在较新 Apple Silicon runner 上用 `--triple x86_64-apple-macosx14.0` 交叉构建，而不是继续把 CPU 架构和 runner 机型绑死。
 - 在 Apple Silicon 主机上跑 `swift test --triple x86_64-apple-macosx14.0` 时，测试二进制可以编出来，但默认无法直接执行 x86_64 test bundle；CI 若仍运行在 arm64 runner，上游验证边界应明确收口为“x86_64 编译/打包成功”，不要误把“可编译”当成“可在当前 runner 上直接执行测试”。
 - 对纯 macOS 原生 GUI 应用，`swift run` 只是启动入口，不等于 Web 项目的 dev server；如果关键日志走 unified log，就应在仓库级开发命令里一并收口 `log stream` 与应用启动，否则用户很容易误以为“启动成功但没有日志”。
+- 当用户用 `<turn_aborted>` 明确上一轮已中断，并随后补充“真实项目都在某个本地目录下”这类路径纠偏时，后续必须从头重新核对该目录下的仓库真相，不要继续沿用上一轮可能半执行的 clone/搜索结果或旧路径假设。

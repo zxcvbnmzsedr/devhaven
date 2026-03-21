@@ -15,9 +15,12 @@ final class GhosttySurfaceScrollView: NSView {
     private var isLiveScrolling = false
     private var lastSentRow: Int?
     private var scrollbar: ScrollbarState?
+    private var onSurfaceAttached: (() -> Void)?
+    private var needsSurfaceAttachmentCallback = true
 
-    init(surfaceView: NSView) {
+    init(surfaceView: NSView, onSurfaceAttached: (() -> Void)? = nil) {
         self.surfaceView = surfaceView
+        self.onSurfaceAttached = onSurfaceAttached
         scrollView = NSScrollView()
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
@@ -98,6 +101,10 @@ final class GhosttySurfaceScrollView: NSView {
         synchronizeScrollView()
         synchronizeSurfaceView()
         (surfaceView as? GhosttyTerminalSurfaceView)?.updateSurfaceSize()
+        if needsSurfaceAttachmentCallback {
+            needsSurfaceAttachmentCallback = false
+            onSurfaceAttached?()
+        }
     }
 
     func setSurfaceView(_ newSurfaceView: NSView) {
@@ -109,8 +116,13 @@ final class GhosttySurfaceScrollView: NSView {
         surfaceView = newSurfaceView
         documentView.addSubview(newSurfaceView)
         bindScrollWrapperIfNeeded(to: newSurfaceView)
+        needsSurfaceAttachmentCallback = true
         needsLayout = true
         layoutSubtreeIfNeeded()
+    }
+
+    func setSurfaceAttachmentHandler(_ handler: (() -> Void)?) {
+        onSurfaceAttached = handler
     }
 
     func updateSurfaceSize() {

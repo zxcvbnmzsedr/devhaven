@@ -35,17 +35,17 @@ usage() {
 用法：$(basename "$0") [选项]
 
 作用：
-  构建 Swift 原生版 DevHaven `.app`，输出到稳定目录，
+  构建 Swift 原生版 DevHaven .app，输出到稳定目录，
   默认完成本地 ad-hoc 签名后打开产物目录。
 
 选项：
   --debug                 构建 debug 版
   --release               构建 release 版（默认）
   --output-dir <path>     指定产物目录；默认：macos/.build/native-app/<configuration>
-  --app-name <name>       自定义 `.app` 名称（默认：$DEFAULT_APP_NAME）
-  --bundle-id <id>        自定义 bundle identifier（默认：$DEFAULT_IDENTIFIER）
-  --version <version>     自定义 CFBundleShortVersionString（默认：$DEFAULT_VERSION）
-  --triple <triple>       指定 Swift 构建 triple（默认：跟随当前运行环境；也可用 DEVHAVEN_NATIVE_TRIPLE）
+  --app-name <name>       自定义 .app 名称（默认：${DEFAULT_APP_NAME}）
+  --bundle-id <id>        自定义 bundle identifier（默认：${DEFAULT_IDENTIFIER}）
+  --version <version>     自定义 CFBundleShortVersionString（默认：${DEFAULT_VERSION}）
+  --triple <triple>       指定 Swift 构建 triple（默认：跟随当前运行环境；也可用环境变量 DEVHAVEN_NATIVE_TRIPLE）
   --no-open               构建完成后不执行 open
   --help                  显示帮助
 

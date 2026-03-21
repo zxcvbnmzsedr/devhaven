@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+fail() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
+
+for arg in "$@"; do
+  if [[ "$arg" == "--debug" ]]; then
+    fail "./release 固定走 release 构建，不支持 --debug；如需 debug 包，请直接运行 bash macos/scripts/build-native-app.sh --debug"
+  fi
+done
+
+cd "$ROOT_DIR"
+exec bash macos/scripts/build-native-app.sh --release "$@"

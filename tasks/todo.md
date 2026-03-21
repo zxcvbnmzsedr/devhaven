@@ -1,5 +1,207 @@
 # 本次任务清单
 
+## 继续修复 workspace 分屏后旧 pane 仍会丢失（2026-03-21）
+
+- [x] 复盘上轮分屏修复与当前截图，确认真正仍在失效的是 surface 状态重放时序
+- [x] 先补失败测试，锁定“只有在新容器完成 attach/layout 后才能重放状态”这条边界
+- [x] 以最小改动把 post-attach replay 收口到 `GhosttySurfaceScrollView` + `GhosttySurfaceHostModel`
+- [x] 运行定向验证并在 `tasks/todo.md` 追加 Review
+
+## Review（继续修复 workspace 分屏后旧 pane 仍会丢失）
+
+- 直接原因：上一轮虽然已经在 `prepareForContainerReuse()` 里清掉了 `occlusion / focus / backing size` 缓存，但 `GhosttySurfaceHostModel.acquireSurfaceView(...)` 仍然会**在旧 `GhosttySurfaceScrollView` 还没完成移除、新 `GhosttySurfaceScrollView` 还没完成 addSubview/layout 之前**就把这些状态重放回 `GhosttyTerminalSurfaceView`。结果就是：缓存确实被清了，但 replay 仍然打在旧容器时序上；等旧 pane 真正被挂到新的 split 容器后，已经没有新的 attach 后 replay，所以用户仍会看到“左边旧 pane 发白/内容消失”。
+- 设计层诱因：存在。问题不再是 split tree 或 surface owner 本身，而是 **surface 复用生命周期被拆成了“model 取 view”与“scroll/container 真正 attach”两段，却把 attach-sensitive replay 放在了前一段**。也就是说，状态缓存和状态重放虽然都已收口，但重放时机仍然分裂。未发现更大的系统设计缺陷。
+- 当前修复：
+  1. `GhosttySurfaceScrollView` 新增 `onSurfaceAttached` 回调与一次性 `needsSurfaceAttachmentCallback` 标记，只在真实 `layout()` 完成后触发 post-attach hook；
+  2. `GhosttySurfaceHostModel.acquireSurfaceView(...)` 在复用既有 surface 时不再提前重放状态，只负责准备复用与记录 diagnostics；
+  3. 新增 `GhosttySurfaceHostModel.surfaceViewDidAttach(preferredFocus:)`，把 `occlusion / focus` replay 收口到**真实 attach 完成之后**执行；
+  4. `GhosttyTerminalView` 负责把 scroll wrapper 的 attach 回调接回 `surfaceViewDidAttach(...)`，确保首次挂载和 split/tree 迁移后的重新挂载都走同一条时序；
+  5. `GhosttySurfaceScrollViewTests` 新增两条回归：锁定“首轮 layout 只回调一次”和“surface swap 后要再回调一次”。
+- 长期建议：如果后续 split/tree/zoom 继续暴露新的 AppKit 容器迁移问题，下一步优先考虑把“稳定 owner”继续上提到完整 hosted container，而不是继续在 `GhosttyTerminalSurfaceView` 内增加更多局部 cache reset；但在当前主线上，先把 replay 时序钉死到 post-attach 已经足够对齐当前故障。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter GhosttySurfaceScrollViewTests` → 初次失败，报 `extra argument 'onSurfaceAttached' in call`，证明测试先锁住了“需要显式 post-attach hook”这条边界。
+  - 定向绿灯：同一条命令修复后通过，`4 tests, 0 failures`。
+  - 相关回归：`swift test --package-path macos --filter 'WorkspaceTerminalSessionStoreTests|WorkspaceSurfaceRegistryTests|WorkspaceTerminalStoreRegistryTests|WorkspaceSplitTreeViewKeyPolicyTests|GhosttySurfaceScrollViewTests'` → 通过，`14 tests, 0 failures`。
+  - 构建验证：`swift build --package-path macos` → 通过。
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceScrollView.swift macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceHost.swift macos/Sources/DevHavenApp/Ghostty/GhosttyTerminalView.swift macos/Tests/DevHavenAppTests/GhosttySurfaceScrollViewTests.swift` → 通过。
+
+## 继续修复“先点亮 pane 焦点，再分屏时旧 pane 消失”（2026-03-21）
+
+- [x] 根据新复现条件聚焦 firstResponder / surface focus 链路，而不是继续泛化到 split 拓扑
+- [x] 先补失败测试，锁定“container reuse 前必须释放旧 pane 的 window firstResponder”边界
+- [x] 以最小改动把 firstResponder 释放收口到 `GhosttyTerminalSurfaceView.prepareForContainerReuse()` / `tearDown()`
+- [x] 运行定向验证并追加 Review
+
+## Review（继续修复“先点亮 pane 焦点，再分屏时旧 pane 消失”）
+
+- 直接原因：你补充的“**先点击 pane 让它拿到真实焦点，再分屏就稳定消失**”把根因进一步钉死到了 AppKit responder 链。当前 `GhosttyTerminalSurfaceView.prepareForContainerReuse()` 之前只会清 attachment cache，却不会释放 `window.firstResponder`；所以当旧 pane 的 surface 已经因为鼠标点击拿到真实 firstResponder 时，split/tree 重挂载会把**带着旧 responder 身份的 surface**直接搬进新容器，表现成旧 pane 在分屏后变白/内容丢失。
+- 设计层诱因：存在。这说明当前 Ghostty surface 的“可见性/尺寸状态”与“AppKit responder 身份”仍然分裂管理：前者已经收口到 attachment replay，后者却没纳入 reuse 生命周期。未发现更大的系统设计缺陷，问题仍集中在 `GhosttyTerminalSurfaceView` 这一层的复用边界。
+- 当前修复：
+  1. 在 `GhosttyTerminalSurfaceView` 新增 `resignOwnedFirstResponderIfNeeded()`，仅当窗口当前 firstResponder 确实是该 surface（或其后代）时才显式 `makeFirstResponder(nil)`；
+  2. `prepareForContainerReuse()` 和 `tearDown()` 都先释放 owned firstResponder，再清本地 `focused` 状态与 attachment cache，确保 surface 不会“带着旧焦点”进入新 split 容器；
+  3. 新增回归测试 `GhosttySurfaceHostTests.testPrepareForContainerReuseYieldsWindowFirstResponderWhenSurfaceViewOwnsResponder`，锁定这条 firstResponder 释放边界。
+- 长期建议：后续所有 pane 复用/关闭/隐藏问题，都要同时检查两类状态是否成对收口：一类是 Ghostty 的 `occlusion / focus / size`，另一类是 AppKit 的 `window.firstResponder`。只清 Ghostty 内部状态、不处理 AppKit responder，仍然会留下“点击后才触发”的 GUI 级缺陷。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter GhosttySurfaceHostTests/testPrepareForContainerReuseYieldsWindowFirstResponderWhenSurfaceViewOwnsResponder` → 初次失败，断言 `window.firstResponder === view` 仍成立，证明 reuse 前没有释放旧焦点。
+  - 定向绿灯：同一条命令修复后通过，`1 test, 0 failures`。
+  - 相关回归：`swift test --package-path macos --filter 'GhosttySurfaceHostTests/testPrepareForContainerReuseYieldsWindowFirstResponderWhenSurfaceViewOwnsResponder|GhosttySurfaceScrollViewTests|WorkspaceTerminalSessionStoreTests|WorkspaceSurfaceRegistryTests|WorkspaceTerminalStoreRegistryTests|WorkspaceSplitTreeViewKeyPolicyTests'` → 通过，`15 tests, 0 failures`。
+  - 构建验证：`swift build --package-path macos` → 通过。
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceView.swift macos/Tests/DevHavenAppTests/GhosttySurfaceHostTests.swift` → 通过。
+  - 本轮 fresh 验证：再次运行同一组相关回归 → 通过，`15 tests, 0 failures`。
+  - 本轮 full suite：`swift test --package-path macos` → 通过，`118 tests, 5 skipped, 0 failures`。
+
+## 继续修复“点击 pane 后分屏，旧 terminal surface 跑到另一侧、原 pane 留空壳”（2026-03-21）
+
+- [x] 根据最新截图复盘 split 后左右 pane 的真实呈现，确认这次更像 representable 复用换 model 时仍挂着旧 surface，而不是 pane 真被删除
+- [x] 先补失败测试，锁定“update 阶段切换到 fresh model 时也必须拿到该 model 自己的 surface”这条边界
+- [x] 以最小改动修复 `GhosttyTerminalView` / representable 的 surface 绑定逻辑，避免旧 surface 跟着被复用的 NSView 跑到错误 pane
+- [x] 运行定向验证、全量 `swift test --package-path macos` 与差异检查，并把结果追加到 Review
+
+## Review（继续修复“点击 pane 后分屏，旧 terminal surface 跑到另一侧、原 pane 留空壳”）
+
+- 直接原因：最新截图显示的问题不再像“旧 pane 被删掉”，而更像 **旧 terminal surface 跟着被 SwiftUI 复用的 representable 跑到了另一侧 pane，原 pane 留下空壳背景**。顺着这条线往下查，`GhosttySurfaceRepresentable.updateNSView()` 之前只会读取 `model.currentSurfaceView`；如果同一个 `NSViewRepresentable` 在 leaf -> split 的重组里被 SwiftUI 复用到了新的 pane/model，而新 model 此时还没有 `currentSurfaceView`，它就会继续挂着旧 pane 的 surface，不会在 update 阶段为新 model 补一次 `acquireSurfaceView(...)`。
+- 设计层诱因：存在。虽然我们之前已经把 subtree structural remount 和 post-attach replay 收口了，但 **representable 这一层仍默认假设“update 时 model 不会换成一个 fresh owner”**。这在普通 SwiftUI 视图里常常没问题，但对“一个活着的 terminal NSView 被外部 store 复用、同时树结构又在变化”的场景就不够稳。未发现更大的系统设计缺陷，问题集中在 representable 的 surface 解析边界。
+- 当前修复：
+  1. 给 `GhosttySurfaceRepresentableUpdatePolicy` 新增 `resolvedSurfaceView(for:preferredFocus:)`，统一定义“若 model 还没有 current surface，就在此处补 `acquireSurfaceView(...)`”；
+  2. `GhosttyTerminalView.makeNSView` 与 `updateNSView` 都改为走这条统一解析逻辑，确保 representable 即使在 update 阶段换到一个 fresh model，也会拿到 **这个 model 自己的 surface**，而不是继续沿用旧 surface；
+  3. 新增 `GhosttySurfaceRepresentableUpdatePolicyTests` 两条回归：fresh model 会创建 surface、已有 surface 的 model 会继续复用原实例；
+  4. 测试里对新建的 `GhosttySurfaceHostModel` 显式 `releaseSurface()`，避免真实 Ghostty surface 在 full suite 里遗留到后续 AppKit 测试进程。
+- 长期建议：后续只要继续沿“外部 store 持有终端 owner，SwiftUI 只负责摆放容器”这条架构，就要默认把 `NSViewRepresentable` 当成**可能被复用换 model** 的边界处理，而不是假设只有 `makeNSView` 会负责建立 owner -> NSView 绑定。对这种终端宿主组件，`updateNSView` 也要能安全地完成 owner 切换。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter GhosttySurfaceRepresentableUpdatePolicyTests` → 初次失败，报 `type 'GhosttySurfaceRepresentableUpdatePolicy' has no member 'resolvedSurfaceView'`。
+  - 新增回归：同一条命令修复后通过，`3 tests, 0 failures`。
+  - 相关分屏回归：`swift test --package-path macos --filter 'GhosttySurfaceRepresentableUpdatePolicyTests|GhosttySurfaceHostTests/testPrepareForContainerReuseYieldsWindowFirstResponderWhenSurfaceViewOwnsResponder|GhosttySurfaceScrollViewTests|WorkspaceTerminalSessionStoreTests|WorkspaceSurfaceRegistryTests|WorkspaceTerminalStoreRegistryTests|WorkspaceSplitTreeViewKeyPolicyTests'` → 通过，`18 tests, 0 failures`。
+  - 全量验证：`swift test --package-path macos` → 最终 fresh 重跑通过，`120 tests, 5 skipped, 0 failures`。
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceRepresentableUpdatePolicy.swift macos/Sources/DevHavenApp/Ghostty/GhosttyTerminalView.swift macos/Tests/DevHavenAppTests/GhosttySurfaceRepresentableUpdatePolicyTests.swift tasks/todo.md` → 通过。
+
+## 新增 ./release 原生打包入口（2026-03-21）
+
+- [x] 对照现有 `./dev` 与 `macos/scripts/build-native-app.sh`，确认新入口的最小职责边界
+- [x] 确认 `./release` 的行为与参数范围，避免把发布包装脚本做成另一套复杂构建系统
+- [x] 实现仓库根 `./release` 入口，并补充必要文档
+- [x] 运行定向验证并在 `tasks/todo.md` 追加 Review
+
+## Review（新增 ./release 原生打包入口）
+
+- 直接原因：仓库根目录已经有 `./dev` 作为原生开发态入口，但本地 release 打包仍要求手动记忆并输入 `bash macos/scripts/build-native-app.sh --release`；同时这次给 `./release` 补回归测试时又暴露出 `build-native-app.sh --help` 本身存在 heredoc 帮助文案展开错误，导致入口链上的帮助信息也不可靠。
+- 设计层诱因：存在，但属于轻量工具链边界问题。开发入口和打包入口没有在仓库根统一收口，导致“运行用 `./dev`、打包用长命令”的体验分裂；另外包装脚本如果继续复制一套参数解析，也会把打包真相源拆成两份。未发现更大的系统设计缺陷。
+- 当前修复：
+  1. 新增仓库根 `./release`，固定在仓库根目录执行 `bash macos/scripts/build-native-app.sh --release`，并透传其余参数；
+  2. `./release` 显式拒绝 `--debug`，避免 release 入口被悄悄降级成 debug 打包；
+  3. 新增 `macos/scripts/test-release-command.sh`，锁定“透传参数 + 固定带 `--release` + 拒绝 `--debug` + `--help` 可用”这几条边界；
+  4. 修复 `macos/scripts/build-native-app.sh --help` 的文案展开问题，避免 heredoc 中的反引号和默认值变量把帮助输出本身炸掉；
+  5. `README.md` 与 `AGENTS.md` 同步补充 `./release` 入口说明，保持仓库结构与使用文档一致。
+- 长期建议：后续如果还要加别的仓库根入口，继续保持“根入口只做 thin wrapper，真正逻辑仍收口到单一脚本/模块”这条边界；不要把 `./release` 再扩成第二套打包系统。
+- 验证证据：
+  - TDD 红灯：`bash macos/scripts/test-release-command.sh` 在实现前失败，报 `/Users/zhaotianzeng/WebstormProjects/DevHaven/release: No such file or directory`。
+  - 定向绿灯：`bash macos/scripts/test-release-command.sh` → 通过，输出 `release command smoke ok`。
+  - 帮助验证：`bash macos/scripts/build-native-app.sh --help` → 通过，正确打印帮助文案。
+  - 行为验证：`./release --no-open --output-dir /tmp/devhaven-release-verify` → 通过，产物为 `/tmp/devhaven-release-verify/DevHaven.app`。
+  - 差异校验：`git diff --check` → 通过。
+
+## 修复终端粘贴图片文件路径缺失（2026-03-21）
+
+- [x] 先确认当前仓库已有未提交改动的隔离边界，避免混入字体 / 分屏等其他任务
+- [x] 写失败测试，锁定 Ghostty 风格的 file URL / utf8 plain text 粘贴预期
+- [x] 以最小改动补齐 Ghostty 风格 pasteboard helper，并接入 `GhosttyRuntime.handleReadClipboard(...)`
+- [x] 运行定向验证，并同步 `tasks/todo.md`、必要文档与 `AGENTS.md`
+
+## Review（修复终端粘贴图片文件路径缺失）
+
+- 直接原因：`GhosttyRuntime.handleReadClipboard(...)` 之前只读取 `NSPasteboard.string(forType: .string)`。当用户从 Finder 或其他宿主复制图片文件时，剪贴板常见真相源是 file URL 或 `public.utf8-plain-text`，不是 `.string`，所以终端最终收到的是空串，连图片文件路径都粘贴不进去。
+- 设计层诱因：Ghostty clipboard 语义此前被收窄成了“只认 plain string”，没有把 file URL / utf8 plain text 这些终端真实会遇到的 pasteboard 形态统一收口。问题集中在剪贴板桥接边界；未发现更大的系统设计缺陷。
+- 当前修复：
+  - 新增 `macos/Sources/DevHavenApp/Ghostty/GhosttyPasteboard.swift`，按 Ghostty 原生结构收口 pasteboard 语义：优先 file URL，回退 `.string` 与 `public.utf8-plain-text`，并对文件路径做 shell escape；
+  - `GhosttyRuntime.handleReadClipboard(...)` 改为通过 `NSPasteboard.ghostty(location)?.getOpinionatedStringContents()` 读取剪贴板；
+  - `AGENTS.md` 同步补充 `GhosttyPasteboard.swift` 的职责说明；
+  - 新增 `GhosttyPasteboardTests` 锁定 file URL 与 utf8 plain text 两条回归预期。
+- 长期建议：如果后续用户继续追求“截图本体也能粘进去”，那已经超出 Ghostty 原生路径粘贴边界，应另起一层做 cmux 那种“图片物化为临时文件/远端上传后再注入路径”的宿主增强；不要把图片附件语义继续塞回这个 Ghostty 对齐 helper。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter GhosttyPasteboardTests` → 初次失败，报 `value of type 'NSPasteboard' has no member 'getOpinionatedStringContents'`。
+  - 定向绿灯：`swift test --package-path macos --filter GhosttyPasteboardTests` → 通过，`2 tests, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+  - 隔离边界：当前仓库还存在与本任务无关的既有改动（如 `README.md`、`GhosttySurfaceHost.swift`、`GhosttySurfaceView.swift` 等），本轮仅新增/修改 Ghostty pasteboard 对齐相关文件与任务文档。
+
+## 修复 ./dev 启动时字体丢失（2026-03-21)
+
+- [x] 先确认当前仓库已有未提交改动的隔离边界，避免混入其他任务
+- [x] 复现 `./dev` 启动时字体丢失的链路，并区分是 UI 字体还是 Ghostty 终端字体
+- [x] 对照 `./dev` 启动脚本、Ghostty runtime 与字体资源定位逻辑，锁定直接原因与设计诱因
+- [x] 以最小改动修复根因，并补充必要测试/文档
+- [x] 运行定向验证并在 `tasks/todo.md` 追加 Review
+
+## Review（修复 ./dev 启动时字体丢失）
+
+- 直接原因：`GhosttyRuntime` 之前直接调用 `ghostty_config_load_default_files(config)`，而当前 `GhosttyKit` binary target 是按 `com.mitchellh.ghostty` 构建的。结果 DevHaven 在 `./dev` 启动时会跟着 Ghostty 默认搜索路径去读取 `~/Library/Application Support/com.mitchellh.ghostty/config`。本机该文件里显式配置了 `font-family = Hack`、`font-family = Noto Sans SC`，但用 CoreText 枚举实际可用字体后，这两个字体在当前系统都不存在，于是嵌入式终端继承了一套无效字体栈，表现成“字体丢失”。
+- 设计层诱因：存在。问题不是 `./dev` 脚本本身，而是**DevHaven 内嵌终端的配置真相源错误地依赖了独立 Ghostty App 的全局配置目录**，导致一个外部应用的字体 / 主题 / 键位配置泄漏进 DevHaven。未发现更大的系统设计缺陷，问题集中在 Ghostty runtime 这层边界没有收口到 DevHaven 自己的数据目录。
+- 当前修复：
+  1. `GhosttyRuntime` 不再调用 `ghostty_config_load_default_files`，改为只读取 `~/.devhaven/ghostty/config` 与 `~/.devhaven/ghostty/config.ghostty`；
+  2. 保留 `ghostty_config_load_recursive_files`，让 DevHaven 自己的配置文件仍可通过 `config-file` 继续拆分；
+  3. 新增 `GhosttyRuntimeConfigLoaderTests`，锁定“即使存在独立 Ghostty 的全局配置，DevHaven 也不应去读取它”这条回归边界；
+  4. `AGENTS.md` / `README.md` 同步补充新的配置入口，避免后续再次把字体问题排到独立 Ghostty 配置上。
+- 长期建议：如果后续要把终端字体、主题或键位暴露到设置页，应该继续以 `~/.devhaven/ghostty/config*` 为唯一真相源，并在应用内明确支持哪些选项；不要再让独立 Ghostty App 的全局配置影响 DevHaven。
+- 验证证据：
+  - 复现前证据：
+    - `./dev` 旧日志里出现 `reading configuration file path=/Users/zhaotianzeng/Library/Application Support/com.mitchellh.ghostty/config`；
+    - `swift -e 'import Foundation; import CoreText; ...'` 输出 `Hack: false`、`Hack Nerd Font: false`、`Noto Sans SC: false`；
+    - `~/Library/Application Support/com.mitchellh.ghostty/config` 里确有 `font-family = Hack`、`font-family = Noto Sans SC`。
+  - TDD 红灯：`swift test --package-path macos --filter GhosttyRuntimeConfigLoaderTests/testEmbeddedConfigFileURLsIgnoreStandaloneGhosttyAppSupportConfig` 初次失败，报 `type 'GhosttyRuntime' has no member 'embeddedConfigFileURLs'`。
+  - 定向绿灯：同一条测试修复后通过，`1 test, 0 failures`。
+  - 行为验证：用 Python 包装 `./dev --logs ghostty` 启动 8 秒后采样，输出 `HAS_STANDALONE_CONFIG_PATH=False`、`HAS_CONFIG_READ_LOG=False`，且日志尾部不再出现 `reading configuration file path=...com.mitchellh.ghostty/config`。
+  - 全量验证：`swift test --package-path macos` → 通过，`112 tests, 5 skipped, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
+## 调研 Codex 截图粘贴与 Ghostty / Supacode / cmux 图片处理（2026-03-21）
+
+- [x] 快速核对当前 DevHaven 与记忆里的 Ghostty / Supacode / cmux 上下文，避免沿旧栈误判
+- [x] 查证 Ghostty 对剪贴板图片、终端图片协议与 paste action 的真实边界
+- [x] 查证 Supacode / cmux 在截图输入上的实际实现路径，区分“终端粘贴”与“宿主附件上传”
+- [x] 结合运行中的 Codex 形态给出直接原因、设计层诱因、当前建议与长期方案
+
+## Review（调研 Codex 截图粘贴与 Ghostty / Supacode / cmux 图片处理）
+
+- 直接原因：运行中的 Codex 本质上还是跑在 Ghostty/libghostty 承载的终端里，而当前 DevHaven 自己的 `GhosttyRuntime.handleReadClipboard(...)` 只从 `NSPasteboard` 读取 `.string`，没有任何图片 MIME、HTML/RTFD 附件或拖拽图片的宿主级转换逻辑；因此截图在剪贴板里若只有图片数据，终端 paste 回调就只能拿到空字符串。
+- 设计层诱因：这不是单纯“Ghostty 少一个开关”，而是“终端文本粘贴”和“AI 客户端图片附件”两种语义被混为一谈。Ghostty / Supacode 的默认边界仍然是“把可表示成文本的东西送进终端”；若产品要支持给 Codex 贴截图，必须由宿主在终端外做图片物化 / 上传 / 路径注入，而不能指望 libghostty 原生帮你把剪贴板图片变成 Codex 可理解的附件。
+- 当前结论：
+  - Ghostty 原生 macOS：`getOpinionatedStringContents()` 只处理 file URL 和 string；拖拽也只注册 `.string/.fileURL/.URL`，不处理图片剪贴板。
+  - Supacode：沿用同样的 Ghostty 语义；终端 paste 和 drop 都是 string/file URL 路径，不做截图图片粘贴增强。
+  - cmux：额外实现了终端图片粘贴增强。它会识别剪贴板里的纯图片或仅图片附件的 HTML/RTFD，把图片落到临时 `clipboard-*` 文件，再根据目标终端是本地还是远端，分别“直接把本地路径插入终端”或“先上传再把远端路径插入终端”；拖拽图片也是同一套思路。
+  - DevHaven 当前状态比 Ghostty / Supacode 还更窄：目前只读 `.string`，连 file URL / HTML 富文本兜底都还没接入，所以“无法粘贴截图”在现状下是符合代码现状的，不是偶发异常。
+- 长期建议：
+  - 如果目标是“终端里的 Codex 能像附件一样接收截图”，优先按 cmux 方案做宿主增强：图片剪贴板 -> 临时文件 -> 本地路径注入 / 远端上传后注入远端路径。
+  - 如果后续还要支持浏览器 pane / WebView 里的真正二进制图片复制粘贴，可以另走 cmux `CmuxWebView` 那条 browser pasteboard 路线；不要试图把“浏览器图片附件语义”和“终端文本 paste 语义”强行塞进同一层 Ghostty callback。
+- 验证证据：
+  - DevHaven：`macos/Sources/DevHavenApp/Ghostty/GhosttyRuntime.swift:260-312`
+  - Ghostty：`ghostty/macos/Sources/Helpers/Extensions/NSPasteboard+Extension.swift:35-48`、`ghostty/macos/Sources/Ghostty/Ghostty.App.swift:325-338`、`ghostty/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift:2091-2128`、`ghostty/src/apprt/gtk/class/surface.zig:3764-3771`
+  - Supacode：`supacode/Infrastructure/Ghostty/GhosttyRuntime.swift:388-423,616-625`、`supacode/Infrastructure/Ghostty/GhosttySurfaceView.swift:126-129,1355-1378`
+  - cmux：`cmux/Sources/GhosttyTerminalView.swift:73-367,1085-1168,3878-3887,6284-6362`、`cmux/Sources/TerminalImageTransfer.swift:112-160`、`cmux/cmuxTests/TerminalAndGhosttyTests.swift:38-58,196-253`、`cmux/CHANGELOG.md:63`
+
+## 修复 workspace 分屏时旧 pane 偶发不显示（2026-03-21）
+
+- [x] 先确认当前仓库已有未提交改动的隔离边界，避免混入 worktree 删除任务
+- [x] 复盘 split/tree/surface 可见性链路，定位旧 pane 偶发不显示的直接原因
+- [x] 先补失败测试锁定“分屏后旧 pane 仍应保持挂载与可见”预期
+- [x] 以最小改动修复根因，并运行定向与全量验证
+- [x] 在 `tasks/todo.md` 追加 Review，写明原因、修复、验证证据与长期建议
+
+## Review（修复 workspace 分屏时旧 pane 偶发不显示）
+
+- 直接原因：上一轮 `WorkspaceSplitTreeView` 已经去掉 structural re-key，避免 split/tree 重排时整棵 subtree 被强制 remount；但当前 `GhosttySurfaceHostModel` 复用的只有 `GhosttyTerminalSurfaceView` 本体。旧 pane 在 split/tree 发生挂载迁移时，surface 会继续被复用，但 `GhosttyTerminalSurfaceView` 内部缓存的 `lastOcclusion`、`lastSurfaceFocus`、`lastBackingSize` 仍保留旧容器状态，导致重新挂到新容器后不会重发 occlusion / focus / resize，同一个 pane 就可能出现“树里还在，但画面没重新出来”的偶发空白。
+- 设计层诱因：存在。这不是 split 拓扑再次算错，而是 **surface 复用边界只收口到了“不要销毁 terminal view”，却没有把“容器迁移后必须刷新挂载敏感状态”一起收口**。也就是说，生命周期主线已经保护了 `/usr/bin/login` 不重跑，但 AppKit/Ghostty 这层 attachment-sensitive state 仍然分散在 `GhosttySurfaceView` 内部缓存里。未发现更大的系统设计缺陷，问题集中在这条复用边界还差最后一步。
+- 当前修复：
+  1. 新增 `GhosttySurfaceAttachmentState.swift`，把 `lastOcclusion`、`lastSurfaceFocus`、`lastBackingSize` 收口成显式状态对象，并提供 `prepareForContainerReuse()`。
+  2. `GhosttyTerminalSurfaceView` 在 `tearDown()` 和新的 `prepareForContainerReuse()` 中都会清空这三类挂载敏感缓存；`setOcclusion` / `setSurfaceFocus` / `updateSurfaceMetrics` 改为统一读写该状态。
+  3. `GhosttySurfaceHostModel.acquireSurfaceView(...)` 在复用既有 `ownedSurfaceView` 前，先调用 `prepareForContainerReuse()`，再重放缓存的可见性 / 焦点 / 尺寸同步，确保 split/tree remount 后旧 pane 能重新收到一次有效 attach 信号。
+  4. 新增 `GhosttySurfaceScrollViewTests.testAttachmentStateResetForContainerReuseClearsVisibilityFocusAndResizeCaches`，用 RED -> GREEN 锁住“容器复用前必须清空 attachment-sensitive caches”这条回归边界。
+- 长期建议：后续凡是继续优化 split/tree/zoom/tab 切换时的 Ghostty 复用，都要把问题拆成两层分别看：一层是 `WorkspaceTerminalSessionStore` 是否还在错误释放 surface；另一层是 **即便 surface 没被释放，容器迁移后是否有 attachment refresh**。不要只看“有没有重新 `/usr/bin/login`”，因为“surface 存活但缓存未刷新”同样会表现成 pane 黑掉或空白。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter GhosttySurfaceScrollViewTests` 初次失败，报 `cannot find 'GhosttySurfaceAttachmentState' in scope`，证明新测试先锁住了待实现边界。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceTopologyTests|GhosttyWorkspaceControllerTests|WorkspaceTerminalSessionStoreTests|WorkspaceSplitTreeViewKeyPolicyTests|WorkspaceSurfaceActivityPolicyTests|GhosttySurfaceScrollViewTests'` → 通过，24 tests, 0 failures。
+  - 全量验证：`swift test --package-path macos` → 通过，`111 tests, 5 skipped, 0 failures`。
+  - 构建验证：`swift build --package-path macos` → 通过。
+  - 差异校验：`git diff --check` → 通过。
+  - 当前边界：本轮已经补齐了代码级 root-cause 与自动化回归，但还没有新的实机 GUI 录屏/截图证据；是否完全消除你看到的“旧 pane 不显示”，仍建议你本机再分两三次屏确认一下。
+
 ## 修复删除 dirty worktree 时被 Git 拒绝（2026-03-21）
 
 - [x] 复现并确认 `git worktree remove` 在 modified / untracked 场景下的失败行为
@@ -209,3 +411,43 @@
   - 依赖前置：`bash macos/scripts/setup-ghostty-framework.sh --verify-only` → 通过，确认当前 `macos/Vendor` 完整。
   - 代码差异：`git diff --check` → 通过。
 - 当前边界：本轮验证已覆盖脚本外部行为、参数分支与 vendor 前置条件，但没有在自动化会话里实际长时间运行 `./dev` 打开 GUI 应用并观察你桌面上的最终体感；如果你要确认真实开发体验，建议本机手动跑一遍 `./dev`。
+
+## 排查 Ghostty 配置不再加载（2026-03-21）
+
+- [x] 先确认当前 Ghostty 配置加载真相源、最近相关改动与用户现象是否一致
+- [x] 定位直接原因与是否存在设计层诱因
+- [x] 在最小改动下恢复预期配置加载行为，并补充回归验证
+- [x] 更新 `tasks/todo.md` Review，必要时同步文档/测试
+
+## Review（排查 Ghostty 配置不再加载）
+
+- 直接原因：`GhosttyRuntime` 这轮未提交改动把配置加载从 `ghostty_config_load_default_files(config)` 改成了“只读取 `~/.devhaven/ghostty/config*`”。而当前机器上这两个 DevHaven 专属配置文件都不存在，实际只有 `~/Library/Application Support/com.mitchellh.ghostty/config`，因此启动后不再加载你原本就在 Ghostty 里使用的主题 / 键位 / 字体配置。
+- 设计层诱因：存在。我们之前为了隔离 DevHaven 和独立 Ghostty App 的字体配置，把“配置真相源”从共享的 Ghostty 默认搜索路径收口到了 DevHaven 私有目录，但**没有提供迁移、显式开关或 fallback**，于是已有用户会在升级后直接感知成“配置突然失效”。问题集中在配置边界切换过猛；未发现更大的系统设计缺陷。
+- 当前修复：
+  1. `GhosttyRuntime` 新增 `preferredConfigFileURLs(...)`，配置加载改为“优先 `~/.devhaven/ghostty/config*`，若不存在则回退到 `~/Library/Application Support/com.mitchellh.ghostty/config*`”；
+  2. 保留 `ghostty_config_load_recursive_files(config)`，因此无论是 DevHaven 专属配置还是原有 Ghostty 配置，`config-file` 拆分能力都还在；
+  3. `GhosttyRuntimeConfigLoaderTests` 改成两条回归边界：`没有 DevHaven 专属配置时会回退到独立 Ghostty 配置`、`存在 DevHaven 专属配置时优先使用它`；
+  4. `README.md` 与 `AGENTS.md` 同步把配置优先级说明改成“DevHaven 专属优先，缺省回退到现有 Ghostty 配置”。
+- 长期建议：如果后续还想把 DevHaven 和独立 Ghostty App 完全隔离，不要再用“静默切断旧配置路径”的方式推进；至少提供一次性迁移、显式开关，或在首次启动时提示“当前正在沿用旧 Ghostty 配置，创建 `~/.devhaven/ghostty/config` 后即可覆盖”。
+- 验证证据：
+  - 本机现状：`~/.devhaven/ghostty/config` 与 `~/.devhaven/ghostty/config.ghostty` 均不存在；`~/Library/Application Support/com.mitchellh.ghostty/config` 存在，且含 `theme = iTerm2 Solarized Dark`、`font-family = Hack`、`font-family = Noto Sans SC` 等用户配置。
+  - TDD 红灯：`swift test --package-path macos --filter GhosttyRuntimeConfigLoaderTests/testPreferredConfigFileURLsFallbackToStandaloneGhosttyConfigWhenDevHavenConfigMissing` 初次失败，报 `type 'GhosttyRuntime' has no member 'preferredConfigFileURLs'`。
+  - 定向绿灯：`swift test --package-path macos --filter GhosttyRuntimeConfigLoaderTests` → 通过，`2 tests, 0 failures`。
+  - 全量验证：`swift test --package-path macos` → 通过，`115 tests, 5 skipped, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
+## 整理当前工作区并执行 git commit（2026-03-21）
+
+- [x] 核对当前分支、已修改文件与未跟踪文件，确认本次提交范围
+- [x] 运行 fresh 验证，确保当前工作区具备提交证据
+- [x] 整理提交内容并执行本地 `git commit`
+
+## Review（整理当前工作区并执行 git commit）
+
+- 提交范围：当前工作区包含同一批次的原生 Ghostty runtime / pasteboard / split surface 复用修复、根目录 `./release` 入口、相关测试、README / `AGENTS.md` / `tasks/*` 文档同步，以及对应实施计划文档；本轮按当前工作区真实状态统一提交。
+- 验证证据：
+  - `swift test --package-path macos` → 通过，`120 tests, 5 skipped, 0 failures`。
+  - `bash macos/scripts/test-release-command.sh` → 通过，输出 `release command smoke ok`。
+  - `bash macos/scripts/build-native-app.sh --help` → 通过，帮助文案正常打印。
+  - `git diff --check` → 通过。
+- 交付结果：已完成本地 `git commit`；具体 commit hash 以本轮命令输出和最终 `git log -1 --oneline` 为准。

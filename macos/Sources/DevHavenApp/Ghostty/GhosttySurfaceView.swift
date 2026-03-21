@@ -23,15 +23,13 @@ final class GhosttyTerminalSurfaceView: NSView {
     private var surfaceRef: GhosttyRuntime.SurfaceReference?
     private var cellSize: NSSize = .zero
     private var backingCellSizeInPixels: NSSize = .zero
-    private var lastBackingSize: NSSize = .zero
+    private var attachmentState = GhosttySurfaceAttachmentState()
     private var trackingAreaRef: NSTrackingArea?
     private var keyTextAccumulator: [String]?
     private var markedText = NSMutableAttributedString()
     private var lastPerformKeyEvent: TimeInterval?
     private var focused = false
     private var lastScrollbar: ScrollbarState?
-    private var lastOcclusion: Bool?
-    private var lastSurfaceFocus: Bool?
     var initializationError: Error?
     weak var scrollWrapper: GhosttySurfaceScrollView? {
         didSet {
@@ -80,6 +78,7 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     func tearDown() {
+        resignOwnedFirstResponderIfNeeded()
         if let trackingAreaRef {
             removeTrackingArea(trackingAreaRef)
             self.trackingAreaRef = nil
@@ -96,12 +95,18 @@ final class GhosttyTerminalSurfaceView: NSView {
         bridge.surfaceView = nil
         scrollWrapper = nil
         lastScrollbar = nil
-        lastOcclusion = nil
-        lastSurfaceFocus = nil
+        focused = false
+        attachmentState.prepareForContainerReuse()
     }
 
     func applyLatestModelState() {
         updateSurfaceMetrics()
+    }
+
+    func prepareForContainerReuse() {
+        resignOwnedFirstResponderIfNeeded()
+        focused = false
+        attachmentState.prepareForContainerReuse()
     }
 
     override func updateTrackingAreas() {
@@ -166,8 +171,8 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     private func setSurfaceFocus(_ focused: Bool) {
         guard let surface else { return }
-        guard lastSurfaceFocus != focused else { return }
-        lastSurfaceFocus = focused
+        guard attachmentState.lastSurfaceFocus != focused else { return }
+        attachmentState.lastSurfaceFocus = focused
         ghostty_surface_set_focus(surface, focused)
     }
 
@@ -177,8 +182,8 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     func setOcclusion(_ visible: Bool) {
         guard let surface else { return }
-        guard lastOcclusion != visible else { return }
-        lastOcclusion = visible
+        guard attachmentState.lastOcclusion != visible else { return }
+        attachmentState.lastOcclusion = visible
         ghostty_surface_set_occlusion(surface, visible)
     }
 
@@ -585,13 +590,13 @@ final class GhosttyTerminalSurfaceView: NSView {
         ghostty_surface_set_content_scale(surface, scale, scale)
         let backingSize = convertToBacking(bounds.size)
         guard let decision = GhosttySurfaceResizePolicy.resizeDecision(
-            lastBackingSize: lastBackingSize,
+            lastBackingSize: attachmentState.lastBackingSize,
             newBackingSize: backingSize,
             cellSizeInPixels: backingCellSizeInPixels
         ) else {
             return
         }
-        lastBackingSize = backingSize
+        attachmentState.lastBackingSize = backingSize
         ghostty_surface_set_size(surface, decision.width, decision.height)
     }
 
@@ -670,6 +675,18 @@ final class GhosttyTerminalSurfaceView: NSView {
         let localPoint = convert(event.locationInWindow, from: nil)
         let point = GhosttySurfaceMousePosition.map(localPoint: localPoint, boundsHeight: bounds.height)
         ghostty_surface_mouse_pos(surface, point.x, point.y, event.ghosttyMods)
+    }
+
+    private func resignOwnedFirstResponderIfNeeded() {
+        guard let window,
+              let firstResponder = window.firstResponder as? NSView
+        else {
+            return
+        }
+        guard firstResponder === self || firstResponder.isDescendant(of: self) else {
+            return
+        }
+        _ = window.makeFirstResponder(nil)
     }
 
     func debugVisibleText() -> String {

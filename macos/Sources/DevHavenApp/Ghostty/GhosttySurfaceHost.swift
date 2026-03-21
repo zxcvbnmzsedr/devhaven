@@ -338,11 +338,11 @@ final class GhosttySurfaceHostModel: ObservableObject {
     }
 
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
+        _ = preferredFocus
         if let ownedSurfaceView {
+            ownedSurfaceView.prepareForContainerReuse()
             hasPreparedSurfaceView = true
             workspaceLaunchDiagnostics.recordSurfaceReused(request: request)
-            applyCachedSurfaceActivity(to: ownedSurfaceView)
-            requestFocusIfNeeded(for: ownedSurfaceView, preferredFocus: preferredFocus)
             return ownedSurfaceView
         }
 
@@ -399,10 +399,16 @@ final class GhosttySurfaceHostModel: ObservableObject {
                 status: .success,
                 errorDescription: nil
             )
-            applyCachedSurfaceActivity(to: view)
-            requestFocusIfNeeded(for: view, preferredFocus: preferredFocus)
         }
         return view
+    }
+
+    func surfaceViewDidAttach(preferredFocus: Bool) {
+        guard let ownedSurfaceView else {
+            return
+        }
+        applyCachedSurfaceActivity(to: ownedSurfaceView)
+        requestFocusIfNeeded(for: ownedSurfaceView, preferredFocus: preferredFocus)
     }
 
     func applyLatestModelState(preferredFocus: Bool = false) {

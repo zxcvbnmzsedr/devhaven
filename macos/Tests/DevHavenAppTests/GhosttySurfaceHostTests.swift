@@ -133,6 +133,23 @@ final class GhosttySurfaceHostTests: XCTestCase {
         XCTAssertEqual(model.terminalStatusText, "终端已退出")
     }
 
+    func testPrepareForContainerReuseYieldsWindowFirstResponderWhenSurfaceViewOwnsResponder() {
+        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let view = model.acquireSurfaceView()
+        let window = makeWindow()
+        window.contentView = view
+        Self.retainedWindows.append(window)
+
+        let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
+        activator.activateIfNeeded(window: AppKitWindowActivationProxy(window: window))
+        XCTAssertTrue(window.makeFirstResponder(view))
+        XCTAssertTrue(window.firstResponder === view)
+
+        view.prepareForContainerReuse()
+
+        XCTAssertFalse(window.firstResponder === view, "container reuse 前应先让旧 pane 释放 firstResponder，避免分屏重挂载时带着旧焦点进新容器")
+    }
+
     private func makeInteractiveSurfaceView(model: GhosttySurfaceHostModel? = nil) throws -> GhosttyTerminalSurfaceView {
         try requireSmokeEnabled()
 

@@ -91,7 +91,7 @@ bash macos/scripts/setup-ghostty-framework.sh --source /path/to/ghostty --skip-b
 swift test --package-path macos
 
 # 构建 macOS 原生 App
-bash macos/scripts/build-native-app.sh --release
+./release
 ```
 
 > 说明：`macos/Vendor/` 不会入库；GitHub Release workflow 会先下载并构建固定版本的 Ghostty 源码（当前 pin 到 `da10707f93104c5466cd4e64b80ff48f789238a0`），再执行 `swift test` 和原生打包。
@@ -115,6 +115,24 @@ bash macos/scripts/build-native-app.sh --release
 ```
 
 > `./dev` 内部会先执行 `bash macos/scripts/setup-ghostty-framework.sh --verify-only`，再按需启动 `log stream`，最后运行 `swift run --package-path macos DevHavenApp`。
+
+### Release 打包入口
+
+仓库根目录还提供了一个更直观的 `./release`：
+
+```bash
+# 默认执行 release 打包
+./release
+
+# 透传原生打包脚本参数
+./release --no-open
+./release --output-dir /tmp/devhaven-native-app
+./release --triple x86_64-apple-macosx14.0 --no-open
+```
+
+> `./release` 内部固定执行 `bash macos/scripts/build-native-app.sh --release`，并继续透传其余参数；如果你需要 debug 包，请直接运行 `bash macos/scripts/build-native-app.sh --debug`。
+
+> DevHaven 的内嵌 Ghostty 终端会优先读取 `~/.devhaven/ghostty/config` 或 `~/.devhaven/ghostty/config.ghostty`；如果这里还没有 DevHaven 专属配置，则会回退到你现有的 Ghostty 全局配置（例如 `~/Library/Application Support/com.mitchellh.ghostty/config*`）。
 
 ### macOS 特别说明
 
