@@ -20,7 +20,16 @@ struct WorkspaceProjectListView: View {
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(groups) { group in
-                        projectGroup(group)
+                        ProjectGroupView(
+                            group: group,
+                            onSelectProject: onSelectProject,
+                            onRefreshWorktrees: onRefreshWorktrees,
+                            onRequestCreateWorktree: onRequestCreateWorktree,
+                            onCloseProject: onCloseProject,
+                            onOpenWorktree: onOpenWorktree,
+                            onRetryWorktree: onRetryWorktree,
+                            onRequestDeleteWorktree: onRequestDeleteWorktree
+                        )
                     }
                 }
                 .padding(10)
@@ -60,34 +69,45 @@ struct WorkspaceProjectListView: View {
         .padding(.vertical, 10)
         .background(NativeTheme.surface)
     }
+}
 
-    private func projectGroup(_ group: WorkspaceSidebarProjectGroup) -> some View {
+// MARK: - Project Group Row
+
+private struct ProjectGroupView: View {
+    let group: WorkspaceSidebarProjectGroup
+    let onSelectProject: (String) -> Void
+    let onRefreshWorktrees: (String) -> Void
+    let onRequestCreateWorktree: (String) -> Void
+    let onCloseProject: (String) -> Void
+    let onOpenWorktree: (String, String) -> Void
+    let onRetryWorktree: (String, String) -> Void
+    let onRequestDeleteWorktree: (String, String) -> Void
+
+    @State private var isHovering = false
+
+    private var cardBg: Color {
+        group.isActive ? NativeTheme.accent.opacity(0.12) : NativeTheme.elevated
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Button {
-                    onSelectProject(group.rootProject.path)
-                } label: {
-                    projectRow(group)
-                }
-                .buttonStyle(.plain)
-
-                HStack(spacing: 4) {
-                    rowIconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
-                        onRefreshWorktrees(group.rootProject.path)
-                    }
-                    rowIconButton(systemName: "plus", help: "创建或添加 worktree") {
-                        onRequestCreateWorktree(group.rootProject.path)
-                    }
-                    rowIconButton(systemName: "xmark", help: "关闭项目") {
-                        onCloseProject(group.rootProject.path)
-                    }
-                }
+            Button {
+                onSelectProject(group.rootProject.path)
+            } label: {
+                projectCard
             }
+            .buttonStyle(.plain)
+            .onHover { isHovering = $0 }
 
             if !group.worktrees.isEmpty {
                 VStack(spacing: 4) {
                     ForEach(group.worktrees) { worktree in
-                        worktreeRow(worktree)
+                        WorktreeRowView(
+                            item: worktree,
+                            onOpenWorktree: onOpenWorktree,
+                            onRetryWorktree: onRetryWorktree,
+                            onRequestDeleteWorktree: onRequestDeleteWorktree
+                        )
                     }
                 }
                 .padding(.leading, 12)
@@ -95,99 +115,154 @@ struct WorkspaceProjectListView: View {
         }
     }
 
-    private func projectRow(_ group: WorkspaceSidebarProjectGroup) -> some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
+    private var projectCard: some View {
+        let dirName = URL(fileURLWithPath: group.rootProject.path).lastPathComponent
+        let showSubtitle = dirName != group.rootProject.name
+
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(group.rootProject.name)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(group.isActive ? NativeTheme.textPrimary : NativeTheme.textSecondary)
                     .lineLimit(1)
-                Text(URL(fileURLWithPath: group.rootProject.path).lastPathComponent)
-                    .font(.caption2)
-                    .foregroundStyle(NativeTheme.textSecondary)
-                    .lineLimit(1)
+                if showSubtitle {
+                    Text(dirName)
+                        .font(.caption2)
+                        .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
-            if !group.worktrees.isEmpty {
-                Text("\(group.worktrees.count)")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(group.isActive ? NativeTheme.textPrimary : NativeTheme.textSecondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .background(NativeTheme.surface)
-                    .clipShape(.rect(cornerRadius: 7))
-            }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 10)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(group.isActive ? NativeTheme.accent.opacity(0.18) : NativeTheme.elevated)
+        .background(cardBg)
+        .overlay(alignment: .trailing) {
+            // 按钮覆盖在卡片右侧，不占额外布局空间
+            HStack(spacing: 4) {
+                iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
+                    onRefreshWorktrees(group.rootProject.path)
+                }
+                iconButton(systemName: "plus", help: "创建或添加 worktree") {
+                    onRequestCreateWorktree(group.rootProject.path)
+                }
+                iconButton(systemName: "xmark", help: "关闭项目") {
+                    onCloseProject(group.rootProject.path)
+                }
+            }
+            .padding(.trailing, 6)
+            .padding(.vertical, 6)
+            .background(
+                // 渐变遮罩，让按钮与卡片内容自然过渡
+                LinearGradient(
+                    colors: [cardBg.opacity(0), cardBg, cardBg],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .opacity(isHovering ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .stroke(group.isActive ? NativeTheme.accent.opacity(0.7) : NativeTheme.border, lineWidth: 1)
+                .stroke(group.isActive ? NativeTheme.accent.opacity(0.5) : NativeTheme.border.opacity(0.5), lineWidth: 1)
         )
         .clipShape(.rect(cornerRadius: 10))
         .contentShape(.rect(cornerRadius: 10))
         .help(group.rootProject.path)
     }
 
-    private func worktreeRow(_ item: WorkspaceSidebarWorktreeItem) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                if item.status == "failed" {
-                    return
-                }
-                if item.status == "creating" {
-                    return
-                }
-                onOpenWorktree(item.rootProjectPath, item.path)
-            } label: {
-                HStack(spacing: 8) {
-                    Text("↳ \(item.name)")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(item.isActive ? NativeTheme.textPrimary : NativeTheme.textSecondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 6)
-                    Text(item.branch)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(NativeTheme.textSecondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(NativeTheme.surface)
-                        .clipShape(.rect(cornerRadius: 6))
-                    statusChip(item)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(item.isActive ? NativeTheme.accent.opacity(0.14) : Color.clear)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(item.isActive ? NativeTheme.accent.opacity(0.55) : NativeTheme.border.opacity(0.6), lineWidth: 1)
-                )
-                .clipShape(.rect(cornerRadius: 8))
-                .contentShape(.rect(cornerRadius: 8))
-                .opacity(item.status == "creating" ? 0.8 : 1)
-            }
-            .buttonStyle(.plain)
-            .disabled(item.status == "creating")
-
-            if item.status == "failed" {
-                rowTextButton(title: "重试", help: item.initError ?? "重试创建") {
-                    onRetryWorktree(item.rootProjectPath, item.path)
-                }
-            }
-
-            rowTextButton(title: "删除", help: "删除 worktree", foreground: NativeTheme.danger) {
-                onRequestDeleteWorktree(item.rootProjectPath, item.path)
-            }
-            .disabled(item.status == "creating")
+    private func iconButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(NativeTheme.textSecondary)
+                .frame(width: 24, height: 24)
+                .background(NativeTheme.surface.opacity(0.8))
+                .clipShape(.rect(cornerRadius: 7))
         }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(help)
+    }
+}
+
+// MARK: - Worktree Row
+
+private struct WorktreeRowView: View {
+    let item: WorkspaceSidebarWorktreeItem
+    let onOpenWorktree: (String, String) -> Void
+    let onRetryWorktree: (String, String) -> Void
+    let onRequestDeleteWorktree: (String, String) -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            if item.status == "failed" || item.status == "creating" { return }
+            onOpenWorktree(item.rootProjectPath, item.path)
+        } label: {
+            rowContent
+        }
+        .buttonStyle(.plain)
+        .disabled(item.status == "creating")
+        .onHover { isHovering = $0 }
         .help(item.path)
     }
 
+    private var rowContent: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.turn.down.right")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(NativeTheme.textSecondary.opacity(0.5))
+            Text(item.name)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(item.isActive ? NativeTheme.textPrimary : NativeTheme.textSecondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            if item.branch != item.name {
+                Text(item.branch)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(NativeTheme.surface.opacity(0.8))
+                    .clipShape(.rect(cornerRadius: 5))
+            }
+            statusChip
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(item.isActive ? NativeTheme.accent.opacity(0.1) : Color.clear)
+        .overlay(alignment: .trailing) {
+            // 删除/重试按钮覆盖在行右侧
+            HStack(spacing: 4) {
+                if item.status == "failed" {
+                    actionChip(title: "重试", help: item.initError ?? "重试创建") {
+                        onRetryWorktree(item.rootProjectPath, item.path)
+                    }
+                }
+                actionChip(title: "删除", help: "删除 worktree") {
+                    onRequestDeleteWorktree(item.rootProjectPath, item.path)
+                }
+            }
+            .padding(.trailing, 6)
+            .opacity(isHovering && item.status != "creating" ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(item.isActive ? NativeTheme.accent.opacity(0.4) : NativeTheme.border.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(.rect(cornerRadius: 7))
+        .contentShape(.rect(cornerRadius: 7))
+        .opacity(item.status == "creating" ? 0.7 : 1)
+    }
+
     @ViewBuilder
-    private func statusChip(_ item: WorkspaceSidebarWorktreeItem) -> some View {
+    private var statusChip: some View {
         switch item.status {
         case "creating":
             Text("创建中")
@@ -210,34 +285,15 @@ struct WorkspaceProjectListView: View {
         }
     }
 
-    private func rowIconButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(NativeTheme.textSecondary)
-                .frame(width: 26, height: 26)
-                .background(NativeTheme.surface)
-                .clipShape(.rect(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .focusable(false)
-        .help(help)
-    }
-
-    private func rowTextButton(
-        title: String,
-        help: String,
-        foreground: Color = NativeTheme.textSecondary,
-        action: @escaping () -> Void
-    ) -> some View {
+    private func actionChip(title: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.caption2.weight(.medium))
-                .foregroundStyle(foreground)
+                .foregroundStyle(NativeTheme.textSecondary)
                 .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.vertical, 5)
                 .background(NativeTheme.surface)
-                .clipShape(.rect(cornerRadius: 7))
+                .clipShape(.rect(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .focusable(false)

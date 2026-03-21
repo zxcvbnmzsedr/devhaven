@@ -1,5 +1,89 @@
 # 本次任务清单
 
+## 合并 `worktree` 分支回当前工作区（2026-03-21）
+
+- [x] 核对当前 `main` / `worktree` 分支差异、预先存在的工作区状态与合并基线
+- [x] 将 `worktree` 分支合并到当前 `main`，处理冲突并保留需要的文档同步
+- [x] 运行合并后的验证命令，并在 `tasks/todo.md` 追加 Review
+
+## Review（合并 `worktree` 分支回当前工作区）
+
+- 合并结果：已将 `worktree` 分支上的 3 个提交（`66914f1`、`9ab13d5`、`5b7cca7`）并入当前 `main`，对应能力包括“worktree 复用已准备好的 Ghostty vendor”“隐藏侧栏项目卡片上的 worktree 数量徽标”“为当前终端窗格增加聚焦描边”。
+- 预处理说明：合并前发现当前工作区里有一个**已暂存删除**的 `tasks/todo.md`；由于仓库工作流要求在执行前写 checklist，并且 `worktree` 分支本身也修改了该文件，本轮先恢复该文件，再把两侧任务记录统一收口到最终 merge 结果。
+- 冲突处理：本轮真实文本冲突出现在 `AGENTS.md` 与 `tasks/todo.md`。`AGENTS.md` 已合并保留 `./release` 入口、Ghostty 配置优先级说明，以及 worktree 自动复用 vendor 的最新事实；`tasks/todo.md` 已同时保留两边历史任务记录，并补充本次 merge Review。
+- 验证证据：
+  - `swift test --package-path macos` → 通过，`123 tests, 5 skipped, 0 failures`。
+  - `bash macos/scripts/test-dev-command.sh` → 通过，输出 `dev command smoke ok`。
+  - `bash macos/scripts/test-release-command.sh` → 通过，输出 `release command smoke ok`。
+  - `git diff --check` → 通过。
+
+## 提交当前改动（2026-03-21）
+
+- [x] 确认当前改动范围与提交主题
+- [x] 同步更新任务记录
+- [x] 运行提交前验证并记录证据
+- [x] 执行 git commit
+
+## Review（提交当前改动）
+
+- 提交结果：已创建提交 `feat(workspace): 为当前终端窗格增加聚焦描边`。
+- 本次纳入提交的改动：
+  - `WorkspaceTerminalPaneView.swift`：在隐藏 pane header 的 workspace minimal 模式下，为当前聚焦终端 pane 增加 accent 描边，避免当前 pane 缺少可见焦点反馈。
+  - `.claude/settings.local.json`：补充本地工具权限，允许 `mcp__serena__find_file` 与 `mcp__open-websearch__search`。
+  - `tasks/todo.md`：记录本次提交任务与验证证据。
+- 验证证据：
+  - `swift test --package-path macos` → 通过，`111 tests, 5 skipped, 0 failures`；过程中仅有既有 Ghostty 链接 warning，未阻断构建与测试。
+  - `git diff --check` → 通过。
+- 当前边界：
+  - 工作区里仍有未跟踪文件 `release`，本次未纳入提交；若后续要正式引入新的根目录发布入口，需要同步更新 `AGENTS.md` / 相关文档后再单独提交。
+
+## 删除工作区侧栏项目卡片上的 worktree 数量徽标（2026-03-21）
+
+- [x] 记录最小设计与实施计划
+- [x] 先补失败测试，锁定项目卡片不再显示 worktree 数量
+- [x] 以最小改动删除数量徽标并保留 worktree 列表
+- [x] 运行定向验证并追加 Review
+
+## Review（删除工作区侧栏项目卡片上的 worktree 数量徽标）
+
+- 直接原因：`WorkspaceProjectListView.swift` 里的私有 `ProjectGroupView.projectCard` 之前会在项目卡片右侧用 `group.worktrees.count` 渲染一个数量徽标，因此用户在 `DevHaven` 项目旁会看到 `1`。
+- 设计层诱因：这是一个局部 UI 信息密度问题，不是数据流或状态分裂问题。`worktree` 数量和下方列表已经同时表达了相同信息，造成冗余展示；未发现明显系统设计缺陷。
+- 当前修复：
+  - 删除 `ProjectGroupView.projectCard` 中基于 `group.worktrees.count` 的数量徽标视图；
+  - 保留 `ForEach(group.worktrees)` 列表、hover 操作按钮、卡片样式和交互不变；
+  - 新增 `WorkspaceProjectListViewTests`，用源码级回归测试锁定“列表仍在，但数量徽标逻辑已删除”。
+- 长期建议：后续如果还要继续收敛侧栏信息密度，优先先检查“同一信息是否已经在下一级列表或 hover 操作中表达”，避免再叠加纯统计型徽标。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter WorkspaceProjectListViewTests/testProjectCardDoesNotRenderWorktreeCountBadge` → 修复前失败，报 `项目卡片不应再使用 group.worktrees.count 渲染数量徽标`。
+  - 定向绿灯：`swift test --package-path macos --filter WorkspaceProjectListViewTests/testProjectCardDoesNotRenderWorktreeCountBadge` → 通过，`1 test, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
+## 修复 worktree 下 ./dev 因 Ghostty vendor 缺失而启动失败（2026-03-21）
+
+- [x] 复现 worktree 下 `./dev` 的 Ghostty vendor 校验失败，并确认触发条件
+- [x] 对照 `git worktree` / vendor 布局定位根因与边界
+- [x] 先补脚本级失败用例，锁定 worktree vendor 复用预期
+- [x] 以最小改动修复 worktree 启动链路并同步必要文档
+- [x] 运行定向验证并追加 Review
+
+## Review（修复 worktree 下 ./dev 因 Ghostty vendor 缺失而启动失败）
+
+- 直接原因：根目录 `./dev` 与 `macos/scripts/build-native-app.sh` 之前都只会对“当前 checkout 的 `macos/Vendor/`”执行 `setup-ghostty-framework.sh --verify-only`。而 `macos/Vendor/` 被 `.gitignore` 忽略，linked worktree 不会自动继承主 checkout 已准备好的 vendor，所以在 worktree 里启动时会直接卡死在 vendor 校验阶段。
+- 设计层诱因：Ghostty binary target 依赖的是一个本地忽略目录，但脚本边界把“当前 worktree 必然已经有独立 vendor”当成默认前提，导致同一仓库的多个 checkout 在本地依赖真相源上分裂。问题集中在 bootstrap 边界没有对齐；未发现更大的系统设计缺陷。
+- 当前修复：
+  - `setup-ghostty-framework.sh` 新增 `--ensure-worktree-vendor`，会先检查当前 worktree 的 `macos/Vendor/`；若缺失或损坏，则扫描同仓库其他 `git worktree`，找到首个已验证通过的 vendor 并同步到当前 worktree；
+  - `./dev` 改为先执行 `--ensure-worktree-vendor`，所以 linked worktree 里不再因为本地缺少 vendor 而直接失败；
+  - `build-native-app.sh` 同步切到相同入口，避免 worktree 下打包链路继续踩同一个坑；
+  - `README.md`、`AGENTS.md` 已同步更新为“worktree 可自动复用其他 checkout 的 vendor”的现状说明。
+- 长期建议：如果后续 worktree 使用频率继续上升，可进一步把 Ghostty vendor 收口到显式共享缓存（例如 `~/.devhaven/` 下的统一 cache）而不是按 worktree 复制，避免重复占用磁盘并减少同步成本。
+- 验证证据：
+  - TDD 红灯：`bash macos/scripts/test-dev-command.sh` → 修复前失败；临时 linked worktree 内稳定复现 `Ghostty vendor 验证失败`，缺少 `GhosttyKit.xcframework`、`themes` 与 `terminfo`。
+  - 定向绿灯：`bash macos/scripts/test-dev-command.sh` → 通过，输出 `dev command smoke ok`。
+  - 当前 worktree 实测：`bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor` → 成功复用 `/Users/zhaotianzeng/WebstormProjects/DevHaven/macos/Vendor`，并完成当前 worktree `macos/Vendor/` 校验。
+  - 当前 worktree 启动链路验证：用 mock `swift` 执行 `./dev --no-log` → 通过 vendor 准备阶段并实际调用 `swift run --package-path macos DevHavenApp`。
+  - 当前 worktree 打包链路验证：`bash macos/scripts/build-native-app.sh --debug --no-open --output-dir /tmp/devhaven-native-app-worktree-vendor-verify` → 通过，产出 `/tmp/devhaven-native-app-worktree-vendor-verify/DevHaven.app`；过程中出现的 Ghostty umbrella header warning 为上游既有告警，不是本次改动新增错误。
+  - 差异校验：`git diff --check` → 通过。
+||||||| Stash base
 
 ## 修复新开项目 / 新开 pane 后终端焦点未进入命令行（2026-03-21）
 
@@ -23,7 +107,6 @@
   - 相关回归：`swift test --package-path macos --filter 'GhosttySurfaceHostTests/(testPrepareForContainerReuseYieldsWindowFirstResponderWhenSurfaceViewOwnsResponder|testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt|testRestoreWindowResponderCanReclaimFocusedPaneFromNonTerminalResponderAfterMissedInitialFocus)|GhosttySurfaceFocusRequestPolicyTests|GhosttySurfaceScrollViewTests|GhosttySurfaceRepresentableUpdatePolicyTests|WorkspaceSurfaceActivityPolicyTests'` → 通过，`20 tests, 0 failures`。
   - 构建验证：`swift build --package-path macos` → 通过。
   - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceHost.swift macos/Tests/DevHavenAppTests/GhosttySurfaceHostTests.swift tasks/todo.md` → 通过。
-
 
 ## 排查 ./release 打包产物字体异常（2026-03-21）
 
@@ -483,3 +566,4 @@
   - `bash macos/scripts/build-native-app.sh --help` → 通过，帮助文案正常打印。
   - `git diff --check` → 通过。
 - 交付结果：已完成本地 `git commit`；具体 commit hash 以本轮命令输出和最终 `git log -1 --oneline` 为准。
+

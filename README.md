@@ -94,7 +94,7 @@ swift test --package-path macos
 ./release
 ```
 
-> 说明：`macos/Vendor/` 不会入库；GitHub Release workflow 会先下载并构建固定版本的 Ghostty 源码（当前 pin 到 `da10707f93104c5466cd4e64b80ff48f789238a0`），再执行 `swift test` 和原生打包。
+> 说明：`macos/Vendor/` 不会入库；GitHub Release workflow 会先下载并构建固定版本的 Ghostty 源码（当前 pin 到 `da10707f93104c5466cd4e64b80ff48f789238a0`），再执行 `swift test` 和原生打包。若你是在 linked worktree 里开发，`./dev` / `build-native-app.sh` 也会优先尝试复用同仓库其他 worktree 已准备好的 vendor。
 
 ### 开发态一键启动
 
@@ -114,7 +114,7 @@ swift test --package-path macos
 ./dev --dry-run
 ```
 
-> `./dev` 内部会先执行 `bash macos/scripts/setup-ghostty-framework.sh --verify-only`，再按需启动 `log stream`，最后运行 `swift run --package-path macos DevHavenApp`。
+> `./dev` 内部会先执行 `bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor`；如果当前 worktree 没有本地 `macos/Vendor/`，但同仓库其他 worktree 已准备好 vendor，它会先自动同步，再按需启动 `log stream`，最后运行 `swift run --package-path macos DevHavenApp`。
 
 ### Release 打包入口
 

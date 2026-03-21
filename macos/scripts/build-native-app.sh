@@ -150,8 +150,8 @@ if [[ -n "$SWIFT_TRIPLE" ]]; then
   SWIFT_BUILD_ARGS+=(--triple "$SWIFT_TRIPLE")
 fi
 
-log "验证 Ghostty vendor 完整性"
-bash "$SCRIPT_DIR/setup-ghostty-framework.sh" --verify-only
+log "确保 Ghostty vendor 可用"
+bash "$SCRIPT_DIR/setup-ghostty-framework.sh" --ensure-worktree-vendor
 
 log "开始构建 Swift 原生版（configuration=${CONFIGURATION}${SWIFT_TRIPLE:+, triple=$SWIFT_TRIPLE}）"
 swift build "${SWIFT_BUILD_ARGS[@]}"

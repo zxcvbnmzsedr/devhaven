@@ -9,6 +9,7 @@ SOURCE_DIR="${GHOSTTY_SOURCE_DIR:-}"
 VENDOR_DIR="$MACOS_DIR/Vendor"
 SKIP_BUILD=0
 VERIFY_ONLY=0
+ENSURE_WORKTREE_VENDOR=0
 
 usage() {
   cat <<USAGE
@@ -23,12 +24,15 @@ usage() {
   --vendor-dir <path>  输出目录，默认：$VENDOR_DIR
   --skip-build         不执行 zig build，直接复用 source 下现有产物
   --verify-only        只验证 vendor 目录是否完整，不做复制
+  --ensure-worktree-vendor
+                       确保当前 worktree 的 vendor 可用；若本地缺失，则尝试复用同仓库其他 worktree 已准备好的 vendor
   --help               显示帮助
 
 典型用法：
   bash macos/scripts/setup-ghostty-framework.sh --source /path/to/ghostty
   bash macos/scripts/setup-ghostty-framework.sh --source /path/to/ghostty --skip-build
   bash macos/scripts/setup-ghostty-framework.sh --verify-only
+  bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor
 USAGE
 }
 
@@ -112,6 +116,52 @@ verify_vendor() {
   fi
 }
 
+vendor_is_valid() {
+  local vendor_dir="$1"
+  verify_vendor "$vendor_dir" >/dev/null 2>&1
+}
+
+find_reusable_worktree_vendor() {
+  command -v git >/dev/null 2>&1 || return 1
+
+  local line=""
+  local worktree_path=""
+  local candidate_vendor=""
+  while IFS= read -r line; do
+    [[ "$line" == worktree\ * ]] || continue
+    worktree_path="${line#worktree }"
+    [[ "$worktree_path" == "$REPO_DIR" ]] && continue
+
+    candidate_vendor="$worktree_path/macos/Vendor"
+    if vendor_is_valid "$candidate_vendor"; then
+      printf '%s\n' "$candidate_vendor"
+      return 0
+    fi
+  done < <(git -C "$REPO_DIR" worktree list --porcelain 2>/dev/null || true)
+
+  return 1
+}
+
+ensure_worktree_vendor() {
+  if vendor_is_valid "$VENDOR_DIR"; then
+    log "当前 worktree 的 Ghostty vendor 已可用：$VENDOR_DIR"
+    verify_vendor "$VENDOR_DIR"
+    return 0
+  fi
+
+  local reusable_vendor=""
+  reusable_vendor="$(find_reusable_worktree_vendor || true)"
+  if [[ -z "$reusable_vendor" ]]; then
+    verify_vendor "$VENDOR_DIR"
+    return 1
+  fi
+
+  log "检测到同仓库其他 worktree 已准备好 Ghostty vendor：$reusable_vendor"
+  log "同步共享 Ghostty vendor 到当前 worktree：$VENDOR_DIR"
+  copy_tree "$reusable_vendor" "$VENDOR_DIR"
+  verify_vendor "$VENDOR_DIR"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --source)
@@ -132,6 +182,10 @@ while [[ $# -gt 0 ]]; do
       VERIFY_ONLY=1
       shift
       ;;
+    --ensure-worktree-vendor)
+      ENSURE_WORKTREE_VENDOR=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -143,6 +197,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 VENDOR_DIR="$(resolve_path "$VENDOR_DIR")"
+
+if (( VERIFY_ONLY && ENSURE_WORKTREE_VENDOR )); then
+  fail "--verify-only 与 --ensure-worktree-vendor 不能同时使用"
+fi
+
+if (( ENSURE_WORKTREE_VENDOR )); then
+  [[ -z "$SOURCE_DIR" ]] || fail "--ensure-worktree-vendor 不能与 --source 同时使用"
+  (( SKIP_BUILD == 0 )) || fail "--ensure-worktree-vendor 不能与 --skip-build 同时使用"
+  ensure_worktree_vendor
+  exit 0
+fi
 
 if (( VERIFY_ONLY )); then
   verify_vendor "$VENDOR_DIR"
