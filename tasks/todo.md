@@ -1,5 +1,49 @@
 # 本次任务清单
 
+## 修复首页左上角加号点击无反应（2026-03-21）
+
+- [x] 对照 `origin/archive/2.8.3` 中首页左上角加号的真实功能链路，确认菜单项、状态变化与调用顺序
+- [x] 回滚上一轮与 2.8.3 行为不一致的假设（例如“单击直接打开目录选择器”“添加目录后自动切到新目录筛选”）
+- [x] 先补失败测试，锁定 2.8.3 的三个入口：添加工作目录（扫描项目）/ 直接添加为项目 / 刷新项目列表
+- [x] 以最小改动在原生首页恢复与 2.8.3 一致的功能
+- [x] 运行验证并在 `tasks/todo.md` 追加基于 2.8.3 对照的 Review
+
+## Review（修复首页左上角加号点击无反应）
+
+- 2.8.3 真相源对照：
+  - 归档分支 `origin/archive/2.8.3` 的 `src/components/Sidebar.tsx` 中，首页左上角加号不是单一按钮，而是 `DropdownMenu`；
+  - 该菜单有 3 个动作：`添加工作目录（扫描项目）`、`直接添加为项目`、`刷新项目列表`；
+  - 其中“添加工作目录”会先写入 `appState.directories`，再执行 refresh 重新扫描；“直接添加为项目”会写入 `directProjectPaths` 并立即 build 项目；“刷新项目列表”会重新扫描 `directories + directProjectPaths`。
+- 直接原因：原生版迁移后，`ProjectSidebarView.swift` 只剩下一个静态 `plus.circle` 图标，没有把 2.8.3 里的目录菜单和背后的三条数据链路一起迁过来；因此用户点击时没有任何响应。
+- 设计层诱因：存在。问题不只是一个按钮漏绑 action，而是 **Tauri 版的复合入口（菜单 + appState 更新 + 项目扫描/build）在迁到原生版时被降成了纯展示图标**，导致 `directories` / `directProjectPaths` 这些兼容状态虽然还在模型里，却没有对应的首页交互和刷新链路。问题集中在迁移时 UI 行为与数据动作一起丢失；未发现明显更大的系统设计缺陷。
+- 当前修复：
+  - `ProjectSidebarView.swift`：把“目录”右侧加号恢复为和 2.8.3 一致的 `Menu`，包含 3 个入口：
+    1. `添加工作目录（扫描项目）`
+    2. `直接添加为项目`
+    3. `刷新项目列表`
+  - `NativeAppViewModel.swift`：
+    - `addProjectDirectory(_:)` 现在只负责持久化工作目录，不再错误地自动切换当前目录筛选；
+    - 新增 `addDirectProjects(_:)`，对齐 2.8.3 的“直接添加为项目”；
+    - 新增 `refreshProjectCatalog()`，对齐 2.8.3 的 refresh：扫描 `directories`、合并 `directProjectPaths`、重建项目列表并持久化；
+    - `refresh()` 同步改为在有目录/直连项目配置时触发上述刷新链路。
+  - `LegacyCompatStore.swift`：新增 `updateDirectProjectPaths(_:)`，与既有 `updateDirectories(_:)` 一起负责兼容写回 `app_state.json`。
+  - `NativeAppViewModel.swift` 底部新增与 2.8.3 对齐的最小项目发现/构建辅助逻辑：
+    - 工作目录扫描：收录根 Git 仓库、直接子目录、以及更深层的嵌套 Git 仓库；
+    - 直接项目构建：保留旧项目的 `id/tags/scripts/worktrees/gitDaily/created`，只刷新元信息。
+  - 测试更新：
+    - `ProjectSidebarViewTests`：锁定目录加号菜单的 3 个动作文案；
+    - `NativeAppViewModelTests.testRefreshProjectCatalogMergesConfiguredDirectoriesAndDirectProjectPathsLikeArchiveRefresh`
+    - `NativeAppViewModelTests.testAddDirectProjectsPersistsPathsAndBuildsProjectsLikeArchiveSidebarAction`
+- 长期建议：后续凡是“从旧栈迁到新栈”的交互，都不要只迁视觉元素；应把 **入口形态、状态写入、刷新/副作用链路** 一起列成迁移清单，否则很容易出现“模型字段还在、UI 图标也还在，但真正行为已断线”的半迁移状态。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter 'ProjectSidebarViewTests|NativeAppViewModelTests/(testRefreshProjectCatalogMergesConfiguredDirectoriesAndDirectProjectPathsLikeArchiveRefresh|testAddDirectProjectsPersistsPathsAndBuildsProjectsLikeArchiveSidebarAction)'`
+    - 修复前失败，编译错误：
+      - `value of type 'NativeAppViewModel' has no member 'refreshProjectCatalog'`
+      - `value of type 'NativeAppViewModel' has no member 'addDirectProjects'`
+  - 定向绿灯：同一命令修复后通过，`3 tests, 0 failures`。
+  - 全量验证：`swift test --package-path macos` → 通过，`126 tests, 5 skipped, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
 ## 合并 `worktree` 分支回当前工作区（2026-03-21）
 
 - [x] 核对当前 `main` / `worktree` 分支差异、预先存在的工作区状态与合并基线
@@ -567,3 +611,182 @@
   - `git diff --check` → 通过。
 - 交付结果：已完成本地 `git commit`；具体 commit hash 以本轮命令输出和最终 `git log -1 --oneline` 为准。
 
+
+## 修复点击“刷新项目”时界面卡死（2026-03-21）
+
+- [x] 梳理“刷新项目”从 UI 到 ViewModel / Store 的执行链路，确认主线程阻塞点
+- [x] 形成单一根因假设，并对照现有刷新/持久化实现找出与可响应路径的关键差异
+- [x] 先补失败测试，锁定刷新期间不应继续把重扫描/写盘压在主线程
+- [x] 以最小改动把阻塞性刷新流程移到后台，并补必要状态反馈/防重入
+- [x] 运行定向验证与全量验证，并在 `tasks/todo.md` 追加 Review
+
+## Review（修复点击“刷新项目”时界面卡死）
+
+- 直接原因：`NativeAppViewModel` 整体挂在 `@MainActor` 上，但“刷新项目”链路里仍然把阻塞性工作放在主线程收尾：
+  1. `refresh()` 先同步执行 `load()`，会在主线程读 `app_state.json / projects.json`；
+  2. `refreshProjectCatalog()` 虽然把目录扫描和项目构建放进了 `Task.detached`，但最终 `persistProjects()` 仍在主线程里做 `JSONEncoder + JSONSerialization + projects.json 原子写盘 + selection/document refresh`；
+  3. 对当前这台机器的 `~/.devhaven` 数据来说，刷新会覆盖约 135 个项目，因此点击后主线程会被这段同步 I/O 和状态收敛短暂卡住。
+- 设计层诱因：存在。问题不是单个按钮写错，而是 **UI 状态层（`@MainActor` ViewModel）与重扫描 / 持久化这类重操作耦合过深**。扫描阶段虽然已经开始后台化，但最终写盘与结果应用仍混在主线程方法里，导致“半后台、半阻塞”的刷新链路。未发现更大的系统设计缺陷。
+- 当前修复：
+  1. `NativeAppViewModel` 新增 `projectCatalogRefresher` 后台刷新注入点与 `ProjectCatalogRefreshRequest`，把“目录扫描 + 项目重建 + `projects.json` 写盘”整体搬到 detached 后台任务执行；
+  2. `refreshProjectCatalog()` 改成只在主线程负责刷新状态切换、错误回传和最终 `snapshot.projects` 应用，不再在主线程里执行写盘；
+  3. `refresh()` 遇到已配置目录/直连项目时，不再先同步 `load()` 再刷新，避免一次多余的主线程磁盘读取；
+  4. 新增 `isRefreshingProjectCatalog`，并在命令菜单 / 侧栏刷新入口上做禁用与“正在刷新…”文案，避免重复触发且给用户最小反馈；
+  5. `LegacyCompatStore` 新增后台刷新所需的 home 目录访问口，保证后台持久化仍落到同一份 `~/.devhaven` 数据。
+- 长期建议：后续把 `LegacyCompatStore` 的读写职责进一步从 `@MainActor` ViewModel 中抽离成统一的后台 job / actor，避免类似“扫描已后台化，但最终写盘仍卡 UI”反复出现；如果刷新耗时继续增长，再补显式进度提示而不只是禁用入口。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter ProjectCatalogRefreshConcurrencyTests`
+    - 修复前失败，编译错误为：
+      - `extra argument 'projectCatalogRefresher' in call`
+      - `value of type 'NativeAppViewModel' has no member 'isRefreshingProjectCatalog'`
+    - 说明新测试确实先锁住了“后台刷新入口 + 刷新中状态”这条边界。
+  - 定向绿灯：同一命令修复后通过，`2 tests, 0 failures`。
+  - 全量验证：`swift test --package-path macos` → 通过，`128 tests, 5 skipped, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
+
+## 排查删除/恢复功能与归档分支回收站差异（2026-03-21）
+
+- [x] 核对当前工作区状态与上轮中断后的现场，确认排查基线
+- [x] 定位当前原生主线中的回收站/删除/恢复入口与数据链路
+- [x] 对照归档分支中的回收站实现，找出缺失点与直接原因
+- [x] 输出结论；若需恢复功能，再补设计与实施计划
+
+## Review（排查删除/恢复功能与归档分支回收站差异）
+
+- 现场基线：上轮“刷新项目卡死”相关改动仍未提交，当前工作区是脏的；后台仅残留一个 `log stream` 观察进程，没有遗留 `swift test` / `swift run`。本轮只做只读排查，未改业务代码。
+- 归档分支 `origin/archive/2.8.3` 的回收站能力包含三层：
+  1. 侧栏底部固定 `回收站` 图标入口（`src/components/Sidebar.tsx`）；
+  2. 项目删除入口不止一处，包含卡片、列表行以及批量“移入回收站”（`src/components/MainContent.tsx` / `ProjectCard.tsx` / `ProjectListRow.tsx`）；
+  3. `RecycleBinModal.tsx` 弹窗支持展示隐藏项目并执行“恢复”。
+- 当前原生主线中，“恢复”能力**并没有完全消失**：
+  - `DevHavenApp.swift` 仍保留 `回收站` 菜单项并调用 `viewModel.revealRecycleBin()`；
+  - `AppRootView.swift` 仍会弹出 `RecycleBinSheetView`；
+  - `RecycleBinSheetView.swift` 里仍有 `恢复` 按钮；
+  - `NativeAppViewModel.swift` 里仍有 `moveProjectToRecycleBin(...)` / `restoreProjectFromRecycleBin(...)` / `recycleBinItems`。
+- 直接原因：这次不是数据层回收站被删了，而是**原生迁移时 UI 入口与操作覆盖范围明显缩水**，导致功能“体感上像没了”：
+  1. 归档版侧栏底部的固定回收站入口被移除了，当前只能从菜单栏 `回收站` 进入；
+  2. 当前 `MainContentView.swift` 只有**卡片模式**项目卡右上角保留 `trash`，**列表模式** `projectRow(...)` 已经没有任何删除入口；
+  3. 归档版的批量移入回收站能力在原生版里也没有迁过来。
+- 设计层诱因：存在。与之前“加号菜单只迁了图标没迁行为”的问题同类，属于 **旧栈复合交互在原生迁移时只迁了部分入口，状态方法还在，但用户可见操作面没有完整迁移**。未发现更大的系统设计缺陷。
+- 当前结论：
+  - “恢复”功能还在，但入口隐藏得更深；
+  - “删除到回收站”在卡片模式仍可用，在列表模式基本等于消失；
+  - 相比 `origin/archive/2.8.3`，当前主线确实存在回收站交互回归。
+- 证据：
+  - 当前主线：`macos/Sources/DevHavenApp/DevHavenApp.swift`、`AppRootView.swift`、`RecycleBinSheetView.swift`、`MainContentView.swift`、`NativeAppViewModel.swift`；
+  - 归档对照：`origin/archive/2.8.3:src/components/Sidebar.tsx`、`RecycleBinModal.tsx`、`MainContent.tsx`、`ProjectCard.tsx`、`ProjectListRow.tsx`、`src/state/useDevHaven.ts`。
+
+
+## 设计回收站交互恢复方案（2026-03-21）
+
+- [x] 探查当前项目上下文、当前主线回收站现状与归档分支差异
+- [x] 逐步确认用户目标与恢复范围（已确认选方案 A：不恢复多选/批量）
+- [x] 提出 2-3 个设计方案并给出推荐
+- [x] 分节展示设计并等待用户确认
+- [x] 设计确认后写入 `docs/plans/2026-03-21-recycle-bin-restore-design.md`
+- [x] 再进入 implementation plan 编写
+
+
+## 恢复回收站交互（2026-03-21）
+
+- [x] 写入设计文档与实施计划，明确本轮只恢复单项目回收站交互，不恢复多选/批量
+- [x] 先补失败测试，锁定固定回收站入口、列表模式删除入口与回收站空状态提示
+- [x] 以最小改动恢复侧栏底部回收站入口与列表模式删除
+- [x] 运行定向验证与全量验证，并在 `tasks/todo.md` 追加 Review
+
+
+## Review（恢复回收站交互）
+
+- 直接原因：当前原生主线并没有删除 `recycleBin` 数据链路或恢复能力，真正回归的是 **交互入口覆盖范围**：
+  1. 侧栏固定回收站入口在迁移时丢失；
+  2. `MainContentView.swift` 仅卡片模式保留 `moveProjectToRecycleBin(project.path)`，列表模式完全没有删除入口；
+  3. 空状态提示没有区分“筛选为空”和“项目已全部移入回收站”，导致用户难以意识到还能恢复。
+- 设计层诱因：存在。与前面目录加号菜单的回归同类，属于旧栈复合交互迁移时只保留了部分入口，数据方法还在，但用户可见操作面收缩。未发现更大的系统设计缺陷。
+- 当前修复：
+  1. `ProjectSidebarView.swift` 从单一 `ScrollView` 改为“滚动主体 + 固定底栏”，底栏新增固定 `回收站` 入口，并展示回收站数量；
+  2. `MainContentView.swift` 新增 `emptyStateView`，当 `visibleProjects` 为空且 `recycleBin` 非空时，提示“当前没有可见项目 / 可在回收站恢复隐藏项目”；
+  3. `MainContentView.swift` 的 `projectRow(_:)` 补回单项目操作区，列表模式重新支持 `moveProjectToRecycleBin(project.path)`；
+  4. 继续复用现有 `NativeAppViewModel` 的 `revealRecycleBin()` / `moveProjectToRecycleBin(_:)` / `restoreProjectFromRecycleBin(_:)`，没有引入第二套状态。
+- 长期建议：如果后续还要继续对齐 `origin/archive/2.8.3`，下一步应单独评估是否恢复多选/批量移入回收站，而不要在这轮单项目恢复里顺手把 selection 系统重新做一遍。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter 'ProjectSidebarViewTests|MainContentViewTests'`
+    - 修复前失败 4 项，包括：
+      - `侧栏应恢复固定回收站入口，而不是只能从菜单栏打开`
+      - `列表模式应重新提供单项目移入回收站入口，而不只是卡片模式可用`
+      - `当没有可见项目且回收站非空时，应提示用户可从回收站恢复`
+  - 定向绿灯：同一命令修复后通过，`4 tests, 0 failures`。
+  - 全量验证：`swift test --package-path macos` → 通过，`131 tests, 5 skipped, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
+
+## 设计直接添加项目的虚拟目录（2026-03-21）
+
+- [x] 补充当前直连项目筛选/侧栏实现上下文，确认现有数据与入口边界
+- [x] 提出 2-3 个方案并给出推荐
+- [x] 分节展示设计并取得用户确认
+- [x] 设计确认后写入 `docs/plans/2026-03-21-direct-projects-virtual-directory-design.md`
+- [x] 再进入 implementation plan 编写与 TDD 实施
+
+
+## 实现直接添加项目虚拟目录（2026-03-21）
+
+- [x] 写入设计文档与实施计划，明确虚拟目录与移除直连项目边界
+- [x] 先补失败测试，锁定虚拟目录筛选与移除直连项目行为
+- [x] 以最小改动实现“直接添加”虚拟目录与移除直连项目动作
+- [x] 运行定向验证与全量验证，并在 `tasks/todo.md` 追加 Review
+
+## Review（实现直接添加项目虚拟目录）
+
+- 直接原因：当前 `directProjectPaths` 虽然已经存在并参与项目构建/刷新，但侧栏目录筛选仍然只支持“全部 + 真实目录路径”。由于 `selectedDirectory` 原本只是 `String?` 且过滤逻辑依赖 `project.path.hasPrefix(selectedDirectory)`，因此“直接添加的项目”没有正式筛选入口，也无法被当作一个可管理的虚拟目录。
+- 设计层诱因：存在。问题集中在 **目录筛选模型过度依赖真实路径字符串**，导致只要出现“非真实路径”的筛选语义（这里是 `directProjectPaths`），就只能继续隐藏在数据层里，无法成为一等 UI 入口。未发现更大的系统设计缺陷。
+- 当前修复：
+  1. `NativeAppViewModel.swift` 新增 `DirectoryFilter` 显式目录筛选类型，把 `selectedDirectory` 从 `String?` 升级为 `.all / .directory(path) / .directProjects`；
+  2. `directoryRows` 现在会正式生成 `直接添加` 虚拟目录项，并按 `directProjectPaths` 计算数量；
+  3. `matchesAllFilters(project:)` 改为按筛选类型分支，不再拿虚拟目录去伪装路径前缀匹配；
+  4. 新增 `removeDirectProject(_:)`，用于把项目从 `directProjectPaths` 中移除并持久化，但不删除磁盘目录、不移入回收站；
+  5. `ProjectSidebarView.swift` 已改为绑定新的显式目录筛选值；
+  6. `MainContentView.swift` 在选中 `直接添加` 虚拟目录时，会在卡片 / 列表操作区显示“移除直连项目”动作。
+- 长期建议：如果后续还会增加“收藏项目”“最近添加”“手工管理”等虚拟目录，继续沿用这套显式筛选类型，不要退回到往路径字段里塞特殊字符串的做法。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter 'NativeAppViewModelTests|MainContentViewTests'`
+    - 修复前失败，关键编译错误包括：
+      - `type 'String?' has no member 'directProjects'`
+      - `value of type 'NativeAppViewModel.DirectoryRow' has no member 'filter'`
+      - `value of type 'NativeAppViewModel' has no member 'removeDirectProject'`
+    - 说明新测试确实先锁住了显式目录筛选模型与移除直连项目能力。
+  - 定向绿灯：同一命令修复后通过，`18 tests, 0 failures`。
+  - 全量验证：`swift test --package-path macos` → 通过，`134 tests, 5 skipped, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
+
+## 修正目录整行点击热区（2026-03-21）
+
+- [x] 确认当前目录行点击热区为何只落在文字/可见内容上
+- [x] 提出 2-3 个最小修复方案并给出推荐
+- [x] 与用户确认修复方案（方案 1：补 `contentShape`）
+- [ ] 先补失败测试，锁定目录行整行热区
+- [ ] 以最小改动修复 `sidebarRow(...)` 的整行点击区域
+- [ ] 运行定向验证并更新 `tasks/todo.md` Review
+
+## 解释 Ghostty `Noto Sans SC` `bold_italic not found` 日志（2026-03-21）
+
+- [x] 确认 DevHaven 当前实际读取的是哪一份 Ghostty 配置
+- [x] 确认本机 `Noto Sans SC` 家族实际提供了哪些字形样式
+- [x] 对照 Ghostty 文档判断该日志的含义、影响范围与处理建议
+
+## Review（解释 Ghostty `Noto Sans SC` `bold_italic not found` 日志）
+
+- 直接原因：当前机器不存在 `~/.devhaven/ghostty/config*`，所以 DevHaven 会按现有逻辑回退读取 `~/Library/Application Support/com.mitchellh.ghostty/config`。该文件里配置了 `font-family = Hack` 与 `font-family = Noto Sans SC`。其中 `Noto Sans SC` 在本机确实存在，但枚举结果只有 `Regular/Thin/ExtraLight/Light/Medium/SemiBold/Bold/ExtraBold/Black`，没有 `Italic` 或 `Bold Italic`。因此 Ghostty 在为 `bold_italic` 样式解析这个字体家族时会打印 `font-family bold_italic not found: Noto Sans SC`。
+- 设计层诱因：存在，但不是新 bug。本质上是 DevHaven 目前仍会在缺少 `~/.devhaven/ghostty/config*` 时回退到独立 Ghostty App 的全局配置；而该全局配置把一个**没有斜体字形**的 CJK 字体家族加入到了 `font-family` 回退链里。未发现更大的系统设计缺陷。
+- 当前结论：这条日志更像**字体样式缺失告警**，而不是 DevHaven 崩溃或终端不可用。按照 Ghostty 文档，若未显式指定对应 style，Ghostty 会先在 `font-family` 中搜索 stylistic variants；缺失时可回退 regular style，部分样式还可能被 synthetic style 合成。
+- 处理建议：
+  1. 如果只是偶发日志、终端显示正常，可以先视为低风险告警；
+  2. 如果想彻底消掉日志，优先在 `~/.devhaven/ghostty/config` 中单独为 DevHaven 设置更合适的终端主字体/回退字体，不要直接继承全局 Ghostty 的整套字体链；
+  3. 不建议把 `Noto Sans SC` 作为需要斜体/粗斜体样式的主终端字体；它更适合作为中文 fallback，而不是承担 italic / bold italic 风格；
+  4. 如需保留中文 fallback，可继续保留 `Noto Sans SC`，但把真正支持 `Italic` / `Bold Italic` 的等宽字体放在前面，并在需要时显式补 `font-family-italic` / `font-family-bold-italic`。
+- 验证证据：
+  - 配置文件检查：`~/.devhaven/ghostty/config` 与 `~/.devhaven/ghostty/config.ghostty` 均不存在；`~/Library/Application Support/com.mitchellh.ghostty/config` 存在，且含 `font-family = Hack`、`font-family = Noto Sans SC`。
+  - 运行时代码检查：`GhosttyRuntime.preferredConfigFileURLs(...)` 会优先读 `~/.devhaven/ghostty/config*`，缺失时回退到 `~/Library/Application Support/com.mitchellh.ghostty/config*`；对应代码位于 `macos/Sources/DevHavenApp/Ghostty/GhosttyRuntime.swift:77-136`。
+  - 字体枚举：`swift - <<'SWIFT' ... NSFontManager.shared.availableMembers(ofFontFamily: "Noto Sans SC") ... SWIFT` 输出 `Noto Sans SC` 存在，但 `has Bold Italic: false`、`has Italic: false`、`has Bold: true`。
+  - 文档依据：仓库内 `macos/Sources/DevHavenApp/GhosttyResources/ghostty/doc/ghostty.5.md` 说明 `font-family` 会为各 style 搜索 stylistic variants；若 style 不存在，Ghostty 会回退 regular style，并且某些 style 可以被 synthesized。

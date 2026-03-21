@@ -20,13 +20,7 @@ struct MainContentView: View {
                 .background(NativeTheme.surface)
 
             if viewModel.filteredProjects.isEmpty {
-                ContentUnavailableView(
-                    "没有匹配项目",
-                    systemImage: "magnifyingglass",
-                    description: Text("可以调整搜索条件，或者切换目录 / 标签 / Git 筛选。")
-                )
-                .foregroundStyle(NativeTheme.textSecondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                emptyStateView
             } else {
                 ScrollView {
                     if viewModel.projectListViewMode == .card {
@@ -106,6 +100,40 @@ struct MainContentView: View {
         }
     }
 
+    private var emptyStateView: some View {
+        Group {
+            if viewModel.isDirectProjectsDirectorySelected {
+                ContentUnavailableView(
+                    "当前没有直接添加项目",
+                    systemImage: "square.stack.3d.up",
+                    description: Text("可通过目录操作中的“直接添加为项目”导入项目。")
+                )
+            } else if viewModel.visibleProjects.isEmpty {
+                if viewModel.recycleBinItems.isEmpty {
+                    ContentUnavailableView(
+                        "暂未添加项目目录",
+                        systemImage: "folder.badge.plus",
+                        description: Text("请添加工作目录或直接导入项目。")
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "当前没有可见项目",
+                        systemImage: "trash",
+                        description: Text("可在回收站恢复隐藏项目。")
+                    )
+                }
+            } else {
+                ContentUnavailableView(
+                    "没有匹配项目",
+                    systemImage: "magnifyingglass",
+                    description: Text("可以调整搜索条件，或者切换目录 / 标签 / Git 筛选。")
+                )
+            }
+        }
+        .foregroundStyle(NativeTheme.textSecondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func projectCard(_ project: Project) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
@@ -120,6 +148,9 @@ struct MainContentView: View {
                         viewModel.toggleProjectFavorite(project.path)
                     }
                     cardActionIcon("trash") { viewModel.moveProjectToRecycleBin(project.path) }
+                    if viewModel.isDirectProjectsDirectorySelected {
+                        cardActionIcon("minus.circle") { viewModel.removeDirectProject(project.path) }
+                    }
                 }
             }
 
@@ -197,6 +228,16 @@ struct MainContentView: View {
                     .font(.caption2)
                     .foregroundStyle(NativeTheme.textSecondary)
             }
+            HStack(spacing: 10) {
+                rowActionIcon("folder") { openInFinder(project.path) }
+                rowActionIcon(viewModel.snapshot.appState.favoriteProjectPaths.contains(project.path) ? "star.fill" : "star") {
+                    viewModel.toggleProjectFavorite(project.path)
+                }
+                rowActionIcon("trash") { viewModel.moveProjectToRecycleBin(project.path) }
+                if viewModel.isDirectProjectsDirectorySelected {
+                    rowActionIcon("minus.circle") { viewModel.removeDirectProject(project.path) }
+                }
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -247,6 +288,19 @@ struct MainContentView: View {
                 .foregroundStyle(NativeTheme.textSecondary)
         }
         .buttonStyle(.plain)
+    }
+
+    private func rowActionIcon(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.caption)
+                .foregroundStyle(NativeTheme.textSecondary)
+                .frame(width: 28, height: 28)
+                .background(NativeTheme.elevated)
+                .clipShape(.rect(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
     }
 
     private func compactDisplayPath(_ path: String) -> String {

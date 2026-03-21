@@ -1,5 +1,6 @@
 # Lessons Learned
 
+- 当用户明确指出“某个现有交互应复刻归档版本/旧版本行为”时，不能只按当前代码表象去补一条看起来合理的新链路；必须先回到指定分支核对旧版真实交互、状态变化和调用顺序，再决定最小修复方案。
 - 对 DevHaven 这类“逻辑 pane 焦点”和 AppKit `firstResponder` 分离的终端宿主，不能把 responder 恢复逻辑写成“只允许 terminal-to-terminal 切换”；从项目列表、pane header 按钮、tab bar 等控件触发的新开项目 / 新开 pane，同样需要把焦点从非 terminal 控件收回当前逻辑焦点 pane。
 - 如果用户补充“只有先点过 pane 拿到真实焦点才会复现”，优先怀疑的是 AppKit `window.firstResponder` / responder chain，而不只是 Ghostty 自己的 visible/focus cache；这类“点击后才触发”的分屏丢失问题，通常要把 responder 身份也纳入 reuse 生命周期一起清理。
 - 对这类“复用同一个原生 `NSView`，但会在 split/tree 重排时重新挂到别的容器”的 GUI 问题，**reset cache 只是前半段**；真正的 `occlusion / focus / resize` replay 必须发生在新容器完成 `addSubview/layout` 之后。若在 `acquireSurfaceView()` 这类“还没真正 attach”阶段就提前重放，只会把信号发给旧容器时序，用户体感仍然会是 pane 空白或内容丢失。

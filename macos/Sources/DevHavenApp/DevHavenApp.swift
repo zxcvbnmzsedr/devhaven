@@ -17,10 +17,11 @@ struct DevHavenApp: App {
         .defaultSize(width: 1480, height: 920)
         .commands {
             CommandMenu("DevHaven") {
-                Button("刷新项目") {
+                Button(viewModel.isRefreshingProjectCatalog ? "正在刷新项目…" : "刷新项目") {
                     viewModel.refresh()
                 }
                 .keyboardShortcut("r", modifiers: [.command])
+                .disabled(viewModel.isRefreshingProjectCatalog)
 
                 Divider()
 

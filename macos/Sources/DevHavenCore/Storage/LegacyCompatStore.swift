@@ -28,6 +28,10 @@ public final class LegacyCompatStore {
         self.encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 
+    var backgroundWorkHomeDirectoryURL: URL {
+        homeDirectoryURL
+    }
+
     public func loadSnapshot() throws -> NativeAppSnapshot {
         let appStateDocument = try loadAppStateDocument()
         let projects = try loadProjects()
@@ -37,6 +41,18 @@ public final class LegacyCompatStore {
     public func updateRecycleBin(_ paths: [String]) throws {
         var document = try loadAppStateDocument()
         document.root["recycleBin"] = normalizePathList(paths)
+        try saveAppStateDocument(document)
+    }
+
+    public func updateDirectories(_ paths: [String]) throws {
+        var document = try loadAppStateDocument()
+        document.root["directories"] = normalizePathList(paths)
+        try saveAppStateDocument(document)
+    }
+
+    public func updateDirectProjectPaths(_ paths: [String]) throws {
+        var document = try loadAppStateDocument()
+        document.root["directProjectPaths"] = normalizePathList(paths)
         try saveAppStateDocument(document)
     }
 

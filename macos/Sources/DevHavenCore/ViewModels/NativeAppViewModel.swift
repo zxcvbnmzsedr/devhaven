@@ -9,22 +9,36 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let projectDocumentLoader: @Sendable (String) throws -> ProjectDocumentSnapshot
     @ObservationIgnored private let gitDailyCollector: @Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult]
     @ObservationIgnored private let gitDailyCollectorAsync: @Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult]
+    @ObservationIgnored private let projectCatalogRefresher: @Sendable (ProjectCatalogRefreshRequest) async throws -> [Project]
     @ObservationIgnored private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
 
+    public enum DirectoryFilter: Equatable, Sendable {
+        case all
+        case directory(String)
+        case directProjects
+    }
+
     public struct DirectoryRow: Identifiable, Equatable {
         public let id: String
-        public let path: String?
+        public let filter: DirectoryFilter
         public let title: String
         public let count: Int
         public let isSystemEntry: Bool
 
-        public init(path: String?, title: String, count: Int, isSystemEntry: Bool = false) {
-            self.id = path ?? title
-            self.path = path
+        public init(filter: DirectoryFilter, title: String, count: Int, isSystemEntry: Bool = false) {
+            self.id = switch filter {
+            case .all:
+                "all"
+            case .directProjects:
+                "direct-projects"
+            case let .directory(path):
+                path
+            }
+            self.filter = filter
             self.title = title
             self.count = count
             self.isSystemEntry = isSystemEntry
@@ -59,13 +73,14 @@ public final class NativeAppViewModel {
     public var openWorkspaceSessions: [OpenWorkspaceSessionState]
     public var activeWorkspaceProjectPath: String?
     public var searchQuery: String
-    public var selectedDirectory: String?
+    public var selectedDirectory: DirectoryFilter
     public var selectedTag: String?
     public var selectedHeatmapDateKey: String?
     public var selectedDateFilter: NativeDateFilter
     public var selectedGitFilter: NativeGitFilter
     public var isLoading: Bool
     public var isRefreshingGitStatistics: Bool
+    public var isRefreshingProjectCatalog: Bool
     public var gitStatisticsProgressText: String?
     public var isProjectDocumentLoading: Bool
     public var errorMessage: String?
@@ -85,6 +100,7 @@ public final class NativeAppViewModel {
         projectDocumentLoader: (@Sendable (String) throws -> ProjectDocumentSnapshot)? = nil,
         gitDailyCollector: (@Sendable ([String], [GitIdentity]) -> [GitDailyRefreshResult])? = nil,
         gitDailyCollectorAsync: (@Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult])? = nil,
+        projectCatalogRefresher: (@Sendable (ProjectCatalogRefreshRequest) async throws -> [Project])? = nil,
         workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics = .shared,
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
         worktreeService: (any NativeWorktreeServicing)? = nil
@@ -93,6 +109,7 @@ public final class NativeAppViewModel {
         self.projectDocumentLoader = projectDocumentLoader ?? loadProjectDocumentFromDisk
         self.gitDailyCollector = gitDailyCollector ?? collectGitDaily
         self.gitDailyCollectorAsync = gitDailyCollectorAsync ?? collectGitDailyAsync
+        self.projectCatalogRefresher = projectCatalogRefresher ?? rebuildProjectCatalogSnapshot
         self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
         self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.worktreeService = worktreeService ?? NativeGitWorktreeService()
@@ -101,13 +118,14 @@ public final class NativeAppViewModel {
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
         self.searchQuery = ""
-        self.selectedDirectory = nil
+        self.selectedDirectory = .all
         self.selectedTag = nil
         self.selectedHeatmapDateKey = nil
         self.selectedDateFilter = .all
         self.selectedGitFilter = .all
         self.isLoading = false
         self.isRefreshingGitStatistics = false
+        self.isRefreshingProjectCatalog = false
         self.gitStatisticsProgressText = nil
         self.isProjectDocumentLoading = false
         self.errorMessage = nil
@@ -214,17 +232,32 @@ public final class NativeAppViewModel {
     }
 
     public var directoryRows: [DirectoryRow] {
-        var rows: [DirectoryRow] = [DirectoryRow(path: nil, title: "全部", count: visibleProjects.count, isSystemEntry: true)]
+        var rows: [DirectoryRow] = [DirectoryRow(filter: .all, title: "全部", count: visibleProjects.count, isSystemEntry: true)]
+        rows.append(
+            DirectoryRow(
+                filter: .directProjects,
+                title: "直接添加",
+                count: visibleProjects.filter { directProjectPathSet.contains(normalizePathForCompare($0.path)) }.count,
+                isSystemEntry: true
+            )
+        )
         rows.append(
             contentsOf: snapshot.appState.directories.map { directory in
                 DirectoryRow(
-                    path: directory,
+                    filter: .directory(directory),
                     title: URL(fileURLWithPath: directory).lastPathComponent,
                     count: visibleProjects.filter { $0.path.hasPrefix(directory) }.count
                 )
             }
         )
         return rows
+    }
+
+    public var isDirectProjectsDirectorySelected: Bool {
+        if case .directProjects = selectedDirectory {
+            return true
+        }
+        return false
     }
 
     public var tagRows: [TagRow] {
@@ -321,7 +354,23 @@ public final class NativeAppViewModel {
     }
 
     public func refresh() {
-        load()
+        guard !isRefreshingProjectCatalog else {
+            return
+        }
+        guard !snapshot.appState.directories.isEmpty || !snapshot.appState.directProjectPaths.isEmpty else {
+            load()
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await self.refreshProjectCatalog()
+            } catch {
+                self.errorMessage = error.localizedDescription
+            }
+        }
     }
 
     @discardableResult
@@ -786,9 +835,95 @@ public final class NativeAppViewModel {
         isDetailPanelPresented = false
     }
 
-    public func selectDirectory(_ path: String?) {
-        selectedDirectory = path
+    public func addProjectDirectory(_ path: String) throws {
+        let normalizedPath = normalizePathForCompare(path)
+        guard !normalizedPath.isEmpty else {
+            return
+        }
+
+        let nextDirectories = normalizePathList(snapshot.appState.directories + [normalizedPath])
+        guard nextDirectories != snapshot.appState.directories else {
+            errorMessage = nil
+            return
+        }
+        try store.updateDirectories(nextDirectories)
+        snapshot.appState.directories = nextDirectories
+        errorMessage = nil
+    }
+
+    public func addDirectProjects(_ paths: [String]) async throws {
+        let normalizedPaths = normalizePathList(paths)
+        guard !normalizedPaths.isEmpty else {
+            return
+        }
+
+        let existingProjects = snapshot.projects
+        let builtProjects = await Task.detached(priority: .userInitiated) {
+            buildProjects(paths: normalizedPaths, existing: existingProjects)
+        }.value
+        let nextProjects = mergeProjectsByPath(existing: existingProjects, updates: builtProjects)
+        let nextDirectProjectPaths = normalizePathList(snapshot.appState.directProjectPaths + normalizedPaths)
+
+        try store.updateDirectProjectPaths(nextDirectProjectPaths)
+        snapshot.appState.directProjectPaths = nextDirectProjectPaths
+        try persistProjects(nextProjects)
+        errorMessage = nil
+    }
+
+    public func refreshProjectCatalog() async throws {
+        guard !snapshot.appState.directories.isEmpty || !snapshot.appState.directProjectPaths.isEmpty else {
+            return
+        }
+        guard !isRefreshingProjectCatalog else {
+            return
+        }
+
+        let directories = snapshot.appState.directories
+        let directProjectPaths = snapshot.appState.directProjectPaths
+        let existingProjects = snapshot.projects
+        let refreshRequest = ProjectCatalogRefreshRequest(
+            directories: directories,
+            directProjectPaths: directProjectPaths,
+            existingProjects: existingProjects,
+            storeHomeDirectoryURL: store.backgroundWorkHomeDirectoryURL
+        )
+        let refresher = projectCatalogRefresher
+
+        isRefreshingProjectCatalog = true
+        defer { isRefreshingProjectCatalog = false }
+
+        let rebuiltProjects = try await Task.detached(priority: .userInitiated) {
+            try await refresher(refreshRequest)
+        }.value
+        applyProjects(rebuiltProjects)
+        errorMessage = nil
+    }
+
+    public func selectDirectory(_ filter: DirectoryFilter) {
+        selectedDirectory = filter
         reconcileSelectionAfterFilterChange()
+    }
+
+    public func removeDirectProject(_ path: String) {
+        let normalizedPath = normalizePathForCompare(path)
+        guard !normalizedPath.isEmpty else {
+            return
+        }
+
+        let nextPaths = snapshot.appState.directProjectPaths.filter { normalizePathForCompare($0) != normalizedPath }
+        guard nextPaths != snapshot.appState.directProjectPaths else {
+            errorMessage = nil
+            return
+        }
+
+        do {
+            try store.updateDirectProjectPaths(nextPaths)
+            snapshot.appState.directProjectPaths = nextPaths
+            reconcileSelectionAfterFilterChange()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     public func selectTag(_ name: String?) {
@@ -1059,8 +1194,17 @@ public final class NativeAppViewModel {
     }
 
     private func matchesAllFilters(project: Project) -> Bool {
-        if let selectedDirectory, !project.path.hasPrefix(selectedDirectory) {
-            return false
+        switch selectedDirectory {
+        case .all:
+            break
+        case let .directory(path):
+            if !project.path.hasPrefix(path) {
+                return false
+            }
+        case .directProjects:
+            if !directProjectPathSet.contains(normalizePathForCompare(project.path)) {
+                return false
+            }
         }
         if let selectedHeatmapDateKey {
             if gitCommitCount(on: selectedHeatmapDateKey, project: project) <= 0 {
@@ -1091,6 +1235,10 @@ public final class NativeAppViewModel {
             || project.path.lowercased().contains(query)
             || project.tags.contains(where: { $0.lowercased().contains(query) })
             || (project.gitLastCommitMessage?.lowercased().contains(query) ?? false)
+    }
+
+    private var directProjectPathSet: Set<String> {
+        Set(snapshot.appState.directProjectPaths.map(normalizePathForCompare))
     }
 
     private func matchesDateFilter(project: Project) -> Bool {
@@ -1178,6 +1326,10 @@ public final class NativeAppViewModel {
 
     private func persistProjects(_ projects: [Project]) throws {
         try store.updateProjects(projects)
+        applyProjects(projects)
+    }
+
+    private func applyProjects(_ projects: [Project]) {
         snapshot.projects = projects
         alignSelectionAfterReload()
         scheduleSelectedProjectDocumentRefresh()
@@ -1335,6 +1487,278 @@ private func normalizePathForCompare(_ path: String) -> String {
         normalized.removeLast()
     }
     return normalized
+}
+
+private func normalizePathList(_ paths: [String]) -> [String] {
+    var seen = Set<String>()
+    return paths
+        .map(normalizePathForCompare)
+        .filter { !$0.isEmpty }
+        .filter { seen.insert($0).inserted }
+}
+
+private func mergeProjectsByPath(existing: [Project], updates: [Project]) -> [Project] {
+    let updatesByPath = Dictionary(uniqueKeysWithValues: updates.map { (normalizePathForCompare($0.path), $0) })
+    let existingPaths = Set(existing.map { normalizePathForCompare($0.path) })
+
+    var nextProjects = existing.map { project in
+        updatesByPath[normalizePathForCompare(project.path)] ?? project
+    }
+    for project in updates where !existingPaths.contains(normalizePathForCompare(project.path)) {
+        nextProjects.append(project)
+    }
+    return nextProjects
+}
+
+public struct ProjectCatalogRefreshRequest: Sendable {
+    public let directories: [String]
+    public let directProjectPaths: [String]
+    public let existingProjects: [Project]
+    public let storeHomeDirectoryURL: URL
+
+    public init(directories: [String], directProjectPaths: [String], existingProjects: [Project], storeHomeDirectoryURL: URL) {
+        self.directories = directories
+        self.directProjectPaths = directProjectPaths
+        self.existingProjects = existingProjects
+        self.storeHomeDirectoryURL = storeHomeDirectoryURL
+    }
+}
+
+private let maxProjectDiscoveryDepth = 6
+
+private func rebuildProjectCatalogSnapshot(_ request: ProjectCatalogRefreshRequest) async throws -> [Project] {
+    let discoveredPaths = discoverProjects(in: request.directories)
+    let nextPaths = normalizePathList(discoveredPaths + request.directProjectPaths)
+    let rebuiltProjects = buildProjects(paths: nextPaths, existing: request.existingProjects)
+    try LegacyCompatStore(homeDirectoryURL: request.storeHomeDirectoryURL).updateProjects(rebuiltProjects)
+    return rebuiltProjects
+}
+
+private func discoverProjects(in directories: [String]) -> [String] {
+    let discovered = directories.flatMap(scanDirectoryWithGit)
+    return normalizePathList(discovered).sorted()
+}
+
+private func scanDirectoryWithGit(_ path: String) -> [String] {
+    let rootURL = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+    guard FileManager.default.fileExists(atPath: rootURL.path) else {
+        return []
+    }
+
+    var results: [String] = []
+    if isGitRepo(rootURL), !isGitWorktree(rootURL) {
+        results.append(rootURL.path)
+    }
+
+    let childDirectories = childDirectories(of: rootURL, shouldSkip: shouldSkipDirectDirectory)
+    for directoryURL in childDirectories where !isGitWorktree(directoryURL) {
+        results.append(directoryURL.path)
+    }
+    results.append(contentsOf: childDirectories.flatMap { collectNestedGitRepos(in: $0, depth: 1) })
+    return results
+}
+
+private func collectNestedGitRepos(in directoryURL: URL, depth: Int) -> [String] {
+    guard depth < maxProjectDiscoveryDepth else {
+        return []
+    }
+
+    if isGitRepo(directoryURL) {
+        return isGitWorktree(directoryURL) ? [] : [directoryURL.path]
+    }
+
+    let childDirectories = childDirectories(of: directoryURL, shouldSkip: shouldSkipRecursiveDirectory)
+    return childDirectories.flatMap { collectNestedGitRepos(in: $0, depth: depth + 1) }
+}
+
+private func childDirectories(of rootURL: URL, shouldSkip: (String) -> Bool) -> [URL] {
+    let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
+    guard let contents = try? FileManager.default.contentsOfDirectory(
+        at: rootURL,
+        includingPropertiesForKeys: Array(keys),
+        options: [.skipsSubdirectoryDescendants]
+    ) else {
+        return []
+    }
+
+    return contents.filter { candidate in
+        let resourceValues = try? candidate.resourceValues(forKeys: keys)
+        let isDirectory = resourceValues?.isDirectory == true
+        let isSymbolicLink = resourceValues?.isSymbolicLink == true
+        return isDirectory && !isSymbolicLink && !shouldSkip(candidate.lastPathComponent)
+    }
+}
+
+private func shouldSkipDirectDirectory(_ name: String) -> Bool {
+    name.hasPrefix(".")
+}
+
+private func shouldSkipRecursiveDirectory(_ name: String) -> Bool {
+    guard !name.hasPrefix(".") else {
+        return true
+    }
+    return [".git", "node_modules", "target", "dist", "build"].contains(name)
+}
+
+private func buildProjects(paths: [String], existing: [Project]) -> [Project] {
+    let existingByPath = Dictionary(uniqueKeysWithValues: existing.map { (normalizePathForCompare($0.path), $0) })
+    return paths.compactMap { createProject(path: $0, existingByPath: existingByPath) }
+}
+
+private func createProject(path: String, existingByPath: [String: Project]) -> Project? {
+    let normalizedPath = normalizePathForCompare(path)
+    let projectURL = URL(fileURLWithPath: normalizedPath, isDirectory: true)
+    guard !isGitWorktree(projectURL) else {
+        return nil
+    }
+
+    let keys: Set<URLResourceKey> = [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey]
+    guard let resourceValues = try? projectURL.resourceValues(forKeys: keys),
+          resourceValues.isDirectory == true
+    else {
+        return nil
+    }
+
+    let now = Date()
+    let modificationDate = resourceValues.contentModificationDate ?? now
+    let size = Int64(resourceValues.fileSize ?? 0)
+    let checksum = "\(Int(modificationDate.timeIntervalSince1970))_\(size)"
+    let gitInfo = loadGitInfo(for: normalizedPath)
+
+    if let existing = existingByPath[normalizedPath] {
+        return Project(
+            id: existing.id,
+            name: projectURL.lastPathComponent.isEmpty ? normalizedPath : projectURL.lastPathComponent,
+            path: normalizedPath,
+            tags: existing.tags,
+            scripts: existing.scripts,
+            worktrees: existing.worktrees,
+            mtime: swiftDateFromDate(modificationDate),
+            size: size,
+            checksum: checksum,
+            gitCommits: gitInfo.commitCount,
+            gitLastCommit: gitInfo.lastCommit,
+            gitLastCommitMessage: gitInfo.lastCommitMessage,
+            gitDaily: existing.gitDaily,
+            created: existing.created,
+            checked: swiftDateFromDate(now)
+        )
+    }
+
+    return Project(
+        id: UUID().uuidString.lowercased(),
+        name: projectURL.lastPathComponent.isEmpty ? normalizedPath : projectURL.lastPathComponent,
+        path: normalizedPath,
+        tags: [],
+        scripts: [],
+        worktrees: [],
+        mtime: swiftDateFromDate(modificationDate),
+        size: size,
+        checksum: checksum,
+        gitCommits: gitInfo.commitCount,
+        gitLastCommit: gitInfo.lastCommit,
+        gitLastCommitMessage: gitInfo.lastCommitMessage,
+        gitDaily: nil,
+        created: swiftDateFromDate(now),
+        checked: swiftDateFromDate(now)
+    )
+}
+
+private struct ProjectGitInfo {
+    let commitCount: Int
+    let lastCommit: SwiftDate
+    let lastCommitMessage: String?
+}
+
+private func loadGitInfo(for path: String) -> ProjectGitInfo {
+    let projectURL = URL(fileURLWithPath: path, isDirectory: true)
+    guard isGitRepo(projectURL), !isGitWorktree(projectURL) else {
+        return ProjectGitInfo(commitCount: 0, lastCommit: .zero, lastCommitMessage: nil)
+    }
+
+    let commitCount = Int(runGitCommand(in: path, arguments: ["rev-list", "--count", "HEAD"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
+    let logOutput = runGitCommand(in: path, arguments: ["log", "--format=%ct%x1f%s", "-n", "1"])
+    let (lastCommitUnix, lastCommitMessage) = parseLastCommitLogOutput(logOutput)
+    return ProjectGitInfo(
+        commitCount: commitCount,
+        lastCommit: lastCommitUnix > 0 ? swiftDateFromDate(Date(timeIntervalSince1970: lastCommitUnix)) : .zero,
+        lastCommitMessage: lastCommitMessage
+    )
+}
+
+private func parseLastCommitLogOutput(_ output: String?) -> (TimeInterval, String?) {
+    guard let output else {
+        return (0, nil)
+    }
+    let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return (0, nil)
+    }
+
+    let parts = trimmed.split(separator: "\u{1f}", maxSplits: 1, omittingEmptySubsequences: false)
+    let lastCommit = TimeInterval(parts.first ?? "") ?? 0
+    let message = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+    return (lastCommit, message.isEmpty ? nil : message)
+}
+
+private func runGitCommand(in path: String, arguments: [String]) -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = arguments
+    process.currentDirectoryURL = URL(fileURLWithPath: path, isDirectory: true)
+
+    let stdout = Pipe()
+    let stderr = Pipe()
+    process.standardOutput = stdout
+    process.standardError = stderr
+
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        return nil
+    }
+    return String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+}
+
+private func isGitRepo(_ url: URL) -> Bool {
+    FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .notDirectory).path)
+        || FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .isDirectory).path)
+}
+
+private func isGitWorktree(_ url: URL) -> Bool {
+    let gitURL = url.appending(path: ".git", directoryHint: .notDirectory)
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: gitURL.path, isDirectory: &isDirectory),
+          !isDirectory.boolValue,
+          let resolvedGitDir = resolveGitDirFromFile(gitURL)
+    else {
+        return false
+    }
+    return resolvedGitDir.pathComponents.contains("worktrees")
+}
+
+private func resolveGitDirFromFile(_ gitFileURL: URL) -> URL? {
+    guard let content = try? String(contentsOf: gitFileURL, encoding: .utf8) else {
+        return nil
+    }
+    guard let firstLine = content.split(whereSeparator: \.isNewline).first?.trimmingCharacters(in: .whitespacesAndNewlines),
+          firstLine.hasPrefix("gitdir:")
+    else {
+        return nil
+    }
+    let rawPath = String(firstLine.dropFirst("gitdir:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !rawPath.isEmpty else {
+        return nil
+    }
+    let candidateURL = URL(fileURLWithPath: rawPath)
+    if candidateURL.path.hasPrefix("/") {
+        return candidateURL
+    }
+    return gitFileURL.deletingLastPathComponent().appending(path: rawPath).standardizedFileURL
 }
 
 private func createWorktreeProjectID(path: String) -> String {

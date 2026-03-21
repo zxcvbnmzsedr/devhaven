@@ -1,21 +1,29 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import DevHavenCore
 
 struct ProjectSidebarView: View {
+    private enum DirectoryImportAction {
+        case addDirectory
+        case addProjects
+    }
+
     @Bindable var viewModel: NativeAppViewModel
+    @State private var pendingDirectoryImportAction: DirectoryImportAction?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                sidebarSection(title: "目录", trailingSystemImage: "plus.circle") {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                directorySection {
                     VStack(spacing: 6) {
                         ForEach(viewModel.directoryRows) { row in
                             sidebarRow(
                                 title: row.title,
                                 count: row.count,
-                                selected: row.path == viewModel.selectedDirectory || (row.path == nil && viewModel.selectedDirectory == nil)
+                                selected: row.filter == viewModel.selectedDirectory
                             ) {
-                                viewModel.selectDirectory(row.path)
+                                viewModel.selectDirectory(row.filter)
                             }
                         }
                     }
@@ -161,9 +169,86 @@ struct ProjectSidebarView: View {
                         }
                     }
                 }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 14)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 14)
+            recycleBinFooter
+        }
+        .fileImporter(
+            isPresented: Binding(
+                get: { pendingDirectoryImportAction != nil },
+                set: { if !$0 { pendingDirectoryImportAction = nil } }
+            ),
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: pendingDirectoryImportAction == .addProjects,
+            onCompletion: handleDirectoryImport
+        )
+    }
+
+    private var recycleBinFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+
+            Button {
+                viewModel.revealRecycleBin()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "trash")
+                        .font(.body)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                    Text("回收站")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(NativeTheme.textPrimary)
+                    Spacer(minLength: 8)
+                    let recycleBinCount = viewModel.recycleBinItems.count
+                    if recycleBinCount > 0 {
+                        Text("\(recycleBinCount)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(NativeTheme.textSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.white.opacity(0.05))
+                            .clipShape(.rect(cornerRadius: 6))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(NativeTheme.surface)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func directorySection<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("目录")
+                    .font(.headline)
+                    .foregroundStyle(NativeTheme.textPrimary)
+                Spacer()
+                Menu {
+                    Button("添加工作目录（扫描项目）") {
+                        pendingDirectoryImportAction = .addDirectory
+                    }
+                    Button("直接添加为项目") {
+                        pendingDirectoryImportAction = .addProjects
+                    }
+                    Button(viewModel.isRefreshingProjectCatalog ? "正在刷新项目列表…" : "刷新项目列表") {
+                        Task { await refreshProjectList() }
+                    }
+                    .disabled(viewModel.isRefreshingProjectCatalog)
+                } label: {
+                    Image(systemName: "plus.circle")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                }
+                .menuStyle(.borderlessButton)
+                .help("目录操作")
+                .accessibilityLabel("目录操作")
+            }
+            content()
         }
     }
 
@@ -175,12 +260,71 @@ struct ProjectSidebarView: View {
                     .foregroundStyle(NativeTheme.textPrimary)
                 Spacer()
                 if let trailingSystemImage {
-                    Image(systemName: trailingSystemImage)
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
+                        Image(systemName: trailingSystemImage)
+                            .font(.caption)
+                            .foregroundStyle(NativeTheme.textSecondary)
                 }
             }
             content()
+        }
+    }
+
+    private func handleDirectoryImport(_ result: Result<[URL], Error>) {
+        let action = pendingDirectoryImportAction
+        pendingDirectoryImportAction = nil
+
+        switch result {
+        case let .success(urls):
+            let paths = importedPaths(from: urls)
+            guard !paths.isEmpty else {
+                return
+            }
+            Task {
+                await performDirectoryImport(paths: paths, action: action)
+            }
+        case let .failure(error):
+            viewModel.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func importedPaths(from urls: [URL]) -> [String] {
+        urls.compactMap { url in
+            let didAccessSecurityScopedResource = url.startAccessingSecurityScopedResource()
+            defer {
+                if didAccessSecurityScopedResource {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            return url.standardizedFileURL.path()
+        }
+    }
+
+    @MainActor
+    private func performDirectoryImport(paths: [String], action: DirectoryImportAction?) async {
+        do {
+            switch action {
+            case .addDirectory:
+                guard let firstPath = paths.first else {
+                    return
+                }
+                try viewModel.addProjectDirectory(firstPath)
+                try await viewModel.refreshProjectCatalog()
+            case .addProjects:
+                try await viewModel.addDirectProjects(paths)
+            case nil:
+                return
+            }
+        } catch {
+            viewModel.errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func refreshProjectList() async {
+        do {
+            try await viewModel.refreshProjectCatalog()
+        } catch {
+            viewModel.errorMessage = error.localizedDescription
         }
     }
 
@@ -210,6 +354,7 @@ struct ProjectSidebarView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(selected ? NativeTheme.accent.opacity(0.18) : Color.clear)
             .clipShape(.rect(cornerRadius: 8))
+            .contentShape(.rect(cornerRadius: 8))
         }
         .buttonStyle(.plain)
     }

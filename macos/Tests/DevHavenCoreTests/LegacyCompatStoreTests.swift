@@ -385,16 +385,270 @@ final class NativeAppViewModelTests: XCTestCase {
         viewModel.load()
         XCTAssertEqual(viewModel.filteredProjects.map(\.name), ["Alpha", "Beta"])
 
-        viewModel.selectDirectory(rootA.path())
+        viewModel.selectDirectory(.directory(rootA.path()))
         XCTAssertEqual(viewModel.filteredProjects.map(\.name), ["Alpha"])
 
-        viewModel.selectDirectory(nil)
+        viewModel.selectDirectory(.all)
         viewModel.selectTag("server")
         XCTAssertEqual(viewModel.filteredProjects.map(\.name), ["Beta"])
 
         viewModel.selectTag(nil)
         viewModel.updateGitFilter(.gitOnly)
         XCTAssertEqual(viewModel.filteredProjects.map(\.name), ["Alpha"])
+    }
+
+    func testDirectProjectsVirtualDirectoryFiltersOnlyDirectProjectPaths() throws {
+        let fixture = try TestFixture()
+        let workspaceAlpha = fixture.homeURL.appending(path: "Workspace/Alpha")
+        let directBeta = fixture.homeURL.appending(path: "Standalone/Beta")
+        try FileManager.default.createDirectory(at: workspaceAlpha, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directBeta, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(fixture.homeURL.appending(path: "Workspace").path())"],
+              "directProjectPaths": ["\(directBeta.path())"],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects(
+            """
+            [
+              {
+                "id": "alpha",
+                "name": "Alpha",
+                "path": "\(workspaceAlpha.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "alpha",
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              },
+              {
+                "id": "beta",
+                "name": "Beta",
+                "path": "\(directBeta.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "beta",
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              }
+            ]
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+
+        XCTAssertTrue(viewModel.directoryRows.contains(where: { $0.title == "直接添加" && $0.filter == .directProjects }))
+
+        viewModel.selectDirectory(.directProjects)
+
+        XCTAssertEqual(viewModel.filteredProjects.map(\.path), [directBeta.path()])
+        XCTAssertEqual(viewModel.selectedDirectory, .directProjects)
+    }
+
+    func testRefreshProjectCatalogMergesConfiguredDirectoriesAndDirectProjectPathsLikeArchiveRefresh() async throws {
+        let fixture = try TestFixture()
+        let workspaceRoot = fixture.homeURL.appending(path: "Workspace")
+        let alphaURL = workspaceRoot.appending(path: "Alpha")
+        let betaURL = fixture.homeURL.appending(path: "Standalone/Beta")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: betaURL, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(workspaceRoot.path())"],
+              "directProjectPaths": ["\(betaURL.path())"],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects("[]")
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+        XCTAssertTrue(viewModel.snapshot.projects.isEmpty)
+
+        try await viewModel.refreshProjectCatalog()
+
+        XCTAssertEqual(
+            viewModel.snapshot.projects.map(\.path).sorted(),
+            [alphaURL.path(), betaURL.path()].sorted()
+        )
+        XCTAssertEqual(viewModel.selectedDirectory, .all, "刷新项目列表不应偷偷改掉当前目录筛选")
+    }
+
+    func testAddDirectProjectsPersistsPathsAndBuildsProjectsLikeArchiveSidebarAction() async throws {
+        let fixture = try TestFixture()
+        let betaURL = fixture.homeURL.appending(path: "Standalone/Beta")
+        try FileManager.default.createDirectory(at: betaURL, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": [],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects("[]")
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+
+        try await viewModel.addDirectProjects([betaURL.path()])
+
+        XCTAssertEqual(viewModel.snapshot.appState.directProjectPaths, [betaURL.path()])
+        XCTAssertEqual(viewModel.snapshot.projects.map(\.path), [betaURL.path()])
+        let appState = try fixture.readJSON(named: "app_state.json")
+        XCTAssertEqual(appState["directProjectPaths"] as? [String], [betaURL.path()])
+    }
+
+    func testRemoveDirectProjectPersistsUpdatedPathsWithoutDeletingDiskProject() throws {
+        let fixture = try TestFixture()
+        let alphaURL = fixture.homeURL.appending(path: "Standalone/Alpha")
+        let betaURL = fixture.homeURL.appending(path: "Standalone/Beta")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: betaURL, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": [],
+              "directProjectPaths": ["\(alphaURL.path())", "\(betaURL.path())"],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects(
+            """
+            [
+              {
+                "id": "alpha",
+                "name": "Alpha",
+                "path": "\(alphaURL.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "alpha",
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              },
+              {
+                "id": "beta",
+                "name": "Beta",
+                "path": "\(betaURL.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "beta",
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              }
+            ]
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+        viewModel.selectDirectory(.directProjects)
+
+        viewModel.removeDirectProject(betaURL.path())
+
+        XCTAssertEqual(viewModel.snapshot.appState.directProjectPaths, [alphaURL.path()])
+        XCTAssertEqual(viewModel.filteredProjects.map(\.path), [alphaURL.path()])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: betaURL.path()), "移除直连项目不应删除磁盘目录")
+
+        let appState = try fixture.readJSON(named: "app_state.json")
+        XCTAssertEqual(appState["directProjectPaths"] as? [String], [alphaURL.path()])
     }
 
     func testHeatmapDateFilterOverridesTagSelectionAndBuildsActiveProjectList() throws {
@@ -1120,6 +1374,111 @@ final class NativeAppViewModelTests: XCTestCase {
     }
 }
 
+@MainActor
+final class ProjectCatalogRefreshConcurrencyTests: XCTestCase {
+    func testRefreshProjectCatalogExecutesInjectedRefresherOffMainThread() async throws {
+        let fixture = try TestFixture()
+        let workspaceRoot = fixture.homeURL.appending(path: "Workspace")
+        try FileManager.default.createDirectory(at: workspaceRoot, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(workspaceRoot.path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects("[]")
+
+        let recorder = RefreshInvocationRecorder()
+        let viewModel = NativeAppViewModel(
+            store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL),
+            projectCatalogRefresher: { _ in
+                await recorder.record(isMainThread: pthread_main_np() != 0)
+                return []
+            }
+        )
+        viewModel.load()
+
+        try await viewModel.refreshProjectCatalog()
+
+        let invocationCount = await recorder.invocationCount()
+        let recordedIsMainThread = await recorder.recordedIsMainThread()
+        XCTAssertEqual(invocationCount, 1)
+        XCTAssertEqual(recordedIsMainThread, [false])
+    }
+
+    func testRefreshProjectCatalogExposesRefreshingStateDuringBackgroundJob() async throws {
+        let fixture = try TestFixture()
+        let workspaceRoot = fixture.homeURL.appending(path: "Workspace")
+        try FileManager.default.createDirectory(at: workspaceRoot, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(workspaceRoot.path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects("[]")
+
+        let started = AsyncSignal()
+        let release = AsyncSignal()
+        let viewModel = NativeAppViewModel(
+            store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL),
+            projectCatalogRefresher: { _ in
+                await started.signal()
+                await release.wait()
+                return []
+            }
+        )
+        viewModel.load()
+
+        let task = Task<Void, Error> {
+            try await viewModel.refreshProjectCatalog()
+        }
+        await started.wait()
+        XCTAssertTrue(viewModel.isRefreshingProjectCatalog)
+
+        await release.signal()
+        try await task.value
+
+        XCTAssertFalse(viewModel.isRefreshingProjectCatalog)
+    }
+}
+
 
 private struct TestFixture {
     let homeURL: URL
@@ -1213,6 +1572,46 @@ private func dateKey(daysFromToday: Int) -> String {
 
 private func startOfToday() -> Date {
     Calendar.current.startOfDay(for: Date())
+}
+
+private actor RefreshInvocationRecorder {
+    private var values: [Bool] = []
+
+    func record(isMainThread: Bool) {
+        values.append(isMainThread)
+    }
+
+    func invocationCount() -> Int {
+        values.count
+    }
+
+    func recordedIsMainThread() -> [Bool] {
+        values
+    }
+}
+
+private actor AsyncSignal {
+    private var hasSignaled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if hasSignaled {
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func signal() {
+        guard !hasSignaled else {
+            return
+        }
+        hasSignaled = true
+        let continuations = waiters
+        waiters.removeAll()
+        continuations.forEach { $0.resume() }
+    }
 }
 
 @MainActor
