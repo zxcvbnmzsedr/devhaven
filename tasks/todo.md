@@ -1,5 +1,31 @@
 # 本次任务清单
 
+## 修复 worktree 下 ./dev 因 Ghostty vendor 缺失而启动失败（2026-03-21）
+
+- [x] 复现 worktree 下 `./dev` 的 Ghostty vendor 校验失败，并确认触发条件
+- [x] 对照 `git worktree` / vendor 布局定位根因与边界
+- [x] 先补脚本级失败用例，锁定 worktree vendor 复用预期
+- [x] 以最小改动修复 worktree 启动链路并同步必要文档
+- [x] 运行定向验证并追加 Review
+
+## Review（修复 worktree 下 ./dev 因 Ghostty vendor 缺失而启动失败）
+
+- 直接原因：根目录 `./dev` 与 `macos/scripts/build-native-app.sh` 之前都只会对“当前 checkout 的 `macos/Vendor/`”执行 `setup-ghostty-framework.sh --verify-only`。而 `macos/Vendor/` 被 `.gitignore` 忽略，linked worktree 不会自动继承主 checkout 已准备好的 vendor，所以在 worktree 里启动时会直接卡死在 vendor 校验阶段。
+- 设计层诱因：Ghostty binary target 依赖的是一个本地忽略目录，但脚本边界把“当前 worktree 必然已经有独立 vendor”当成默认前提，导致同一仓库的多个 checkout 在本地依赖真相源上分裂。问题集中在 bootstrap 边界没有对齐；未发现更大的系统设计缺陷。
+- 当前修复：
+  - `setup-ghostty-framework.sh` 新增 `--ensure-worktree-vendor`，会先检查当前 worktree 的 `macos/Vendor/`；若缺失或损坏，则扫描同仓库其他 `git worktree`，找到首个已验证通过的 vendor 并同步到当前 worktree；
+  - `./dev` 改为先执行 `--ensure-worktree-vendor`，所以 linked worktree 里不再因为本地缺少 vendor 而直接失败；
+  - `build-native-app.sh` 同步切到相同入口，避免 worktree 下打包链路继续踩同一个坑；
+  - `README.md`、`AGENTS.md` 已同步更新为“worktree 可自动复用其他 checkout 的 vendor”的现状说明。
+- 长期建议：如果后续 worktree 使用频率继续上升，可进一步把 Ghostty vendor 收口到显式共享缓存（例如 `~/.devhaven/` 下的统一 cache）而不是按 worktree 复制，避免重复占用磁盘并减少同步成本。
+- 验证证据：
+  - TDD 红灯：`bash macos/scripts/test-dev-command.sh` → 修复前失败；临时 linked worktree 内稳定复现 `Ghostty vendor 验证失败`，缺少 `GhosttyKit.xcframework`、`themes` 与 `terminfo`。
+  - 定向绿灯：`bash macos/scripts/test-dev-command.sh` → 通过，输出 `dev command smoke ok`。
+  - 当前 worktree 实测：`bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor` → 成功复用 `/Users/zhaotianzeng/WebstormProjects/DevHaven/macos/Vendor`，并完成当前 worktree `macos/Vendor/` 校验。
+  - 当前 worktree 启动链路验证：用 mock `swift` 执行 `./dev --no-log` → 通过 vendor 准备阶段并实际调用 `swift run --package-path macos DevHavenApp`。
+  - 当前 worktree 打包链路验证：`bash macos/scripts/build-native-app.sh --debug --no-open --output-dir /tmp/devhaven-native-app-worktree-vendor-verify` → 通过，产出 `/tmp/devhaven-native-app-worktree-vendor-verify/DevHaven.app`；过程中出现的 Ghostty umbrella header warning 为上游既有告警，不是本次改动新增错误。
+  - 差异校验：`git diff --check` → 通过。
+
 ## 修复删除 dirty worktree 时被 Git 拒绝（2026-03-21）
 
 - [x] 复现并确认 `git worktree remove` 在 modified / untracked 场景下的失败行为

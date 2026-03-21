@@ -13,7 +13,7 @@ usage() {
 
 作用：
   以接近 `pnpm dev` 的方式启动 DevHaven 原生开发态：
-  先校验 Ghostty vendor，再按需接入 unified log，最后运行 `swift run --package-path macos DevHavenApp`。
+  先确保 Ghostty vendor 可用，再按需接入 unified log，最后运行 `swift run --package-path macos DevHavenApp`。
 
 选项：
   --dry-run               只打印将要执行的命令，不真正启动
@@ -99,13 +99,13 @@ done
 
 cd "$ROOT_DIR"
 
-VERIFY_COMMAND=(bash macos/scripts/setup-ghostty-framework.sh --verify-only)
+VENDOR_COMMAND=(bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor)
 RUN_COMMAND=(swift run --package-path macos DevHavenApp)
 LOG_PREDICATE="$(build_predicate)"
 LOG_COMMAND=(log stream --style compact --level debug --predicate "$LOG_PREDICATE")
 
 if (( DRY_RUN )); then
-  print_command "校验命令" "${VERIFY_COMMAND[@]}"
+  print_command "vendor命令" "${VENDOR_COMMAND[@]}"
   if (( ENABLE_LOG )); then
     print_command "日志命令" "${LOG_COMMAND[@]}"
   fi
@@ -118,8 +118,8 @@ command -v log >/dev/null 2>&1 || fail "未检测到 macOS log 命令"
 
 trap cleanup EXIT INT TERM
 
-printf '==> 校验 Ghostty vendor\n'
-"${VERIFY_COMMAND[@]}"
+printf '==> 确保 Ghostty vendor 可用\n'
+"${VENDOR_COMMAND[@]}"
 
 if (( ENABLE_LOG )); then
   printf '==> 启动 unified log 观察（logs=%s）\n' "$LOG_MODE"
