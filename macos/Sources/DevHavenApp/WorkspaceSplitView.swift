@@ -6,6 +6,7 @@ struct WorkspaceSplitView<Leading: View, Trailing: View>: View {
     let direction: WorkspaceSplitAxis
     let ratio: Double
     let onRatioChange: (Double) -> Void
+    let onRatioChangeEnded: ((Double) -> Void)?
     let onEqualize: () -> Void
     let leading: Leading
     let trailing: Trailing
@@ -18,6 +19,7 @@ struct WorkspaceSplitView<Leading: View, Trailing: View>: View {
         direction: WorkspaceSplitAxis,
         ratio: Double,
         onRatioChange: @escaping (Double) -> Void,
+        onRatioChangeEnded: ((Double) -> Void)? = nil,
         onEqualize: @escaping () -> Void = {},
         @ViewBuilder leading: () -> Leading,
         @ViewBuilder trailing: () -> Trailing
@@ -25,6 +27,7 @@ struct WorkspaceSplitView<Leading: View, Trailing: View>: View {
         self.direction = direction
         self.ratio = ratio
         self.onRatioChange = onRatioChange
+        self.onRatioChangeEnded = onRatioChangeEnded
         self.onEqualize = onEqualize
         self.leading = leading()
         self.trailing = trailing()
@@ -60,15 +63,30 @@ struct WorkspaceSplitView<Leading: View, Trailing: View>: View {
     private func dragGesture(_ size: CGSize) -> some Gesture {
         DragGesture()
             .onChanged { gesture in
-                switch direction {
-                case .horizontal:
-                    let new = min(max(minSize, gesture.location.x), size.width - minSize)
-                    onRatioChange(Double(new / size.width))
-                case .vertical:
-                    let new = min(max(minSize, gesture.location.y), size.height - minSize)
-                    onRatioChange(Double(new / size.height))
-                }
+                onRatioChange(resolvedRatio(for: gesture.location, in: size))
             }
+            .onEnded { gesture in
+                let finalRatio = resolvedRatio(for: gesture.location, in: size)
+                onRatioChange(finalRatio)
+                onRatioChangeEnded?(finalRatio)
+            }
+    }
+
+    private func resolvedRatio(for location: CGPoint, in size: CGSize) -> Double {
+        switch direction {
+        case .horizontal:
+            guard size.width > 0 else {
+                return ratio
+            }
+            let new = min(max(minSize, location.x), size.width - minSize)
+            return Double(new / size.width)
+        case .vertical:
+            guard size.height > 0 else {
+                return ratio
+            }
+            let new = min(max(minSize, location.y), size.height - minSize)
+            return Double(new / size.height)
+        }
     }
 
     private func leadingRect(for size: CGSize) -> CGRect {

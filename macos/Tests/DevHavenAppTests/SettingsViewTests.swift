@@ -22,6 +22,15 @@ final class SettingsViewTests: XCTestCase {
         )
     }
 
+    func testNextSettingsPreservesWorkspaceSidebarWidth() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("workspaceSidebarWidth: originalSettings.workspaceSidebarWidth"),
+            "设置页保存其他配置时也应保留现有的工作区侧边栏宽度，不能把该值意外重置"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

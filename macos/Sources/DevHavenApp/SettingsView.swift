@@ -370,6 +370,7 @@ struct SettingsView: View {
             terminalTheme: originalSettings.terminalTheme,
             gitIdentities: normalizedGitIdentities,
             projectListViewMode: originalSettings.projectListViewMode,
+            workspaceSidebarWidth: originalSettings.workspaceSidebarWidth,
             sharedScriptsRoot: sharedScriptsRoot,
             viteDevPort: originalSettings.viteDevPort,
             webEnabled: originalSettings.webEnabled,

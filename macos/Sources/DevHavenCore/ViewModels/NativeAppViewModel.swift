@@ -147,6 +147,10 @@ public final class NativeAppViewModel {
         snapshot.appState.settings.projectListViewMode
     }
 
+    public var workspaceSidebarWidth: Double {
+        snapshot.appState.settings.workspaceSidebarWidth
+    }
+
     public var visibleProjects: [Project] {
         let hidden = Set(snapshot.appState.recycleBin)
         return snapshot.projects.filter { !hidden.contains($0.path) }
@@ -996,6 +1000,15 @@ public final class NativeAppViewModel {
         }
         var nextSettings = snapshot.appState.settings
         nextSettings.projectListViewMode = mode
+        saveSettings(nextSettings)
+    }
+
+    public func updateWorkspaceSidebarWidth(_ width: Double) {
+        guard snapshot.appState.settings.workspaceSidebarWidth != width else {
+            return
+        }
+        var nextSettings = snapshot.appState.settings
+        nextSettings.workspaceSidebarWidth = width
         saveSettings(nextSettings)
     }
 

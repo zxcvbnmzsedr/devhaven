@@ -13,6 +13,7 @@ struct WorkspaceShellView: View {
     @State private var isProjectPickerPresented = false
     @State private var worktreeDialogProjectPath: String?
     @State private var pendingDeleteRequest: WorktreeDeleteRequest?
+    @State private var sidebarWidth: CGFloat = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
     @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
 
     private var worktreeDialogProject: Project? {
@@ -23,47 +24,83 @@ struct WorkspaceShellView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            WorkspaceProjectListView(
-                groups: viewModel.workspaceSidebarGroups,
-                canOpenMoreProjects: !viewModel.availableWorkspaceProjects.isEmpty,
-                onSelectProject: viewModel.activateWorkspaceProject,
-                onOpenProjectPicker: { isProjectPickerPresented = true },
-                onRequestCreateWorktree: { projectPath in
-                    worktreeDialogProjectPath = projectPath
+        GeometryReader { geometry in
+            let totalWidth = geometry.size.width
+            WorkspaceSplitView(
+                direction: .horizontal,
+                ratio: WorkspaceSidebarLayoutPolicy.sidebarRatio(
+                    for: sidebarWidth,
+                    totalWidth: totalWidth
+                ),
+                onRatioChange: { ratio in
+                    sidebarWidth = WorkspaceSidebarLayoutPolicy.sidebarWidth(
+                        for: ratio,
+                        totalWidth: totalWidth
+                    )
                 },
-                onRefreshWorktrees: { projectPath in
-                    Task {
-                        do {
-                            try await viewModel.refreshProjectWorktrees(projectPath)
-                        } catch {
-                            viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                onRatioChangeEnded: { ratio in
+                    let committedWidth = WorkspaceSidebarLayoutPolicy.sidebarWidth(
+                        for: ratio,
+                        totalWidth: totalWidth
+                    )
+                    sidebarWidth = committedWidth
+                    persistSidebarWidth(committedWidth)
+                },
+                onEqualize: {
+                    sidebarWidth = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
+                    persistSidebarWidth(WorkspaceSidebarLayoutPolicy.defaultSidebarWidth)
+                }
+            ) {
+                WorkspaceProjectListView(
+                    groups: viewModel.workspaceSidebarGroups,
+                    canOpenMoreProjects: !viewModel.availableWorkspaceProjects.isEmpty,
+                    onSelectProject: viewModel.activateWorkspaceProject,
+                    onOpenProjectPicker: { isProjectPickerPresented = true },
+                    onRequestCreateWorktree: { projectPath in
+                        worktreeDialogProjectPath = projectPath
+                    },
+                    onRefreshWorktrees: { projectPath in
+                        Task {
+                            do {
+                                try await viewModel.refreshProjectWorktrees(projectPath)
+                            } catch {
+                                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                            }
                         }
-                    }
-                },
-                onOpenWorktree: { rootProjectPath, worktreePath in
-                    viewModel.openWorkspaceWorktree(worktreePath, from: rootProjectPath)
-                },
-                onRetryWorktree: { rootProjectPath, worktreePath in
-                    Task {
-                        do {
-                            try await viewModel.retryWorkspaceWorktree(worktreePath, from: rootProjectPath)
-                        } catch {
-                            viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    },
+                    onOpenWorktree: { rootProjectPath, worktreePath in
+                        viewModel.openWorkspaceWorktree(worktreePath, from: rootProjectPath)
+                    },
+                    onRetryWorktree: { rootProjectPath, worktreePath in
+                        Task {
+                            do {
+                                try await viewModel.retryWorkspaceWorktree(worktreePath, from: rootProjectPath)
+                            } catch {
+                                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                            }
                         }
-                    }
-                },
-                onRequestDeleteWorktree: { rootProjectPath, worktreePath in
-                    pendingDeleteRequest = WorktreeDeleteRequest(rootProjectPath: rootProjectPath, worktreePath: worktreePath)
-                },
-                onCloseProject: viewModel.closeWorkspaceProject,
-                onExit: viewModel.exitWorkspace
-            )
-            .frame(width: 280)
-
-            workspaceContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(NativeTheme.window)
+                    },
+                    onRequestDeleteWorktree: { rootProjectPath, worktreePath in
+                        pendingDeleteRequest = WorktreeDeleteRequest(rootProjectPath: rootProjectPath, worktreePath: worktreePath)
+                    },
+                    onCloseProject: viewModel.closeWorkspaceProject,
+                    onExit: viewModel.exitWorkspace
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } trailing: {
+                workspaceContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(NativeTheme.window)
+            }
+            .onAppear {
+                syncSidebarWidth(totalWidth: totalWidth)
+            }
+            .onChange(of: viewModel.workspaceSidebarWidth) { _, _ in
+                syncSidebarWidth(totalWidth: totalWidth)
+            }
+            .onChange(of: totalWidth) { _, _ in
+                syncSidebarWidth(totalWidth: totalWidth)
+            }
         }
         .background(NativeTheme.window)
         .onAppear {
@@ -205,9 +242,55 @@ struct WorkspaceShellView: View {
             activeProjectPath: viewModel.activeWorkspaceProjectPath
         )
     }
+
+    private func syncSidebarWidth(totalWidth: CGFloat) {
+        sidebarWidth = WorkspaceSidebarLayoutPolicy.clampSidebarWidth(
+            CGFloat(viewModel.workspaceSidebarWidth),
+            totalWidth: totalWidth
+        )
+    }
+
+    private func persistSidebarWidth(_ width: CGFloat) {
+        let persistedWidth = Double(width.rounded())
+        viewModel.updateWorkspaceSidebarWidth(persistedWidth)
+    }
 }
 
 private struct WorkspaceDialogProject: Identifiable {
     let project: Project
     var id: String { project.path }
+}
+
+enum WorkspaceSidebarLayoutPolicy {
+    static let defaultSidebarWidth: CGFloat = 280
+    private static let minSidebarWidth: CGFloat = 220
+    private static let maxSidebarWidth: CGFloat = 420
+    private static let minWorkspaceContentWidth: CGFloat = 520
+
+    static func sidebarRatio(for width: CGFloat, totalWidth: CGFloat) -> Double {
+        guard totalWidth > 0 else {
+            return 0.5
+        }
+        return Double(clampSidebarWidth(width, totalWidth: totalWidth) / totalWidth)
+    }
+
+    static func sidebarWidth(for ratio: Double, totalWidth: CGFloat) -> CGFloat {
+        guard totalWidth > 0 else {
+            return defaultSidebarWidth
+        }
+        let proposedWidth = totalWidth * CGFloat(ratio)
+        return clampSidebarWidth(proposedWidth, totalWidth: totalWidth)
+    }
+
+    static func clampSidebarWidth(_ width: CGFloat, totalWidth: CGFloat) -> CGFloat {
+        let range = allowedSidebarWidthRange(totalWidth: totalWidth)
+        return min(max(width, range.lowerBound), range.upperBound)
+    }
+
+    private static func allowedSidebarWidthRange(totalWidth: CGFloat) -> ClosedRange<CGFloat> {
+        let lowerBound = min(minSidebarWidth, totalWidth)
+        let contentSafeUpperBound = max(totalWidth - minWorkspaceContentWidth, lowerBound)
+        let upperBound = min(maxSidebarWidth, contentSafeUpperBound)
+        return lowerBound...max(lowerBound, upperBound)
+    }
 }

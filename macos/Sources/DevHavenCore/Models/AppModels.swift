@@ -94,6 +94,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var terminalTheme: String
     public var gitIdentities: [GitIdentity]
     public var projectListViewMode: ProjectListViewMode
+    public var workspaceSidebarWidth: Double
     public var sharedScriptsRoot: String
     public var viteDevPort: Int
     public var webEnabled: Bool
@@ -107,6 +108,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         terminalTheme: String = "DevHaven Dark",
         gitIdentities: [GitIdentity] = [],
         projectListViewMode: ProjectListViewMode = .card,
+        workspaceSidebarWidth: Double = 280,
         sharedScriptsRoot: String = "~/.devhaven/scripts",
         viteDevPort: Int = 1420,
         webEnabled: Bool = true,
@@ -119,6 +121,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.terminalTheme = terminalTheme
         self.gitIdentities = gitIdentities
         self.projectListViewMode = projectListViewMode
+        self.workspaceSidebarWidth = workspaceSidebarWidth
         self.sharedScriptsRoot = sharedScriptsRoot
         self.viteDevPort = viteDevPort
         self.webEnabled = webEnabled
@@ -133,6 +136,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case terminalTheme
         case gitIdentities
         case projectListViewMode
+        case workspaceSidebarWidth
         case sharedScriptsRoot
         case viteDevPort
         case webEnabled
@@ -148,6 +152,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.terminalTheme = try container.decodeIfPresent(String.self, forKey: .terminalTheme) ?? "DevHaven Dark"
         self.gitIdentities = try container.decodeIfPresent([GitIdentity].self, forKey: .gitIdentities) ?? []
         self.projectListViewMode = try container.decodeIfPresent(ProjectListViewMode.self, forKey: .projectListViewMode) ?? .card
+        self.workspaceSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .workspaceSidebarWidth) ?? 280
         self.sharedScriptsRoot = try container.decodeIfPresent(String.self, forKey: .sharedScriptsRoot) ?? "~/.devhaven/scripts"
         self.viteDevPort = try container.decodeIfPresent(Int.self, forKey: .viteDevPort) ?? 1420
         self.webEnabled = try container.decodeIfPresent(Bool.self, forKey: .webEnabled) ?? true
