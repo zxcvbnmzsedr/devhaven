@@ -96,6 +96,26 @@ bash macos/scripts/build-native-app.sh --release
 
 > 说明：`macos/Vendor/` 不会入库；GitHub Release workflow 会先下载并构建固定版本的 Ghostty 源码（当前 pin 到 `da10707f93104c5466cd4e64b80ff48f789238a0`），再执行 `swift test` 和原生打包。
 
+### 开发态一键启动
+
+如果你想要更接近 `pnpm dev` 的体验，可以直接使用仓库根目录的 `./dev`：
+
+```bash
+# 默认：校验 vendor + 观察 DevHaven/Ghostty unified log + 启动原生 App
+./dev
+
+# 只看 DevHaven 自己的日志
+./dev --logs app
+
+# 只启动应用，不接入 unified log
+./dev --no-log
+
+# 仅打印将要执行的命令，方便排查
+./dev --dry-run
+```
+
+> `./dev` 内部会先执行 `bash macos/scripts/setup-ghostty-framework.sh --verify-only`，再按需启动 `log stream`，最后运行 `swift run --package-path macos DevHavenApp`。
+
 ### macOS 特别说明
 
 3.0.0 起默认发布产物为 **macOS 原生 `.app`**。如果遇到“无法打开应用”的安全提示，可以移除隔离属性：

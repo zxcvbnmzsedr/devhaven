@@ -159,3 +159,30 @@
   - 全量验证：`swift test --package-path macos` → 通过，`109 tests, 5 skipped, 0 failures`；
   - 代码格式校验：`git diff --check` → 通过。
 - 当前边界：本轮已经完成代码级 root-cause 修复并通过自动化验证，但还没有新的 GUI 肉眼滚动手感证据；最终体感是否已与 Ghostty / Supacode 对齐，仍建议你本机再滚一轮确认。
+
+## 新增根目录 `./dev` 原生开发命令（2026-03-21）
+
+- [x] 记录设计与实现计划，明确单命令入口的职责边界
+- [x] 先写失败用例，锁定 `./dev` 的帮助、dry-run 与日志包装行为
+- [x] 实现根目录 `./dev` 脚本并补 README / AGENTS 说明
+- [x] 运行脚本级验证与代码差异校验
+
+## Review（根目录 `./dev` 原生开发命令）
+
+- 直接原因：当前仓库虽然已经有 `swift run --package-path macos DevHavenApp` 这条原生启动链路，但关键诊断日志走的是 macOS unified log；直接运行 `swift run` 时，用户很难像 `pnpm dev` 那样在同一开发入口里同时看到日志和应用启动过程。
+- 设计层诱因：开发态入口被拆成了“手动运行应用”和“另开终端执行 `log stream`”两步，应用启动真相源与日志观测真相源分裂。未发现更大的系统设计缺陷，问题集中在本地开发体验缺少统一入口。
+- 当前修复：
+  - 新增根目录 `./dev`，默认先执行 `bash macos/scripts/setup-ghostty-framework.sh --verify-only`；
+  - 默认以 unified log 观察 `DevHavenNative` 与 `com.mitchellh.ghostty`；
+  - 前台执行 `swift run --package-path macos DevHavenApp`，并通过 `trap` 回收后台日志进程；
+  - 新增 `--dry-run`、`--no-log`、`--logs all|app|ghostty`，保证脚本具备最小可测试/可排障能力；
+  - `README.md`、`AGENTS.md`、`tasks/lessons.md` 已同步更新。
+- 长期建议：后续如果再增加新的原生诊断 subsystem、环境变量或调试开关，优先继续收口到 `./dev`，不要重新散落成多套“启动命令 + 文档说明 + 临时 shell alias”。
+- 验证证据：
+  - TDD 红灯：`bash macos/scripts/test-dev-command.sh` → 初次失败，报 `/Users/zhaotianzeng/WebstormProjects/DevHaven/dev: No such file or directory`，证明新测试确实先锁住了缺失的入口。
+  - 定向绿灯：`bash macos/scripts/test-dev-command.sh` → 通过，输出 `dev command smoke ok`。
+  - 帮助输出：`./dev --help` → 通过，已展示 `--dry-run`、`--no-log`、`--logs all|app|ghostty`。
+  - dry-run：`./dev --dry-run` → 通过，已打印 vendor 校验、`log stream` 与 `swift run --package-path macos DevHavenApp` 三条命令。
+  - 依赖前置：`bash macos/scripts/setup-ghostty-framework.sh --verify-only` → 通过，确认当前 `macos/Vendor` 完整。
+  - 代码差异：`git diff --check` → 通过。
+- 当前边界：本轮验证已覆盖脚本外部行为、参数分支与 vendor 前置条件，但没有在自动化会话里实际长时间运行 `./dev` 打开 GUI 应用并观察你桌面上的最终体感；如果你要确认真实开发体验，建议本机手动跑一遍 `./dev`。

@@ -13,3 +13,4 @@
 - 当 GitHub release 要同时发多个 macOS 架构时，不要继续沿用单 runner + 通用 asset 文件名；应把“runner 架构”和“release asset 命名”一起显式化，否则多 job 上传时要么互相覆盖，要么让用户无法判断包对应的 CPU 架构。
 - GitHub-hosted Intel runner 不等于“适合构建 Intel 目标”；如果上游依赖（这里是 Ghostty）已经要求更高版本的 Xcode，而 GitHub 当前可用 Intel runner 只有较老工具链，就应改成在较新 Apple Silicon runner 上用 `--triple x86_64-apple-macosx14.0` 交叉构建，而不是继续把 CPU 架构和 runner 机型绑死。
 - 在 Apple Silicon 主机上跑 `swift test --triple x86_64-apple-macosx14.0` 时，测试二进制可以编出来，但默认无法直接执行 x86_64 test bundle；CI 若仍运行在 arm64 runner，上游验证边界应明确收口为“x86_64 编译/打包成功”，不要误把“可编译”当成“可在当前 runner 上直接执行测试”。
+- 对纯 macOS 原生 GUI 应用，`swift run` 只是启动入口，不等于 Web 项目的 dev server；如果关键日志走 unified log，就应在仓库级开发命令里一并收口 `log stream` 与应用启动，否则用户很容易误以为“启动成功但没有日志”。
