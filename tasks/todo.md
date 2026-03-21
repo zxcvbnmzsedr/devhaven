@@ -1,5 +1,25 @@
 # 本次任务清单
 
+## 提交当前改动（2026-03-21）
+
+- [x] 确认当前改动范围与提交主题
+- [x] 同步更新任务记录
+- [x] 运行提交前验证并记录证据
+- [x] 执行 git commit
+
+## Review（提交当前改动）
+
+- 提交结果：已创建提交 `feat(workspace): 为当前终端窗格增加聚焦描边`。
+- 本次纳入提交的改动：
+  - `WorkspaceTerminalPaneView.swift`：在隐藏 pane header 的 workspace minimal 模式下，为当前聚焦终端 pane 增加 accent 描边，避免当前 pane 缺少可见焦点反馈。
+  - `.claude/settings.local.json`：补充本地工具权限，允许 `mcp__serena__find_file` 与 `mcp__open-websearch__search`。
+  - `tasks/todo.md`：记录本次提交任务与验证证据。
+- 验证证据：
+  - `swift test --package-path macos` → 通过，`111 tests, 5 skipped, 0 failures`；过程中仅有既有 Ghostty 链接 warning，未阻断构建与测试。
+  - `git diff --check` → 通过。
+- 当前边界：
+  - 工作区里仍有未跟踪文件 `release`，本次未纳入提交；若后续要正式引入新的根目录发布入口，需要同步更新 `AGENTS.md` / 相关文档后再单独提交。
+
 ## 删除工作区侧栏项目卡片上的 worktree 数量徽标（2026-03-21）
 
 - [x] 记录最小设计与实施计划

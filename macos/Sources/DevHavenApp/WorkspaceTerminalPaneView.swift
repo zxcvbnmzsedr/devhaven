@@ -39,6 +39,11 @@ struct WorkspaceTerminalPaneView: View {
                 )
             } else {
                 surfaceHost
+                    .overlay(
+                        Rectangle()
+                            .inset(by: 0)
+                            .stroke(isFocused ? NativeTheme.accent.opacity(0.8) : Color.clear, lineWidth: 2)
+                    )
             }
         }
     }
