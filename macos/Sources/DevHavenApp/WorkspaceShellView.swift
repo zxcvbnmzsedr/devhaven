@@ -158,7 +158,7 @@ struct WorkspaceShellView: View {
             }
         } message: {
             if let pendingDeleteRequest {
-                Text("将删除 \(pendingDeleteRequest.worktreePath)。若该 worktree 由 DevHaven 创建，还会尝试删除对应本地分支。")
+                Text("将删除 \(pendingDeleteRequest.worktreePath)，并丢弃其中未提交修改与未跟踪文件。若该 worktree 由 DevHaven 创建，还会尝试删除对应本地分支。")
             }
         }
     }

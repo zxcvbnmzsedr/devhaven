@@ -135,7 +135,7 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         }
 
         do {
-            _ = try runGit(["worktree", "remove", request.worktreePath], at: request.sourceProjectPath)
+            _ = try runGit(["worktree", "remove", "--force", request.worktreePath], at: request.sourceProjectPath)
         } catch let error as NativeWorktreeError {
             if case let .commandFailed(message) = error, shouldPruneAfterRemoveFailure(message) {
                 _ = try? runGit(["worktree", "prune"], at: request.sourceProjectPath)

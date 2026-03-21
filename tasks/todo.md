@@ -1,5 +1,28 @@
 # 本次任务清单
 
+## 修复删除 dirty worktree 时被 Git 拒绝（2026-03-21）
+
+- [x] 复现并确认 `git worktree remove` 在 modified / untracked 场景下的失败行为
+- [x] 先补失败测试，锁定删除 dirty worktree 的预期
+- [x] 以最小改动修复删除逻辑与必要文案
+- [x] 运行定向与全量验证，并追加 Review
+
+## Review（修复删除 dirty worktree 时被 Git 拒绝）
+
+- 直接原因：`NativeGitWorktreeService.removeWorktree(...)` 之前直接执行 `git worktree remove <path>`。Git 在 worktree 内存在 modified / untracked 文件时会按默认安全策略拒绝删除，并返回 `fatal: '.../swift' contains modified or untracked files, use --force to delete it`，所以 DevHaven 的“删除 worktree”会直接失败。
+- 设计层诱因：产品语义和底层 Git 语义没有收口。UI 已经把这个入口定义成显式 destructive delete，但服务层仍保留 Git 的“仅允许删除干净 worktree”默认策略，同时确认文案也没有提前说明会如何处理未提交改动。这是一个局部边界不一致；未发现更大的系统设计缺陷。
+- 当前修复：
+  - `NativeGitWorktreeService` 删除 worktree 时改为执行 `git worktree remove --force <path>`，让显式删除动作可以按预期回收 dirty worktree；
+  - 保留原有 `worktree prune` fallback 和“删除对应本地分支”的后续处理；
+  - `WorkspaceShellView` 的确认文案同步补充“会丢弃未提交修改与未跟踪文件”，把 destructive 语义显式告诉用户。
+- 长期建议：如果后续想给用户保留更多控制权，下一步应考虑把删除分成“取消 / 强制删除”两条显式路径，或在确认弹窗里先展示 dirty-state 预检结果；但当前这类单按钮 destructive flow 不应再把裸 Git fatal 暴露给用户。
+- 验证证据：
+  - 复现脚本：临时仓库里执行 `git worktree remove "$wt"`，在 worktree 含修改和未跟踪文件时稳定复现 `EXIT_CODE=128` 与 `contains modified or untracked files, use --force to delete it`。
+  - TDD 红灯：`swift test --package-path macos --filter NativeWorktreeServiceTests/testRemoveWorktreeForceDeletesDirtyManagedWorktree` → 修复前失败，报 `contains modified or untracked files, use --force to delete it`。
+  - 定向绿灯：`swift test --package-path macos --filter NativeWorktreeServiceTests/testRemoveWorktreeForceDeletesDirtyManagedWorktree` → 通过，`1 test, 0 failures`。
+  - 全量验证：`swift test --package-path macos` → 通过，`110 tests, 5 skipped, 0 failures`。
+  - 差异校验：`git diff --check` → 通过。
+
 ## DevHaven 3.0.0 仓库收口为纯 macOS 原生主线（2026-03-20）
 
 - [x] 保护当前工作区并核对 merge 前状态

@@ -1,5 +1,6 @@
 # Lessons Learned
 
+- 对 DevHaven 这种显式确认后的 “删除 worktree” 操作，不能直接透传裸 `git worktree remove`；Git 默认会因 modified / untracked 文件拒删并抛出原始 fatal。要么在服务层显式使用 `--force` 对齐产品语义，要么在 UI 先做 dirty-state 预检并给出清晰分支。
 - 当用户已经明确要求“切到 Swift 原生打包主线”时，不要只删 Tauri 打包入口；要继续检查 release workflow、版本真相源、README、AGENTS 和设置页文案是否仍残留旧栈语义。
 - 当用户进一步明确要求“源文件都删除”时，必须连同旧的 React / Vite / Tauri / Rust 兼容源码、Node 构建配置、历史实施文档与旧 release note 一起清理，避免仓库结构和产品口径继续分裂。
 - 原生打包脚本不应依赖已经准备删除的 `package.json` 或 `src-tauri/tauri.conf.json`；版本号、bundle identifier、product name 这类真相源应提前迁到 `macos/Resources/AppMetadata.json` 这类原生侧元数据文件。

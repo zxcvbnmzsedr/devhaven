@@ -113,6 +113,44 @@ final class NativeWorktreeServiceTests: XCTestCase {
         let branchNames = try fixture.gitOutput(["git", "branch", "--list", "feature/delete-me"], at: repositoryURL)
         XCTAssertTrue(branchNames.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
+
+    func testRemoveWorktreeForceDeletesDirtyManagedWorktree() throws {
+        let fixture = try GitWorktreeFixture()
+        let repositoryURL = try fixture.createRepository(named: "sample-app")
+        let service = NativeGitWorktreeService(homeDirectoryURL: fixture.homeURL)
+        let created = try service.createWorktree(
+            NativeWorktreeCreateRequest(
+                sourceProjectPath: repositoryURL.path(),
+                branch: "feature/dirty-delete",
+                createBranch: true,
+                baseBranch: "main"
+            ),
+            progress: { _ in }
+        )
+
+        let dirtyReadmeURL = URL(fileURLWithPath: created.worktreePath).appending(path: "README.md")
+        try "\nlocal change\n".appendLine(to: dirtyReadmeURL)
+        try "scratch\n".write(
+            to: URL(fileURLWithPath: created.worktreePath).appending(path: "untracked.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = try service.removeWorktree(
+            NativeWorktreeRemoveRequest(
+                sourceProjectPath: repositoryURL.path(),
+                worktreePath: created.worktreePath,
+                branch: created.branch,
+                shouldDeleteBranch: true
+            )
+        )
+
+        XCTAssertNil(result.warning)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: created.worktreePath))
+        XCTAssertEqual(try service.listWorktrees(at: repositoryURL.path), [])
+        let branchNames = try fixture.gitOutput(["git", "branch", "--list", "feature/dirty-delete"], at: repositoryURL)
+        XCTAssertTrue(branchNames.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
 }
 
 private struct GitWorktreeFixture {
@@ -195,6 +233,21 @@ private struct GitWorktreeFixture {
 private struct ProcessOutput {
     let stdout: String
     let stderr: String
+}
+
+private extension String {
+    func appendLine(to url: URL) throws {
+        guard let data = self.data(using: .utf8) else {
+            throw XCTSkip("测试输入编码失败")
+        }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+            return
+        }
+        throw XCTSkip("测试文件不存在：\(url.path())")
+    }
 }
 
 private final class ProgressRecorder: @unchecked Sendable {
