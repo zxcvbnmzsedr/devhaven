@@ -15,7 +15,59 @@ permissions:
   contents: write
 
 jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve-tag.outputs.tag }}
+
+    steps:
+      - name: Resolve release tag
+        id: resolve-tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          if [[ -z "$tag" ]]; then
+            echo "缺少 release tag，无法继续发布。" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Remove duplicate draft releases for tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.resolve-tag.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          draft_ids="$(gh release list --limit 100 --json databaseId,tagName,isDraft --jq '.[] | select(.tagName == env.RELEASE_TAG and .isDraft == true) | .databaseId')"
+          if [[ -z "$draft_ids" ]]; then
+            echo "未发现需要清理的重复 draft release。"
+            exit 0
+          fi
+
+          while IFS= read -r release_id; do
+            [[ -n "$release_id" ]] || continue
+            echo "删除重复 draft release: $release_id"
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/$release_id"
+          done <<< "$draft_ids"
+
+      - name: Ensure GitHub release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.resolve-tag.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_name="DevHaven ${RELEASE_TAG}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$release_name" --prerelease
+          else
+            gh release create "$RELEASE_TAG" --title "$release_name" --prerelease --notes ""
+          fi
+
   build-macos-native:
+    needs: prepare-release
     strategy:
       fail-fast: false
       matrix:
@@ -87,10 +139,10 @@ jobs:
           echo "zip_path=$zip_path" >> "$GITHUB_OUTPUT"
 
       - name: Publish native release asset
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          name: "DevHaven ${{ inputs.tag || github.ref_name }}"
-          draft: false
-          prerelease: true
-          files: ${{ steps.archive.outputs.zip_path }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" "${{ steps.archive.outputs.zip_path }}" --clobber
