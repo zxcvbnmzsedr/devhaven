@@ -1,5 +1,37 @@
 # 本次任务清单
 
+
+## 修复新开项目 / 新开 pane 后终端焦点未进入命令行（2026-03-21）
+
+- [x] 复盘 workspace / Ghostty 焦点链路，确认新开项目与新开 pane 共用的直接失焦点
+- [x] 先补失败测试，锁定“逻辑焦点 pane 后续仍要把 responder 从按钮/列表控件收回 terminal”这条回归边界
+- [x] 以最小改动修复焦点请求逻辑，确保新开项目与新开 pane 都会落到对应 terminal surface
+- [x] 运行定向验证、必要构建检查，并在 `tasks/todo.md` 追加 Review
+
+## Review（修复新开项目 / 新开 pane 后终端焦点未进入命令行）
+
+- 直接原因：`GhosttySurfaceHostModel.restoreWindowResponderIfNeeded()` 之前只会在 `window.firstResponder` **已经是另一个 `GhosttyTerminalSurfaceView`** 时，才把 responder 转回当前逻辑焦点 pane。可你这次复现的两个入口——**新开项目**与**点击按钮新开 pane**——前一个 responder 往往是项目列表项、按钮或其他非 terminal 控件。于是即使 pane 的业务焦点已经切到了新项目 / 新 pane，首次 attach 阶段若没把焦点稳稳落进 terminal，后续 restore 也会因为这条 guard 过窄而直接跳过，最终表现成“新开后命令行没有输入焦点”。
+- 设计层诱因：存在，但集中在 GUI responder 同步边界。当前模型里“哪个 pane 是逻辑焦点”已经由 `focusedPaneId` 统一管理，但“AppKit `firstResponder` 该不该跟进”在恢复阶段仍假设**当前 responder 必须已经属于 terminal 家族**。这个假设对 pane 间切换成立，但对“从项目列表 / pane header 按钮触发的新开动作”不成立。未发现明显更大的系统设计缺陷。
+- 当前修复：
+  1. 保持现有 logical focus / pane focus 状态流不变；
+  2. 仅在 `GhosttySurfaceHostModel.restoreWindowResponderIfNeeded()` 做最小收口：只要当前 pane 已经是逻辑焦点、窗口也已挂载，并且 `firstResponder` 还不是该 pane 自己，就允许把 responder 还给当前 `ownedSurfaceView`，不再强依赖“当前 responder 也必须是 terminal”；
+  3. 新增回归测试 `GhosttySurfaceHostTests.testRestoreWindowResponderCanReclaimFocusedPaneFromNonTerminalResponderAfterMissedInitialFocus`，锁定“首次焦点请求被按钮吃掉后，后续仍要把 responder 收回 terminal”这条边界。
+- 长期建议：后续只要继续保留“SwiftUI 逻辑焦点 + AppKit 原生 responder”双层机制，就要默认把**来自按钮、列表、tab bar 等非 terminal 控件的临时 responder 占用**视为正常 GUI 行为，而不是只处理 terminal-to-terminal 交接。否则每次新增一个“从控件触发切 pane / 切项目”的入口，都容易再冒出同类焦点回归。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter GhosttySurfaceHostTests/testRestoreWindowResponderCanReclaimFocusedPaneFromNonTerminalResponderAfterMissedInitialFocus` → 修复前失败，断言“当前 pane 已经是逻辑焦点时，即使首次焦点请求被按钮吃掉，后续也应把 responder 还给 terminal surface”未成立。
+  - 定向绿灯：同一条命令修复后通过，`1 test, 0 failures`。
+  - 相关回归：`swift test --package-path macos --filter 'GhosttySurfaceHostTests/(testPrepareForContainerReuseYieldsWindowFirstResponderWhenSurfaceViewOwnsResponder|testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt|testRestoreWindowResponderCanReclaimFocusedPaneFromNonTerminalResponderAfterMissedInitialFocus)|GhosttySurfaceFocusRequestPolicyTests|GhosttySurfaceScrollViewTests|GhosttySurfaceRepresentableUpdatePolicyTests|WorkspaceSurfaceActivityPolicyTests'` → 通过，`20 tests, 0 failures`。
+  - 构建验证：`swift build --package-path macos` → 通过。
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceHost.swift macos/Tests/DevHavenAppTests/GhosttySurfaceHostTests.swift tasks/todo.md` → 通过。
+
+
+## 排查 ./release 打包产物字体异常（2026-03-21）
+
+- [x] 核对当前 `./release` 打包链、Ghostty runtime 字体配置与已有字体测试，确认可能落点
+- [x] 复现 release 产物的字体异常，并区分是运行态配置问题、bundle 资源问题，还是字体 override 未生效
+- [ ] 如果确认是代码问题，先补失败测试再做最小修复
+- [ ] 运行定向验证、必要的 release 打包验证，并在 `tasks/todo.md` 追加 Review
+
 ## 继续修复 workspace 分屏后旧 pane 仍会丢失（2026-03-21）
 
 - [x] 复盘上轮分屏修复与当前截图，确认真正仍在失效的是 surface 状态重放时序

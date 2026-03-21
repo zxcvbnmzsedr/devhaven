@@ -440,9 +440,6 @@ final class GhosttySurfaceHostModel: ObservableObject {
         guard let window = ownedSurfaceView.window else {
             return
         }
-        guard window.firstResponder is GhosttyTerminalSurfaceView else {
-            return
-        }
         guard window.firstResponder !== ownedSurfaceView else {
             return
         }

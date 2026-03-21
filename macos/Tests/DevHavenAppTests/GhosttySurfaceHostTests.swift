@@ -150,6 +150,68 @@ final class GhosttySurfaceHostTests: XCTestCase {
         XCTAssertFalse(window.firstResponder === view, "container reuse 前应先让旧 pane 释放 firstResponder，避免分屏重挂载时带着旧焦点进新容器")
     }
 
+    func testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt() {
+        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let view = model.acquireSurfaceView()
+        let window = FocusRetryWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 960, height: 640))
+        let button = NSButton(title: "Open", target: nil, action: nil)
+        button.frame = NSRect(x: 20, y: 20, width: 120, height: 32)
+        view.frame = container.bounds
+        container.addSubview(view)
+        container.addSubview(button)
+        window.contentView = container
+        Self.retainedWindows.append(window)
+
+        let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
+        activator.activateIfNeeded(window: AppKitWindowActivationProxy(window: window))
+        XCTAssertTrue(window.makeFirstResponder(button))
+        XCTAssertTrue(window.firstResponder === button)
+
+        view.requestFocus()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertGreaterThanOrEqual(
+            window.surfaceFocusAttemptCount,
+            2,
+            "首次 makeFirstResponder 没接住时，仍应继续补焦点，避免新开项目或新 pane 时 terminal 没拿到输入焦点"
+        )
+        XCTAssertTrue(window.firstResponder === view)
+    }
+
+    func testRestoreWindowResponderCanReclaimFocusedPaneFromNonTerminalResponderAfterMissedInitialFocus() {
+        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let view = model.acquireSurfaceView()
+        let window = FocusRetryWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 960, height: 640))
+        let button = NSButton(title: "Split", target: nil, action: nil)
+        button.frame = NSRect(x: 20, y: 20, width: 120, height: 32)
+        view.frame = container.bounds
+        container.addSubview(view)
+        container.addSubview(button)
+        window.contentView = container
+        Self.retainedWindows.append(window)
+
+        let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
+        activator.activateIfNeeded(window: AppKitWindowActivationProxy(window: window))
+        XCTAssertTrue(window.makeFirstResponder(button))
+        XCTAssertTrue(window.firstResponder === button)
+
+        model.syncSurfaceActivity(isVisible: true, isFocused: true)
+        model.syncPreferredFocusTransition(preferredFocus: true)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertEqual(window.surfaceFocusAttemptCount, 1, "先模拟首次 terminal 抢焦点失败，复现新开项目/新 pane 后按钮仍占着 responder 的场景")
+        XCTAssertTrue(window.firstResponder === button)
+
+        model.restoreWindowResponderIfNeeded()
+
+        XCTAssertTrue(
+            window.firstResponder === view,
+            "当前 pane 已经是逻辑焦点时，即使首次焦点请求被按钮吃掉，后续也应把 responder 还给 terminal surface"
+        )
+    }
+
     private func makeInteractiveSurfaceView(model: GhosttySurfaceHostModel? = nil) throws -> GhosttyTerminalSurfaceView {
         try requireSmokeEnabled()
 
@@ -232,5 +294,29 @@ final class GhosttySurfaceHostTests: XCTestCase {
             searchRange = range.upperBound..<haystack.endIndex
         }
         return count
+    }
+}
+
+@MainActor
+private final class FocusRetryWindow: NSWindow {
+    private(set) var surfaceFocusAttemptCount = 0
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+    }
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if responder is GhosttyTerminalSurfaceView {
+            surfaceFocusAttemptCount += 1
+            if surfaceFocusAttemptCount == 1 {
+                return false
+            }
+        }
+        return super.makeFirstResponder(responder)
     }
 }
