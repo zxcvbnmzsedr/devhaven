@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import DevHavenCore
 
@@ -30,7 +31,7 @@ struct SettingsView: View {
             case .general:
                 return "应用版本、发布边界与兼容说明。"
             case .terminal:
-                return "终端渲染与主题显示配置。"
+                return "直接编辑 Ghostty 配置文件与查看生效路径。"
             case .scripts:
                 return "通用脚本目录与后续迁移进度。"
             case .workflow:
@@ -43,25 +44,15 @@ struct SettingsView: View {
     private let onCancel: () -> Void
     private let onSave: (AppSettings) -> Void
 
-    @State private var terminalUseWebglRenderer: Bool
-    @State private var terminalFollowSystem: Bool
-    @State private var terminalSingleTheme: String
-    @State private var terminalLightTheme: String
-    @State private var terminalDarkTheme: String
     @State private var gitIdentities: [GitIdentity]
     @State private var activeCategory: Category = .general
+    @State private var terminalConfigStatusMessage: String?
+    @State private var terminalConfigErrorMessage: String?
 
     init(settings: AppSettings, onCancel: @escaping () -> Void, onSave: @escaping (AppSettings) -> Void) {
         self.originalSettings = settings
         self.onCancel = onCancel
         self.onSave = onSave
-
-        let parsed = TerminalThemeSetting.parse(settings.terminalTheme)
-        _terminalUseWebglRenderer = State(initialValue: settings.terminalUseWebglRenderer)
-        _terminalFollowSystem = State(initialValue: parsed.isSystem)
-        _terminalSingleTheme = State(initialValue: parsed.singleTheme)
-        _terminalLightTheme = State(initialValue: parsed.lightTheme)
-        _terminalDarkTheme = State(initialValue: parsed.darkTheme)
         _gitIdentities = State(initialValue: settings.gitIdentities)
     }
 
@@ -202,57 +193,49 @@ struct SettingsView: View {
     }
 
     private var terminalContent: some View {
-        Group {
-            settingsCard(title: "渲染性能", description: "根据设备能力选择终端渲染策略。") {
-                SettingsToggleRow(
-                    title: "启用 WebGL 渲染",
-                    description: "通常可提升高频输出与滚动场景下的终端性能。",
-                    isOn: $terminalUseWebglRenderer
-                )
-            }
+        settingsCard(
+            title: "Ghostty 配置",
+            description: "原生终端的主题、字体、键位与渲染行为统一以 Ghostty 配置文件为真相源。"
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("DevHaven 会优先读取 `~/.devhaven/ghostty/config` 或 `config.ghostty`；如果这里还没有 DevHaven 专属配置，则会回退到独立 Ghostty 的现有全局配置。首次点击“编辑 Ghostty 配置文件”时，会自动创建 `~/.devhaven/ghostty/config`。")
+                    .font(.caption)
+                    .foregroundStyle(NativeTheme.textSecondary)
 
-            settingsCard(title: "主题", description: "支持固定主题或跟随系统浅/深色。") {
-                SettingsToggleRow(
-                    title: "跟随系统浅 / 深色",
-                    description: "开启后可分别设置浅色与深色主题。",
-                    isOn: $terminalFollowSystem
-                )
-
-                if terminalFollowSystem {
-                    HStack(spacing: 12) {
-                        labeledField(title: "浅色主题") {
-                            Picker("浅色主题", selection: $terminalLightTheme) {
-                                ForEach(TerminalThemeSetting.availableThemes, id: \.self) { name in
-                                    Text(name).tag(name)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-
-                        labeledField(title: "深色主题") {
-                            Picker("深色主题", selection: $terminalDarkTheme) {
-                                ForEach(TerminalThemeSetting.availableThemes, id: \.self) { name in
-                                    Text(name).tag(name)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                } else {
-                    labeledField(title: "终端主题") {
-                        Picker("终端主题", selection: $terminalSingleTheme) {
-                            ForEach(TerminalThemeSetting.availableThemes, id: \.self) { name in
-                                Text(name).tag(name)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("当前直达路径")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                    Text(ghosttyConfigFileURL.path)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(NativeTheme.textPrimary)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(NativeTheme.elevated)
+                        .clipShape(.rect(cornerRadius: 12))
+                }
+
+                HStack(spacing: 12) {
+                    Button("编辑 Ghostty 配置文件") {
+                        editGhosttyConfigFile()
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(NativeTheme.accent)
+
+                    Button("打开配置目录") {
+                        openGhosttyConfigDirectory()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if let terminalConfigStatusMessage {
+                    terminalConfigNotice(terminalConfigStatusMessage, isError: false)
+                }
+
+                if let terminalConfigErrorMessage {
+                    terminalConfigNotice(terminalConfigErrorMessage, isError: true)
                 }
             }
         }
@@ -383,8 +366,8 @@ struct SettingsView: View {
         AppSettings(
             editorOpenTool: originalSettings.editorOpenTool,
             terminalOpenTool: originalSettings.terminalOpenTool,
-            terminalUseWebglRenderer: terminalUseWebglRenderer,
-            terminalTheme: terminalThemeSetting,
+            terminalUseWebglRenderer: originalSettings.terminalUseWebglRenderer,
+            terminalTheme: originalSettings.terminalTheme,
             gitIdentities: normalizedGitIdentities,
             projectListViewMode: originalSettings.projectListViewMode,
             sharedScriptsRoot: sharedScriptsRoot,
@@ -395,20 +378,15 @@ struct SettingsView: View {
         )
     }
 
-    private var terminalThemeSetting: String {
-        if terminalFollowSystem {
-            return "light:\(terminalLightTheme),dark:\(terminalDarkTheme)"
-        }
-        return terminalSingleTheme
+    private var ghosttyConfigFileURL: URL {
+        GhosttyRuntime.editableConfigFileURL()
     }
 
     private var isDirty: Bool {
-        canonicalThemeSetting(nextSettings.terminalTheme) != canonicalThemeSetting(originalSettings.terminalTheme)
-            || nextSettings.terminalUseWebglRenderer != originalSettings.terminalUseWebglRenderer
-            || normalizedGitIdentities != originalSettings.gitIdentities.filter {
-                !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || !$0.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
+        normalizedGitIdentities != originalSettings.gitIdentities.filter {
+            !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !$0.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     private func handleClose() {
@@ -467,103 +445,42 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func canonicalThemeSetting(_ value: String) -> String {
-        let parsed = TerminalThemeSetting.parse(value)
-        if parsed.isSystem {
-            return "light:\(parsed.lightTheme),dark:\(parsed.darkTheme)"
-        }
-        return parsed.singleTheme
+    private func terminalConfigNotice(_ text: String, isError: Bool) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(isError ? Color.red : NativeTheme.textSecondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isError ? Color.red.opacity(0.08) : NativeTheme.elevated)
+            .clipShape(.rect(cornerRadius: 12))
     }
-}
 
-private struct SettingsToggleRow: View {
-    let title: String
-    let description: String?
-    @Binding var isOn: Bool
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(NativeTheme.textPrimary)
-                if let description {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            Button {
-                isOn.toggle()
-            } label: {
-                RoundedRectangle(cornerRadius: 16)
-                    .fill(isOn ? NativeTheme.accent.opacity(0.28) : NativeTheme.elevated)
-                    .frame(width: 52, height: 30)
-                    .overlay(alignment: isOn ? .trailing : .leading) {
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 22, height: 22)
-                            .padding(4)
-                    }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(title)
-            .accessibilityValue(isOn ? "已开启" : "已关闭")
+    private func editGhosttyConfigFile() {
+        do {
+            let configURL = try GhosttyRuntime.ensureEditableConfigFile()
+            terminalConfigErrorMessage = nil
+            terminalConfigStatusMessage = "已打开配置文件：\(configURL.path)"
+            NSWorkspace.shared.open(configURL)
+        } catch {
+            terminalConfigStatusMessage = nil
+            terminalConfigErrorMessage = error.localizedDescription
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(NativeTheme.elevated)
-        .clipShape(.rect(cornerRadius: 14))
     }
-}
 
-private struct TerminalThemeSetting {
-    static let availableThemes = [
-        "DevHaven Dark",
-        "iTerm2 Solarized Dark",
-        "iTerm2 Solarized Light",
-    ]
-
-    let isSystem: Bool
-    let singleTheme: String
-    let lightTheme: String
-    let darkTheme: String
-
-    static func parse(_ rawValue: String) -> TerminalThemeSetting {
-        let raw = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = raw
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-        let lightTheme = parts.first(where: { $0.lowercased().hasPrefix("light:") })?
-            .dropFirst("light:".count)
-        let darkTheme = parts.first(where: { $0.lowercased().hasPrefix("dark:") })?
-            .dropFirst("dark:".count)
-
-        let normalizedLightTheme = lightTheme.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-        let normalizedDarkTheme = darkTheme.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-
-        if let normalizedLightTheme, let normalizedDarkTheme, !normalizedLightTheme.isEmpty, !normalizedDarkTheme.isEmpty {
-            return TerminalThemeSetting(
-                isSystem: true,
-                singleTheme: "DevHaven Dark",
-                lightTheme: sanitizeTheme(normalizedLightTheme),
-                darkTheme: sanitizeTheme(normalizedDarkTheme)
+    private func openGhosttyConfigDirectory() {
+        let directoryURL = ghosttyConfigFileURL.deletingLastPathComponent()
+        do {
+            try FileManager.default.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true
             )
+            terminalConfigErrorMessage = nil
+            terminalConfigStatusMessage = "已打开配置目录：\(directoryURL.path)"
+            NSWorkspace.shared.open(directoryURL)
+        } catch {
+            terminalConfigStatusMessage = nil
+            terminalConfigErrorMessage = "Ghostty 配置目录创建失败：\(directoryURL.path)"
         }
-
-        return TerminalThemeSetting(
-            isSystem: false,
-            singleTheme: sanitizeTheme(raw.isEmpty ? "DevHaven Dark" : raw),
-            lightTheme: "iTerm2 Solarized Light",
-            darkTheme: "iTerm2 Solarized Dark"
-        )
-    }
-
-    private static func sanitizeTheme(_ value: String) -> String {
-        availableThemes.contains(value) ? value : "DevHaven Dark"
     }
 }

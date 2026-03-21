@@ -1,5 +1,6 @@
 # Lessons Learned
 
+- 当原生版终端已经把配置真相源切到 Ghostty 配置文件时，设置页不能继续把 `terminalUseWebglRenderer`、应用内主题切换这类 Tauri 时代的兼容字段当成当前能力暴露；应直接提供实际生效的 Ghostty config 入口，并让设置页与运行时共用同一套配置路径解析逻辑。
 - 当用户明确指出“某个现有交互应复刻归档版本/旧版本行为”时，不能只按当前代码表象去补一条看起来合理的新链路；必须先回到指定分支核对旧版真实交互、状态变化和调用顺序，再决定最小修复方案。
 - 对 DevHaven 这类“逻辑 pane 焦点”和 AppKit `firstResponder` 分离的终端宿主，不能把 responder 恢复逻辑写成“只允许 terminal-to-terminal 切换”；从项目列表、pane header 按钮、tab bar 等控件触发的新开项目 / 新开 pane，同样需要把焦点从非 terminal 控件收回当前逻辑焦点 pane。
 - 如果用户补充“只有先点过 pane 拿到真实焦点才会复现”，优先怀疑的是 AppKit `window.firstResponder` / responder chain，而不只是 Ghostty 自己的 visible/focus cache；这类“点击后才触发”的分屏丢失问题，通常要把 responder 身份也纳入 reuse 生命周期一起清理。
@@ -23,3 +24,4 @@
 - 在 Apple Silicon 主机上跑 `swift test --triple x86_64-apple-macosx14.0` 时，测试二进制可以编出来，但默认无法直接执行 x86_64 test bundle；CI 若仍运行在 arm64 runner，上游验证边界应明确收口为“x86_64 编译/打包成功”，不要误把“可编译”当成“可在当前 runner 上直接执行测试”。
 - 对纯 macOS 原生 GUI 应用，`swift run` 只是启动入口，不等于 Web 项目的 dev server；如果关键日志走 unified log，就应在仓库级开发命令里一并收口 `log stream` 与应用启动，否则用户很容易误以为“启动成功但没有日志”。
 - 当用户用 `<turn_aborted>` 明确上一轮已中断，并随后补充“真实项目都在某个本地目录下”这类路径纠偏时，后续必须从头重新核对该目录下的仓库真相，不要继续沿用上一轮可能半执行的 clone/搜索结果或旧路径假设。
+- 对包含 `TextEditor` / `NSTextView` / `NSTextField` 等 AppKit-backed 编辑器的侧边面板，关闭时不能只把 SwiftUI 可见性布尔值改成 false；若不先释放 `NSWindow.firstResponder`，窗口可能继续挂着已移除子树里的 responder，用户体感就是“点完关闭后界面未响应”。

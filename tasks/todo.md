@@ -1,5 +1,72 @@
 # 本次任务清单
 
+## 提交终端配置入口优化改动（2026-03-21）
+
+- [x] 确认本次只提交 Ghostty 配置入口优化相关文件，不混入其他进行中的工作区改动
+- [x] 复用最新验证证据并执行 commit
+
+## Review（提交终端配置入口优化改动）
+
+- 提交主题：`feat(settings): 直达 Ghostty 配置文件`
+- 提交范围：
+  - `macos/Sources/DevHavenApp/SettingsView.swift`
+  - `macos/Sources/DevHavenApp/Ghostty/GhosttyRuntime.swift`
+  - `macos/Tests/DevHavenAppTests/SettingsViewTests.swift`
+  - `macos/Tests/DevHavenAppTests/GhosttyRuntimeConfigLoaderTests.swift`
+  - `tasks/todo.md`
+  - `tasks/lessons.md`
+- 提交前验证证据：
+  - `swift test --package-path macos --filter 'SettingsViewTests|GhosttyRuntimeConfigLoaderTests'` → 通过，`5 tests, 0 failures`
+  - `swift test --package-path macos` → 通过，`139 tests, 5 skipped, 0 failures`
+  - `git diff --check -- macos/Sources/DevHavenApp/SettingsView.swift macos/Sources/DevHavenApp/Ghostty/GhosttyRuntime.swift macos/Tests/DevHavenAppTests/SettingsViewTests.swift macos/Tests/DevHavenAppTests/GhosttyRuntimeConfigLoaderTests.swift tasks/todo.md tasks/lessons.md` → 通过
+
+## 优化设置中的终端配置入口（2026-03-21）
+
+- [x] 核对原生设置页与 Ghostty 配置加载逻辑，确认旧 Tauri 终端开关的真实残留范围
+- [x] 先补失败测试，锁定设置页应直接提供 Ghostty 配置文件入口、且不再暴露旧开关
+- [x] 以最小改动实现 Ghostty 配置文件直达编辑 / 打开目录能力，并保留兼容存储字段不变
+- [x] 运行定向验证与必要全量验证，在 `tasks/todo.md` 追加 Review
+
+## Review（优化设置中的终端配置入口）
+
+- 直接原因：原生版的终端实际已经由 Ghostty 托管，并且运行时真相源是 `~/.devhaven/ghostty/config*` / 独立 Ghostty 全局配置；但 `SettingsView.swift` 里仍保留了 Tauri / xterm 时代的 `terminalUseWebglRenderer`、应用内主题切换等开关式 UI，用户在设置里反而无法直接触达到真正生效的 Ghostty 配置文件。
+- 设计层诱因：存在。兼容存储层里的旧字段还需要保留给历史 `app_state.json` 读写，但设置页把这些**兼容字段误当成当前产品能力**继续暴露，导致“运行时配置真相源”和“设置页可操作入口”分裂。问题集中在配置入口没有跟随原生终端主线一起迁移；未发现更大的系统设计缺陷。
+- 当前修复：
+  - `SettingsView.swift`：移除旧 Tauri 终端开关与主题切换 UI，把“终端”分类改为直接展示 Ghostty 配置说明、当前直达路径、`编辑 Ghostty 配置文件` 与 `打开配置目录` 两个入口；
+  - `GhosttyRuntime.swift`：新增与运行时同源的 `editableConfigFileURL()` / `ensureEditableConfigFile()`，设置页和终端加载逻辑共用同一套配置路径选择规则；当没有任何现成配置时，首次点击会自动创建 `~/.devhaven/ghostty/config`；
+  - 兼容边界：`AppSettings` 里的 `terminalUseWebglRenderer` / `terminalTheme` 继续保留，仅作为兼容存储字段，不再由当前原生设置页编辑。
+- 长期建议：后续凡是“为了兼容历史状态仍需保留”的字段，都应明确区分“兼容存储”与“当前产品能力”；如果运行时已经切到新的真相源，设置页应优先暴露真实生效入口，而不是继续维护一套不会驱动当前行为的旧 UI。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter 'SettingsViewTests|GhosttyRuntimeConfigLoaderTests'` 修复前失败，编译错误为 `type 'GhosttyRuntime' has no member 'ensureEditableConfigFile'`，说明新回归边界先锁住了“需要真实的 Ghostty 配置文件入口”；
+  - 定向绿灯：同一命令修复后通过，`5 tests, 0 failures`；
+  - 全量验证：`swift test --package-path macos` → 通过，`139 tests, 5 skipped, 0 failures`；
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/SettingsView.swift macos/Sources/DevHavenApp/Ghostty/GhosttyRuntime.swift macos/Tests/DevHavenAppTests/SettingsViewTests.swift macos/Tests/DevHavenAppTests/GhosttyRuntimeConfigLoaderTests.swift tasks/todo.md tasks/lessons.md` → 通过。
+
+## 修复关闭右侧项目详情面板导致未响应（2026-03-21）
+
+- [x] 复现“关闭右侧项目详情面板”卡死，定位真实交互入口与状态流
+- [x] 对照相关 SwiftUI / AppKit 代码，确认直接原因与是否存在设计层诱因
+- [x] 先补失败测试，锁定关闭详情面板不应触发未响应这条回归边界
+- [x] 以最小改动修复问题，并同步必要文档
+- [x] 运行定向验证与必要全量验证，在 `tasks/todo.md` 追加 Review
+
+## Review（修复关闭右侧项目详情面板导致未响应）
+
+- 直接原因：右侧项目详情面板里有 `TextEditor` / `TextField` 一类 AppKit-backed 编辑控件；关闭面板时，代码之前只是把 `isDetailPanelPresented` 设为 `false`，却**没有先让窗口当前 `firstResponder` 释放详情面板内的编辑器**。结果是面板已经从视图树移除，但 `NSWindow.firstResponder` 仍指向那个已经脱离层级的 `NSTextView`，窗口后续事件链会挂在一个悬空 responder 上，体感就像“点完关闭后界面未响应”。
+- 设计层诱因：存在，但集中在 AppKit / SwiftUI 生命周期边界。当前详情面板的显示/隐藏状态收口在 `NativeAppViewModel.isDetailPanelPresented`，但“移除一个含原生编辑器的面板前，需要先清理窗口 responder”这一层没有被纳入统一关闭动作，导致状态隐藏了、原生焦点却没回收。未发现更大的系统设计缺陷。
+- 当前修复：
+  1. 新增 `DetailPanelCloseAction`，把“关闭详情面板前先 `window.makeFirstResponder(nil)`，再落到 `viewModel.closeDetailPanel()`”收口为统一动作；
+  2. `MainContentView` 的工具栏关闭入口、`AppRootView` 的遮罩点击关闭、`ProjectDetailRootView` 的右上角关闭按钮，都改为走这条统一关闭链路；
+  3. 新增 AppKit 集成回归测试 `ProjectDetailPanelCloseActionTests.testClosingDetailPanelReleasesActiveEditorResponderBeforeHidingPanel`，锁定“关闭前必须先释放活动编辑器 responder”这条边界。
+- 长期建议：后续凡是**会整体移除一块含 `TextEditor` / `NSTextView` / `NSTextField` 等 AppKit-backed 控件的面板、抽屉或浮层**，都不要只改 SwiftUI 的布尔显示状态；必须同时检查窗口 `firstResponder` 是否仍挂在即将被移除的子树上，并把 responder 回收动作收口到统一 dismiss helper。
+- 验证证据：
+  - TDD 红灯：修复前临时探针用例 `swift test --package-path macos --filter TemporaryProjectDetailPanelProbeTests/testClosingDetailPanelReleasesEditorFirstResponder` 失败，断言 `window.firstResponder === textView` 仍成立，证明关闭面板后窗口继续挂着已移除的编辑器 responder。
+  - 定向绿灯：`swift test --package-path macos --filter 'ProjectDetailPanelCloseActionTests|NativeAppViewModelWorkspaceEntryTests/(testSelectingAnotherProjectWhileWorkspaceIsOpenKeepsOpenedSessionsAlive|testExitWorkspacePreservesOpenSessionsForLaterReentry)|LegacyCompatStoreTests/testSelectingProjectLoadsProjectDocumentDrafts'` → 通过，`3 tests, 0 failures`。
+  - 全量验证快照：在本轮 responder 修复与正式回归测试落地后，`swift test --package-path macos` → 通过，`136 tests, 5 skipped, 0 failures`。
+  - 最终代码收口验证：在把 `MainContentView` 的工具栏关闭入口也接到同一 helper 后，`swift build --package-path macos --target DevHavenApp` → 通过。
+  - 当前工作区说明：继续重跑 `swift test --package-path macos` 目前会被工作区里**与本任务无关**的现有 WIP 测试 `macos/Tests/DevHavenAppTests/GhosttyRuntimeConfigLoaderTests.swift` 阻断，报 `type 'GhosttyRuntime' has no member 'ensureEditableConfigFile'`；该失败不在本任务 diff 范围内，因此本轮保留上面的全量通过快照，并以最终目标编译验证补齐闭环。
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/DetailPanelCloseAction.swift macos/Sources/DevHavenApp/AppRootView.swift macos/Sources/DevHavenApp/ProjectDetailRootView.swift macos/Sources/DevHavenApp/MainContentView.swift macos/Tests/DevHavenAppTests/ProjectDetailPanelCloseActionTests.swift tasks/todo.md tasks/lessons.md` → 通过。
+
 ## 修复首页左上角加号点击无反应（2026-03-21）
 
 - [x] 对照 `origin/archive/2.8.3` 中首页左上角加号的真实功能链路，确认菜单项、状态变化与调用顺序
@@ -790,3 +857,29 @@
   - 运行时代码检查：`GhosttyRuntime.preferredConfigFileURLs(...)` 会优先读 `~/.devhaven/ghostty/config*`，缺失时回退到 `~/Library/Application Support/com.mitchellh.ghostty/config*`；对应代码位于 `macos/Sources/DevHavenApp/Ghostty/GhosttyRuntime.swift:77-136`。
   - 字体枚举：`swift - <<'SWIFT' ... NSFontManager.shared.availableMembers(ofFontFamily: "Noto Sans SC") ... SWIFT` 输出 `Noto Sans SC` 存在，但 `has Bold Italic: false`、`has Italic: false`、`has Bold: true`。
   - 文档依据：仓库内 `macos/Sources/DevHavenApp/GhosttyResources/ghostty/doc/ghostty.5.md` 说明 `font-family` 会为各 style 搜索 stylistic variants；若 style 不存在，Ghostty 会回退 regular style，并且某些 style 可以被 synthesized。
+
+## 重推当前分支并替换 `v3.0.0` tag 重新触发构建（2026-03-21）
+
+- [x] 检查当前分支、远端差异、`v3.0.0` 本地/远端指向与 release workflow 触发条件
+- [x] 明确是否需要把当前未跟踪文件一并纳入本次 push/tag 重置范围
+- [x] 执行分支 push，并强制更新远端 `v3.0.0` tag
+- [x] 验证远端分支与 tag 已更新，补充 Review 证据
+
+
+## Review（重推当前分支并替换 `v3.0.0` tag 重新触发构建）
+
+- 操作结果：已将 `main` 分支提交 `becb1c9` 推送到远端，并把远端注解 tag `v3.0.0` 强制更新到同一提交。
+- 执行说明：按用户确认，本轮只推送已提交的 `becb1c9`，未把当前 7 个未跟踪文件纳入本次 push / tag 重置范围。
+- 触发结果：`release.yml` 已因 `v3.0.0` tag push 重新触发，最新 run 为 `23376437476`，当前状态 `in_progress`。
+- 验证证据：
+  - `git push origin main` → 远端更新 `bda3e81..becb1c9  main -> main`
+  - `git push --force origin refs/tags/v3.0.0` → 远端更新 `+ 8d15bcc...276ab9a v3.0.0 -> v3.0.0 (forced update)`
+  - `git ls-remote origin refs/heads/main` → `becb1c91c2231794dcab81138d213e9c454dfd99	refs/heads/main`
+  - `git ls-remote origin 'refs/tags/v3.0.0^{}'` → `becb1c91c2231794dcab81138d213e9c454dfd99	refs/tags/v3.0.0^{}`
+  - `gh run list --workflow release.yml --limit 5 --json ...` → 最新记录 `databaseId=23376437476`、`headSha=becb1c91c2231794dcab81138d213e9c454dfd99`、`status=in_progress`、`url=https://github.com/zxcvbnmzsedr/devhaven/actions/runs/23376437476`
+
+## 盯住 `v3.0.0` release workflow 运行状态（2026-03-21）
+
+- [x] 记录待监控的 GitHub Actions run 与当前基线状态
+- [ ] 持续轮询 run 状态直到结束
+- [ ] 汇总成功/失败结论、关键步骤结果与下一步建议

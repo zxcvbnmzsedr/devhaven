@@ -3,6 +3,17 @@ import Foundation
 import GhosttyKit
 import DevHavenCore
 
+enum GhosttyConfigFileError: LocalizedError {
+    case fileCreationFailed(URL)
+
+    var errorDescription: String? {
+        switch self {
+        case let .fileCreationFailed(url):
+            return "Ghostty 配置文件创建失败：\(url.path)"
+        }
+    }
+}
+
 final class GhosttyRuntime {
     final class SurfaceReference {
         let surface: ghostty_surface_t
@@ -89,6 +100,51 @@ final class GhosttyRuntime {
             fileManager: fileManager,
             homeDirectoryURL: homeDirectoryURL
         )
+    }
+
+    static func editableConfigFileURL(
+        fileManager: FileManager = .default,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> URL {
+        if let configURL = devHavenConfigFileURLs(
+            fileManager: fileManager,
+            homeDirectoryURL: homeDirectoryURL
+        ).first {
+            return configURL
+        }
+        if let configURL = standaloneGhosttyConfigFileURLs(
+            fileManager: fileManager,
+            homeDirectoryURL: homeDirectoryURL
+        ).first {
+            return configURL
+        }
+        return homeDirectoryURL
+            .appending(path: ".devhaven", directoryHint: .isDirectory)
+            .appending(path: "ghostty", directoryHint: .isDirectory)
+            .appending(path: "config", directoryHint: .notDirectory)
+    }
+
+    @discardableResult
+    static func ensureEditableConfigFile(
+        fileManager: FileManager = .default,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) throws -> URL {
+        let configURL = editableConfigFileURL(
+            fileManager: fileManager,
+            homeDirectoryURL: homeDirectoryURL
+        )
+        if fileManager.fileExists(atPath: configURL.path) {
+            return configURL
+        }
+
+        try fileManager.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        guard fileManager.createFile(atPath: configURL.path, contents: Data()) else {
+            throw GhosttyConfigFileError.fileCreationFailed(configURL)
+        }
+        return configURL
     }
 
     private static func devHavenConfigFileURLs(

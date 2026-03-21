@@ -47,6 +47,39 @@ final class GhosttyRuntimeConfigLoaderTests: XCTestCase {
         XCTAssertEqual(urls, [devHavenConfigURL])
     }
 
+    func testEnsureEditableConfigFileFallsBackToStandaloneGhosttyConfigWhenDevHavenConfigMissing() throws {
+        let homeURL = try makeTemporaryDirectory()
+        let standaloneConfigURL = homeURL
+            .appending(path: "Library/Application Support/com.mitchellh.ghostty/config.ghostty", directoryHint: .notDirectory)
+        try FileManager.default.createDirectory(
+            at: standaloneConfigURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "font-size = 14\n".write(to: standaloneConfigURL, atomically: true, encoding: .utf8)
+
+        let url = try GhosttyRuntime.ensureEditableConfigFile(
+            fileManager: FileManager.default,
+            homeDirectoryURL: homeURL
+        )
+
+        XCTAssertEqual(url, standaloneConfigURL)
+    }
+
+    func testEnsureEditableConfigFileCreatesDevHavenConfigWhenNoConfigExists() throws {
+        let homeURL = try makeTemporaryDirectory()
+
+        let url = try GhosttyRuntime.ensureEditableConfigFile(
+            fileManager: FileManager.default,
+            homeDirectoryURL: homeURL
+        )
+
+        XCTAssertEqual(
+            url,
+            homeURL.appending(path: ".devhaven/ghostty/config", directoryHint: .notDirectory)
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let rootURL = FileManager.default.temporaryDirectory
             .appending(path: UUID().uuidString, directoryHint: .isDirectory)
