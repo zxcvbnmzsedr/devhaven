@@ -1,5 +1,153 @@
 # 本次任务清单
 
+## 提交 quick terminal 会话列表改动（2026-03-21）
+
+- [x] 确认本次只提交 quick terminal 会话列表相关文件，不混入其他进行中的工作区改动
+- [x] 复用最新验证证据并执行 commit
+
+## Review（提交 quick terminal 会话列表改动）
+
+- 提交主题：`feat(workspace): 收口 quick terminal 会话列表`
+- 提交范围：
+  - `docs/plans/2026-03-21-quick-terminal-cli-session-list-design.md`
+  - `docs/plans/2026-03-21-quick-terminal-cli-session-list.md`
+  - `macos/Sources/DevHavenApp/ProjectSidebarView.swift`
+  - `macos/Sources/DevHavenApp/WorkspaceProjectListView.swift`
+  - `macos/Sources/DevHavenApp/WorkspaceShellView.swift`
+  - `macos/Sources/DevHavenCore/Models/AppModels.swift`
+  - `macos/Sources/DevHavenCore/Models/OpenWorkspaceSessionState.swift`
+  - `macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift`
+  - `macos/Tests/DevHavenAppTests/ProjectSidebarViewTests.swift`
+  - `macos/Tests/DevHavenAppTests/WorkspaceProjectListViewTests.swift`
+  - `macos/Tests/DevHavenCoreTests/NativeAppViewModelWorkspaceEntryTests.swift`
+  - `tasks/todo.md`
+  - `tasks/lessons.md`
+- 提交前验证证据：
+  - `swift test --package-path macos --filter 'NativeAppViewModelWorkspaceEntryTests|ProjectSidebarViewTests|WorkspaceProjectListViewTests'` → 通过，`26 tests, 0 failures`
+  - `./dev --no-log` → 成功完成 `swift run --package-path macos DevHavenApp` 构建并进入运行态；确认后手动 `Ctrl+C` 结束
+  - `git diff --check -- macos/Sources/DevHavenCore/Models/AppModels.swift macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift macos/Sources/DevHavenApp/ProjectSidebarView.swift macos/Sources/DevHavenApp/WorkspaceProjectListView.swift macos/Tests/DevHavenCoreTests/NativeAppViewModelWorkspaceEntryTests.swift macos/Tests/DevHavenAppTests/ProjectSidebarViewTests.swift macos/Tests/DevHavenAppTests/WorkspaceProjectListViewTests.swift docs/plans/2026-03-21-quick-terminal-cli-session-list-design.md docs/plans/2026-03-21-quick-terminal-cli-session-list.md tasks/todo.md` → 通过
+
+## 实现 quick terminal 会话列表型 UI（2026-03-21）
+
+- [x] 写入 quick terminal 会话列表设计/实施文档
+- [x] 先补 quick terminal 会话真相源与 sidebar 交互的失败测试
+- [x] 以最小改动实现会话列表型 CLI 区块与 workspace 侧错误按钮隐藏
+- [x] 运行验证闭环并追加 Review
+
+## Review（实现 quick terminal 会话列表型 UI）
+
+- 直接原因：之前左侧“CLI 会话”区块的标题虽然已经切到 quick terminal 语义，但列表数据仍来自 `visibleProjects` 的派生逻辑，而不是真实的 `openWorkspaceSessions`。与此同时，workspace 左侧项目列表把 quick terminal 当成普通项目渲染，继续暴露“刷新 worktree / 创建或添加 worktree”按钮，造成标题、状态与可操作能力三者不一致。
+- 设计层诱因：存在。问题集中在 **“真实 session 状态”和“sidebar 展示模型”分裂**：`OpenWorkspaceSessionState.isQuickTerminal` 已经是 session 真相源，但 `cliSessionItems` 却还在复用旧的项目派生逻辑，workspace project card 也没有为 quick terminal 建立专门边界。未发现更大的系统设计缺陷。
+- 当前修复：
+  1. 写入 `docs/plans/2026-03-21-quick-terminal-cli-session-list-design.md` 与 `docs/plans/2026-03-21-quick-terminal-cli-session-list.md`，把“CLI 会话改为真实 quick terminal 会话列表”的设计与实施步骤固化；
+  2. `Project` 新增 quick terminal 判定能力，避免 UI 层继续散落 magic id；
+  3. `NativeAppViewModel.cliSessionItems` 改为直接读取 `openWorkspaceSessions.filter(\.isQuickTerminal)`，并按当前是否激活输出 `已打开 / 可恢复`；
+  4. `ProjectSidebarView` 的“CLI 会话”区块改为真实可交互 session card：点击卡片恢复/激活 quick terminal，点击 `x` 关闭 session；
+  5. `WorkspaceProjectListView` 对 quick terminal group 隐藏 worktree 按钮，只保留激活与关闭；
+  6. 新增/更新测试，锁定 quick terminal 会话真相源、global sidebar 交互与 workspace 错误按钮隐藏边界。
+- 长期建议：如果后续继续扩展 CLI session，优先沿用“session 真相源驱动 UI”的模式，不要再让某个标题叫“会话”，但数据却从项目列表 / scripts / worktrees 临时派生；否则每新增一种 session 类型，都要重复踩一次语义分裂问题。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceEntryTests|ProjectSidebarViewTests|WorkspaceProjectListViewTests'` → 修复前失败，关键断言包括：
+    - `CLI 会话区块不应继续从普通项目 / worktree 派生`
+    - `CLI 会话项点击后应恢复 / 激活真实 quick terminal session`
+    - `quick terminal group 应显式跳过 worktree 操作按钮`
+  - 定向绿灯：同一命令修复后通过，`26 tests, 0 failures`。
+  - 开发入口验证：`./dev --no-log` → 成功完成 `swift run --package-path macos DevHavenApp` 构建并进入运行态；确认后手动 `Ctrl+C` 结束进程。
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenCore/Models/AppModels.swift macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift macos/Sources/DevHavenApp/ProjectSidebarView.swift macos/Sources/DevHavenApp/WorkspaceProjectListView.swift macos/Tests/DevHavenCoreTests/NativeAppViewModelWorkspaceEntryTests.swift macos/Tests/DevHavenAppTests/ProjectSidebarViewTests.swift macos/Tests/DevHavenAppTests/WorkspaceProjectListViewTests.swift docs/plans/2026-03-21-quick-terminal-cli-session-list-design.md docs/plans/2026-03-21-quick-terminal-cli-session-list.md tasks/todo.md` → 通过。
+
+## 审查 quick terminal 相关未提交改动（2026-03-21）
+
+- [x] 收集 quick terminal 相关未提交改动与受影响文件
+- [x] 检查模型 / ViewModel / UI 状态流是否一致
+- [x] 核对测试覆盖与潜在遗漏
+- [x] 汇总结论、风险与修复建议
+
+## Review（审查 quick terminal 相关未提交改动）
+
+- 审查范围：
+  - `macos/Sources/DevHavenCore/Models/AppModels.swift`
+  - `macos/Sources/DevHavenCore/Models/OpenWorkspaceSessionState.swift`
+  - `macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift`
+  - `macos/Sources/DevHavenApp/ProjectSidebarView.swift`
+  - `macos/Sources/DevHavenApp/WorkspaceShellView.swift`
+  - `macos/Tests/DevHavenCoreTests/NativeAppViewModelWorkspaceEntryTests.swift`
+- 结论：这批 quick terminal 改动的“创建并进入 terminal workspace”主路径已经打通，但**周边 UI 语义和会话建模还没有完全收口**。我确认到 2 个实质性风险和 1 个低风险一致性问题。
+- 主要问题：
+  1. **高风险：workspace 侧栏把 quick terminal 当普通项目渲染，暴露了错误的 worktree 操作入口。**
+     - `WorkspaceProjectListView.swift:144-149` 对所有 `WorkspaceSidebarProjectGroup` 一律展示“刷新 worktree / 创建或添加 worktree”按钮；
+     - quick terminal group 来自 `NativeAppViewModel.workspaceSidebarGroups` 的 `.quickTerminal(at:)` 虚拟项目（`NativeAppViewModel.swift:209-214` + `AppModels.swift:412-428`），并不在 `snapshot.projects` 里；
+     - 因此：
+       - 点“刷新 worktree”会走 `WorkspaceShellView.swift:35-42` → `viewModel.refreshProjectWorktrees(homePath)`，进一步进入 `NativeAppViewModel.swift:681-692`，在 home 目录上跑 worktree 刷新逻辑，语义错误；
+       - 点“创建/添加 worktree”会把 `worktreeDialogProjectPath` 设为 homePath，但 `WorkspaceShellView.swift:18-23` 的 `worktreeDialogProject` 只能从 `snapshot.projects` 里找真实项目，所以弹窗会直接拿不到 source project，表现成按钮无效或路径错误。
+  2. **中风险：项目侧栏“CLI 会话”区块没有绑定 quick terminal session 真相源。**
+     - `ProjectSidebarView.swift:123-155` 现在右上角 `+` 已经会调用 `viewModel.openQuickTerminal()`；
+     - 但实际列表仍来自 `NativeAppViewModel.cliSessionItems`（`NativeAppViewModel.swift:326-335`），它只是从 `visibleProjects` 里筛 `worktrees/scripts`，并不读取 `openWorkspaceSessions`，也不识别 `isQuickTerminal`；
+     - 结果是 quick terminal 打开后，这个区块仍可能继续显示“暂无活跃 CLI 会话”，和真实 session 状态脱节；退出 workspace 后，也不会列出这个已保留的 quick terminal session。
+  3. **低风险：quick terminal 入口与普通 `enterWorkspace` 的副作用不完全一致。**
+     - `enterWorkspace(_:)`（`NativeAppViewModel.swift:471-483`）会同步 `selectedProjectPath`、记录 `workspaceLaunchDiagnostics`、刷新选中文档；
+     - `openQuickTerminal()`（`NativeAppViewModel.swift:485-490`）目前只设置 active path 与隐藏 detail panel；
+     - 这不一定是当前 bug，但说明 quick terminal 还不是一等“workspace session 类型”，后续只要再有代码默认“所有 workspace entry 都会走 enterWorkspace 同一副作用集”，就容易再次漂移。
+- 测试覆盖结论：
+  - 已有新增测试 `NativeAppViewModelWorkspaceEntryTests.testOpenQuickTerminalCreatesQuickTerminalWorkspaceSessionAndSidebarGroup` 只能覆盖“session 被创建 + group 出现”；
+  - 当前**没有测试**覆盖：
+    - quick terminal group 不应展示 worktree 操作按钮；
+    - 项目侧栏 CLI 会话区块应反映 quick terminal session；
+    - quick terminal 从 workspace 退出/恢复后的可见性与状态一致性。
+- 验证证据：
+  - 源码证据如上各文件行号；
+  - 定向测试：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceEntryTests|ProjectSidebarViewTests|WorkspaceProjectListViewTests'` → 通过，`23 tests, 0 failures`；
+  - 这说明当前测试集没有拦住上面两类 UI / 状态语义问题，也印证了“主路径通过，但边界没锁住”的判断。
+- 建议优先级：
+  1. 先把 quick terminal 从 `WorkspaceProjectListView` 的普通项目按钮逻辑里分流，隐藏/替换 worktree 按钮；
+  2. 再决定“CLI 会话”区块到底是 launcher 还是 session 列表：若是 launcher，就改名并去掉“活跃会话”文案；若是 session 列表，就必须改用 `openWorkspaceSessions` / `isQuickTerminal` 驱动；
+  3. 最后补 2~3 条源码级或 ViewModel 级测试，把这些边界锁住。
+
+## 修复 `./dev` 无法启动（2026-03-21）
+
+- [x] 复现 `./dev` 启动失败并记录报错、退出码与触发条件
+- [x] 排查 `dev` 及相关原生启动链路，确认直接原因与设计层诱因
+- [x] 如需修改，先补最小回归验证，再实现修复
+- [x] 运行验证闭环并在 `tasks/todo.md` 追加 Review
+
+## Review（修复 `./dev` 无法启动）
+
+- 直接原因：`./dev` 本身已经顺利通过 Ghostty vendor 准备阶段，真正失败点出在 `swift run --package-path macos DevHavenApp` 的编译阶段。`NativeAppViewModel.swift` 在新加 `openQuickTerminal()` 方法后，多写了一个额外的 `}`，导致 `NativeAppViewModel` 在第 491 行被提前闭合，后半段大量方法/属性都被编译器当成“类型外顶层声明”，于是连锁报出 `static methods may only be declared on a type`、`cannot find ... in scope`、`extraneous '}' at top level` 等错误，`./dev` 因此直接以退出码 1 结束。
+- 设计层诱因：存在。`NativeAppViewModel.swift` 当前是一个承载目录筛选、workspace、文档加载、worktree 等多类职责的超长文件；这类大文件里只要在中段插入方法时多出一个花括号，就会把后半个类型整体“踢出作用域”，表面上看像几十个独立编译错误，实际只是一个 scope 断裂。问题集中在文件职责过于集中；未发现更大的系统设计缺陷。
+- 当前修复：
+  1. 先补 `NativeAppViewModelWorkspaceEntryTests.testOpenQuickTerminalCreatesQuickTerminalWorkspaceSessionAndSidebarGroup`，锁定“快速终端入口必须创建 quick terminal session 与侧栏 group”这条回归边界；
+  2. 删除 `NativeAppViewModel.openQuickTerminal()` 末尾误多出的那一个 `}`，让后续 workspace / 筛选 / worktree 相关方法重新回到 `NativeAppViewModel` 类型作用域内；
+  3. 保持 quick terminal 其余实现不变，避免把这次“启动链路被语法错误阻断”的修复扩散成额外重构。
+- 长期建议：后续如果继续往 `NativeAppViewModel` 塞新入口或状态流，优先把 workspace、筛选、文档加载等职责继续拆分到更小的扩展/辅助类型里；至少在每次插入新方法后立刻跑一次定向 `swift test` 或 `swift build`，不要等到最后再发现整个 `./dev` 被一个花括号拖死。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests/testOpenQuickTerminalCreatesQuickTerminalWorkspaceSessionAndSidebarGroup` → 修复前失败，核心报错为 `NativeAppViewModel.swift:1472:1 extraneous '}' at top level` 与 `NativeAppViewModel.swift:1289:32 static methods may only be declared on a type`。
+  - 定向绿灯：同一命令修复后通过，`1 test, 0 failures`。
+  - 开发入口实测：`./dev --no-log` → 成功完成 `swift run --package-path macos DevHavenApp` 构建并进入运行态；本次为避免长期占用前台会话，确认启动后手动 `Ctrl+C` 结束进程。
+  - 脚本烟测：`bash macos/scripts/test-dev-command.sh` → 通过，输出 `dev command smoke ok`。
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift macos/Tests/DevHavenCoreTests/NativeAppViewModelWorkspaceEntryTests.swift tasks/todo.md` → 通过。
+
+## 继续修复项目详情面板打开慢导致转圈（2026-03-21）
+
+- [x] 根据用户补充的“打开项目侧边栏很慢”线索，重新定位真正卡顿点
+- [x] 先补失败测试，锁定详情面板不应内联一次性渲染整份超长 README
+- [x] 以最小改动收敛详情面板内容渲染开销，并保留完整 README 的使用路径
+- [x] 运行定向验证并把新的根因/证据追加到 `tasks/todo.md` 与 `tasks/lessons.md`
+
+## Review（继续修复项目详情面板打开慢导致转圈）
+
+- 直接原因：结合你补充的“打开项目侧边栏很慢所以转圈圈”和代码排查，当前详情面板在 `ProjectDetailRootView.swift` 的 Markdown 区之前会**直接执行 `Text(readme.content)`**，把整份 `README.md` 原文一次性塞进 SwiftUI 文本布局。对大 README 来说，这会让右侧详情抽屉打开/关闭都要做重排版，主线程容易短暂卡住，体感就是 beachball / 转圈。
+- 设计层诱因：存在。详情面板同时承担了“轻量元信息查看”和“整份 README 原文展示”两个职责，但没有区分“侧边抽屉预览”和“完整文档内容”的展示边界，导致一个本该快速开的抽屉承载了超长文本布局负担。未发现更大的系统设计缺陷。
+- 当前修复：
+  1. 新增 `ProjectDetailMarkdownPresentationPolicy`，把 README 展示收口为最多 4000 字符的轻量预览；
+  2. `ProjectDetailRootView` 的 Markdown 区不再直接渲染 `readme.content`，而是渲染预览内容；
+  3. 若 README 被截断，会额外提示“完整 README 仍保留在『用 README 初始化』路径里”，既保留完整内容入口，又避免详情抽屉一次性布局整份长文档；
+  4. 新增源码级回归测试 `ProjectDetailRootViewTests.testMarkdownSectionDoesNotRenderFullReadmeInline`，锁定“详情面板不能再直接 `Text(readme.content)`”这条边界。
+- 长期建议：后续凡是侧边抽屉 / inspector / popup 这类“应当秒开”的容器，都不要直接内联完整长文档、长日志或大段 Markdown；应默认拆成**轻量预览 + 明确的完整内容入口**，否则每次布局变化都会把大文本排版成本带进主线程。
+- 验证证据：
+  - TDD 红灯：新增 `ProjectDetailRootViewTests.testMarkdownSectionDoesNotRenderFullReadmeInline` 后，当前源码中原本存在 `Text(readme.content)`，按测试断言会失败，能直接锁定这条重布局回归边界。
+  - 当前代码证据：`ProjectDetailRootView.swift` 已改为 `ProjectDetailMarkdownPresentationPolicy.resolve(readme: readme)` + `Text(markdownPresentation.previewContent)`，不再直接内联整份 README。
+  - 差异校验：`git diff --check -- macos/Sources/DevHavenApp/ProjectDetailMarkdownPresentationPolicy.swift macos/Sources/DevHavenApp/ProjectDetailRootView.swift macos/Tests/DevHavenAppTests/ProjectDetailRootViewTests.swift tasks/todo.md tasks/lessons.md` → 通过。
+  - 当前工作区边界：本轮无法给出新的 `swift build` / `swift test` 成功结果，因为工作区里存在**与本任务无关**的现有 WIP 改动：`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift` 当前多出一段 `openQuickTerminal()` 相关未完成改动，并带入额外 `}`，导致整个 package 构建先在该文件报错。这个阻断不在本轮改动范围内。
+
 ## 提交终端配置入口优化改动（2026-03-21）
 
 - [x] 确认本次只提交 Ghostty 配置入口优化相关文件，不混入其他进行中的工作区改动

@@ -62,10 +62,12 @@ public final class NativeAppViewModel {
     }
 
     public struct CLISessionItem: Identifiable, Equatable {
-        public let id: String
+        public let projectPath: String
         public let title: String
         public let subtitle: String
         public let statusText: String
+
+        public var id: String { projectPath }
     }
 
     public var snapshot: NativeAppSnapshot
@@ -188,7 +190,7 @@ public final class NativeAppViewModel {
     }
 
     public var workspaceSidebarGroups: [WorkspaceSidebarProjectGroup] {
-        openWorkspaceRootProjectPaths.compactMap { rootPath in
+        var groups: [WorkspaceSidebarProjectGroup] = openWorkspaceRootProjectPaths.compactMap { rootPath in
             guard let rootProject = snapshot.projects.first(where: { $0.path == rootPath }) else {
                 return nil
             }
@@ -206,6 +208,14 @@ public final class NativeAppViewModel {
                 isActive: activeWorkspaceProjectPath == rootPath
             )
         }
+        for session in openWorkspaceSessions where session.isQuickTerminal {
+            groups.append(WorkspaceSidebarProjectGroup(
+                rootProject: .quickTerminal(at: session.projectPath),
+                worktrees: [],
+                isActive: activeWorkspaceProjectPath == session.projectPath
+            ))
+        }
+        return groups
     }
 
     public var activeWorkspaceController: GhosttyWorkspaceController? {
@@ -316,15 +326,16 @@ public final class NativeAppViewModel {
     }
 
     public var cliSessionItems: [CLISessionItem] {
-        let running = visibleProjects.filter { !($0.worktrees.isEmpty && $0.scripts.isEmpty) }.prefix(4)
-        return running.map { project in
+        openWorkspaceSessions
+            .filter(\.isQuickTerminal)
+            .map { session in
             CLISessionItem(
-                id: project.id,
-                title: project.name,
-                subtitle: URL(fileURLWithPath: project.path).lastPathComponent,
-                statusText: project.worktrees.isEmpty ? "配置中" : "已关联"
+                projectPath: session.projectPath,
+                title: Project.quickTerminal(at: session.projectPath).name,
+                subtitle: session.projectPath,
+                statusText: activeWorkspaceProjectPath == session.projectPath ? "已打开" : "可恢复"
             )
-        }
+            }
     }
 
     public var recycleBinItems: [RecycleBinItem] {
@@ -474,14 +485,24 @@ public final class NativeAppViewModel {
         scheduleSelectedProjectDocumentRefresh()
     }
 
+    public func openQuickTerminal() {
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        openWorkspaceSessionIfNeeded(for: homePath, rootProjectPath: homePath, isQuickTerminal: true)
+        activateWorkspaceProject(homePath)
+    }
+
     public func activateWorkspaceProject(_ path: String) {
         guard openWorkspaceProjectPaths.contains(path) else {
             return
         }
         activeWorkspaceProjectPath = path
-        selectedProjectPath = path
+        if !isQuickTerminalSessionPath(path) {
+            selectedProjectPath = path
+        }
         isDetailPanelPresented = false
-        scheduleSelectedProjectDocumentRefresh()
+        if !isQuickTerminalSessionPath(path) {
+            scheduleSelectedProjectDocumentRefresh()
+        }
     }
 
     public func closeWorkspaceProject(_ path: String) {
@@ -1095,7 +1116,8 @@ public final class NativeAppViewModel {
     private func alignSelectionAfterReload() {
         let rootProjectPaths = Set(snapshot.projects.map(\.path))
         openWorkspaceSessions.removeAll { session in
-            !rootProjectPaths.contains(session.rootProjectPath) || resolveDisplayProject(for: session.projectPath, rootProjectPath: session.rootProjectPath) == nil
+            if session.isQuickTerminal { return false }
+            return !rootProjectPaths.contains(session.rootProjectPath) || resolveDisplayProject(for: session.projectPath, rootProjectPath: session.rootProjectPath) == nil
         }
         if let activeWorkspaceProjectPath, !openWorkspaceProjectPaths.contains(activeWorkspaceProjectPath) {
             self.activeWorkspaceProjectPath = openWorkspaceSessions.last?.projectPath
@@ -1281,7 +1303,7 @@ public final class NativeAppViewModel {
         }
     }
 
-    private func openWorkspaceSessionIfNeeded(for path: String, rootProjectPath: String) {
+    private func openWorkspaceSessionIfNeeded(for path: String, rootProjectPath: String, isQuickTerminal: Bool = false) {
         guard !openWorkspaceProjectPaths.contains(path) else {
             return
         }
@@ -1289,9 +1311,14 @@ public final class NativeAppViewModel {
             OpenWorkspaceSessionState(
                 projectPath: path,
                 rootProjectPath: rootProjectPath,
-                controller: GhosttyWorkspaceController(projectPath: path)
+                controller: GhosttyWorkspaceController(projectPath: path),
+                isQuickTerminal: isQuickTerminal
             )
         )
+    }
+
+    private func isQuickTerminalSessionPath(_ path: String) -> Bool {
+        openWorkspaceSessions.first(where: { $0.projectPath == path })?.isQuickTerminal ?? false
     }
 
     private func workspaceController(for projectPath: String? = nil) -> GhosttyWorkspaceController? {

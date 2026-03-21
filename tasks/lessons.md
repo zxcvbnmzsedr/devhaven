@@ -23,5 +23,8 @@
 - GitHub-hosted Intel runner 不等于“适合构建 Intel 目标”；如果上游依赖（这里是 Ghostty）已经要求更高版本的 Xcode，而 GitHub 当前可用 Intel runner 只有较老工具链，就应改成在较新 Apple Silicon runner 上用 `--triple x86_64-apple-macosx14.0` 交叉构建，而不是继续把 CPU 架构和 runner 机型绑死。
 - 在 Apple Silicon 主机上跑 `swift test --triple x86_64-apple-macosx14.0` 时，测试二进制可以编出来，但默认无法直接执行 x86_64 test bundle；CI 若仍运行在 arm64 runner，上游验证边界应明确收口为“x86_64 编译/打包成功”，不要误把“可编译”当成“可在当前 runner 上直接执行测试”。
 - 对纯 macOS 原生 GUI 应用，`swift run` 只是启动入口，不等于 Web 项目的 dev server；如果关键日志走 unified log，就应在仓库级开发命令里一并收口 `log stream` 与应用启动，否则用户很容易误以为“启动成功但没有日志”。
+- 当 `./dev` / `swift test` 突然爆出成片 `cannot find ... in scope`、`static methods may only be declared on a type`、`extraneous '}' at top level` 这类级联错误时，先检查最近插入方法附近是否多写/少写了花括号；在超长 Swift 类型文件里，一次作用域断裂就足以让后半个类型整体掉到顶层。
+- 当某个 sidebar 分区标题已经叫“会话”时，数据源就必须直接绑定真实 session 状态，而不是继续从项目列表、scripts 或 worktrees 派生；否则标题、状态文案和可操作能力很快就会互相打架。
 - 当用户用 `<turn_aborted>` 明确上一轮已中断，并随后补充“真实项目都在某个本地目录下”这类路径纠偏时，后续必须从头重新核对该目录下的仓库真相，不要继续沿用上一轮可能半执行的 clone/搜索结果或旧路径假设。
 - 对包含 `TextEditor` / `NSTextView` / `NSTextField` 等 AppKit-backed 编辑器的侧边面板，关闭时不能只把 SwiftUI 可见性布尔值改成 false；若不先释放 `NSWindow.firstResponder`，窗口可能继续挂着已移除子树里的 responder，用户体感就是“点完关闭后界面未响应”。
+- 当用户反馈“不是点关闭卡，而是打开项目详情抽屉本身很慢所以转圈”时，要优先检查侧边抽屉里是否直接内联渲染了整份 README / 长日志 / 长 Markdown；这类重文本布局更容易造成主线程卡顿，不能只盯着按钮 action 或 responder 清理。

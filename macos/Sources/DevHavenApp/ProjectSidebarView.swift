@@ -120,36 +120,55 @@ struct ProjectSidebarView: View {
                     }
                 }
 
-                sidebarSection(title: "CLI 会话", trailingSystemImage: nil) {
+                sidebarSection(title: "CLI 会话", trailingSystemImage: "plus.circle", trailingAction: { viewModel.openQuickTerminal() }) {
                     if viewModel.cliSessionItems.isEmpty {
-                        Text("终端工作区尚未迁入原生版")
+                        Text("暂无 CLI 会话，点击 + 开启快速终端")
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
                     } else {
                         VStack(spacing: 8) {
                             ForEach(viewModel.cliSessionItems) { item in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(alignment: .firstTextBaseline) {
-                                        Circle()
-                                            .fill(NativeTheme.success)
-                                            .frame(width: 7, height: 7)
-                                        Text(item.title)
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(NativeTheme.textPrimary)
-                                        Spacer()
-                                        Text(item.statusText)
-                                            .font(.caption2)
-                                            .foregroundStyle(NativeTheme.textSecondary)
+                                HStack(spacing: 8) {
+                                    Button {
+                                        viewModel.activateWorkspaceProject(item.projectPath)
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack(alignment: .firstTextBaseline) {
+                                                Circle()
+                                                    .fill(NativeTheme.success)
+                                                    .frame(width: 7, height: 7)
+                                                Text(item.title)
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(NativeTheme.textPrimary)
+                                                Spacer()
+                                                Text(item.statusText)
+                                                    .font(.caption2)
+                                                    .foregroundStyle(NativeTheme.textSecondary)
+                                            }
+                                            Text(item.subtitle)
+                                                .font(.caption2)
+                                                .foregroundStyle(NativeTheme.textSecondary)
+                                                .lineLimit(1)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(10)
+                                        .background(NativeTheme.elevated)
+                                        .clipShape(.rect(cornerRadius: 10))
                                     }
-                                    Text(item.subtitle)
-                                        .font(.caption2)
-                                        .foregroundStyle(NativeTheme.textSecondary)
-                                        .lineLimit(1)
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        viewModel.closeWorkspaceProject(item.projectPath)
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(NativeTheme.textSecondary)
+                                            .frame(width: 26, height: 26)
+                                            .background(NativeTheme.elevated)
+                                            .clipShape(.rect(cornerRadius: 8))
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(10)
-                                .background(NativeTheme.elevated)
-                                .clipShape(.rect(cornerRadius: 10))
                             }
                         }
                     }
@@ -252,7 +271,7 @@ struct ProjectSidebarView: View {
         }
     }
 
-    private func sidebarSection<Content: View>(title: String, trailingSystemImage: String?, @ViewBuilder content: () -> Content) -> some View {
+    private func sidebarSection<Content: View>(title: String, trailingSystemImage: String?, trailingAction: (() -> Void)? = nil, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(title)
@@ -260,9 +279,18 @@ struct ProjectSidebarView: View {
                     .foregroundStyle(NativeTheme.textPrimary)
                 Spacer()
                 if let trailingSystemImage {
+                    if let trailingAction {
+                        Button(action: trailingAction) {
+                            Image(systemName: trailingSystemImage)
+                                .font(.caption)
+                                .foregroundStyle(NativeTheme.textSecondary)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
                         Image(systemName: trailingSystemImage)
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
+                    }
                 }
             }
             content()

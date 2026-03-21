@@ -408,6 +408,32 @@ public struct MarkdownDocument: Equatable, Sendable {
     }
 }
 
+extension Project {
+    public static let quickTerminalID = "__devhaven_quick_terminal__"
+
+    public var isQuickTerminal: Bool {
+        id == Self.quickTerminalID
+    }
+
+    public static func quickTerminal(at homePath: String) -> Project {
+        Project(
+            id: Self.quickTerminalID,
+            name: "快速终端",
+            path: homePath,
+            tags: [],
+            scripts: [],
+            worktrees: [],
+            mtime: 0,
+            size: 0,
+            checksum: "",
+            gitCommits: 0,
+            gitLastCommit: 0,
+            created: 0,
+            checked: 0
+        )
+    }
+}
+
 public struct ProjectDocumentSnapshot: Equatable, Sendable {
     public var notes: String?
     public var todoItems: [TodoItem]

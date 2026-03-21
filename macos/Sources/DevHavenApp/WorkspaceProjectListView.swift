@@ -141,11 +141,13 @@ private struct ProjectGroupView: View {
         .overlay(alignment: .trailing) {
             // 按钮覆盖在卡片右侧，不占额外布局空间
             HStack(spacing: 4) {
-                iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
-                    onRefreshWorktrees(group.rootProject.path)
-                }
-                iconButton(systemName: "plus", help: "创建或添加 worktree") {
-                    onRequestCreateWorktree(group.rootProject.path)
+                if !group.rootProject.isQuickTerminal {
+                    iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
+                        onRefreshWorktrees(group.rootProject.path)
+                    }
+                    iconButton(systemName: "plus", help: "创建或添加 worktree") {
+                        onRequestCreateWorktree(group.rootProject.path)
+                    }
                 }
                 iconButton(systemName: "xmark", help: "关闭项目") {
                     onCloseProject(group.rootProject.path)

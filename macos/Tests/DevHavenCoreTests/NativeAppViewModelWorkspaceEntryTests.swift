@@ -34,6 +34,46 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         )
     }
 
+    func testOpenQuickTerminalCreatesQuickTerminalWorkspaceSessionAndSidebarGroup() {
+        let viewModel = makeViewModel()
+        let homePath = FileManager.default.homeDirectoryForCurrentUser.path
+        viewModel.isDetailPanelPresented = true
+
+        viewModel.openQuickTerminal()
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [homePath])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, homePath)
+        XCTAssertEqual(viewModel.activeWorkspaceState?.projectPath, homePath)
+        XCTAssertFalse(viewModel.isDetailPanelPresented)
+        XCTAssertTrue(viewModel.openWorkspaceSessions.first?.isQuickTerminal ?? false)
+        XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.rootProject, .quickTerminal(at: homePath))
+        XCTAssertTrue(viewModel.workspaceSidebarGroups.first?.worktrees.isEmpty ?? false)
+    }
+
+    func testCliSessionItemsReflectQuickTerminalSessionsInsteadOfVisibleProjects() {
+        let viewModel = makeViewModel()
+        let project = makeProject(
+            id: "project-1",
+            name: "Alpha",
+            path: "/tmp/alpha",
+            worktrees: [makeWorktree(path: "/tmp/alpha-feature", branch: "feature/demo")]
+        )
+        viewModel.snapshot.projects = [project]
+
+        XCTAssertTrue(viewModel.cliSessionItems.isEmpty, "CLI 会话区块不应继续从普通项目 / worktree 派生")
+
+        viewModel.openQuickTerminal()
+
+        XCTAssertEqual(viewModel.cliSessionItems.count, 1)
+        XCTAssertEqual(viewModel.cliSessionItems.first?.title, "快速终端")
+        XCTAssertEqual(viewModel.cliSessionItems.first?.statusText, "已打开")
+
+        viewModel.exitWorkspace()
+
+        XCTAssertEqual(viewModel.cliSessionItems.count, 1)
+        XCTAssertEqual(viewModel.cliSessionItems.first?.statusText, "可恢复")
+    }
+
 
     func testEnteringMultipleProjectsKeepsOpenWorkspaceListAndActivatesLatestProject() {
         let viewModel = makeViewModel()

@@ -8,6 +8,15 @@ final class WorkspaceProjectListViewTests: XCTestCase {
         XCTAssertFalse(source.contains("group.worktrees.count"), "项目卡片不应再使用 group.worktrees.count 渲染数量徽标")
     }
 
+    func testQuickTerminalGroupDoesNotRenderWorktreeActionButtons() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("if !group.rootProject.isQuickTerminal"),
+            "quick terminal group 应显式跳过 worktree 操作按钮"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

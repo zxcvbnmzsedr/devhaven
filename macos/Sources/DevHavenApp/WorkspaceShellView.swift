@@ -165,7 +165,7 @@ struct WorkspaceShellView: View {
 
     @ViewBuilder
     private var workspaceContent: some View {
-        if viewModel.openWorkspaceProjects.isEmpty {
+        if viewModel.openWorkspaceSessions.isEmpty {
             ContentUnavailableView(
                 "没有已打开项目",
                 systemImage: "terminal",
@@ -175,7 +175,10 @@ struct WorkspaceShellView: View {
         } else {
             ZStack {
                 ForEach(viewModel.openWorkspaceSessions) { session in
-                    if let project = viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath }) {
+                    let project: Project? = session.isQuickTerminal
+                        ? .quickTerminal(at: session.projectPath)
+                        : viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath })
+                    if let project {
                         WorkspaceHostView(
                             viewModel: viewModel,
                             project: project,
