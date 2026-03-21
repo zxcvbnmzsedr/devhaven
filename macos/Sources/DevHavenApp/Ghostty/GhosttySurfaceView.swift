@@ -251,12 +251,13 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     override func scrollWheel(with event: NSEvent) {
         guard let surface else { return }
-        ghostty_surface_mouse_scroll(
-            surface,
-            event.scrollingDeltaX,
-            event.scrollingDeltaY,
-            event.ghosttyScrollMods
+        let input = GhosttySurfaceScrollInput.make(
+            deltaX: event.scrollingDeltaX,
+            deltaY: event.scrollingDeltaY,
+            hasPreciseScrollingDeltas: event.hasPreciseScrollingDeltas,
+            momentumPhase: event.momentumPhase
         )
+        ghostty_surface_mouse_scroll(surface, input.deltaX, input.deltaY, input.mods)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -937,10 +938,6 @@ extension NSEvent {
         if modifierFlags.contains(.command) { rawValue |= GHOSTTY_MODS_SUPER.rawValue }
         if modifierFlags.contains(.capsLock) { rawValue |= GHOSTTY_MODS_CAPS.rawValue }
         return ghostty_input_mods_e(rawValue)
-    }
-
-    var ghosttyScrollMods: ghostty_input_scroll_mods_t {
-        Int32(bitPattern: ghosttyMods.rawValue)
     }
 
     var ghosttyMouseButton: ghostty_input_mouse_button_e {

@@ -137,3 +137,25 @@
   - `swift test --package-path macos` → 通过，`107 tests, 5 skipped, 0 failures`。
   - `bash macos/scripts/build-native-app.sh --release --no-open --triple x86_64-apple-macosx14.0 --output-dir /tmp/devhaven-native-app-x86-cross-verify` → 通过。
   - `file /tmp/devhaven-native-app-x86-cross-verify/DevHaven.app/Contents/MacOS/DevHavenApp` → 输出 `Mach-O 64-bit executable x86_64`。
+
+## 滚动优化：对齐 Ghostty 原生 / Supacode 滚动语义（2026-03-21）
+
+- [x] 检查当前 Ghostty 宿主的滚动事件链与速度来源
+- [x] 对照 Ghostty 原生与 Supacode 的滚动包装/节流策略
+- [x] 确认最小修复方案并完成验证
+
+## Review（Ghostty scroll 输入桥对齐）
+
+- 直接原因：`GhosttySurfaceView.scrollWheel(with:)` 直接把 `scrollingDeltaX/Y` 原样传给 `ghostty_surface_mouse_scroll(...)`，并把键盘 modifiers 误当成 `ghostty_input_scroll_mods_t` 传入，导致 trackpad 这类高精度滚动事件没有被正确标记为 `precision + momentum`；Ghostty core 因此会把本应走 precision 路径的输入按 discrete scroll 解释，体感表现为“滚得特别快”。
+- 设计层诱因：问题不在 `GhosttySurfaceScrollView` wrapper 主线，而在输入桥接边界把“键盘/鼠标修饰键 mods”和“滚动专用 scroll mods”混成了一种 bitfield。未发现更大的系统设计缺陷，当前是局部输入语义接线偏离 Ghostty / Supacode 参考实现。
+- 当前修复：
+  - 新增 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceScrollInput.swift`，把 precise scroll 的 delta 调整与 `precision + momentumPhase` 编码收口成可测试 helper；
+  - `GhosttySurfaceView.scrollWheel(with:)` 改为使用该 helper，precise scrolling 对齐 Ghostty 原生 / Supacode 的 `x2` delta 规则，并正确传入 `ghostty_input_scroll_mods_t`；
+  - 移除原先会误导实现的 `ghosttyScrollMods` 旧接线。
+- 长期建议：后续所有 Ghostty 输入问题优先做 source-to-source diff，对照 Ghostty 原生和 Supacode 的桥接细节；不要先在 `GhosttySurfaceScrollView` 或 SwiftUI 外层做人为减速补丁，否则容易掩盖真正的输入语义错误。
+- 验证证据：
+  - TDD 红灯：`swift test --package-path macos --filter GhosttySurfaceScrollInputTests` → 先失败，报 `cannot find 'GhosttySurfaceScrollInput' in scope`，证明新增测试确实锁住了待实现行为；
+  - 定向绿灯：`swift test --package-path macos --filter GhosttySurfaceScrollInputTests` → 通过，2 tests, 0 failures；
+  - 全量验证：`swift test --package-path macos` → 通过，`109 tests, 5 skipped, 0 failures`；
+  - 代码格式校验：`git diff --check` → 通过。
+- 当前边界：本轮已经完成代码级 root-cause 修复并通过自动化验证，但还没有新的 GUI 肉眼滚动手感证据；最终体感是否已与 Ghostty / Supacode 对齐，仍建议你本机再滚一轮确认。
