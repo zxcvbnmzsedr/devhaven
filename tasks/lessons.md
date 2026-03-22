@@ -83,3 +83,14 @@
   2. 再通过用户补充描述、截图或代码结构确认真正目标；
   3. 最后才对具体控件的焦点链路下结论。
 - 这类问题真正要找的往往不是“某个按钮为什么被主动聚焦”，而是“当前界面有没有显式初始焦点策略”；先抓语义，再落到具体控件，能减少误判。
+
+## 2026-03-22 C callback userdata 不要直接指向短命 bridge 再跨队列传递
+
+- 如果某个 C 库 callback 会先在后台线程触发，再异步 hop 到主线程处理，就不能把 `Unmanaged.passUnretained(short-lived object).toOpaque()` 当成长期安全的 userdata 真相源。
+- 裸指针在 callback 触发当下也许还是有效的，但只要中间经过 `DispatchQueue.main.async`、Task 或其它延迟执行，原对象就可能在真正处理前被释放；这类 bug 往往只在关闭 pane、删除 worktree、退出会话等 teardown 场景下以 `EXC_BAD_ACCESS` 暴露出来。
+- 更稳的做法是：
+  1. 让 userdata 指向稳定的 callback context / handle；
+  2. 跨线程时只捕获 context；
+  3. 真正执行时再向 context 解析当前 active 对象；
+  4. teardown 开始时先 invalidation，让晚到回调统一 no-op。
+

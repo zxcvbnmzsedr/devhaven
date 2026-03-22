@@ -21,6 +21,7 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     nonisolated(unsafe) private(set) var surface: ghostty_surface_t?
     private var surfaceRef: GhosttyRuntime.SurfaceReference?
+    private var callbackContext: GhosttySurfaceCallbackContext?
     private var cellSize: NSSize = .zero
     private var backingCellSizeInPixels: NSSize = .zero
     private var attachmentState = GhosttySurfaceAttachmentState()
@@ -59,14 +60,20 @@ final class GhosttyTerminalSurfaceView: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: 960, height: 640))
 
         do {
+            let callbackContext = GhosttySurfaceCallbackContext(bridge: bridge)
             let surface = try runtime.createSurface(
                 for: self,
                 bridge: bridge,
+                callbackContext: callbackContext,
                 request: request,
                 extraEnvironment: extraEnvironment
             )
             self.surface = surface
-            self.surfaceRef = runtime.registerSurface(surface)
+            self.callbackContext = callbackContext
+            self.surfaceRef = runtime.registerSurface(
+                surface,
+                callbackContext: callbackContext
+            )
         } catch {
             initializationError = error
         }
@@ -85,6 +92,7 @@ final class GhosttyTerminalSurfaceView: NSView {
     func tearDown() {
         cancelPendingFocusRequest()
         resignOwnedFirstResponderIfNeeded()
+        callbackContext?.invalidate()
         if let trackingAreaRef {
             removeTrackingArea(trackingAreaRef)
             self.trackingAreaRef = nil
@@ -99,6 +107,7 @@ final class GhosttyTerminalSurfaceView: NSView {
         }
         bridge.surface = nil
         bridge.surfaceView = nil
+        callbackContext = nil
         scrollWrapper = nil
         lastScrollbar = nil
         focused = false
@@ -876,11 +885,11 @@ struct GhosttyTerminalSurfaceConfiguration {
     @MainActor
     func withCValue<T>(
         view: GhosttyTerminalSurfaceView,
-        bridge: GhosttySurfaceBridge,
+        callbackContext: GhosttySurfaceCallbackContext,
         _ body: (inout ghostty_surface_config_s) throws -> T
     ) rethrows -> T {
         var configuration = ghostty_surface_config_new()
-        configuration.userdata = Unmanaged.passUnretained(bridge).toOpaque()
+        configuration.userdata = Unmanaged.passUnretained(callbackContext).toOpaque()
         configuration.platform_tag = GHOSTTY_PLATFORM_MACOS
         configuration.platform = ghostty_platform_u(
             macos: ghostty_platform_macos_s(

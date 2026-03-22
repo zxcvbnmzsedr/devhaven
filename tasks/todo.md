@@ -760,9 +760,28 @@
 
 - [x] 在崩溃报告与现有代码中定位删除 worktree 时的崩溃链路
 - [x] 判断直接原因与是否存在设计层诱因
-- [ ] 先补失败测试或最小复现场景，稳定约束该崩溃
-- [ ] 实施最小修复并保持最少改动边界
-- [ ] 运行验证并回填 Review（含证据）
+- [x] 先补失败测试或最小复现场景，稳定约束该崩溃
+- [x] 实施最小修复并保持最少改动边界
+- [x] 运行验证并回填 Review（含证据）
+
+## Review（2026-03-22 排查并修复删除 worktree 时闪退）
+
+- 结果：已修复删除 worktree 时的 Ghostty 晚到回调闪退问题。当前 Ghostty surface 的 C callback userdata 不再直接暴露 `GhosttySurfaceBridge` 裸指针，而是改为稳定的 `GhosttySurfaceCallbackContext`；当 workspace/worktree 关闭触发 terminal surface teardown 后，晚到的 action / close / clipboard 回调会通过 context 安全判空并直接 no-op，不再命中已释放 bridge。
+- 直接原因：`GhosttyRuntime.handleAction(...)` / `handleCloseSurface(...)` 之前会把 `surface userdata` 中的 `GhosttySurfaceBridge` 非持有裸指针跨 `DispatchQueue.main.async` 带到主线程；删除 worktree 时对应 pane/session 会先释放 surface/view/bridge，等主线程稍后执行晚到回调时，再按旧地址反解 bridge 就会落到悬挂对象，最终在 `GhosttySurfaceBridge.handleAction(...) -> GhosttySurfaceState.pwd.setter` 处触发 `EXC_BAD_ACCESS`。
+- 设计层诱因：Ghostty C callback 生命周期此前直接耦合到短命的 Swift bridge/view 对象，userdata 既承担“回调入口”又隐含“对象仍存活”的假设，导致跨线程 hop 与 teardown 并发时没有稳定的中间宿主。未发现更大的系统设计缺陷，但 callback 生命周期边界此前没有收口。
+- 当前修复方案：
+  1. 新增 `GhosttySurfaceCallbackContext` 作为 surface userdata 的稳定宿主，线程安全持有当前 active bridge；
+  2. `GhosttyRuntime` 的 action / close / clipboard 回调统一先解析 callback context，跨线程时只捕获 context，等真正执行时再读取 active bridge；
+  3. `GhosttyTerminalSurfaceView.tearDown()` 开始时先 invalidation callback context，再继续 unregister/free surface，让 teardown 开始后的晚到回调统一 no-op；
+  4. 补充 `GhosttySurfaceCallbackContextTests`，约束 active/invalidate 语义与异步 hop 场景。
+- 长期改进建议：
+  1. 后续新增 Ghostty runtime callback 时，继续沿用 callback context 模式，不要再把 `Unmanaged.passUnretained(short-lived object)` 的裸指针直接跨队列传递；
+  2. 若未来 callback 类型继续增长，可考虑再把“userdata 解析 + active bridge 判定”收口成更统一的 helper，减少重复 fromOpaque 入口。
+- 验证证据：
+  - 2026-03-22 `swift test --package-path macos --filter GhosttySurfaceCallbackContextTests`（修复前）→ exit 1，编译报错 `cannot find type 'GhosttySurfaceCallbackContext' in scope`，确认失败测试先建立。
+  - 2026-03-22 `swift test --package-path macos --filter GhosttySurfaceCallbackContextTests`（修复后）→ 2 tests，0 failures，exit 0。
+  - 2026-03-22 `swift test --package-path macos --filter 'GhosttySurface(CallbackContext|BridgeTabPane|Host)Tests'` → 17 tests，5 skipped，0 failures，exit 0。
+  - 2026-03-22 `swift test --package-path macos` → 228 tests，5 skipped，0 failures，exit 0。
 
 
 ## 2026-03-22 修复 release workflow arm64 测试时序脆弱性
@@ -772,8 +791,8 @@
 - [x] 参考现有可通过路径，将固定等待改为条件轮询，实施最小测试修复
 - [x] 运行定向测试验证两条脆弱测试在本地通过
 - [x] 运行完整 `swift test --package-path macos` 验证没有引入回归
-- [ ] 提交并推送测试稳定性修复到 `origin/main`
-- [ ] 重新触发 `release.yml(tag=v3.0.0)` 并验证 run / release 资产
+- [x] 提交并推送测试稳定性修复到 `origin/main`
+- [x] 重新触发 `release.yml(tag=v3.0.0)` 并验证 run / release 资产
 
 ## Review（2026-03-22 修复 release workflow arm64 测试时序脆弱性）
 
@@ -795,3 +814,15 @@
   - 2026-03-22 `gh run view 23403375014 --log-failed` 日志定位到 arm64 job 失败测试：`GhosttySurfaceHostTests.testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt` 与 `ProjectDetailPanelCloseActionTests.testClosingDetailPanelReleasesActiveEditorResponderBeforeHidingPanel`。
   - 2026-03-22 `swift test --package-path macos --filter 'GhosttySurfaceHostTests/testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt|ProjectDetailPanelCloseActionTests/testClosingDetailPanelReleasesActiveEditorResponderBeforeHidingPanel'` → 2 tests，0 failures，exit 0。
   - 2026-03-22 `swift test --package-path macos` → 226 tests，5 skipped，0 failures，exit 0。
+  - 2026-03-22 `git push origin main`：将提交 `662f9411df5612f73a5943d92de603b142c70f76` 推送到 `origin/main`。
+  - 2026-03-22 `git tag -fa v3.0.0 -m "v3.0.0" HEAD && git push origin refs/tags/v3.0.0 --force`：本地 / 远端 `v3.0.0^{}` 均已指向 `662f9411df5612f73a5943d92de603b142c70f76`。
+  - 2026-03-22 `gh run view 23403723188 --json status,conclusion,jobs,url` → `status=completed`、`conclusion=success`，`prepare-release` / `build-macos-native (x86_64, macos-26, x86_64-apple-macosx14.0)` / `build-macos-native (arm64, macos-26)` 全部成功。
+  - 2026-03-22 `gh release view v3.0.0 --json assets` → 产物包含 `DevHaven-macos-arm64.zip`、`DevHaven-macos-x86_64.zip`。
+
+## 2026-03-22 提交删除 worktree 闪退修复并重新覆盖 v3.0.0
+
+- [x] 核对当前工作区改动、已有验证证据与本地 tag 现状
+- [ ] 复跑提交前验证，确认当前改动可提交
+- [ ] 提交当前修复到 `main`
+- [ ] 将 `v3.0.0` 覆盖到新提交并推送 branch/tag
+- [ ] 观察 GitHub Actions / release 状态并回填 Review

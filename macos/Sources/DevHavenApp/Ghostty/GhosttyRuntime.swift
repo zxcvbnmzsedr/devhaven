@@ -17,14 +17,20 @@ enum GhosttyConfigFileError: LocalizedError {
 final class GhosttyRuntime {
     final class SurfaceReference {
         let surface: ghostty_surface_t
+        let callbackContext: GhosttySurfaceCallbackContext
         var isValid = true
 
-        init(_ surface: ghostty_surface_t) {
+        init(
+            _ surface: ghostty_surface_t,
+            callbackContext: GhosttySurfaceCallbackContext
+        ) {
             self.surface = surface
+            self.callbackContext = callbackContext
         }
 
         func invalidate() {
             isValid = false
+            callbackContext.invalidate()
         }
     }
 
@@ -196,8 +202,11 @@ final class GhosttyRuntime {
         shutdown()
     }
 
-    func registerSurface(_ surface: ghostty_surface_t) -> SurfaceReference {
-        let ref = SurfaceReference(surface)
+    func registerSurface(
+        _ surface: ghostty_surface_t,
+        callbackContext: GhosttySurfaceCallbackContext
+    ) -> SurfaceReference {
+        let ref = SurfaceReference(surface, callbackContext: callbackContext)
         surfaceRefs.append(ref)
         surfaceRefs = surfaceRefs.filter(\.isValid)
         return ref
@@ -230,6 +239,7 @@ final class GhosttyRuntime {
     func createSurface(
         for view: GhosttyTerminalSurfaceView,
         bridge: GhosttySurfaceBridge,
+        callbackContext: GhosttySurfaceCallbackContext,
         request: WorkspaceTerminalLaunchRequest,
         extraEnvironment: [String: String]
     ) throws -> ghostty_surface_t {
@@ -242,7 +252,10 @@ final class GhosttyRuntime {
             environmentVariables: extraEnvironment
         )
 
-        let surface = try configuration.withCValue(view: view, bridge: bridge) { cConfig in
+        let surface = try configuration.withCValue(
+            view: view,
+            callbackContext: callbackContext
+        ) { cConfig in
             guard let surface = ghostty_surface_new(app, &cConfig) else {
                 throw GhosttySurfaceHostError.surfaceCreationFailed
             }
@@ -314,25 +327,22 @@ final class GhosttyRuntime {
         return runtime(from: UnsafeMutableRawPointer(bitPattern: bits))
     }
 
-    private static func bridge(from userdata: UnsafeMutableRawPointer?) -> GhosttySurfaceBridge? {
+    private static func callbackContext(
+        from userdata: UnsafeMutableRawPointer?
+    ) -> GhosttySurfaceCallbackContext? {
         guard let userdata else {
             return nil
         }
-        return Unmanaged<GhosttySurfaceBridge>.fromOpaque(userdata).takeUnretainedValue()
+        return Unmanaged<GhosttySurfaceCallbackContext>.fromOpaque(userdata).takeUnretainedValue()
     }
 
-    private static func bridge(fromBits bits: UInt?) -> GhosttySurfaceBridge? {
-        guard let bits else {
-            return nil
-        }
-        return bridge(from: UnsafeMutableRawPointer(bitPattern: bits))
-    }
-
-    private static func bridge(fromSurface surface: ghostty_surface_t?) -> GhosttySurfaceBridge? {
+    private static func callbackContext(
+        fromSurface surface: ghostty_surface_t?
+    ) -> GhosttySurfaceCallbackContext? {
         guard let surface, let userdata = ghostty_surface_userdata(surface) else {
             return nil
         }
-        return bridge(from: userdata)
+        return callbackContext(from: userdata)
     }
 
     nonisolated private static func handleWakeup(_ userdata: UnsafeMutableRawPointer?) {
@@ -351,21 +361,21 @@ final class GhosttyRuntime {
         guard target.tag == GHOSTTY_TARGET_SURFACE else {
             return false
         }
-        guard let surfaceBridge = bridge(fromSurface: target.target.surface) else {
+        guard let callbackContext = callbackContext(fromSurface: target.target.surface) else {
             return false
         }
 
         if Thread.isMainThread {
+            guard let surfaceBridge = callbackContext.activeBridge() else {
+                return false
+            }
             return MainActor.assumeIsolated {
                 surfaceBridge.handleAction(target: target, action: action)
             }
         }
 
-        let bridgeBits = target.target.surface
-            .flatMap { ghostty_surface_userdata($0) }
-            .map { UInt(bitPattern: $0) }
         DispatchQueue.main.async {
-            if let bridge = bridge(fromBits: bridgeBits) {
+            if let bridge = callbackContext.activeBridge() {
                 MainActor.assumeIsolated {
                     _ = bridge.handleAction(target: target, action: action)
                 }
@@ -379,7 +389,8 @@ final class GhosttyRuntime {
         location: ghostty_clipboard_e,
         state: UnsafeMutableRawPointer?
     ) {
-        guard let bridge = bridge(from: userdata), let surface = bridge.surface else {
+        guard let bridge = callbackContext(from: userdata)?.activeBridge(),
+              let surface = bridge.surface else {
             return
         }
         let string = NSPasteboard.ghostty(location)?.getOpinionatedStringContents() ?? ""
@@ -408,7 +419,10 @@ final class GhosttyRuntime {
         _ confirmed: Bool
     ) {
         _ = confirmed
-        guard len > 0, let content, bridge(from: userdata) != nil else {
+        guard len > 0,
+              let content,
+              callbackContext(from: userdata)?.activeBridge() != nil
+        else {
             return
         }
         guard let pasteboard = NSPasteboard.ghostty(location) else {
@@ -430,9 +444,11 @@ final class GhosttyRuntime {
         _ userdata: UnsafeMutableRawPointer?,
         processAlive: Bool
     ) {
-        let bridgeBits = userdata.map { UInt(bitPattern: $0) }
+        guard let callbackContext = callbackContext(from: userdata) else {
+            return
+        }
         DispatchQueue.main.async {
-            if let bridge = bridge(fromBits: bridgeBits) {
+            if let bridge = callbackContext.activeBridge() {
                 MainActor.assumeIsolated {
                     bridge.closeSurface(processAlive: processAlive)
                 }
