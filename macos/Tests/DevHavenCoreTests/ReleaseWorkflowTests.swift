@@ -40,6 +40,26 @@ final class ReleaseWorkflowTests: XCTestCase {
         )
     }
 
+    func testReleaseWorkflowPrepareReleaseGhCommandsDoNotAssumeCheckedOutGitRepository() throws {
+        let source = try String(contentsOf: workflowFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("gh release view \"$RELEASE_TAG\" -R \"$GITHUB_REPOSITORY\"") ||
+            source.contains("gh release view \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\""),
+            "prepare-release job 没有 checkout 仓库，gh release view 必须显式指定目标 repo，不能隐式依赖本地 git 上下文"
+        )
+        XCTAssertTrue(
+            source.contains("gh release edit \"$RELEASE_TAG\" -R \"$GITHUB_REPOSITORY\"") ||
+            source.contains("gh release edit \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\""),
+            "prepare-release job 没有 checkout 仓库，gh release edit 必须显式指定目标 repo，避免 runner 上报 not a git repository"
+        )
+        XCTAssertTrue(
+            source.contains("gh release create \"$RELEASE_TAG\" -R \"$GITHUB_REPOSITORY\"") ||
+            source.contains("gh release create \"$RELEASE_TAG\" --repo \"$GITHUB_REPOSITORY\""),
+            "prepare-release job 没有 checkout 仓库，gh release create 也必须显式指定目标 repo"
+        )
+    }
+
     private func workflowFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

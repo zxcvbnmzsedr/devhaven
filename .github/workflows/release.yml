@@ -60,10 +60,10 @@ jobs:
         run: |
           set -euo pipefail
           release_name="DevHaven ${RELEASE_TAG}"
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --title "$release_name" --prerelease
+          if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --title "$release_name" --prerelease
           else
-            gh release create "$RELEASE_TAG" --title "$release_name" --prerelease --notes ""
+            gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --title "$release_name" --prerelease --notes ""
           fi
 
   build-macos-native:
