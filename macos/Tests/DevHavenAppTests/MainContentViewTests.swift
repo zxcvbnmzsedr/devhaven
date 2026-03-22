@@ -1,6 +1,27 @@
 import XCTest
 
 final class MainContentViewTests: XCTestCase {
+    func testMainContentRequestsInitialFocusForSearchField() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("@FocusState private var focusedField: FocusableField?"),
+            "主界面应显式声明搜索框焦点状态，避免把初始焦点交给默认 key-view 顺序"
+        )
+        XCTAssertTrue(
+            source.contains("TextField(\"搜索项目...\", text: $viewModel.searchQuery)\n                    .textFieldStyle(.plain)\n                    .foregroundStyle(NativeTheme.textPrimary)\n                    .focused($focusedField, equals: .search)"),
+            "顶部搜索框应绑定显式 focus state，保证它能成为主界面的默认输入入口"
+        )
+        XCTAssertTrue(
+            source.contains(".onAppear {\n            requestInitialSearchFocus()\n        }"),
+            "主界面出现时应主动触发一次搜索框焦点请求，而不是继续依赖默认 key-view 顺序"
+        )
+        XCTAssertTrue(
+            source.contains("private func requestInitialSearchFocus() {\n        DispatchQueue.main.async {\n            focusedField = .search\n        }\n    }"),
+            "主界面出现后应主动请求把焦点交给搜索框，而不是等待侧边栏按钮抢走默认焦点"
+        )
+    }
+
     func testListModeRestoresSingleProjectRecycleBinAction() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
         let occurrences = source.components(separatedBy: "moveProjectToRecycleBin(project.path)").count - 1

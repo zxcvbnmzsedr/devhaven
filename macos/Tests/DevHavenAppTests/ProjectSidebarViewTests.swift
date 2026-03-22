@@ -1,6 +1,15 @@
 import XCTest
 
 final class ProjectSidebarViewTests: XCTestCase {
+    func testDirectoryMenuButtonDoesNotCompeteForInitialFocus() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(".menuStyle(.borderlessButton)\n                .focusable(false)\n                .help(\"目录操作\")"),
+            "目录操作按钮不应继续参与主界面的默认焦点竞争，否则应用启动时焦点会先落到侧边栏 chrome 按钮上"
+        )
+    }
+
     func testDirectorySectionUsesArchiveSidebarPlusMenuActions() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 

@@ -530,3 +530,54 @@
   - 2026-03-22 `swift test --package-path macos --filter GhosttySurfaceHostTests`（修复后）→ 11 tests，5 skipped，0 failures，exit 0。
   - 2026-03-22 `swift test --package-path macos`（修复后）→ 205 tests，5 skipped，0 failures，exit 0。
 
+## 2026-03-22 排查项目打开后的初始焦点异常
+
+- [x] 阅读技能与项目约束，确定按系统化调试流程排查
+- [x] 更新任务清单并记录本次排查范围
+- [x] 定位“打开项目后焦点落在目录右侧按钮”对应 UI 与焦点链路
+- [x] 分析直接原因、是否存在设计诱因，并形成结论 / 改进建议
+
+## Review（2026-03-22 排查项目打开后的初始焦点异常）
+
+- 结果：本轮排查先基于“目录右边那个按钮”的口述描述，误把目标控件推断成 `ProjectDetailRootView.swift` 顶部路径右侧的关闭按钮（`xmark`）。后续用户明确纠偏后，已确认真正的问题控件是左侧边栏“目录”标题右侧的目录操作按钮；因此本节结论只保留为一次中间排查记录，不再作为最终根因。
+- 直接原因：
+  1. 用户最初的描述不足以唯一定位控件；
+  2. 我方在没有截图 / 具体控件标识的情况下，先按“目录显示在详情面板路径右侧”做了错误推断；
+  3. 后续用户给出“直接放到搜索框上”的目标语义后，重新确认了真正问题位于主界面左侧边栏的目录操作按钮。
+- 设计层诱因：这类“焦点落到哪个可视按钮”问题，如果只靠自然语言描述而不先对照具体视图结构，很容易把“右边那个按钮”误映射到错误的 UI 层级。未发现明显系统设计缺陷，但排查流程需要先确认控件身份再下结论。
+- 当前结论：这一轮排查的主要价值是收敛出“根因属于缺少显式初始焦点策略”，但具体按钮定位在用户纠偏前是错的；最终修复与结论以“修复主界面初始焦点落到目录按钮”一节为准。
+- 长期改进建议：
+  1. 继续保留“先确认控件身份，再分析焦点链路”的排查顺序；
+  2. 对“右边那个按钮 / 这个控件”之类模糊描述，优先要求最小补充信息或结合代码结构做多候选核对；
+  3. 产品层面仍应给主界面 / 详情面板定义清晰的显式初始焦点策略，减少此类歧义。
+- 验证证据：
+  - 2026-03-22 用户后续明确要求“实在不知道焦点落在哪里，你就放在搜索框上面吧”，说明真实问题语义落在主界面默认焦点，而非详情面板交互。
+  - 2026-03-22 最终修复与验证详见下方“修复主界面初始焦点落到目录按钮” Review。
+
+## 2026-03-22 修复主界面初始焦点落到目录按钮
+
+- [x] 完成设计确认，确定采用“搜索框接管初始焦点 + 目录按钮不参与默认焦点竞争”方案
+- [x] 落设计文档与实现计划文档
+- [x] 按 TDD 补失败测试并验证当前行为缺少显式焦点策略
+- [x] 实现主界面搜索框初始焦点修复与目录按钮防抢焦点
+- [x] 运行验证并回填 Review
+
+## Review（2026-03-22 修复主界面初始焦点落到目录按钮）
+
+- 结果：已把 DevHaven 主界面的默认初始焦点显式收口到顶部“搜索项目...”输入框，并让左侧“目录操作”按钮不再参与默认焦点竞争。应用启动进入主界面时，不再依赖系统默认 key-view 顺序猜测焦点落点。
+- 直接原因：主界面此前没有定义显式初始焦点策略，导致 AppKit / SwiftUI 退回默认 key-view 顺序；左侧边栏“目录操作”按钮又是较早出现的可聚焦 chrome 控件，因此会先抢到焦点。
+- 设计层诱因：主界面虽然已经有明确的主输入入口（搜索框），但“窗口激活后第一输入目标”这一交互语义没有被代码显式建模，只能依赖默认焦点链。未发现明显系统设计缺陷，但焦点策略边界此前没有收口。
+- 当前修复方案：
+  1. 在 `MainContentView.swift` 中新增 `@FocusState` 与 `FocusableField.search`，让搜索框拥有显式焦点绑定；
+  2. 在主界面 `onAppear` 时通过异步主线程请求，把初始焦点交给搜索框；
+  3. 在 `ProjectSidebarView.swift` 中给“目录操作”按钮增加 `.focusable(false)`，避免它继续参与默认焦点竞争；
+  4. 补充 `MainContentViewTests` 与 `ProjectSidebarViewTests` 回归测试。
+- 长期改进建议：
+  1. 如果未来主界面还会新增其它主输入控件，应继续把默认焦点策略统一收口在 `MainContentView`，不要再散落到各个 sidebar / toolbar 按钮上；
+  2. 若后续产品希望“从工作区返回主界面时也自动回到搜索框”，可以在同一焦点入口上继续扩展状态触发，而不是重新引入窗口级焦点猜测。
+- 验证证据：
+  - 2026-03-22 `swift test --package-path macos --filter MainContentViewTests/testMainContentRequestsInitialFocusForSearchField` → 失败，确认修复前缺少显式搜索框焦点策略。
+  - 2026-03-22 `swift test --package-path macos --filter ProjectSidebarViewTests/testDirectoryMenuButtonDoesNotCompeteForInitialFocus` → 失败，确认修复前目录操作按钮仍参与默认焦点竞争。
+  - 2026-03-22 `swift test --package-path macos --filter MainContentViewTests` → 6 tests，0 failures，exit 0。
+  - 2026-03-22 `swift test --package-path macos --filter ProjectSidebarViewTests` → 5 tests，0 failures，exit 0。
+  - 2026-03-22 `swift build --package-path macos` → Build complete，exit 0。
