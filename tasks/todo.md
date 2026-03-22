@@ -44,9 +44,13 @@
 - [x] 运行定向验证并回填本次 GitHub Action 故障 Review
 
 - [x] 整理 release workflow 修复改动并完成提交前校验
-- [ ] 提交并推送 release workflow 修复到 origin/main
-- [ ] 用 workflow_dispatch 触发 release(tag=v3.0.0)
+- [x] 提交并推送 release workflow 修复到 origin/main
+- [x] 用 workflow_dispatch 触发 release(tag=v3.0.0)
 - [ ] 复核新 run 结论、失败点是否消失以及 release 产物状态
+
+- [x] 收集 arm64 Swift test 失败明细并定位是代码回归还是测试脆弱性
+- [x] 以最小改动修复两条 AppKit 时序脆弱测试
+- [ ] 跑本地定向测试与完整 swift test 验证后重新触发 release workflow
 
 ## Review
 
@@ -751,3 +755,43 @@
   - 2026-03-22 `swift test --package-path macos --filter MainContentViewTests` → 6 tests，0 failures，exit 0。
   - 2026-03-22 `swift test --package-path macos --filter ProjectSidebarViewTests` → 5 tests，0 failures，exit 0。
   - 2026-03-22 `swift build --package-path macos` → Build complete，exit 0。
+
+## 2026-03-22 排查并修复删除 worktree 时闪退
+
+- [x] 在崩溃报告与现有代码中定位删除 worktree 时的崩溃链路
+- [x] 判断直接原因与是否存在设计层诱因
+- [ ] 先补失败测试或最小复现场景，稳定约束该崩溃
+- [ ] 实施最小修复并保持最少改动边界
+- [ ] 运行验证并回填 Review（含证据）
+
+
+## 2026-03-22 修复 release workflow arm64 测试时序脆弱性
+
+- [x] 复核最新 release workflow 失败日志，确认仅 arm64 `swift test` 失败
+- [x] 定位失败测试与直接原因，确认属于 AppKit firstResponder 异步时序脆弱而非 release workflow 逻辑回归
+- [x] 参考现有可通过路径，将固定等待改为条件轮询，实施最小测试修复
+- [x] 运行定向测试验证两条脆弱测试在本地通过
+- [x] 运行完整 `swift test --package-path macos` 验证没有引入回归
+- [ ] 提交并推送测试稳定性修复到 `origin/main`
+- [ ] 重新触发 `release.yml(tag=v3.0.0)` 并验证 run / release 资产
+
+## Review（2026-03-22 修复 release workflow arm64 测试时序脆弱性）
+
+- 结果：已确认 release workflow 前两个工作流级故障已分别通过 `2a5555a` 与 `64e1b2a` 修复；当前剩余失败点收敛为 arm64 runner 上两条 AppKit 测试的固定等待时长不足。本轮先把测试等待从固定睡眠改为条件轮询，避免 CI 机器较慢时在真正状态达成前过早断言。
+- 直接原因：
+  1. `GhosttySurfaceHostTests.testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt` 依赖 `RunLoop.main.run(until: now + 0.2)`，CI arm64 机器上补焦点第二次尝试未必在 0.2 秒内完成；
+  2. `ProjectDetailPanelCloseActionTests.testClosingDetailPanelReleasesActiveEditorResponderBeforeHidingPanel` 同样用固定 `0.3` 秒等待 firstResponder 释放和右侧面板关闭；
+  3. 两条测试都把“时间足够久”误当成“状态已经满足”，因此在慢机上出现假失败。
+- 设计层诱因：测试代码把 AppKit 异步 firstResponder / 面板关闭链路建模成固定时长等待，而不是等待明确条件成立，导致验证依赖机器速度。未发现明显系统设计缺陷，但测试同步策略此前没有收口为条件驱动。
+- 当前修复方案：
+  1. 在两条测试里把固定 `RunLoop.main.run(until:)` 改为 `waitUntil(...)` 条件轮询；
+  2. `GhosttySurfaceHostTests` 等待“焦点补偿至少执行两次且 firstResponder 已切回 terminal view”；
+  3. `ProjectDetailPanelCloseActionTests` 等待“编辑器已释放 firstResponder 且详情面板状态已关闭”；
+  4. 保持生产代码不变，只修测试同步方式。
+- 长期改进建议：
+  1. 后续凡是验证 AppKit / SwiftUI 异步状态流转的测试，优先统一为条件等待 helper，而不是分散写固定 sleep；
+  2. 若类似等待逻辑继续增多，可提取测试公共 helper，减少不同测试文件各自维护轮询实现。
+- 验证证据：
+  - 2026-03-22 `gh run view 23403375014 --log-failed` 日志定位到 arm64 job 失败测试：`GhosttySurfaceHostTests.testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt` 与 `ProjectDetailPanelCloseActionTests.testClosingDetailPanelReleasesActiveEditorResponderBeforeHidingPanel`。
+  - 2026-03-22 `swift test --package-path macos --filter 'GhosttySurfaceHostTests/testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt|ProjectDetailPanelCloseActionTests/testClosingDetailPanelReleasesActiveEditorResponderBeforeHidingPanel'` → 2 tests，0 failures，exit 0。
+  - 2026-03-22 `swift test --package-path macos` → 226 tests，5 skipped，0 failures，exit 0。

@@ -54,13 +54,22 @@ final class ProjectDetailPanelCloseActionTests: XCTestCase {
 
         DetailPanelCloseAction.perform(for: viewModel, window: window)
         window.displayIfNeeded()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        waitUntil(timeout: 1.0) {
+            window.firstResponder !== textView && !viewModel.isDetailPanelPresented
+        }
 
         XCTAssertFalse(
             window.firstResponder === textView,
             "关闭详情面板前应先让当前编辑器释放 firstResponder，避免移除右侧面板后窗口仍挂着已脱离层级的 responder 而出现无响应"
         )
         XCTAssertFalse(viewModel.isDetailPanelPresented)
+    }
+
+    private func waitUntil(timeout: TimeInterval, pollInterval: TimeInterval = 0.01, condition: @escaping () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(pollInterval))
+        }
     }
 
     private func findSubview<T: NSView>(in root: NSView, ofType type: T.Type) -> T? {

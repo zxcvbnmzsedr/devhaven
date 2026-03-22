@@ -230,7 +230,9 @@ final class GhosttySurfaceHostTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === button)
 
         view.requestFocus()
-        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        waitUntil(timeout: 1.0) {
+            window.surfaceFocusAttemptCount >= 2 && window.firstResponder === view
+        }
 
         XCTAssertGreaterThanOrEqual(
             window.surfaceFocusAttemptCount,
@@ -386,6 +388,14 @@ private extension FileManager {
 }
 
 @MainActor
+
+private func waitUntil(timeout: TimeInterval, pollInterval: TimeInterval = 0.01, condition: @escaping () -> Bool) {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() && Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(pollInterval))
+    }
+}
+
 private final class FocusRetryWindow: NSWindow {
     private(set) var surfaceFocusAttemptCount = 0
 
