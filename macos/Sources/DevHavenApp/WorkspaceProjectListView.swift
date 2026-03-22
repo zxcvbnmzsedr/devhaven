@@ -135,6 +135,16 @@ private struct ProjectGroupView: View {
                         .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
                         .lineLimit(1)
                 }
+                if let branch = group.currentBranch, !group.rootProject.isQuickTerminal {
+                    Text(branch)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(NativeTheme.surface.opacity(0.8))
+                        .clipShape(.rect(cornerRadius: 5))
+                }
             }
             Spacer(minLength: 8)
         }

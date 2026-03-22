@@ -168,6 +168,7 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     public var rootProject: Project
     public var worktrees: [WorkspaceSidebarWorktreeItem]
     public var isActive: Bool
+    public var currentBranch: String?
     public var notifications: [WorkspaceTerminalNotification]
     public var unreadNotificationCount: Int
     public var taskStatus: WorkspaceTaskStatus?
@@ -176,6 +177,7 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
         rootProject: Project,
         worktrees: [WorkspaceSidebarWorktreeItem],
         isActive: Bool,
+        currentBranch: String? = nil,
         notifications: [WorkspaceTerminalNotification] = [],
         unreadNotificationCount: Int = 0,
         taskStatus: WorkspaceTaskStatus? = nil
@@ -183,6 +185,7 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
         self.rootProject = rootProject
         self.worktrees = worktrees
         self.isActive = isActive
+        self.currentBranch = currentBranch
         self.notifications = notifications
         self.unreadNotificationCount = unreadNotificationCount
         self.taskStatus = taskStatus
@@ -242,6 +245,7 @@ public enum NativeWorktreeError: LocalizedError, Equatable, Sendable {
 
 public protocol NativeWorktreeServicing: Sendable {
     func managedWorktreePath(for sourceProjectPath: String, branch: String) throws -> String
+    func currentBranch(at projectPath: String) throws -> String
     func listBranches(at projectPath: String) throws -> [NativeGitBranch]
     func listWorktrees(at projectPath: String) throws -> [NativeGitWorktree]
     func createWorktree(

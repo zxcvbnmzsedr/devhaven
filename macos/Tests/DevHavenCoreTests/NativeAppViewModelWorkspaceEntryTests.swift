@@ -668,6 +668,10 @@ private final class TestWorktreeService: NativeWorktreeServicing, @unchecked Sen
         managedPath
     }
 
+    func currentBranch(at projectPath: String) throws -> String {
+        "main"
+    }
+
     func listBranches(at projectPath: String) throws -> [NativeGitBranch] {
         listBranchesResult
     }

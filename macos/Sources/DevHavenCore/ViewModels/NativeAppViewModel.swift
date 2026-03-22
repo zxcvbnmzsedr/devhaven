@@ -75,6 +75,7 @@ public final class NativeAppViewModel {
     public var openWorkspaceSessions: [OpenWorkspaceSessionState]
     public var activeWorkspaceProjectPath: String?
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
+    private var currentBranchByProjectPath: [String: String]
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
     public var selectedTag: String?
@@ -121,6 +122,7 @@ public final class NativeAppViewModel {
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
         self.attentionStateByProjectPath = [:]
+        self.currentBranchByProjectPath = [:]
         self.searchQuery = ""
         self.selectedDirectory = .all
         self.selectedTag = nil
@@ -221,6 +223,7 @@ public final class NativeAppViewModel {
                 rootProject: rootProject,
                 worktrees: worktrees,
                 isActive: activeWorkspaceProjectPath == rootPath,
+                currentBranch: currentBranchByProjectPath[rootPath],
                 notifications: notifications,
                 unreadNotificationCount: unreadNotificationCount,
                 taskStatus: makeGroupTaskStatus(
@@ -820,6 +823,7 @@ public final class NativeAppViewModel {
             gitWorktrees: gitWorktrees
         )
         try persistProjects(projects)
+        refreshCurrentBranch(for: rootProjectPath)
     }
 
     public func addExistingWorkspaceWorktree(
@@ -1441,6 +1445,9 @@ public final class NativeAppViewModel {
                 isQuickTerminal: isQuickTerminal
             )
         )
+        if path == rootProjectPath, !isQuickTerminal {
+            refreshCurrentBranch(for: path)
+        }
     }
 
     private func isQuickTerminalSessionPath(_ path: String) -> Bool {
@@ -1453,6 +1460,12 @@ public final class NativeAppViewModel {
             return nil
         }
         return openWorkspaceSessions.first(where: { $0.projectPath == targetProjectPath })?.controller
+    }
+
+    private func refreshCurrentBranch(for projectPath: String) {
+        if let branch = try? worktreeService.currentBranch(at: projectPath) {
+            currentBranchByProjectPath[projectPath] = branch
+        }
     }
 
     private func orderedSidebarWorktreeItems(
