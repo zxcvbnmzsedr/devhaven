@@ -16,6 +16,9 @@ struct DevHavenApp: App {
         }
         .defaultSize(width: 1480, height: 920)
         .commands {
+            CommandGroup(replacing: .newItem) {
+            }
+
             CommandMenu("DevHaven") {
                 Button(viewModel.isRefreshingProjectCatalog ? "正在刷新项目…" : "刷新项目") {
                     viewModel.refresh()
