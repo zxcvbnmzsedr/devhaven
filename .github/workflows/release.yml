@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          draft_ids="$(gh release list --limit 100 --json databaseId,tagName,isDraft --jq '.[] | select(.tagName == env.RELEASE_TAG and .isDraft == true) | .databaseId')"
+          draft_ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[] | select(.tag_name == env.RELEASE_TAG and .draft == true) | .id')"
           if [[ -z "$draft_ids" ]]; then
             echo "未发现需要清理的重复 draft release。"
             exit 0

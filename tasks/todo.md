@@ -27,6 +27,27 @@
 - [x] 提交合并结果并记录 Review 证据
 - [x] 覆盖 v3.0.0 tag 指向新提交并验证结果
 
+- [x] 核对本地/远端 v3.0.0 当前指向，确认需要强制覆盖远端 tag
+- [x] 强制推送本地 v3.0.0 到 origin
+- [x] 复核远端 v3.0.0 已指向当前 merge commit，并记录 Review 证据
+
+- [x] 核对本地 main 与 origin/main 指向，确认推送前基线
+- [x] 推送本地 main 到 origin/main
+- [x] 复核远端 main 已指向当前 HEAD，并记录 Review 证据
+
+- [x] 收集最新失败 GitHub Action run 的编号、触发时间、失败 job 与原始日志
+- [x] 对照 workflow 配置与近期提交定位直接原因
+- [x] 判断是否存在设计层诱因，并给出修复建议与验证方案
+
+- [x] 为 release workflow 补回归测试，约束 draft release 清理不再依赖不支持的 gh json 字段
+- [x] 以最小改动修复 .github/workflows/release.yml 的 draft release 清理逻辑
+- [x] 运行定向验证并回填本次 GitHub Action 故障 Review
+
+- [x] 整理 release workflow 修复改动并完成提交前校验
+- [ ] 提交并推送 release workflow 修复到 origin/main
+- [ ] 用 workflow_dispatch 触发 release(tag=v3.0.0)
+- [ ] 复核新 run 结论、失败点是否消失以及 release 产物状态
+
 ## Review
 
 - 直接原因：`WorkspaceShellView` 原先使用 `HStack + .frame(width: 280)` 固定左侧项目栏宽度，界面没有任何可拖拽分栏容器，因此侧边栏宽度无法通过拖拽改变。
@@ -97,6 +118,55 @@
   - 2026-03-22 `swift build --package-path macos` → Build complete，exit 0。
   - 2026-03-22 `git log --oneline --decorate -n 1` → `HEAD` 为本次 merge commit。
   - 2026-03-22 `git rev-parse v3.0.0^{}` → tag 最终指向当前合并提交。
+
+
+## Review（2026-03-22 强制更新远端 v3.0.0 tag）
+
+- 结果：已将远端 `origin` 上的 `v3.0.0` tag 强制更新到当前 merge commit `a15ebe8efea6a92536c2f433162300a764f4fcea`。
+- 直接原因：本地 `v3.0.0^{}` 已指向新的 merge commit，但远端 `v3.0.0^{}` 仍停留在旧提交 `8535c55c8c5af501989bde83a243103baccae928`，因此需要执行一次显式 force-push 才能覆盖远端 tag。
+- 设计层诱因：tag 覆盖与分支推送是两条独立链路；仅在本地重打 annotated tag，不会自动修改远端已有 tag。未发现明显系统设计缺陷。
+- 当前处理方案：执行 `git push --force origin refs/tags/v3.0.0`，随后用 `git ls-remote --tags origin refs/tags/v3.0.0 refs/tags/v3.0.0^{}` 复核远端对象与 peeled commit。
+- 长期改进建议：以后凡是“覆盖现有 release tag”，都应固定做两步验证：先核对本地 `tag^{}`，再核对远端 `refs/tags/<tag>^{}`，避免只看到 tag 对象变了，却忽略真正指向的 commit。
+- 验证证据：
+  - 2026-03-22 `git push --force origin refs/tags/v3.0.0` → `v3.0.0 -> v3.0.0 (forced update)`，exit 0。
+  - 2026-03-22 `git rev-parse HEAD` → `a15ebe8efea6a92536c2f433162300a764f4fcea`。
+  - 2026-03-22 `git rev-parse v3.0.0^{}` → `a15ebe8efea6a92536c2f433162300a764f4fcea`。
+  - 2026-03-22 `git ls-remote --tags origin refs/tags/v3.0.0 refs/tags/v3.0.0^{}` → `refs/tags/v3.0.0^{}` 为 `a15ebe8efea6a92536c2f433162300a764f4fcea`。
+
+
+## Review（2026-03-22 推送 main 到远端）
+
+- 结果：已将本地 `main` 推送到远端 `origin/main`，远端分支现已指向当前 merge commit `a15ebe8efea6a92536c2f433162300a764f4fcea`。
+- 直接原因：本地 `main` 在推送前领先 `origin/main` 6 个提交，且当前合并结果尚未同步到远端分支。
+- 设计层诱因：分支推送与 tag 覆盖彼此独立；即使前一步已经把远端 `v3.0.0` 覆盖到新提交，远端 `main` 仍不会自动前进。未发现明显系统设计缺陷。
+- 当前处理方案：执行 `git push origin main`，随后通过 `git ls-remote origin refs/heads/main` 与 `git fetch origin main --quiet && git rev-parse origin/main` 双重复核远端分支指向。
+- 长期改进建议：以后在“先重写 release tag，再推送主分支”的场景中，建议固定把“tag 已更新”和“branch 已更新”作为两条独立检查项，避免只更新其中一条引用。
+- 验证证据：
+  - 2026-03-22 `git push origin main` → `75f4d3e..a15ebe8  main -> main`，exit 0。
+  - 2026-03-22 `git ls-remote origin refs/heads/main` → `a15ebe8efea6a92536c2f433162300a764f4fcea	refs/heads/main`。
+  - 2026-03-22 `git fetch origin main --quiet && git rev-parse origin/main` → `a15ebe8efea6a92536c2f433162300a764f4fcea`。
+
+
+## Review（2026-03-22 GitHub Action release workflow 故障）
+
+- 结果：已定位最新失败 run `23403125653` 的直接原因，并在本地完成最小修复与回归测试。失败不在构建阶段，而是在 `prepare-release` job 的 `Remove duplicate draft releases for tag` 步骤；该步骤调用了 `gh release list --json databaseId,tagName,isDraft`，但当前 GitHub CLI 官方支持字段里没有 `databaseId`，因此脚本在真正开始清理 draft release 前就直接退出。当前本地修复已改为走 GitHub Releases REST API 列表接口，通过稳定的 `id/tag_name/draft` 字段筛选并删除重复 draft release。
+- 直接原因：`.github/workflows/release.yml` 第 43 行把 `gh run list` 风格的 `databaseId` 字段误用到了 `gh release list --json ...` 上；GitHub Actions runner 上的 `gh` 直接报 `Unknown JSON field: "databaseId"`，导致 `prepare-release` 失败，后续 `build-macos-native` 整个被跳过。
+- 设计层诱因：release workflow 当前把“列出 release 并拿内部 id 删除草稿”建立在 GitHub CLI 某个子命令的 JSON 字段假设上，但 `gh release list` 的字段面并不覆盖内部 release id，这使脚本对 CLI 子命令实现细节过度耦合。未发现明显系统设计缺陷，但这一步更适合直接使用 Releases REST API 这种字段语义更稳定的主接口。
+- 当前修复方案：
+  1. 在 `macos/Tests/DevHavenCoreTests/ReleaseWorkflowTests.swift` 新增回归断言，禁止继续依赖 `gh release list --json databaseId,...`。
+  2. 将 `.github/workflows/release.yml` 中的 draft release 清理改为：`gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[] | select(.tag_name == env.RELEASE_TAG and .draft == true) | .id'`。
+  3. 保持后续删除逻辑仍使用 `DELETE /repos/{owner}/{repo}/releases/{id}`，只修正“如何安全拿到 release id”这一处根因点。
+- 长期改进建议：
+  1. 对 GitHub CLI 子命令的 `--json` 字段依赖，建议都补一个最小回归测试或改走 REST API，避免 runner 侧 CLI 字段面差异再次把 workflow 炸掉。
+  2. 这类 release 元数据清理逻辑，优先依赖 GitHub 官方 REST 响应字段（`id`、`tag_name`、`draft`），不要把不同 `gh` 子命令的 JSON 字段假设互相迁移复用。
+- 验证证据：
+  - GitHub failed run：`https://github.com/zxcvbnmzsedr/devhaven/actions/runs/23403125653`
+  - `gh run view 23403125653 --log-failed`：失败步骤报错 `Unknown JSON field: "databaseId"`，可用字段仅有 `createdAt/isDraft/isImmutable/isLatest/isPrerelease/name/publishedAt/tagName`。
+  - 2026-03-22 `gh release list --limit 1 --json databaseId,tagName,isDraft`：本地直接复现同样报错 `Unknown JSON field: "databaseId"`。
+  - 2026-03-22 `swift test --package-path macos --filter ReleaseWorkflowTests`（修复前）→ 3 tests 中 1 failure，失败点为新增回归测试。
+  - 2026-03-22 `swift test --package-path macos --filter ReleaseWorkflowTests`（修复后）→ 3 tests，0 failures，exit 0。
+  - 2026-03-22 `gh api --paginate "repos/zxcvbnmzsedr/devhaven/releases?per_page=100" --jq '.[] | select(.tag_name == "v3.0.0" and .draft == true) | .id'` → exit 0，说明修复后采用的查询路径在当前环境可正常执行。
+
 
 ## 历史记录（notify 分支）
 

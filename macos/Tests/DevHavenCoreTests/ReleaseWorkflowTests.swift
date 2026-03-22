@@ -27,6 +27,19 @@ final class ReleaseWorkflowTests: XCTestCase {
         )
     }
 
+    func testReleaseWorkflowDraftCleanupDoesNotUseUnsupportedGhReleaseListDatabaseIdField() throws {
+        let source = try String(contentsOf: workflowFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(
+            source.contains("gh release list --limit 100 --json databaseId,tagName,isDraft"),
+            "draft release 清理不应再依赖 gh release list 不支持的 databaseId 字段，否则 prepare-release 会在 runner 上直接失败"
+        )
+        XCTAssertTrue(
+            source.contains("repos/${GITHUB_REPOSITORY}/releases"),
+            "draft release 清理应直接走 GitHub Releases API，拿到稳定的 release id 再删除重复 draft"
+        )
+    }
+
     private func workflowFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
