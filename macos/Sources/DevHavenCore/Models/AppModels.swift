@@ -96,6 +96,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var projectListViewMode: ProjectListViewMode
     public var workspaceSidebarWidth: Double
     public var sharedScriptsRoot: String
+    public var workspaceInAppNotificationsEnabled: Bool
+    public var workspaceNotificationSoundEnabled: Bool
+    public var workspaceSystemNotificationsEnabled: Bool
+    public var moveNotifiedWorktreeToTop: Bool
     public var viteDevPort: Int
     public var webEnabled: Bool
     public var webBindHost: String
@@ -110,6 +114,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         projectListViewMode: ProjectListViewMode = .card,
         workspaceSidebarWidth: Double = 280,
         sharedScriptsRoot: String = "~/.devhaven/scripts",
+        workspaceInAppNotificationsEnabled: Bool = true,
+        workspaceNotificationSoundEnabled: Bool = true,
+        workspaceSystemNotificationsEnabled: Bool = false,
+        moveNotifiedWorktreeToTop: Bool = true,
         viteDevPort: Int = 1420,
         webEnabled: Bool = true,
         webBindHost: String = "0.0.0.0",
@@ -123,6 +131,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.projectListViewMode = projectListViewMode
         self.workspaceSidebarWidth = workspaceSidebarWidth
         self.sharedScriptsRoot = sharedScriptsRoot
+        self.workspaceInAppNotificationsEnabled = workspaceInAppNotificationsEnabled
+        self.workspaceNotificationSoundEnabled = workspaceNotificationSoundEnabled
+        self.workspaceSystemNotificationsEnabled = workspaceSystemNotificationsEnabled
+        self.moveNotifiedWorktreeToTop = moveNotifiedWorktreeToTop
         self.viteDevPort = viteDevPort
         self.webEnabled = webEnabled
         self.webBindHost = webBindHost
@@ -138,6 +150,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case projectListViewMode
         case workspaceSidebarWidth
         case sharedScriptsRoot
+        case workspaceInAppNotificationsEnabled
+        case workspaceNotificationSoundEnabled
+        case workspaceSystemNotificationsEnabled
+        case moveNotifiedWorktreeToTop
         case viteDevPort
         case webEnabled
         case webBindHost
@@ -154,6 +170,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.projectListViewMode = try container.decodeIfPresent(ProjectListViewMode.self, forKey: .projectListViewMode) ?? .card
         self.workspaceSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .workspaceSidebarWidth) ?? 280
         self.sharedScriptsRoot = try container.decodeIfPresent(String.self, forKey: .sharedScriptsRoot) ?? "~/.devhaven/scripts"
+        self.workspaceInAppNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceInAppNotificationsEnabled) ?? true
+        self.workspaceNotificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceNotificationSoundEnabled) ?? true
+        self.workspaceSystemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceSystemNotificationsEnabled) ?? false
+        self.moveNotifiedWorktreeToTop = try container.decodeIfPresent(Bool.self, forKey: .moveNotifiedWorktreeToTop) ?? true
         self.viteDevPort = try container.decodeIfPresent(Int.self, forKey: .viteDevPort) ?? 1420
         self.webEnabled = try container.decodeIfPresent(Bool.self, forKey: .webEnabled) ?? true
         self.webBindHost = try container.decodeIfPresent(String.self, forKey: .webBindHost) ?? "0.0.0.0"

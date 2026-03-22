@@ -11,6 +11,7 @@ struct WorkspaceProjectListView: View {
     let onOpenWorktree: (String, String) -> Void
     let onRetryWorktree: (String, String) -> Void
     let onRequestDeleteWorktree: (String, String) -> Void
+    let onFocusNotification: (WorkspaceTerminalNotification) -> Void
     let onCloseProject: (String) -> Void
     let onExit: () -> Void
 
@@ -28,7 +29,8 @@ struct WorkspaceProjectListView: View {
                             onCloseProject: onCloseProject,
                             onOpenWorktree: onOpenWorktree,
                             onRetryWorktree: onRetryWorktree,
-                            onRequestDeleteWorktree: onRequestDeleteWorktree
+                            onRequestDeleteWorktree: onRequestDeleteWorktree,
+                            onFocusNotification: onFocusNotification
                         )
                     }
                 }
@@ -82,6 +84,7 @@ private struct ProjectGroupView: View {
     let onOpenWorktree: (String, String) -> Void
     let onRetryWorktree: (String, String) -> Void
     let onRequestDeleteWorktree: (String, String) -> Void
+    let onFocusNotification: (WorkspaceTerminalNotification) -> Void
 
     @State private var isHovering = false
 
@@ -106,7 +109,8 @@ private struct ProjectGroupView: View {
                             item: worktree,
                             onOpenWorktree: onOpenWorktree,
                             onRetryWorktree: onRetryWorktree,
-                            onRequestDeleteWorktree: onRequestDeleteWorktree
+                            onRequestDeleteWorktree: onRequestDeleteWorktree,
+                            onFocusNotification: onFocusNotification
                         )
                     }
                 }
@@ -118,6 +122,7 @@ private struct ProjectGroupView: View {
     private var projectCard: some View {
         let dirName = URL(fileURLWithPath: group.rootProject.path).lastPathComponent
         let showSubtitle = dirName != group.rootProject.name
+        let agentAccessory = WorkspaceAgentStatusAccessory(agentState: group.agentState, agentKind: group.agentKind)
 
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -131,6 +136,28 @@ private struct ProjectGroupView: View {
                         .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
                         .lineLimit(1)
                 }
+                if let branch = group.currentBranch, !group.rootProject.isQuickTerminal {
+                    Text(branch)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
+                        .lineLimit(1)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(NativeTheme.surface.opacity(0.8))
+                        .clipShape(.rect(cornerRadius: 5))
+                }
+                if let agentAccessory {
+                    Text(
+                        displayedAgentSummaryText(
+                            label: agentAccessory.label,
+                            summary: group.agentSummary
+                        )
+                        .map { "\(agentAccessory.label)：\($0)" } ?? agentAccessory.label
+                    )
+                        .font(.caption2)
+                        .foregroundStyle(agentAccessoryColor(agentAccessory).opacity(0.9))
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
         }
@@ -139,32 +166,34 @@ private struct ProjectGroupView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBg)
         .overlay(alignment: .trailing) {
-            // 按钮覆盖在卡片右侧，不占额外布局空间
             HStack(spacing: 4) {
-                if !group.rootProject.isQuickTerminal {
-                    iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
-                        onRefreshWorktrees(group.rootProject.path)
+                groupStatusAccessory
+
+                HStack(spacing: 4) {
+                    if !group.rootProject.isQuickTerminal {
+                        iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
+                            onRefreshWorktrees(group.rootProject.path)
+                        }
+                        iconButton(systemName: "plus", help: "创建或添加 worktree") {
+                            onRequestCreateWorktree(group.rootProject.path)
+                        }
                     }
-                    iconButton(systemName: "plus", help: "创建或添加 worktree") {
-                        onRequestCreateWorktree(group.rootProject.path)
+                    iconButton(systemName: "xmark", help: "关闭项目") {
+                        onCloseProject(group.rootProject.path)
                     }
                 }
-                iconButton(systemName: "xmark", help: "关闭项目") {
-                    onCloseProject(group.rootProject.path)
-                }
+                .opacity(isHovering ? 1 : 0)
+                .animation(.easeInOut(duration: 0.15), value: isHovering)
             }
             .padding(.trailing, 6)
             .padding(.vertical, 6)
             .background(
-                // 渐变遮罩，让按钮与卡片内容自然过渡
                 LinearGradient(
                     colors: [cardBg.opacity(0), cardBg, cardBg],
                     startPoint: .leading,
                     endPoint: .trailing
                 )
             )
-            .opacity(isHovering ? 1 : 0)
-            .animation(.easeInOut(duration: 0.15), value: isHovering)
         }
         .overlay(
             RoundedRectangle(cornerRadius: 10)
@@ -173,6 +202,52 @@ private struct ProjectGroupView: View {
         .clipShape(.rect(cornerRadius: 10))
         .contentShape(.rect(cornerRadius: 10))
         .help(group.rootProject.path)
+    }
+
+    @ViewBuilder
+    private var groupStatusAccessory: some View {
+        if group.hasUnreadNotifications {
+            WorkspaceNotificationPopoverButton(
+                notifications: group.notifications,
+                onFocusNotification: onFocusNotification
+            ) {
+                badgeButton(systemName: "bell.fill", value: group.unreadNotificationCount)
+            }
+        } else if let agentAccessory = WorkspaceAgentStatusAccessory(agentState: group.agentState, agentKind: group.agentKind) {
+            Image(systemName: agentAccessory.symbolName)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(agentAccessoryColor(agentAccessory))
+                .frame(width: 24, height: 24)
+                .background(NativeTheme.surface.opacity(0.8))
+                .clipShape(.rect(cornerRadius: 7))
+                .help(agentAccessoryTooltip(accessory: agentAccessory, summary: group.agentSummary))
+        } else if group.taskStatus == .running {
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 24, height: 24)
+        }
+    }
+
+    private func badgeButton(systemName: String, value: Int) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(systemName: systemName)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(NativeTheme.warning)
+                .frame(width: 24, height: 24)
+                .background(NativeTheme.surface.opacity(0.8))
+                .clipShape(.rect(cornerRadius: 7))
+
+            if value > 0 {
+                Text("\(value)")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(NativeTheme.warning)
+                    .clipShape(.capsule)
+                    .offset(x: 6, y: -6)
+            }
+        }
     }
 
     private func iconButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
@@ -188,6 +263,37 @@ private struct ProjectGroupView: View {
         .focusable(false)
         .help(help)
     }
+
+    private func agentAccessoryColor(_ accessory: WorkspaceAgentStatusAccessory) -> Color {
+        switch accessory.state {
+        case .waiting:
+            NativeTheme.warning
+        case .failed:
+            NativeTheme.danger
+        case .running, .completed:
+            NativeTheme.accent
+        case .idle, .unknown:
+            NativeTheme.textSecondary
+        }
+    }
+
+    private func agentAccessoryTooltip(accessory: WorkspaceAgentStatusAccessory, summary: String?) -> String {
+        guard let summary = displayedAgentSummaryText(label: accessory.label, summary: summary) else {
+            return accessory.label
+        }
+        return "\(accessory.label)\n\(summary)"
+    }
+
+    private func displayedAgentSummaryText(label: String, summary: String?) -> String? {
+        let trimmedSummary = summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedSummary.isEmpty else {
+            return nil
+        }
+        guard trimmedSummary != label else {
+            return nil
+        }
+        return trimmedSummary
+    }
 }
 
 // MARK: - Worktree Row
@@ -197,6 +303,7 @@ private struct WorktreeRowView: View {
     let onOpenWorktree: (String, String) -> Void
     let onRetryWorktree: (String, String) -> Void
     let onRequestDeleteWorktree: (String, String) -> Void
+    let onFocusNotification: (WorkspaceTerminalNotification) -> Void
 
     @State private var isHovering = false
 
@@ -214,14 +321,53 @@ private struct WorktreeRowView: View {
     }
 
     private var rowContent: some View {
-        HStack(spacing: 6) {
+        let agentAccessory = WorkspaceAgentStatusAccessory(agentState: item.agentState, agentKind: item.agentKind)
+        return HStack(spacing: 6) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.system(size: 9, weight: .medium))
                 .foregroundStyle(NativeTheme.textSecondary.opacity(0.5))
-            Text(item.name)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(item.isActive ? NativeTheme.textPrimary : NativeTheme.textSecondary)
-                .lineLimit(1)
+            if let agentAccessory {
+                Image(systemName: agentAccessory.symbolName)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(agentAccessoryColor(agentAccessory))
+                    .frame(width: 16, height: 16)
+                    .help(agentAccessoryTooltip(accessory: agentAccessory, summary: item.agentSummary))
+            } else if item.taskStatus == .running {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 14, height: 14)
+            } else if item.hasUnreadNotifications {
+                WorkspaceNotificationPopoverButton(
+                    notifications: item.notifications,
+                    onFocusNotification: onFocusNotification
+                ) {
+                    ZStack(alignment: .topTrailing) {
+                        Image(systemName: "bell.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(NativeTheme.warning)
+                            .frame(width: 16, height: 16)
+                        if item.unreadNotificationCount > 0 {
+                            Circle()
+                                .fill(NativeTheme.warning)
+                                .frame(width: 6, height: 6)
+                                .offset(x: 2, y: -2)
+                        }
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.name)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(item.isActive ? NativeTheme.textPrimary : NativeTheme.textSecondary)
+                    .lineLimit(1)
+                if let agentAccessory,
+                   let text = displayedWorktreeAgentText(label: agentAccessory.label, summary: item.agentSummary) {
+                    Text(text)
+                        .font(.caption2)
+                        .foregroundStyle(agentAccessoryColor(agentAccessory).opacity(0.9))
+                        .lineLimit(1)
+                }
+            }
             Spacer(minLength: 4)
             if item.branch != item.name {
                 Text(item.branch)
@@ -300,5 +446,41 @@ private struct WorktreeRowView: View {
         .buttonStyle(.plain)
         .focusable(false)
         .help(help)
+    }
+
+    private func agentAccessoryColor(_ accessory: WorkspaceAgentStatusAccessory) -> Color {
+        switch accessory.state {
+        case .waiting:
+            NativeTheme.warning
+        case .failed:
+            NativeTheme.danger
+        case .running, .completed:
+            NativeTheme.accent
+        case .idle, .unknown:
+            NativeTheme.textSecondary
+        }
+    }
+
+    private func agentAccessoryTooltip(accessory: WorkspaceAgentStatusAccessory, summary: String?) -> String {
+        guard let summary = displayedAgentSummaryText(label: accessory.label, summary: summary) else {
+            return accessory.label
+        }
+        return "\(accessory.label)\n\(summary)"
+    }
+
+    private func displayedWorktreeAgentText(label: String, summary: String?) -> String? {
+        displayedAgentSummaryText(label: label, summary: summary)
+            .map { "\(label)：\($0)" } ?? label
+    }
+
+    private func displayedAgentSummaryText(label: String, summary: String?) -> String? {
+        let trimmedSummary = summary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedSummary.isEmpty else {
+            return nil
+        }
+        guard trimmedSummary != label else {
+            return nil
+        }
+        return trimmedSummary
     }
 }

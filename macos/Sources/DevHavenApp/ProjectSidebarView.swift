@@ -264,6 +264,7 @@ struct ProjectSidebarView: View {
                         .foregroundStyle(NativeTheme.textSecondary)
                 }
                 .menuStyle(.borderlessButton)
+                .focusable(false)
                 .help("目录操作")
                 .accessibilityLabel("目录操作")
             }

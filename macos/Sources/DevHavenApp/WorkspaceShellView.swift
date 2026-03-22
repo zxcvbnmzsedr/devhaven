@@ -14,7 +14,9 @@ struct WorkspaceShellView: View {
     @State private var worktreeDialogProjectPath: String?
     @State private var pendingDeleteRequest: WorktreeDeleteRequest?
     @State private var sidebarWidth: CGFloat = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
+    @State private var codexDisplayRefreshState = CodexAgentDisplayStateRefresher.RuntimeState()
     @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
+    private let codexDisplayRefreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var worktreeDialogProject: Project? {
         guard let worktreeDialogProjectPath else {
@@ -83,6 +85,7 @@ struct WorkspaceShellView: View {
                     onRequestDeleteWorktree: { rootProjectPath, worktreePath in
                         pendingDeleteRequest = WorktreeDeleteRequest(rootProjectPath: rootProjectPath, worktreePath: worktreePath)
                     },
+                    onFocusNotification: viewModel.focusWorkspaceNotification,
                     onCloseProject: viewModel.closeWorkspaceProject,
                     onExit: viewModel.exitWorkspace
                 )
@@ -103,23 +106,35 @@ struct WorkspaceShellView: View {
             }
         }
         .background(NativeTheme.window)
+        .onReceive(codexDisplayRefreshTimer) { _ in
+            refreshCodexDisplayStates()
+        }
         .onAppear {
+            viewModel.startWorkspaceAgentSignalObservation()
             syncTerminalStores()
             warmActiveWorkspace()
+            refreshCodexDisplayStates()
             WorkspaceLaunchDiagnostics.shared.recordShellMounted(
                 activeProjectPath: viewModel.activeWorkspaceProjectPath,
                 openSessionCount: viewModel.openWorkspaceSessions.count
             )
         }
+        .onDisappear {
+            viewModel.stopWorkspaceAgentSignalObservation()
+        }
         .onChange(of: viewModel.openWorkspaceProjectPaths) { _, _ in
             syncTerminalStores()
+            viewModel.refreshWorkspaceAgentSignals()
             warmActiveWorkspace()
+            refreshCodexDisplayStates()
         }
         .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
             warmActiveWorkspace()
+            refreshCodexDisplayStates()
         }
         .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
             warmActiveWorkspace()
+            refreshCodexDisplayStates()
         }
         .sheet(isPresented: $isProjectPickerPresented) {
             WorkspaceProjectPickerView(
@@ -253,6 +268,15 @@ struct WorkspaceShellView: View {
     private func persistSidebarWidth(_ width: CGFloat) {
         let persistedWidth = Double(width.rounded())
         viewModel.updateWorkspaceSidebarWidth(persistedWidth)
+    }
+
+    private func refreshCodexDisplayStates() {
+        codexDisplayRefreshState = CodexAgentDisplayStateRefresher.refresh(
+            viewModel: viewModel,
+            runtimeState: codexDisplayRefreshState
+        ) { projectPath, paneID in
+            terminalStoreRegistry.modelIfLoaded(for: projectPath, paneID: paneID)?.currentVisibleText()
+        }
     }
 }
 

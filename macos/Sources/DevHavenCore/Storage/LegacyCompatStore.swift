@@ -32,6 +32,12 @@ public final class LegacyCompatStore {
         homeDirectoryURL
     }
 
+    public var agentStatusSessionsDirectoryURL: URL {
+        appDataDirectoryURL
+            .appending(path: "agent-status", directoryHint: .isDirectory)
+            .appending(path: "sessions", directoryHint: .isDirectory)
+    }
+
     public func loadSnapshot() throws -> NativeAppSnapshot {
         let appStateDocument = try loadAppStateDocument()
         let projects = try loadProjects()

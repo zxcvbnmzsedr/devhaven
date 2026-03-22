@@ -3,7 +3,12 @@ import AppKit
 import DevHavenCore
 
 struct MainContentView: View {
+    private enum FocusableField: Hashable {
+        case search
+    }
+
     @Bindable var viewModel: NativeAppViewModel
+    @FocusState private var focusedField: FocusableField?
 
     private let listColumns = [
         GridItem(.flexible(minimum: 220), spacing: 14),
@@ -43,6 +48,9 @@ struct MainContentView: View {
                 .background(NativeTheme.window)
             }
         }
+        .onAppear {
+            requestInitialSearchFocus()
+        }
     }
 
     private var toolbar: some View {
@@ -57,6 +65,7 @@ struct MainContentView: View {
                 TextField("搜索项目...", text: $viewModel.searchQuery)
                     .textFieldStyle(.plain)
                     .foregroundStyle(NativeTheme.textPrimary)
+                    .focused($focusedField, equals: .search)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -279,6 +288,12 @@ struct MainContentView: View {
         }
         .buttonStyle(.plain)
         .focusable(false)
+    }
+
+    private func requestInitialSearchFocus() {
+        DispatchQueue.main.async {
+            focusedField = .search
+        }
     }
 
     private func cardActionIcon(_ systemName: String, action: @escaping () -> Void) -> some View {

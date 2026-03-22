@@ -79,6 +79,12 @@ if [ -n "$GHOSTTY_BASH_INJECT" ]; then
   builtin unset GHOSTTY_BASH_RCFILE
 fi
 
+if [[ -n "$DEVHAVEN_AGENT_RESOURCES_DIR" ]]; then
+  __devhaven_agent_shell="$DEVHAVEN_AGENT_RESOURCES_DIR/shell/devhaven-agent-path.bash"
+  [ -r "$__devhaven_agent_shell" ] && builtin source "$__devhaven_agent_shell"
+  builtin unset __devhaven_agent_shell
+fi
+
 # Add Ghostty binary to PATH if the path feature is enabled
 if [[ "$GHOSTTY_SHELL_FEATURES" == *"path"* && -n "$GHOSTTY_BIN_DIR" ]]; then
   if [[ ":$PATH:" != *":$GHOSTTY_BIN_DIR:"* ]]; then
@@ -194,6 +200,10 @@ _ghostty_last_reported_cwd=""
 
 function __ghostty_precmd() {
   local ret="$?"
+  if [[ -n "$DEVHAVEN_AGENT_RESOURCES_DIR" ]]; then
+    local __devhaven_agent_shell="$DEVHAVEN_AGENT_RESOURCES_DIR/shell/devhaven-agent-path.bash"
+    [ -r "$__devhaven_agent_shell" ] && builtin source "$__devhaven_agent_shell"
+  fi
   if test "$_ghostty_executing" != "0"; then
     _GHOSTTY_SAVE_PS1="$PS1"
     _GHOSTTY_SAVE_PS2="$PS2"

@@ -98,6 +98,12 @@ _ghostty_deferred_init() {
         builtin local -i cmd_status=$?
         builtin emulate -L zsh -o no_warn_create_global -o no_aliases
 
+        if [[ -n "${DEVHAVEN_AGENT_RESOURCES_DIR:-}" ]]; then
+            builtin local _devhaven_agent_shell="${DEVHAVEN_AGENT_RESOURCES_DIR}/shell/devhaven-agent-path.zsh"
+            [[ ! -r "$_devhaven_agent_shell" ]] || builtin source -- "$_devhaven_agent_shell"
+            builtin unset _devhaven_agent_shell
+        fi
+
         # Don't write OSC 133 D when our precmd handler is invoked from zle.
         # Some plugins do that to update prompt on cd.
         if ! builtin zle; then

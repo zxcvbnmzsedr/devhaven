@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+if [[ -z "${PATH:-}" ]]; then
+  export PATH="$DEFAULT_SYSTEM_PATH"
+elif [[ ":$PATH:" != *":/usr/bin:"* ]]; then
+  export PATH="$PATH:$DEFAULT_SYSTEM_PATH"
+fi
+
+find_real_codex() {
+  if [[ -n "${DEVHAVEN_TEST_REAL_CODEX:-}" && -x "${DEVHAVEN_TEST_REAL_CODEX}" ]]; then
+    printf '%s' "$DEVHAVEN_TEST_REAL_CODEX"
+    return 0
+  fi
+  local self_dir
+  self_dir="$(cd "$(dirname "$0")" && pwd)"
+  local IFS=:
+  for d in $PATH; do
+    [[ "$d" == "$self_dir" ]] && continue
+    [[ -x "$d/codex" ]] && printf '%s' "$d/codex" && return 0
+  done
+  return 1
+}
+
+REAL_CODEX="$(find_real_codex || true)"
+if [[ -z "$REAL_CODEX" ]]; then
+  echo "Error: codex not found in PATH" >&2
+  exit 127
+fi
+
+if [[ -z "${DEVHAVEN_TERMINAL_SESSION_ID:-}" || -z "${DEVHAVEN_AGENT_RESOURCES_DIR:-}" || -z "${DEVHAVEN_AGENT_SIGNAL_DIR:-}" ]]; then
+  exec "$REAL_CODEX" "$@"
+fi
+
+EMIT_BIN="$DEVHAVEN_AGENT_RESOURCES_DIR/bin/devhaven-agent-emit"
+NOTIFY_BIN="$DEVHAVEN_AGENT_RESOURCES_DIR/bin/devhaven-codex-notify"
+if [[ ! -x "$EMIT_BIN" || ! -x "$NOTIFY_BIN" ]]; then
+  exec "$REAL_CODEX" "$@"
+fi
+
+SESSION_ID="${DEVHAVEN_AGENT_SESSION_ID:-$(uuidgen | tr '[:upper:]' '[:lower:]')}"
+export DEVHAVEN_AGENT_SESSION_ID="$SESSION_ID"
+export DEVHAVEN_AGENT_SESSION_PID="$$"
+
+toml_escape_string() {
+  local value="${1-}"
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  printf '%s' "$value"
+}
+
+NOTIFY_CONFIG="notify=[\"$(toml_escape_string "$NOTIFY_BIN")\"]"
+
+"$EMIT_BIN" \
+  --agent codex \
+  --state running \
+  --session-id "$SESSION_ID" \
+  --pid "$$" \
+  --summary "Codex 正在运行" >/dev/null
+
+set +e
+"$REAL_CODEX" \
+  -c "$NOTIFY_CONFIG" \
+  -c "tui.notifications=true" \
+  "$@"
+status=$?
+set -e
+
+if [[ $status -eq 0 ]]; then
+  "$EMIT_BIN" \
+    --agent codex \
+    --state completed \
+    --session-id "$SESSION_ID" \
+    --summary "Codex 已完成" >/dev/null || true
+else
+  "$EMIT_BIN" \
+    --agent codex \
+    --state failed \
+    --session-id "$SESSION_ID" \
+    --summary "Codex 失败" \
+    --detail "exit status $status" >/dev/null || true
+fi
+
+exit $status

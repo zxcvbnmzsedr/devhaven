@@ -61,6 +61,57 @@ final class GhosttySurfaceBridgeTabPaneTests: XCTestCase {
         XCTAssertEqual(actions[4], .toggleSplitZoom)
     }
 
+
+    func testHandleActionRoutesDesktopNotificationToClosure() {
+        let bridge = GhosttySurfaceBridge()
+        var received: (String, String)?
+        bridge.onDesktopNotification = { title, body in
+            received = (title, body)
+        }
+
+        var action = makeAction(GHOSTTY_ACTION_DESKTOP_NOTIFICATION)
+        "任务完成".withCString { titlePointer in
+            "构建已通过".withCString { bodyPointer in
+                action.action.desktop_notification = ghostty_action_desktop_notification_s(
+                    title: titlePointer,
+                    body: bodyPointer
+                )
+                XCTAssertTrue(bridge.handleAction(target: ghostty_target_s(), action: action))
+            }
+        }
+
+        XCTAssertEqual(received?.0, "任务完成")
+        XCTAssertEqual(received?.1, "构建已通过")
+    }
+
+    func testHandleActionUpdatesTaskStatusAndBellState() {
+        let bridge = GhosttySurfaceBridge()
+        var statuses: [GhosttySurfaceTaskStatus] = []
+        bridge.onTaskStatusChange = { status in
+            statuses.append(status)
+        }
+
+        var progress = makeAction(GHOSTTY_ACTION_PROGRESS_REPORT)
+        progress.action.progress_report = ghostty_action_progress_report_s(
+            state: GHOSTTY_PROGRESS_STATE_SET,
+            progress: 42
+        )
+        XCTAssertTrue(bridge.handleAction(target: ghostty_target_s(), action: progress))
+        XCTAssertEqual(bridge.state.taskStatus, .running)
+
+        let bell = makeAction(GHOSTTY_ACTION_RING_BELL)
+        XCTAssertTrue(bridge.handleAction(target: ghostty_target_s(), action: bell))
+        XCTAssertEqual(bridge.state.bellCount, 1)
+
+        progress.action.progress_report = ghostty_action_progress_report_s(
+            state: GHOSTTY_PROGRESS_STATE_REMOVE,
+            progress: -1
+        )
+        XCTAssertTrue(bridge.handleAction(target: ghostty_target_s(), action: progress))
+        XCTAssertEqual(bridge.state.taskStatus, .idle)
+        XCTAssertEqual(statuses, [.running, .idle])
+    }
+
     private func makeAction(_ tag: ghostty_action_tag_e) -> ghostty_action_s {
         var action = ghostty_action_s()
         action.tag = tag

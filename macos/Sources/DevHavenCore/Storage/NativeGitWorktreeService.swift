@@ -11,6 +11,16 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         try resolveTargetPath(sourceProjectPath: sourceProjectPath, branch: branch, explicitTargetPath: nil)
     }
 
+    public func currentBranch(at projectPath: String) throws -> String {
+        try ensureGitRepository(at: projectPath)
+        let output = try runGit(["rev-parse", "--abbrev-ref", "HEAD"], at: projectPath).stdout
+        let branch = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !branch.isEmpty else {
+            throw NativeWorktreeError.commandFailed("无法获取当前分支")
+        }
+        return branch
+    }
+
     public func listBranches(at projectPath: String) throws -> [NativeGitBranch] {
         try ensureGitRepository(at: projectPath)
         let output = try runGit(["branch", "--list"], at: projectPath).stdout

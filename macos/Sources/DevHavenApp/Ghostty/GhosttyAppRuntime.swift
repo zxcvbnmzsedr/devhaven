@@ -4,7 +4,7 @@ import GhosttyKit
 @MainActor
 final class GhosttyAppRuntime {
     static let shared = GhosttyAppRuntime()
-    static let resourceBundleName = "DevHavenNative_DevHavenApp.bundle"
+    static let resourceBundleName = DevHavenAppResourceBundleLocator.resourceBundleName
 
     let resourcesDirectoryURL: URL?
     private(set) var initializationError: String?
@@ -12,7 +12,7 @@ final class GhosttyAppRuntime {
     private var didBootstrap = false
     private var sharedRuntime: GhosttyRuntime?
 
-    private init(bundle: Bundle? = nil) {
+    init(bundle: Bundle? = nil) {
         let resolvedBundle = bundle ?? Self.resolveResourceBundle()
         let rootURL = resolvedBundle?.resourceURL?.appending(path: "GhosttyResources", directoryHint: .isDirectory)
         let resourcesURL = rootURL?.appending(path: "ghostty", directoryHint: .isDirectory)
@@ -28,10 +28,10 @@ final class GhosttyAppRuntime {
         fileManager: FileManager = .default,
         mainBundle: Bundle = .main
     ) -> URL? {
-        let candidates = candidateResourceBundleURLs(mainBundle: mainBundle)
-            + Bundle.allBundles.flatMap(candidateResourceBundleURLs(mainBundle:))
-            + Bundle.allFrameworks.flatMap(candidateResourceBundleURLs(mainBundle:))
-        return candidates.first { fileManager.fileExists(atPath: $0.path) }
+        DevHavenAppResourceBundleLocator.resolveResourceBundleURL(
+            fileManager: fileManager,
+            mainBundle: mainBundle
+        )
     }
 
     static func resolveResourceBundle(mainBundle: Bundle = .main) -> Bundle? {
@@ -42,13 +42,7 @@ final class GhosttyAppRuntime {
     }
 
     static func candidateResourceBundleURLs(mainBundle: Bundle = .main) -> [URL] {
-        var candidates: [URL] = []
-        if let resourceURL = mainBundle.resourceURL {
-            candidates.append(resourceURL.appending(path: resourceBundleName, directoryHint: .isDirectory))
-        }
-        candidates.append(mainBundle.bundleURL.appending(path: resourceBundleName, directoryHint: .isDirectory))
-        candidates.append(mainBundle.bundleURL.deletingLastPathComponent().appending(path: resourceBundleName, directoryHint: .isDirectory))
-        return candidates.uniquedByPath()
+        DevHavenAppResourceBundleLocator.candidateResourceBundleURLs(mainBundle: mainBundle)
     }
 
     var runtime: GhosttyRuntime? {
@@ -96,12 +90,5 @@ final class GhosttyAppRuntime {
         didBootstrap = true
         initializationError = nil
         return nil
-    }
-}
-
-private extension Array where Element == URL {
-    func uniquedByPath() -> [URL] {
-        var seen = Set<String>()
-        return filter { seen.insert($0.path).inserted }
     }
 }

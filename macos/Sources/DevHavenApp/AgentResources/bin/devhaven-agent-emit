@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+if [[ -z "${PATH:-}" ]]; then
+  export PATH="$DEFAULT_SYSTEM_PATH"
+elif [[ ":$PATH:" != *":/usr/bin:"* ]]; then
+  export PATH="$PATH:$DEFAULT_SYSTEM_PATH"
+fi
+
+json_escape() {
+  local value="${1-}"
+  value=${value//\\/\\\\}
+  value=${value//"/\\"}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/\\r}
+  value=${value//$'\t'/\\t}
+  printf '%s' "$value"
+}
+
+json_string_or_null() {
+  local value="${1-}"
+  if [[ -z "$value" ]]; then
+    printf 'null'
+  else
+    printf '"%s"' "$(json_escape "$value")"
+  fi
+}
+
+signal_file_name() {
+  local terminal_session_id="${1-}"
+  local encoded
+  encoded="$(printf '%s' "$terminal_session_id" | base64 | tr -d '\n=' | tr '+/' '-_')"
+  printf '%s.json' "$encoded"
+}
+
+agent_kind=""
+state=""
+session_id=""
+pid_value="null"
+summary=""
+detail=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --agent)
+      agent_kind="${2-}"
+      shift 2
+      ;;
+    --state)
+      state="${2-}"
+      shift 2
+      ;;
+    --session-id)
+      session_id="${2-}"
+      shift 2
+      ;;
+    --pid)
+      pid_value="${2-}"
+      shift 2
+      ;;
+    --summary)
+      summary="${2-}"
+      shift 2
+      ;;
+    --detail)
+      detail="${2-}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "${DEVHAVEN_AGENT_SIGNAL_DIR:-}" || -z "${DEVHAVEN_TERMINAL_SESSION_ID:-}" || -z "$agent_kind" || -z "$state" ]]; then
+  printf 'OK\n'
+  exit 0
+fi
+
+mkdir -p "$DEVHAVEN_AGENT_SIGNAL_DIR"
+
+if [[ "$pid_value" == "null" || -z "$pid_value" ]]; then
+  pid_json='null'
+else
+  pid_json="$pid_value"
+fi
+
+if [[ -z "$session_id" ]]; then
+  session_id="${DEVHAVEN_AGENT_SESSION_ID:-${DEVHAVEN_TERMINAL_SESSION_ID}}"
+fi
+
+iso_now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+output_file="$DEVHAVEN_AGENT_SIGNAL_DIR/$(signal_file_name "${DEVHAVEN_TERMINAL_SESSION_ID}")"
+temp_file="$output_file.tmp.$$"
+
+cat > "$temp_file" <<JSON
+{
+  "projectPath": $(json_string_or_null "${DEVHAVEN_PROJECT_PATH:-}"),
+  "workspaceId": $(json_string_or_null "${DEVHAVEN_WORKSPACE_ID:-}"),
+  "tabId": $(json_string_or_null "${DEVHAVEN_TAB_ID:-}"),
+  "paneId": $(json_string_or_null "${DEVHAVEN_PANE_ID:-}"),
+  "surfaceId": $(json_string_or_null "${DEVHAVEN_SURFACE_ID:-}"),
+  "terminalSessionId": $(json_string_or_null "${DEVHAVEN_TERMINAL_SESSION_ID:-}"),
+  "agentKind": $(json_string_or_null "$agent_kind"),
+  "sessionId": $(json_string_or_null "$session_id"),
+  "pid": $pid_json,
+  "state": $(json_string_or_null "$state"),
+  "summary": $(json_string_or_null "$summary"),
+  "detail": $(json_string_or_null "$detail"),
+  "updatedAt": $(json_string_or_null "$iso_now")
+}
+JSON
+mv "$temp_file" "$output_file"
+printf 'OK\n'

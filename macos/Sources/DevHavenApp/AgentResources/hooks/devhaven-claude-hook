@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+if [[ -z "${PATH:-}" ]]; then
+  export PATH="$DEFAULT_SYSTEM_PATH"
+elif [[ ":$PATH:" != *":/usr/bin:"* ]]; then
+  export PATH="$PATH:$DEFAULT_SYSTEM_PATH"
+fi
+
+hook_event="${1:-}"
+payload="$(cat || true)"
+
+if [[ -z "${DEVHAVEN_AGENT_RESOURCES_DIR:-}" ]]; then
+  printf 'OK\n'
+  exit 0
+fi
+
+emit_bin="$DEVHAVEN_AGENT_RESOURCES_DIR/bin/devhaven-agent-emit"
+if [[ ! -x "$emit_bin" ]]; then
+  printf 'OK\n'
+  exit 0
+fi
+
+extract_json_string() {
+  local key="$1"
+  printf '%s' "$payload" | sed -nE "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/p" | head -n 1
+}
+
+signal_file_name() {
+  local terminal_session_id="${1-}"
+  local encoded
+  encoded="$(printf '%s' "$terminal_session_id" | base64 | tr -d '\n=' | tr '+/' '-_')"
+  printf '%s.json' "$encoded"
+}
+
+session_id="$(extract_json_string session_id)"
+if [[ -z "$session_id" ]]; then
+  session_id="$(extract_json_string sessionId)"
+fi
+if [[ -z "$session_id" ]]; then
+  session_id="${DEVHAVEN_AGENT_SESSION_ID:-${DEVHAVEN_TERMINAL_SESSION_ID:-claude-session}}"
+fi
+
+message="$(extract_json_string message)"
+if [[ -z "$message" ]]; then
+  message="$(extract_json_string body)"
+fi
+if [[ -z "$message" ]]; then
+  message="$(extract_json_string prompt)"
+fi
+if [[ -z "$message" ]]; then
+  message="$(extract_json_string error)"
+fi
+
+current_state=""
+signal_file="${DEVHAVEN_AGENT_SIGNAL_DIR:-}/$(signal_file_name "${DEVHAVEN_TERMINAL_SESSION_ID:-}")"
+if [[ -n "${DEVHAVEN_AGENT_SIGNAL_DIR:-}" && -f "$signal_file" ]]; then
+  current_state="$(sed -nE 's/.*"state"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' "$signal_file" | head -n 1)"
+fi
+
+state="idle"
+summary=""
+detail=""
+
+case "$hook_event" in
+  SessionStart)
+    state="idle"
+    summary="Claude 会话已开始"
+    ;;
+  UserPromptSubmit)
+    state="running"
+    summary="Claude 正在运行"
+    ;;
+  PreToolUse)
+    tool_name="$(extract_json_string tool_name)"
+    if [[ -n "$tool_name" ]]; then
+      summary="Claude 正在使用 ${tool_name}"
+    else
+      summary="Claude 正在运行工具"
+    fi
+    state="running"
+    ;;
+  Notification)
+    state="waiting"
+    summary="Claude 需要处理"
+    detail="${message:-Claude 需要你的注意}"
+    ;;
+  Stop)
+    state="completed"
+    summary="Claude 已完成"
+    detail="$message"
+    ;;
+  SessionEnd)
+    if [[ "$current_state" == "completed" || "$current_state" == "failed" ]]; then
+      printf 'OK\n'
+      exit 0
+    fi
+    state="idle"
+    summary=""
+    detail=""
+    ;;
+  *)
+    printf 'OK\n'
+    exit 0
+    ;;
+esac
+
+"$emit_bin" \
+  --agent claude \
+  --state "$state" \
+  --session-id "$session_id" \
+  --pid "${DEVHAVEN_AGENT_PID:-$$}" \
+  --summary "$summary" \
+  --detail "$detail"

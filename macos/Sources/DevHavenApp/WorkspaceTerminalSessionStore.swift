@@ -15,6 +15,8 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
         onFocusChange: ((Bool) -> Void)? = nil,
         onSurfaceExit: (() -> Void)? = nil,
         onTabTitleChange: ((String) -> Void)? = nil,
+        onNotificationEvent: ((String, String) -> Void)? = nil,
+        onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)? = nil,
         onNewTab: (() -> Bool)? = nil,
         onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)? = nil,
         onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
@@ -30,6 +32,8 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
             onFocusChange: onFocusChange,
             onSurfaceExit: onSurfaceExit,
             onTabTitleChange: onTabTitleChange,
+            onNotificationEvent: onNotificationEvent,
+            onTaskStatusChange: onTaskStatusChange,
             onNewTab: onNewTab,
             onCloseTab: onCloseTab,
             onGotoTab: onGotoTab,
@@ -46,6 +50,10 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
             return nil
         }
         return model(for: selectedPane)
+    }
+
+    func modelIfLoaded(for paneID: String) -> GhosttySurfaceHostModel? {
+        modelsByPaneID[paneID]
     }
 
     func syncRetainedPaneIDs(_ paneIDs: Set<String>) {
@@ -100,5 +108,9 @@ final class WorkspaceTerminalStoreRegistry: ObservableObject {
             return nil
         }
         return store(for: activeProjectPath).warmSelectedPane(in: session.controller)
+    }
+
+    func modelIfLoaded(for projectPath: String, paneID: String) -> GhosttySurfaceHostModel? {
+        storesByProjectPath[projectPath]?.modelIfLoaded(for: paneID)
     }
 }

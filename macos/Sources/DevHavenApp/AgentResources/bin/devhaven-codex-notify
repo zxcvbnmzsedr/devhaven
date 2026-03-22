@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import subprocess
+import sys
+
+
+def first_non_empty(*values: object) -> str:
+    for value in values:
+        if isinstance(value, str):
+            trimmed = value.strip()
+            if trimmed:
+                return trimmed
+    return ""
+
+
+def emit_waiting_signal(payload: dict[str, object]) -> None:
+    resources_dir = os.environ.get("DEVHAVEN_AGENT_RESOURCES_DIR", "").strip()
+    if not resources_dir:
+        return
+
+    emit_bin = os.path.join(resources_dir, "bin", "devhaven-agent-emit")
+    if not (os.path.isfile(emit_bin) and os.access(emit_bin, os.X_OK)):
+        return
+
+    if payload.get("type") != "agent-turn-complete":
+        return
+
+    session_id = first_non_empty(
+        payload.get("session_id"),
+        payload.get("sessionId"),
+        os.environ.get("DEVHAVEN_AGENT_SESSION_ID"),
+        os.environ.get("DEVHAVEN_TERMINAL_SESSION_ID"),
+        "codex-session",
+    )
+    summary = first_non_empty(
+        payload.get("last-assistant-message"),
+        payload.get("last_assistant_message"),
+        payload.get("msg"),
+        "Codex 等待输入",
+    )
+    pid = first_non_empty(os.environ.get("DEVHAVEN_AGENT_SESSION_PID"))
+
+    args = [
+        emit_bin,
+        "--agent",
+        "codex",
+        "--state",
+        "waiting",
+        "--session-id",
+        session_id,
+        "--summary",
+        summary,
+    ]
+    if pid:
+        args.extend(["--pid", pid])
+
+    subprocess.run(
+        args,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def main() -> int:
+    payload_raw = sys.argv[1] if len(sys.argv) > 1 else ""
+    if not payload_raw:
+        print("OK")
+        return 0
+
+    try:
+        payload = json.loads(payload_raw)
+    except json.JSONDecodeError:
+        print("OK")
+        return 0
+
+    if isinstance(payload, dict):
+        emit_waiting_signal(payload)
+
+    print("OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

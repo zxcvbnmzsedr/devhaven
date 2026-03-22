@@ -422,6 +422,360 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path])
     }
 
+    func testWorkspaceNotificationsTrackUnreadAndMoveNotifiedWorktreeToTop() throws {
+        let viewModel = makeViewModel()
+        let first = makeWorktree(path: "/tmp/devhaven-first", branch: "feature/first")
+        let second = makeWorktree(path: "/tmp/devhaven-second", branch: "feature/second")
+        let project = makeProject(worktrees: [first, second])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(first.path, from: project.path)
+        viewModel.openWorkspaceWorktree(second.path, from: project.path)
+        viewModel.activateWorkspaceProject(first.path)
+
+        let secondController = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == second.path })?.controller
+        )
+        let secondTabID = try XCTUnwrap(secondController.selectedTab?.id)
+        let secondPaneID = try XCTUnwrap(secondController.selectedPane?.id)
+
+        viewModel.recordWorkspaceNotification(
+            projectPath: second.path,
+            tabID: secondTabID,
+            paneID: secondPaneID,
+            title: "任务完成",
+            body: "feature/second 已通过"
+        )
+
+        let group = try XCTUnwrap(viewModel.workspaceSidebarGroups.first)
+        XCTAssertEqual(group.worktrees.map(\.path), [second.path, first.path])
+        XCTAssertEqual(group.worktrees.first?.unreadNotificationCount, 1)
+        XCTAssertEqual(group.worktrees.first?.notifications.first?.title, "任务完成")
+        XCTAssertEqual(viewModel.workspaceAttentionState(for: second.path)?.unreadCount, 1)
+    }
+
+    func testFocusWorkspaceNotificationActivatesProjectSelectsTargetAndMarksNotificationRead() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-focus", branch: "feature/focus")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+        viewModel.activateWorkspaceProject(worktree.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let originalTabID = try XCTUnwrap(controller.selectedTab?.id)
+        let targetTab = controller.createTab()
+        let targetPaneID = try XCTUnwrap(controller.selectedPane?.id)
+        controller.selectTab(originalTabID)
+        viewModel.activateWorkspaceProject(project.path)
+
+        viewModel.recordWorkspaceNotification(
+            projectPath: worktree.path,
+            tabID: targetTab.id,
+            paneID: targetPaneID,
+            title: "测试完成",
+            body: "请回到目标 pane"
+        )
+        let notification = try XCTUnwrap(viewModel.workspaceAttentionState(for: worktree.path)?.notifications.first)
+
+        viewModel.focusWorkspaceNotification(notification)
+
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, worktree.path)
+        XCTAssertEqual(controller.selectedTabId, targetTab.id)
+        XCTAssertEqual(controller.selectedPane?.id, targetPaneID)
+        XCTAssertEqual(viewModel.workspaceAttentionState(for: worktree.path)?.unreadCount, 0)
+        XCTAssertEqual(viewModel.workspaceAttentionState(for: worktree.path)?.notifications.first?.isRead, true)
+    }
+
+    func testWorkspaceTaskStatusReflectsRunningPanesInSidebar() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-running", branch: "feature/running")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let paneID = try XCTUnwrap(controller.selectedPane?.id)
+
+        viewModel.updateWorkspaceTaskStatus(projectPath: worktree.path, paneID: paneID, status: .running)
+        XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.worktrees.first?.taskStatus, .running)
+
+        viewModel.updateWorkspaceTaskStatus(projectPath: worktree.path, paneID: paneID, status: .idle)
+        XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.worktrees.first?.taskStatus, .idle)
+    }
+
+    func testWorkspaceAgentStatePrefersWaitingOverRunningInSidebar() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-agent", branch: "feature/agent")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let paneID = try XCTUnwrap(controller.selectedPane?.id)
+        let tabID = try XCTUnwrap(controller.selectedTab?.id)
+        let terminalSessionID = try XCTUnwrap(controller.selectedPane?.request.terminalSessionId)
+
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: worktree.path,
+                workspaceId: controller.workspaceId,
+                tabId: tabID,
+                paneId: paneID,
+                surfaceId: try XCTUnwrap(controller.selectedPane?.request.surfaceId),
+                terminalSessionId: terminalSessionID,
+                agentKind: .claude,
+                sessionId: "claude-session-1",
+                pid: 42,
+                state: .running,
+                summary: "Reading file",
+                detail: nil,
+                updatedAt: Date(timeIntervalSince1970: 100)
+            )
+        )
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: worktree.path,
+                workspaceId: controller.workspaceId,
+                tabId: tabID,
+                paneId: paneID,
+                surfaceId: try XCTUnwrap(controller.selectedPane?.request.surfaceId),
+                terminalSessionId: terminalSessionID,
+                agentKind: .claude,
+                sessionId: "claude-session-1",
+                pid: 42,
+                state: .waiting,
+                summary: "Waiting for approval",
+                detail: nil,
+                updatedAt: Date(timeIntervalSince1970: 101)
+            )
+        )
+
+        let worktreeItem = try XCTUnwrap(viewModel.workspaceSidebarGroups.first?.worktrees.first)
+        XCTAssertEqual(worktreeItem.agentState, .waiting)
+        XCTAssertEqual(worktreeItem.agentSummary, "Waiting for approval")
+        XCTAssertEqual(worktreeItem.agentKind, .claude)
+    }
+
+    func testWorkspaceCodexDisplayOverridePrefersWaitingOverRunningSignal() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-codex-display", branch: "feature/codex-display")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let pane = try XCTUnwrap(controller.selectedPane)
+        let tabID = try XCTUnwrap(controller.selectedTab?.id)
+
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: worktree.path,
+                workspaceId: controller.workspaceId,
+                tabId: tabID,
+                paneId: pane.id,
+                surfaceId: pane.request.surfaceId,
+                terminalSessionId: pane.request.terminalSessionId,
+                agentKind: .codex,
+                sessionId: "codex-session-1",
+                pid: 43,
+                state: .running,
+                summary: "Codex 正在运行",
+                detail: nil,
+                updatedAt: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        viewModel.replaceWorkspaceAgentDisplayOverrides([
+            worktree.path: [
+                pane.id: WorkspaceAgentPresentationOverride(state: .waiting, summary: nil)
+            ]
+        ])
+
+        let worktreeItem = try XCTUnwrap(viewModel.workspaceSidebarGroups.first?.worktrees.first)
+        XCTAssertEqual(worktreeItem.agentState, .waiting)
+        XCTAssertNil(worktreeItem.agentSummary)
+        XCTAssertEqual(worktreeItem.agentKind, .codex)
+    }
+
+    func testWorkspaceWorktreeAgentStateDoesNotBubbleToRootProjectCard() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-agent-child", branch: "feature/child")
+        let project = makeProject(path: "/tmp/devhaven-agent-root", worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let pane = try XCTUnwrap(controller.selectedPane)
+        let tabID = try XCTUnwrap(controller.selectedTab?.id)
+
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: worktree.path,
+                workspaceId: controller.workspaceId,
+                tabId: tabID,
+                paneId: pane.id,
+                surfaceId: pane.request.surfaceId,
+                terminalSessionId: pane.request.terminalSessionId,
+                agentKind: .codex,
+                sessionId: "codex-session-child",
+                pid: 43,
+                state: .running,
+                summary: "Codex 正在运行",
+                detail: nil,
+                updatedAt: Date(timeIntervalSince1970: 210)
+            )
+        )
+
+        let group = try XCTUnwrap(viewModel.workspaceSidebarGroups.first)
+        let worktreeItem = try XCTUnwrap(group.worktrees.first)
+        XCTAssertNil(group.agentState)
+        XCTAssertNil(group.agentSummary)
+        XCTAssertNil(group.agentKind)
+        XCTAssertEqual(worktreeItem.agentState, .running)
+        XCTAssertEqual(worktreeItem.agentSummary, "Codex 正在运行")
+        XCTAssertEqual(worktreeItem.agentKind, .codex)
+    }
+
+    func testWorkspaceCodexDisplayOverrideFallsBackToSignalAfterClear() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-codex-display-clear", branch: "feature/codex-display-clear")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let pane = try XCTUnwrap(controller.selectedPane)
+        let tabID = try XCTUnwrap(controller.selectedTab?.id)
+
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: worktree.path,
+                workspaceId: controller.workspaceId,
+                tabId: tabID,
+                paneId: pane.id,
+                surfaceId: pane.request.surfaceId,
+                terminalSessionId: pane.request.terminalSessionId,
+                agentKind: .codex,
+                sessionId: "codex-session-1",
+                pid: 43,
+                state: .running,
+                summary: "Codex 正在运行",
+                detail: nil,
+                updatedAt: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        viewModel.replaceWorkspaceAgentDisplayOverrides([
+            worktree.path: [
+                pane.id: WorkspaceAgentPresentationOverride(state: .waiting, summary: nil)
+            ]
+        ])
+        viewModel.replaceWorkspaceAgentDisplayOverrides([:])
+
+        let worktreeItem = try XCTUnwrap(viewModel.workspaceSidebarGroups.first?.worktrees.first)
+        XCTAssertEqual(worktreeItem.agentState, .running)
+        XCTAssertEqual(worktreeItem.agentSummary, "Codex 正在运行")
+        XCTAssertEqual(worktreeItem.agentKind, .codex)
+    }
+
+    func testCodexDisplayCandidatesIncludeWaitingSignals() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-codex-display-candidates", branch: "feature/codex-candidates")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let pane = try XCTUnwrap(controller.selectedPane)
+        let tabID = try XCTUnwrap(controller.selectedTab?.id)
+
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: worktree.path,
+                workspaceId: controller.workspaceId,
+                tabId: tabID,
+                paneId: pane.id,
+                surfaceId: pane.request.surfaceId,
+                terminalSessionId: pane.request.terminalSessionId,
+                agentKind: .codex,
+                sessionId: "codex-session-1",
+                pid: 43,
+                state: .waiting,
+                summary: "Codex 等待输入",
+                detail: nil,
+                updatedAt: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        XCTAssertEqual(
+            viewModel.codexDisplayCandidates(),
+            [
+                WorkspaceAgentDisplayCandidate(
+                    projectPath: worktree.path,
+                    paneID: pane.id,
+                    signalState: .waiting
+                )
+            ]
+        )
+    }
+
+    func testWorkspaceAgentSignalIsIgnoredAfterWorktreeCloses() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-agent-closed", branch: "feature/closed")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let pane = try XCTUnwrap(controller.selectedPane)
+        viewModel.closeWorkspaceProject(worktree.path)
+
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: worktree.path,
+                workspaceId: controller.workspaceId,
+                tabId: try XCTUnwrap(controller.selectedTab?.id),
+                paneId: pane.id,
+                surfaceId: pane.request.surfaceId,
+                terminalSessionId: pane.request.terminalSessionId,
+                agentKind: .codex,
+                sessionId: "codex-session-1",
+                pid: 43,
+                state: .running,
+                summary: "Running codex",
+                detail: nil,
+                updatedAt: Date(timeIntervalSince1970: 200)
+            )
+        )
+
+        XCTAssertNil(viewModel.workspaceAttentionState(for: worktree.path))
+    }
+
     func testDeleteWorkspaceWorktreeRemovesTrackedItemAndClosesOpenedSession() async throws {
         let service = TestWorktreeService()
         let worktree = makeWorktree(
@@ -578,6 +932,10 @@ private final class TestWorktreeService: NativeWorktreeServicing, @unchecked Sen
 
     func managedWorktreePath(for sourceProjectPath: String, branch: String) throws -> String {
         managedPath
+    }
+
+    func currentBranch(at projectPath: String) throws -> String {
+        "main"
     }
 
     func listBranches(at projectPath: String) throws -> [NativeGitBranch] {

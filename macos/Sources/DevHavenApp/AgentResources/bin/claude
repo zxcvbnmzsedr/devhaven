@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+if [[ -z "${PATH:-}" ]]; then
+  export PATH="$DEFAULT_SYSTEM_PATH"
+elif [[ ":$PATH:" != *":/usr/bin:"* ]]; then
+  export PATH="$PATH:$DEFAULT_SYSTEM_PATH"
+fi
+
+find_real_claude() {
+  if [[ -n "${DEVHAVEN_TEST_REAL_CLAUDE:-}" && -x "${DEVHAVEN_TEST_REAL_CLAUDE}" ]]; then
+    printf '%s' "$DEVHAVEN_TEST_REAL_CLAUDE"
+    return 0
+  fi
+  local self_dir
+  self_dir="$(cd "$(dirname "$0")" && pwd)"
+  local IFS=:
+  for d in $PATH; do
+    [[ "$d" == "$self_dir" ]] && continue
+    [[ -x "$d/claude" ]] && printf '%s' "$d/claude" && return 0
+  done
+  return 1
+}
+
+REAL_CLAUDE="$(find_real_claude || true)"
+if [[ -z "$REAL_CLAUDE" ]]; then
+  echo "Error: claude not found in PATH" >&2
+  exit 127
+fi
+
+if [[ -z "${DEVHAVEN_TERMINAL_SESSION_ID:-}" || -z "${DEVHAVEN_AGENT_RESOURCES_DIR:-}" || -z "${DEVHAVEN_AGENT_SIGNAL_DIR:-}" ]]; then
+  exec "$REAL_CLAUDE" "$@"
+fi
+
+HOOK_PATH="$DEVHAVEN_AGENT_RESOURCES_DIR/hooks/devhaven-claude-hook"
+if [[ ! -x "$HOOK_PATH" ]]; then
+  exec "$REAL_CLAUDE" "$@"
+fi
+
+SKIP_SESSION_ID=false
+for arg in "$@"; do
+  case "$arg" in
+    --resume|--resume=*|--session-id|--session-id=*|--continue|-c)
+      SKIP_SESSION_ID=true
+      break
+      ;;
+  esac
+done
+
+export DEVHAVEN_AGENT_PID=$$
+
+if [[ "$SKIP_SESSION_ID" == true ]]; then
+  SESSION_ID="${DEVHAVEN_AGENT_SESSION_ID:-${DEVHAVEN_TERMINAL_SESSION_ID}}"
+else
+  SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  export DEVHAVEN_AGENT_SESSION_ID="$SESSION_ID"
+fi
+
+HOOKS_JSON=$(cat <<JSON
+{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' SessionStart","timeout":10}]}],"Stop":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' Stop","timeout":10}]}],"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' SessionEnd","timeout":5}]}],"Notification":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' Notification","timeout":10}]}],"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' UserPromptSubmit","timeout":10}]}],"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' PreToolUse","timeout":5,"async":true}]}]}}
+JSON
+)
+
+if [[ "$SKIP_SESSION_ID" == true ]]; then
+  exec "$REAL_CLAUDE" --settings "$HOOKS_JSON" "$@"
+else
+  exec "$REAL_CLAUDE" --session-id "$SESSION_ID" --settings "$HOOKS_JSON" "$@"
+fi

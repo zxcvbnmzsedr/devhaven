@@ -26,6 +26,9 @@ final class GhosttySurfaceBridge {
     var onWorkingDirectoryChange: ((String) -> Void)?
     var onRendererHealthChange: ((Bool) -> Void)?
     var onAppearanceChange: ((GhosttySurfaceAppearance) -> Void)?
+    var onDesktopNotification: ((String, String) -> Void)?
+    var onTaskStatusChange: ((GhosttySurfaceTaskStatus) -> Void)?
+    var onBell: (() -> Void)?
     var onCloseRequest: ((Bool) -> Void)?
 
     @MainActor
@@ -97,6 +100,30 @@ final class GhosttySurfaceBridge {
 
         case GHOSTTY_ACTION_OPEN_URL:
             return openURL(action.action.open_url)
+
+        case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+            let note = action.action.desktop_notification
+            let title = string(from: note.title) ?? ""
+            let body = string(from: note.body) ?? ""
+            guard !(title.isEmpty && body.isEmpty) else {
+                return true
+            }
+            onDesktopNotification?(title, body)
+            return true
+
+        case GHOSTTY_ACTION_PROGRESS_REPORT:
+            let status = taskStatus(from: action.action.progress_report.state)
+            guard status != state.taskStatus else {
+                return true
+            }
+            state.taskStatus = status
+            onTaskStatusChange?(status)
+            return true
+
+        case GHOSTTY_ACTION_RING_BELL:
+            state.bellCount += 1
+            onBell?()
+            return true
 
         default:
             return false
@@ -213,6 +240,20 @@ final class GhosttySurfaceBridge {
             return nil
         }
         return String(cString: cString)
+    }
+
+    private func taskStatus(from progressState: ghostty_action_progress_report_state_e) -> GhosttySurfaceTaskStatus {
+        switch progressState {
+        case GHOSTTY_PROGRESS_STATE_SET,
+             GHOSTTY_PROGRESS_STATE_ERROR,
+             GHOSTTY_PROGRESS_STATE_INDETERMINATE,
+             GHOSTTY_PROGRESS_STATE_PAUSE:
+            return .running
+        case GHOSTTY_PROGRESS_STATE_REMOVE:
+            return .idle
+        default:
+            return .idle
+        }
     }
 
     private func openURL(_ action: ghostty_action_open_url_s) -> Bool {

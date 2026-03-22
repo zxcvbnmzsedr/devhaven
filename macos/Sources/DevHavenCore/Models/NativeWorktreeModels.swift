@@ -132,12 +132,35 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
     public var worktree: ProjectWorktree
     public var isOpen: Bool
     public var isActive: Bool
+    public var notifications: [WorkspaceTerminalNotification]
+    public var unreadNotificationCount: Int
+    public var taskStatus: WorkspaceTaskStatus?
+    public var agentState: WorkspaceAgentState?
+    public var agentSummary: String?
+    public var agentKind: WorkspaceAgentKind?
 
-    public init(rootProjectPath: String, worktree: ProjectWorktree, isOpen: Bool, isActive: Bool) {
+    public init(
+        rootProjectPath: String,
+        worktree: ProjectWorktree,
+        isOpen: Bool,
+        isActive: Bool,
+        notifications: [WorkspaceTerminalNotification] = [],
+        unreadNotificationCount: Int = 0,
+        taskStatus: WorkspaceTaskStatus? = nil,
+        agentState: WorkspaceAgentState? = nil,
+        agentSummary: String? = nil,
+        agentKind: WorkspaceAgentKind? = nil
+    ) {
         self.rootProjectPath = rootProjectPath
         self.worktree = worktree
         self.isOpen = isOpen
         self.isActive = isActive
+        self.notifications = notifications
+        self.unreadNotificationCount = unreadNotificationCount
+        self.taskStatus = taskStatus
+        self.agentState = agentState
+        self.agentSummary = agentSummary
+        self.agentKind = agentKind
     }
 
     public var id: String { worktree.id }
@@ -147,20 +170,47 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
     public var status: String? { worktree.status }
     public var initStep: String? { worktree.initStep }
     public var initError: String? { worktree.initError }
+    public var hasUnreadNotifications: Bool { unreadNotificationCount > 0 }
 }
 
 public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     public var rootProject: Project
     public var worktrees: [WorkspaceSidebarWorktreeItem]
     public var isActive: Bool
+    public var currentBranch: String?
+    public var notifications: [WorkspaceTerminalNotification]
+    public var unreadNotificationCount: Int
+    public var taskStatus: WorkspaceTaskStatus?
+    public var agentState: WorkspaceAgentState?
+    public var agentSummary: String?
+    public var agentKind: WorkspaceAgentKind?
 
-    public init(rootProject: Project, worktrees: [WorkspaceSidebarWorktreeItem], isActive: Bool) {
+    public init(
+        rootProject: Project,
+        worktrees: [WorkspaceSidebarWorktreeItem],
+        isActive: Bool,
+        currentBranch: String? = nil,
+        notifications: [WorkspaceTerminalNotification] = [],
+        unreadNotificationCount: Int = 0,
+        taskStatus: WorkspaceTaskStatus? = nil,
+        agentState: WorkspaceAgentState? = nil,
+        agentSummary: String? = nil,
+        agentKind: WorkspaceAgentKind? = nil
+    ) {
         self.rootProject = rootProject
         self.worktrees = worktrees
         self.isActive = isActive
+        self.currentBranch = currentBranch
+        self.notifications = notifications
+        self.unreadNotificationCount = unreadNotificationCount
+        self.taskStatus = taskStatus
+        self.agentState = agentState
+        self.agentSummary = agentSummary
+        self.agentKind = agentKind
     }
 
     public var id: String { rootProject.id }
+    public var hasUnreadNotifications: Bool { unreadNotificationCount > 0 }
 }
 
 public struct WorktreeInteractionState: Equatable, Sendable {
@@ -213,6 +263,7 @@ public enum NativeWorktreeError: LocalizedError, Equatable, Sendable {
 
 public protocol NativeWorktreeServicing: Sendable {
     func managedWorktreePath(for sourceProjectPath: String, branch: String) throws -> String
+    func currentBranch(at projectPath: String) throws -> String
     func listBranches(at projectPath: String) throws -> [NativeGitBranch]
     func listWorktrees(at projectPath: String) throws -> [NativeGitWorktree]
     func createWorktree(
