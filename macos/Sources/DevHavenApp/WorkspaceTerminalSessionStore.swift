@@ -52,6 +52,10 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
         return model(for: selectedPane)
     }
 
+    func modelIfLoaded(for paneID: String) -> GhosttySurfaceHostModel? {
+        modelsByPaneID[paneID]
+    }
+
     func syncRetainedPaneIDs(_ paneIDs: Set<String>) {
         let removedIDs = Set(modelsByPaneID.keys).subtracting(paneIDs)
         for paneID in removedIDs {
@@ -104,5 +108,9 @@ final class WorkspaceTerminalStoreRegistry: ObservableObject {
             return nil
         }
         return store(for: activeProjectPath).warmSelectedPane(in: session.controller)
+    }
+
+    func modelIfLoaded(for projectPath: String, paneID: String) -> GhosttySurfaceHostModel? {
+        storesByProjectPath[projectPath]?.modelIfLoaded(for: paneID)
     }
 }

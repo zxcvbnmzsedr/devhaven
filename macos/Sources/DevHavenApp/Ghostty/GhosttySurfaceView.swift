@@ -30,6 +30,7 @@ final class GhosttyTerminalSurfaceView: NSView {
     private var lastPerformKeyEvent: TimeInterval?
     private var focused = false
     private var lastScrollbar: ScrollbarState?
+    private var focusRequestTask: Task<Void, Never>?
     var initializationError: Error?
     weak var scrollWrapper: GhosttySurfaceScrollView? {
         didSet {
@@ -77,7 +78,12 @@ final class GhosttyTerminalSurfaceView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        focusRequestTask?.cancel()
+    }
+
     func tearDown() {
+        cancelPendingFocusRequest()
         resignOwnedFirstResponderIfNeeded()
         if let trackingAreaRef {
             removeTrackingArea(trackingAreaRef)
@@ -104,6 +110,7 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     func prepareForContainerReuse() {
+        cancelPendingFocusRequest()
         resignOwnedFirstResponderIfNeeded()
         focused = false
         attachmentState.prepareForContainerReuse()
@@ -131,6 +138,9 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if window == nil {
+            cancelPendingFocusRequest()
+        }
         updateSurfaceMetrics()
     }
 
@@ -148,6 +158,7 @@ final class GhosttyTerminalSurfaceView: NSView {
     override func becomeFirstResponder() -> Bool {
         let result = super.becomeFirstResponder()
         if result {
+            cancelPendingFocusRequest()
             focusDidChange(true)
         }
         return result
@@ -177,7 +188,7 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     func requestFocus() {
-        Self.moveFocus(to: self)
+        scheduleFocusRequest(delay: 0.05)
     }
 
     func setOcclusion(_ visible: Bool) {
@@ -187,27 +198,50 @@ final class GhosttyTerminalSurfaceView: NSView {
         ghostty_surface_set_occlusion(surface, visible)
     }
 
-    static func moveFocus(
-        to view: GhosttyTerminalSurfaceView,
+    private func cancelPendingFocusRequest() {
+        focusRequestTask?.cancel()
+        focusRequestTask = nil
+    }
+
+    private func scheduleFocusRequest(
         from previous: GhosttyTerminalSurfaceView? = nil,
-        delay: TimeInterval? = nil
+        delay: TimeInterval
     ) {
         let maxDelay: TimeInterval = 0.5
-        let currentDelay = delay ?? 0
-        guard currentDelay < maxDelay else { return }
-        let nextDelay: TimeInterval = if let delay { delay * 2 } else { 0.05 }
-        Task { @MainActor in
-            if let delay {
-                try? await ContinuousClock().sleep(for: .seconds(delay))
-            }
-            guard let window = view.window else {
-                moveFocus(to: view, from: previous, delay: nextDelay)
+        guard delay <= maxDelay else { return }
+        let canRetryAfterThisAttempt = delay < maxDelay
+        let nextDelay = min(delay * 2, maxDelay)
+        focusRequestTask?.cancel()
+        focusRequestTask = Task { @MainActor [weak self, weak previous] in
+            guard let self else { return }
+            try? await ContinuousClock().sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            guard let window = self.window else {
+                guard self.surface != nil else {
+                    self.focusRequestTask = nil
+                    return
+                }
+                self.scheduleFocusRequest(from: previous, delay: nextDelay)
                 return
             }
-            if let previous, previous !== view {
+            if let previous, previous !== self {
                 _ = previous.resignFirstResponder()
             }
-            window.makeFirstResponder(view)
+            guard !Task.isCancelled else { return }
+            if window.firstResponder === self {
+                self.focusRequestTask = nil
+                return
+            }
+            let didFocus = window.makeFirstResponder(self)
+            if didFocus || self.surface == nil {
+                self.focusRequestTask = nil
+                return
+            }
+            guard canRetryAfterThisAttempt else {
+                self.focusRequestTask = nil
+                return
+            }
+            self.scheduleFocusRequest(from: previous, delay: nextDelay)
         }
     }
 

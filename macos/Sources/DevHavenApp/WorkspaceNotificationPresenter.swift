@@ -15,6 +15,12 @@ private final class WorkspaceForegroundNotificationDelegate: NSObject, UNUserNot
 
 @MainActor
 enum WorkspaceNotificationPresenter {
+    enum PresentationRoute: Equatable {
+        case none
+        case soundOnly
+        case systemNotification
+    }
+
     private static let delegate = WorkspaceForegroundNotificationDelegate()
 
     static func presentIfNeeded(
@@ -22,23 +28,25 @@ enum WorkspaceNotificationPresenter {
         body: String,
         settings: AppSettings
     ) {
-        guard settings.workspaceSystemNotificationsEnabled || settings.workspaceNotificationSoundEnabled else {
+        switch presentationRoute(
+            settings: settings,
+            supportsSystemNotifications: supportsSystemNotifications()
+        ) {
+        case .none:
             return
-        }
-
-        if settings.workspaceSystemNotificationsEnabled {
+        case .soundOnly:
+            NSSound.beep()
+        case .systemNotification:
             Task { @MainActor in
                 await sendSystemNotification(title: title, body: body)
             }
-            return
-        }
-
-        if settings.workspaceNotificationSoundEnabled {
-            NSSound.beep()
         }
     }
 
     private static func sendSystemNotification(title: String, body: String) async {
+        guard supportsSystemNotifications() else {
+            return
+        }
         let center = configuredCenter()
         let settings = await center.notificationSettings()
         switch settings.authorizationStatus {
@@ -77,5 +85,34 @@ enum WorkspaceNotificationPresenter {
             center.delegate = delegate
         }
         return center
+    }
+
+    nonisolated static func supportsSystemNotifications(
+        bundleURL: URL = Bundle.main.bundleURL,
+        bundleIdentifier: String? = Bundle.main.bundleIdentifier
+    ) -> Bool {
+        guard bundleURL.pathExtension == "app" else {
+            return false
+        }
+        guard let bundleIdentifier, !bundleIdentifier.isEmpty else {
+            return false
+        }
+        return true
+    }
+
+    nonisolated static func presentationRoute(
+        settings: AppSettings,
+        supportsSystemNotifications: Bool
+    ) -> PresentationRoute {
+        guard settings.workspaceSystemNotificationsEnabled || settings.workspaceNotificationSoundEnabled else {
+            return .none
+        }
+        if settings.workspaceSystemNotificationsEnabled, supportsSystemNotifications {
+            return .systemNotification
+        }
+        if settings.workspaceNotificationSoundEnabled {
+            return .soundOnly
+        }
+        return .none
     }
 }

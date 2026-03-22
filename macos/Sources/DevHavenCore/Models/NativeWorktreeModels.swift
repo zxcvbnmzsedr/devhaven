@@ -135,6 +135,9 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
     public var notifications: [WorkspaceTerminalNotification]
     public var unreadNotificationCount: Int
     public var taskStatus: WorkspaceTaskStatus?
+    public var agentState: WorkspaceAgentState?
+    public var agentSummary: String?
+    public var agentKind: WorkspaceAgentKind?
 
     public init(
         rootProjectPath: String,
@@ -143,7 +146,10 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
         isActive: Bool,
         notifications: [WorkspaceTerminalNotification] = [],
         unreadNotificationCount: Int = 0,
-        taskStatus: WorkspaceTaskStatus? = nil
+        taskStatus: WorkspaceTaskStatus? = nil,
+        agentState: WorkspaceAgentState? = nil,
+        agentSummary: String? = nil,
+        agentKind: WorkspaceAgentKind? = nil
     ) {
         self.rootProjectPath = rootProjectPath
         self.worktree = worktree
@@ -152,6 +158,9 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
         self.notifications = notifications
         self.unreadNotificationCount = unreadNotificationCount
         self.taskStatus = taskStatus
+        self.agentState = agentState
+        self.agentSummary = agentSummary
+        self.agentKind = agentKind
     }
 
     public var id: String { worktree.id }
@@ -172,6 +181,9 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     public var notifications: [WorkspaceTerminalNotification]
     public var unreadNotificationCount: Int
     public var taskStatus: WorkspaceTaskStatus?
+    public var agentState: WorkspaceAgentState?
+    public var agentSummary: String?
+    public var agentKind: WorkspaceAgentKind?
 
     public init(
         rootProject: Project,
@@ -180,7 +192,10 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
         currentBranch: String? = nil,
         notifications: [WorkspaceTerminalNotification] = [],
         unreadNotificationCount: Int = 0,
-        taskStatus: WorkspaceTaskStatus? = nil
+        taskStatus: WorkspaceTaskStatus? = nil,
+        agentState: WorkspaceAgentState? = nil,
+        agentSummary: String? = nil,
+        agentKind: WorkspaceAgentKind? = nil
     ) {
         self.rootProject = rootProject
         self.worktrees = worktrees
@@ -189,6 +204,9 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
         self.notifications = notifications
         self.unreadNotificationCount = unreadNotificationCount
         self.taskStatus = taskStatus
+        self.agentState = agentState
+        self.agentSummary = agentSummary
+        self.agentKind = agentKind
     }
 
     public var id: String { rootProject.id }

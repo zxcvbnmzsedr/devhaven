@@ -13,8 +13,10 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
+    @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
+    @ObservationIgnored private var isAgentSignalObservationStarted = false
 
     public enum DirectoryFilter: Equatable, Sendable {
         case all
@@ -75,6 +77,7 @@ public final class NativeAppViewModel {
     public var openWorkspaceSessions: [OpenWorkspaceSessionState]
     public var activeWorkspaceProjectPath: String?
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
+    private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     private var currentBranchByProjectPath: [String: String]
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
@@ -107,7 +110,8 @@ public final class NativeAppViewModel {
         projectCatalogRefresher: (@Sendable (ProjectCatalogRefreshRequest) async throws -> [Project])? = nil,
         workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics = .shared,
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
-        worktreeService: (any NativeWorktreeServicing)? = nil
+        worktreeService: (any NativeWorktreeServicing)? = nil,
+        agentSignalStore: WorkspaceAgentSignalStore? = nil
     ) {
         self.store = store
         self.projectDocumentLoader = projectDocumentLoader ?? loadProjectDocumentFromDisk
@@ -117,11 +121,15 @@ public final class NativeAppViewModel {
         self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
         self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.worktreeService = worktreeService ?? NativeGitWorktreeService()
+        self.agentSignalStore = agentSignalStore ?? WorkspaceAgentSignalStore(
+            baseDirectoryURL: store.agentStatusSessionsDirectoryURL
+        )
         self.snapshot = NativeAppSnapshot()
         self.selectedProjectPath = nil
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
         self.attentionStateByProjectPath = [:]
+        self.agentDisplayOverridesByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
         self.searchQuery = ""
         self.selectedDirectory = .all
@@ -208,6 +216,10 @@ public final class NativeAppViewModel {
                 moveNotifiedWorktreeToTop: moveNotifiedWorktreeToTop
             )
             let rootAttention = attentionStateByProjectPath[rootPath]
+            let rootAgentOverrides = agentDisplayOverridesByProjectPath[rootPath] ?? [:]
+            let rootAgentState = rootAttention?.resolvedAgentState(overridesByPaneID: rootAgentOverrides)
+            let rootAgentSummary = rootAttention?.resolvedAgentSummary(overridesByPaneID: rootAgentOverrides)
+            let rootAgentKind = rootAttention?.resolvedAgentKind(overridesByPaneID: rootAgentOverrides)
             let notifications = showsInAppNotifications
                 ? ([rootAttention?.notifications ?? []] + worktrees.map(\.notifications))
                     .flatMap { $0 }
@@ -230,18 +242,33 @@ public final class NativeAppViewModel {
                     rootProjectPath: rootPath,
                     rootAttention: rootAttention,
                     worktrees: worktrees
+                ),
+                agentState: makeGroupAgentState(
+                    rootAgentState: rootAgentState
+                ),
+                agentSummary: makeGroupAgentSummary(
+                    rootAgentState: rootAgentState,
+                    rootAgentSummary: rootAgentSummary
+                ),
+                agentKind: makeGroupAgentKind(
+                    rootAgentState: rootAgentState,
+                    rootAgentKind: rootAgentKind
                 )
             )
         }
         for session in openWorkspaceSessions where session.isQuickTerminal {
             let attention = attentionStateByProjectPath[session.projectPath]
+            let agentOverrides = agentDisplayOverridesByProjectPath[session.projectPath] ?? [:]
             groups.append(WorkspaceSidebarProjectGroup(
                 rootProject: .quickTerminal(at: session.projectPath),
                 worktrees: [],
                 isActive: activeWorkspaceProjectPath == session.projectPath,
                 notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
                 unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
-                taskStatus: attention?.taskStatus
+                taskStatus: attention?.taskStatus,
+                agentState: attention?.resolvedAgentState(overridesByPaneID: agentOverrides),
+                agentSummary: attention?.resolvedAgentSummary(overridesByPaneID: agentOverrides),
+                agentKind: attention?.resolvedAgentKind(overridesByPaneID: agentOverrides)
             ))
         }
         return groups
@@ -296,6 +323,87 @@ public final class NativeAppViewModel {
         var attention = attentionStateByProjectPath[projectPath] ?? WorkspaceAttentionState()
         attention.setTaskStatus(status, for: paneID)
         attentionStateByProjectPath[projectPath] = attention
+    }
+
+    public func recordAgentSignal(_ signal: WorkspaceAgentSessionSignal) {
+        guard openWorkspaceProjectPaths.contains(signal.projectPath) else {
+            return
+        }
+        var attention = attentionStateByProjectPath[signal.projectPath] ?? WorkspaceAttentionState()
+        attention.setAgentState(
+            signal.state,
+            kind: signal.agentKind,
+            summary: signal.summary,
+            updatedAt: signal.updatedAt,
+            for: signal.paneId
+        )
+        attentionStateByProjectPath[signal.projectPath] = attention
+    }
+
+    public func clearAgentSignal(projectPath: String, paneID: String) {
+        guard var attention = attentionStateByProjectPath[projectPath] else {
+            return
+        }
+        attention.clearAgentState(for: paneID)
+        attentionStateByProjectPath[projectPath] = attention
+    }
+
+    public func startWorkspaceAgentSignalObservation() {
+        guard !isAgentSignalObservationStarted else {
+            refreshWorkspaceAgentSignals()
+            return
+        }
+        agentSignalStore.onSignalsChange = { [weak self] snapshots in
+            Task { @MainActor in
+                self?.applyAgentSignalSnapshots(snapshots)
+            }
+        }
+        do {
+            try agentSignalStore.start()
+            isAgentSignalObservationStarted = true
+            applyAgentSignalSnapshots(agentSignalStore.currentSnapshots)
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func stopWorkspaceAgentSignalObservation() {
+        guard isAgentSignalObservationStarted else {
+            return
+        }
+        agentSignalStore.stop()
+        isAgentSignalObservationStarted = false
+    }
+
+    public func refreshWorkspaceAgentSignals() {
+        applyAgentSignalSnapshots(agentSignalStore.currentSnapshots)
+    }
+
+    public func codexDisplayCandidates() -> [WorkspaceAgentDisplayCandidate] {
+        let openPaths = Set(openWorkspaceProjectPaths)
+        return attentionStateByProjectPath
+            .filter { openPaths.contains($0.key) }
+            .flatMap { projectPath, attention in
+                attention.agentStateByPaneID.compactMap { paneID, state in
+                    guard (state == .running || state == .waiting),
+                          attention.agentKindByPaneID[paneID] == .codex
+                    else {
+                        return nil
+                    }
+                    return WorkspaceAgentDisplayCandidate(
+                        projectPath: projectPath,
+                        paneID: paneID,
+                        signalState: state
+                    )
+                }
+            }
+    }
+
+    public func replaceWorkspaceAgentDisplayOverrides(
+        _ overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
+    ) {
+        agentDisplayOverridesByProjectPath = overridesByProjectPath
+        pruneWorkspaceAgentDisplayOverrides()
     }
 
     public func markWorkspaceNotificationsRead(projectPath: String, paneID: String) {
@@ -647,6 +755,7 @@ public final class NativeAppViewModel {
             openWorkspaceSessions.remove(at: index)
         }
         attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
+        pruneWorkspaceAgentDisplayOverrides()
 
         if openWorkspaceSessions.isEmpty {
             activeWorkspaceProjectPath = nil
@@ -1483,7 +1592,16 @@ public final class NativeAppViewModel {
                 isActive: activeWorkspaceProjectPath == worktree.path,
                 notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
                 unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
-                taskStatus: attention.map(\.taskStatus)
+                taskStatus: attention.map(\.taskStatus),
+                agentState: attention?.resolvedAgentState(
+                    overridesByPaneID: agentDisplayOverridesByProjectPath[worktree.path] ?? [:]
+                ),
+                agentSummary: attention?.resolvedAgentSummary(
+                    overridesByPaneID: agentDisplayOverridesByProjectPath[worktree.path] ?? [:]
+                ),
+                agentKind: attention?.resolvedAgentKind(
+                    overridesByPaneID: agentDisplayOverridesByProjectPath[worktree.path] ?? [:]
+                )
             )
         }
         guard moveNotifiedWorktreeToTop, showsInAppNotifications else {
@@ -1538,6 +1656,35 @@ public final class NativeAppViewModel {
         return nil
     }
 
+    private func makeGroupAgentState(
+        rootAgentState: WorkspaceAgentState?
+    ) -> WorkspaceAgentState? {
+        rootAgentState
+    }
+
+    private func makeGroupAgentSummary(
+        rootAgentState: WorkspaceAgentState?,
+        rootAgentSummary: String?
+    ) -> String? {
+        guard rootAgentState != nil,
+              let rootAgentSummary,
+              !rootAgentSummary.isEmpty
+        else {
+            return nil
+        }
+        return rootAgentSummary
+    }
+
+    private func makeGroupAgentKind(
+        rootAgentState: WorkspaceAgentState?,
+        rootAgentKind: WorkspaceAgentKind?
+    ) -> WorkspaceAgentKind? {
+        guard rootAgentState != nil else {
+            return nil
+        }
+        return rootAgentKind
+    }
+
     private func isWorkspacePaneCurrentlyFocused(
         projectPath: String,
         tabID: String,
@@ -1554,6 +1701,42 @@ public final class NativeAppViewModel {
     private func syncAttentionStateWithOpenSessions() {
         let activePaths = Set(openWorkspaceProjectPaths)
         attentionStateByProjectPath = attentionStateByProjectPath.filter { activePaths.contains($0.key) }
+        agentDisplayOverridesByProjectPath = agentDisplayOverridesByProjectPath.filter { activePaths.contains($0.key) }
+        if isAgentSignalObservationStarted {
+            applyAgentSignalSnapshots(agentSignalStore.currentSnapshots)
+        }
+    }
+
+    private func applyAgentSignalSnapshots(_ snapshots: [String: WorkspaceAgentSessionSignal]) {
+        let openPaths = Set(openWorkspaceProjectPaths)
+        for path in openPaths {
+            if var attention = attentionStateByProjectPath[path] {
+                attention.clearAgentStates()
+                attentionStateByProjectPath[path] = attention
+            }
+        }
+        for signal in snapshots.values where openPaths.contains(signal.projectPath) {
+            recordAgentSignal(signal)
+        }
+        pruneWorkspaceAgentDisplayOverrides()
+    }
+
+    private func pruneWorkspaceAgentDisplayOverrides() {
+        let validPaneIDsByProjectPath = Dictionary(
+            grouping: codexDisplayCandidates(),
+            by: \.projectPath
+        ).mapValues { Set($0.map(\.paneID)) }
+
+        agentDisplayOverridesByProjectPath = agentDisplayOverridesByProjectPath.reduce(into: [:]) { result, entry in
+            guard let validPaneIDs = validPaneIDsByProjectPath[entry.key] else {
+                return
+            }
+            let filteredOverrides = entry.value.filter { validPaneIDs.contains($0.key) }
+            guard !filteredOverrides.isEmpty else {
+                return
+            }
+            result[entry.key] = filteredOverrides
+        }
     }
 
     private func resolveDisplayProject(for path: String, rootProjectPath: String? = nil) -> Project? {

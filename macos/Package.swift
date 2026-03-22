@@ -23,6 +23,7 @@ let package = Package(
             dependencies: ["DevHavenCore", "GhosttyKit"],
             resources: [
                 .copy("GhosttyResources"),
+                .copy("AgentResources"),
             ],
             linkerSettings: [
                 .linkedFramework("Carbon"),

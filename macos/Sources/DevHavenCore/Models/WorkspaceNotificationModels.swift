@@ -46,16 +46,50 @@ public struct WorkspaceTerminalNotification: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct WorkspaceAgentPresentationOverride: Equatable, Sendable {
+    public var state: WorkspaceAgentState
+    public var summary: String?
+
+    public init(state: WorkspaceAgentState, summary: String?) {
+        self.state = state
+        self.summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+public struct WorkspaceAgentDisplayCandidate: Equatable, Sendable {
+    public var projectPath: String
+    public var paneID: String
+    public var signalState: WorkspaceAgentState
+
+    public init(projectPath: String, paneID: String, signalState: WorkspaceAgentState) {
+        self.projectPath = projectPath
+        self.paneID = paneID
+        self.signalState = signalState
+    }
+}
+
 public struct WorkspaceAttentionState: Equatable, Sendable {
     public var notifications: [WorkspaceTerminalNotification]
     public var taskStatusByPaneID: [String: WorkspaceTaskStatus]
+    public var agentStateByPaneID: [String: WorkspaceAgentState]
+    public var agentSummaryByPaneID: [String: String]
+    public var agentKindByPaneID: [String: WorkspaceAgentKind]
+    public var agentUpdatedAtByPaneID: [String: Date]
 
     public init(
         notifications: [WorkspaceTerminalNotification] = [],
-        taskStatusByPaneID: [String: WorkspaceTaskStatus] = [:]
+        taskStatusByPaneID: [String: WorkspaceTaskStatus] = [:],
+        agentStateByPaneID: [String: WorkspaceAgentState] = [:],
+        agentSummaryByPaneID: [String: String] = [:],
+        agentKindByPaneID: [String: WorkspaceAgentKind] = [:],
+        agentUpdatedAtByPaneID: [String: Date] = [:]
     ) {
         self.notifications = notifications
         self.taskStatusByPaneID = taskStatusByPaneID
+        self.agentStateByPaneID = agentStateByPaneID
+        self.agentSummaryByPaneID = agentSummaryByPaneID
+        self.agentKindByPaneID = agentKindByPaneID
+        self.agentUpdatedAtByPaneID = agentUpdatedAtByPaneID
     }
 
     public var unreadCount: Int {
@@ -78,6 +112,36 @@ public struct WorkspaceAttentionState: Equatable, Sendable {
         notifications.first?.createdAt
     }
 
+    public var agentState: WorkspaceAgentState? {
+        prioritizedAgentRecord?.state
+    }
+
+    public var agentSummary: String? {
+        prioritizedAgentRecord?.summary
+    }
+
+    public var agentKind: WorkspaceAgentKind? {
+        prioritizedAgentRecord?.kind
+    }
+
+    public func resolvedAgentState(
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride]
+    ) -> WorkspaceAgentState? {
+        prioritizedAgentRecord(overridesByPaneID: overridesByPaneID)?.state
+    }
+
+    public func resolvedAgentSummary(
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride]
+    ) -> String? {
+        prioritizedAgentRecord(overridesByPaneID: overridesByPaneID)?.summary
+    }
+
+    public func resolvedAgentKind(
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride]
+    ) -> WorkspaceAgentKind? {
+        prioritizedAgentRecord(overridesByPaneID: overridesByPaneID)?.kind
+    }
+
     public mutating func appendNotification(_ notification: WorkspaceTerminalNotification) {
         notifications.insert(notification, at: 0)
     }
@@ -97,5 +161,68 @@ public struct WorkspaceAttentionState: Equatable, Sendable {
 
     public mutating func setTaskStatus(_ status: WorkspaceTaskStatus, for paneID: String) {
         taskStatusByPaneID[paneID] = status
+    }
+
+    public mutating func setAgentState(
+        _ state: WorkspaceAgentState,
+        kind: WorkspaceAgentKind,
+        summary: String?,
+        updatedAt: Date = Date(),
+        for paneID: String
+    ) {
+        agentStateByPaneID[paneID] = state
+        agentKindByPaneID[paneID] = kind
+        agentUpdatedAtByPaneID[paneID] = updatedAt
+        if let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            agentSummaryByPaneID[paneID] = summary
+        } else {
+            agentSummaryByPaneID.removeValue(forKey: paneID)
+        }
+    }
+
+    public mutating func clearAgentState(for paneID: String) {
+        agentStateByPaneID.removeValue(forKey: paneID)
+        agentSummaryByPaneID.removeValue(forKey: paneID)
+        agentKindByPaneID.removeValue(forKey: paneID)
+        agentUpdatedAtByPaneID.removeValue(forKey: paneID)
+    }
+
+    public mutating func clearAgentStates() {
+        agentStateByPaneID.removeAll()
+        agentSummaryByPaneID.removeAll()
+        agentKindByPaneID.removeAll()
+        agentUpdatedAtByPaneID.removeAll()
+    }
+
+    private var prioritizedAgentRecord: (paneID: String, state: WorkspaceAgentState, kind: WorkspaceAgentKind?, summary: String?, updatedAt: Date?)? {
+        prioritizedAgentRecord(overridesByPaneID: [:])
+    }
+
+    private func prioritizedAgentRecord(
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride]
+    ) -> (paneID: String, state: WorkspaceAgentState, kind: WorkspaceAgentKind?, summary: String?, updatedAt: Date?)? {
+        agentStateByPaneID
+            .map { paneID, state in
+                let presentationOverride = overridesByPaneID[paneID]
+                return (
+                    paneID: paneID,
+                    state: presentationOverride?.state ?? state,
+                    kind: agentKindByPaneID[paneID],
+                    summary: presentationOverride != nil ? presentationOverride?.summary : agentSummaryByPaneID[paneID],
+                    updatedAt: agentUpdatedAtByPaneID[paneID]
+                )
+            }
+            .max { lhs, rhs in
+                if lhs.state.priority != rhs.state.priority {
+                    return lhs.state.priority < rhs.state.priority
+                }
+                return (lhs.updatedAt ?? .distantPast) < (rhs.updatedAt ?? .distantPast)
+            }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

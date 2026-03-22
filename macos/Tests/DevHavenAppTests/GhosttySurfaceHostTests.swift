@@ -42,7 +42,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
     func testGhosttyRuntimeCanCreateTerminalSurfaceOrExposeInitializationError() throws {
         try requireSmokeEnabled()
 
-        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let model = makeManagedHostModel()
         let view = model.acquireSurfaceView()
 
         if view.surface == nil {
@@ -120,7 +120,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
     }
 
     func testAcquireSurfaceViewBridgesNotificationTaskStatusAndBellCallbacks() {
-        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let model = makeManagedHostModel()
         var receivedNotification: (String, String)?
         var statuses: [WorkspaceTaskStatus] = []
         var bellCount = 0
@@ -149,10 +149,41 @@ final class GhosttySurfaceHostTests: XCTestCase {
         XCTAssertEqual(bellCount, 1)
     }
 
+    func testAcquireSurfaceViewInjectsAgentSignalDirectoryAndAgentResourcePath() {
+        let resourcesRootURL = try! FileManager.default.createTemporaryDirectoryForTests()
+        let agentResourcesURL = resourcesRootURL
+            .appending(path: DevHavenAppResourceLocator.resourceBundleName, directoryHint: .isDirectory)
+            .appending(path: "AgentResources", directoryHint: .isDirectory)
+        let agentBinURL = agentResourcesURL.appending(path: "bin", directoryHint: .isDirectory)
+        try! FileManager.default.createDirectory(at: agentBinURL, withIntermediateDirectories: true)
+
+        let environment = GhosttyRuntimeEnvironmentBuilder.build(
+            baseEnvironment: makeRequest().environment,
+            agentResourcesURL: agentResourcesURL,
+            processEnvironment: [:]
+        )
+
+        XCTAssertEqual(
+            environment["DEVHAVEN_AGENT_RESOURCES_DIR"],
+            agentResourcesURL.path
+        )
+        XCTAssertEqual(
+            environment["DEVHAVEN_AGENT_BIN_DIR"],
+            agentBinURL.path
+        )
+        XCTAssertTrue(
+            environment["DEVHAVEN_AGENT_SIGNAL_DIR"]?.contains(".devhaven/agent-status/sessions") == true
+        )
+        XCTAssertTrue(
+            environment["PATH"] == agentBinURL.path
+                || environment["PATH"]?.hasPrefix(agentBinURL.path + ":") == true
+        )
+    }
+
     func testGhosttyControlDExitTearsDownSurfaceWithoutLockingHost() throws {
         try requireSmokeEnabled()
 
-        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let model = makeManagedHostModel()
         let view = try makeInteractiveSurfaceView(model: model)
 
         view.debugHandleProcessClosed(processAlive: false)
@@ -164,11 +195,11 @@ final class GhosttySurfaceHostTests: XCTestCase {
     }
 
     func testPrepareForContainerReuseYieldsWindowFirstResponderWhenSurfaceViewOwnsResponder() {
-        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let model = makeManagedHostModel()
         let view = model.acquireSurfaceView()
         let window = makeWindow()
         window.contentView = view
-        Self.retainedWindows.append(window)
+        retainWindow(window)
 
         let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
         activator.activateIfNeeded(window: AppKitWindowActivationProxy(window: window))
@@ -181,7 +212,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
     }
 
     func testRequestFocusRetriesWhenFirstResponderAssignmentMissesFirstAttempt() {
-        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let model = makeManagedHostModel()
         let view = model.acquireSurfaceView()
         let window = FocusRetryWindow()
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 960, height: 640))
@@ -191,7 +222,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
         container.addSubview(view)
         container.addSubview(button)
         window.contentView = container
-        Self.retainedWindows.append(window)
+        retainWindow(window)
 
         let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
         activator.activateIfNeeded(window: AppKitWindowActivationProxy(window: window))
@@ -210,7 +241,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
     }
 
     func testRestoreWindowResponderCanReclaimFocusedPaneFromNonTerminalResponderAfterMissedInitialFocus() {
-        let model = GhosttySurfaceHostModel(request: makeRequest())
+        let model = makeManagedHostModel()
         let view = model.acquireSurfaceView()
         let window = FocusRetryWindow()
         let container = NSView(frame: NSRect(x: 0, y: 0, width: 960, height: 640))
@@ -220,7 +251,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
         container.addSubview(view)
         container.addSubview(button)
         window.contentView = container
-        Self.retainedWindows.append(window)
+        retainWindow(window)
 
         let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
         activator.activateIfNeeded(window: AppKitWindowActivationProxy(window: window))
@@ -245,7 +276,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
     private func makeInteractiveSurfaceView(model: GhosttySurfaceHostModel? = nil) throws -> GhosttyTerminalSurfaceView {
         try requireSmokeEnabled()
 
-        let model = model ?? GhosttySurfaceHostModel(request: makeRequest())
+        let model = model ?? makeManagedHostModel()
         let view = model.acquireSurfaceView()
         guard view.surface != nil else {
             throw XCTSkip("当前 xctest 进程下 Ghostty surface 创建失败：\(model.initializationError ?? "未知错误")")
@@ -253,13 +284,21 @@ final class GhosttySurfaceHostTests: XCTestCase {
 
         let window = makeWindow()
         window.contentView = view
-        Self.retainedWindows.append(window)
+        retainWindow(window)
         let activator = InitialWindowActivator(application: AppKitApplicationActivationProxy())
         activator.activateIfNeeded(window: AppKitWindowActivationProxy(window: window))
         window.makeFirstResponder(view)
         window.displayIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         return view
+    }
+
+    private func makeManagedHostModel() -> GhosttySurfaceHostModel {
+        let model = GhosttySurfaceHostModel(request: makeRequest())
+        addTeardownBlock { @MainActor in
+            model.releaseSurface()
+        }
+        return model
     }
 
     private func requireSmokeEnabled() throws {
@@ -283,12 +322,23 @@ final class GhosttySurfaceHostTests: XCTestCase {
     }
 
     private func makeWindow() -> NSWindow {
-        NSWindow(
+        let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
             styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
+        window.animationBehavior = .none
+        return window
+    }
+
+    private func retainWindow(_ window: NSWindow) {
+        Self.retainedWindows.append(window)
+        addTeardownBlock { @MainActor in
+            window.orderOut(nil)
+            window.contentView = nil
+            Self.retainedWindows.removeAll { $0 === window }
+        }
     }
 
     private func makeKeyEvent(
@@ -327,6 +377,14 @@ final class GhosttySurfaceHostTests: XCTestCase {
     }
 }
 
+private extension FileManager {
+    func createTemporaryDirectoryForTests() throws -> URL {
+        let rootURL = temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try createDirectory(at: rootURL, withIntermediateDirectories: true)
+        return rootURL
+    }
+}
+
 @MainActor
 private final class FocusRetryWindow: NSWindow {
     private(set) var surfaceFocusAttemptCount = 0
@@ -338,6 +396,7 @@ private final class FocusRetryWindow: NSWindow {
             backing: .buffered,
             defer: false
         )
+        animationBehavior = .none
     }
 
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {

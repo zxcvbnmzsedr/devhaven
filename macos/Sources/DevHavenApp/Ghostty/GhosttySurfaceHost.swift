@@ -148,6 +148,37 @@ enum GhosttySurfaceHostError: LocalizedError {
     }
 }
 
+enum GhosttyRuntimeEnvironmentBuilder {
+    static func build(
+        baseEnvironment: [String: String],
+        store: LegacyCompatStore = LegacyCompatStore(),
+        agentResourcesURL: URL? = DevHavenAppResourceLocator.resolveAgentResourcesURL(),
+        processEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment = baseEnvironment
+        let signalDirectory = store.agentStatusSessionsDirectoryURL
+        environment["DEVHAVEN_AGENT_SIGNAL_DIR"] = signalDirectory.path
+
+        guard let agentResourcesURL else {
+            return environment
+        }
+
+        environment["DEVHAVEN_AGENT_RESOURCES_DIR"] = agentResourcesURL.path
+        let binDirectory = agentResourcesURL.appending(path: "bin", directoryHint: .isDirectory).path
+        environment["DEVHAVEN_AGENT_BIN_DIR"] = binDirectory
+        let existingPath = environment["PATH"] ?? processEnvironment["PATH"] ?? ""
+        if existingPath.isEmpty {
+            environment["PATH"] = binDirectory
+        } else if !existingPath.split(separator: ":").contains(Substring(binDirectory)) {
+            environment["PATH"] = "\(binDirectory):\(existingPath)"
+        } else {
+            environment["PATH"] = existingPath
+        }
+
+        return environment
+    }
+}
+
 struct GhosttySurfaceHost: View {
     let isFocused: Bool
     let chromePolicy: WorkspaceChromePolicy
@@ -311,6 +342,16 @@ final class GhosttySurfaceHostModel: ObservableObject {
         ownedSurfaceView
     }
 
+    func currentVisibleText() -> String? {
+        guard let text = ownedSurfaceView?.debugVisibleText()
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else {
+            return nil
+        }
+        return text
+    }
+
     init(
         request: WorkspaceTerminalLaunchRequest,
         onFocusChange: ((Bool) -> Void)? = nil,
@@ -403,11 +444,12 @@ final class GhosttySurfaceHostModel: ObservableObject {
         bridge.onSplitAction = onSplitAction
 
         workspaceLaunchDiagnostics.recordSurfaceCreationStarted(request: request)
+        let extraEnvironment = resolvedRuntimeEnvironment()
         let view = GhosttyTerminalSurfaceView(
             runtime: terminalRuntime,
             request: request,
             bridge: bridge,
-            extraEnvironment: request.environment
+            extraEnvironment: extraEnvironment
         )
         view.onFocusChange = { [weak self] focused in
             self?.onFocusChange?(focused)
@@ -430,6 +472,10 @@ final class GhosttySurfaceHostModel: ObservableObject {
             )
         }
         return view
+    }
+
+    private func resolvedRuntimeEnvironment() -> [String: String] {
+        GhosttyRuntimeEnvironmentBuilder.build(baseEnvironment: request.environment)
     }
 
     func surfaceViewDidAttach(preferredFocus: Bool) {

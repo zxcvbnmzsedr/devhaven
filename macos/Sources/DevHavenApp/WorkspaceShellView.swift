@@ -13,7 +13,9 @@ struct WorkspaceShellView: View {
     @State private var isProjectPickerPresented = false
     @State private var worktreeDialogProjectPath: String?
     @State private var pendingDeleteRequest: WorktreeDeleteRequest?
+    @State private var codexDisplayRefreshState = CodexAgentDisplayStateRefresher.RuntimeState()
     @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
+    private let codexDisplayRefreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     private var worktreeDialogProject: Project? {
         guard let worktreeDialogProjectPath else {
@@ -67,23 +69,35 @@ struct WorkspaceShellView: View {
                 .background(NativeTheme.window)
         }
         .background(NativeTheme.window)
+        .onReceive(codexDisplayRefreshTimer) { _ in
+            refreshCodexDisplayStates()
+        }
         .onAppear {
+            viewModel.startWorkspaceAgentSignalObservation()
             syncTerminalStores()
             warmActiveWorkspace()
+            refreshCodexDisplayStates()
             WorkspaceLaunchDiagnostics.shared.recordShellMounted(
                 activeProjectPath: viewModel.activeWorkspaceProjectPath,
                 openSessionCount: viewModel.openWorkspaceSessions.count
             )
         }
+        .onDisappear {
+            viewModel.stopWorkspaceAgentSignalObservation()
+        }
         .onChange(of: viewModel.openWorkspaceProjectPaths) { _, _ in
             syncTerminalStores()
+            viewModel.refreshWorkspaceAgentSignals()
             warmActiveWorkspace()
+            refreshCodexDisplayStates()
         }
         .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
             warmActiveWorkspace()
+            refreshCodexDisplayStates()
         }
         .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
             warmActiveWorkspace()
+            refreshCodexDisplayStates()
         }
         .sheet(isPresented: $isProjectPickerPresented) {
             WorkspaceProjectPickerView(
@@ -205,6 +219,15 @@ struct WorkspaceShellView: View {
             sessions: viewModel.openWorkspaceSessions,
             activeProjectPath: viewModel.activeWorkspaceProjectPath
         )
+    }
+
+    private func refreshCodexDisplayStates() {
+        codexDisplayRefreshState = CodexAgentDisplayStateRefresher.refresh(
+            viewModel: viewModel,
+            runtimeState: codexDisplayRefreshState
+        ) { projectPath, paneID in
+            terminalStoreRegistry.modelIfLoaded(for: projectPath, paneID: paneID)?.currentVisibleText()
+        }
     }
 }
 
