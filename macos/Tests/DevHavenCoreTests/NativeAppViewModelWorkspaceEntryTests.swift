@@ -422,6 +422,94 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path])
     }
 
+    func testWorkspaceNotificationsTrackUnreadAndMoveNotifiedWorktreeToTop() throws {
+        let viewModel = makeViewModel()
+        let first = makeWorktree(path: "/tmp/devhaven-first", branch: "feature/first")
+        let second = makeWorktree(path: "/tmp/devhaven-second", branch: "feature/second")
+        let project = makeProject(worktrees: [first, second])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(first.path, from: project.path)
+        viewModel.openWorkspaceWorktree(second.path, from: project.path)
+        viewModel.activateWorkspaceProject(first.path)
+
+        let secondController = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == second.path })?.controller
+        )
+        let secondTabID = try XCTUnwrap(secondController.selectedTab?.id)
+        let secondPaneID = try XCTUnwrap(secondController.selectedPane?.id)
+
+        viewModel.recordWorkspaceNotification(
+            projectPath: second.path,
+            tabID: secondTabID,
+            paneID: secondPaneID,
+            title: "任务完成",
+            body: "feature/second 已通过"
+        )
+
+        let group = try XCTUnwrap(viewModel.workspaceSidebarGroups.first)
+        XCTAssertEqual(group.worktrees.map(\.path), [second.path, first.path])
+        XCTAssertEqual(group.worktrees.first?.unreadNotificationCount, 1)
+        XCTAssertEqual(group.worktrees.first?.notifications.first?.title, "任务完成")
+        XCTAssertEqual(viewModel.workspaceAttentionState(for: second.path)?.unreadCount, 1)
+    }
+
+    func testFocusWorkspaceNotificationActivatesProjectSelectsTargetAndMarksNotificationRead() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-focus", branch: "feature/focus")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+        viewModel.activateWorkspaceProject(worktree.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let originalTabID = try XCTUnwrap(controller.selectedTab?.id)
+        let targetTab = controller.createTab()
+        let targetPaneID = try XCTUnwrap(controller.selectedPane?.id)
+        controller.selectTab(originalTabID)
+        viewModel.activateWorkspaceProject(project.path)
+
+        viewModel.recordWorkspaceNotification(
+            projectPath: worktree.path,
+            tabID: targetTab.id,
+            paneID: targetPaneID,
+            title: "测试完成",
+            body: "请回到目标 pane"
+        )
+        let notification = try XCTUnwrap(viewModel.workspaceAttentionState(for: worktree.path)?.notifications.first)
+
+        viewModel.focusWorkspaceNotification(notification)
+
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, worktree.path)
+        XCTAssertEqual(controller.selectedTabId, targetTab.id)
+        XCTAssertEqual(controller.selectedPane?.id, targetPaneID)
+        XCTAssertEqual(viewModel.workspaceAttentionState(for: worktree.path)?.unreadCount, 0)
+        XCTAssertEqual(viewModel.workspaceAttentionState(for: worktree.path)?.notifications.first?.isRead, true)
+    }
+
+    func testWorkspaceTaskStatusReflectsRunningPanesInSidebar() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-running", branch: "feature/running")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let paneID = try XCTUnwrap(controller.selectedPane?.id)
+
+        viewModel.updateWorkspaceTaskStatus(projectPath: worktree.path, paneID: paneID, status: .running)
+        XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.worktrees.first?.taskStatus, .running)
+
+        viewModel.updateWorkspaceTaskStatus(projectPath: worktree.path, paneID: paneID, status: .idle)
+        XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.worktrees.first?.taskStatus, .idle)
+    }
+
     func testDeleteWorkspaceWorktreeRemovesTrackedItemAndClosesOpenedSession() async throws {
         let service = TestWorktreeService()
         let worktree = makeWorktree(

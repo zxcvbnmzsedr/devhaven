@@ -45,6 +45,10 @@ struct SettingsView: View {
     private let onSave: (AppSettings) -> Void
 
     @State private var gitIdentities: [GitIdentity]
+    @State private var workspaceInAppNotificationsEnabled: Bool
+    @State private var workspaceNotificationSoundEnabled: Bool
+    @State private var workspaceSystemNotificationsEnabled: Bool
+    @State private var moveNotifiedWorktreeToTop: Bool
     @State private var activeCategory: Category = .general
     @State private var terminalConfigStatusMessage: String?
     @State private var terminalConfigErrorMessage: String?
@@ -54,6 +58,10 @@ struct SettingsView: View {
         self.onCancel = onCancel
         self.onSave = onSave
         _gitIdentities = State(initialValue: settings.gitIdentities)
+        _workspaceInAppNotificationsEnabled = State(initialValue: settings.workspaceInAppNotificationsEnabled)
+        _workspaceNotificationSoundEnabled = State(initialValue: settings.workspaceNotificationSoundEnabled)
+        _workspaceSystemNotificationsEnabled = State(initialValue: settings.workspaceSystemNotificationsEnabled)
+        _moveNotifiedWorktreeToTop = State(initialValue: settings.moveNotifiedWorktreeToTop)
     }
 
     var body: some View {
@@ -193,50 +201,65 @@ struct SettingsView: View {
     }
 
     private var terminalContent: some View {
-        settingsCard(
-            title: "Ghostty 配置",
-            description: "原生终端的主题、字体、键位与渲染行为统一以 Ghostty 配置文件为真相源。"
-        ) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("DevHaven 会优先读取 `~/.devhaven/ghostty/config` 或 `config.ghostty`；如果这里还没有 DevHaven 专属配置，则会回退到独立 Ghostty 的现有全局配置。首次点击“编辑 Ghostty 配置文件”时，会自动创建 `~/.devhaven/ghostty/config`。")
-                    .font(.caption)
-                    .foregroundStyle(NativeTheme.textSecondary)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("当前直达路径")
+        Group {
+            settingsCard(
+                title: "Ghostty 配置",
+                description: "原生终端的主题、字体、键位与渲染行为统一以 Ghostty 配置文件为真相源。"
+            ) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("DevHaven 会优先读取 `~/.devhaven/ghostty/config` 或 `config.ghostty`；如果这里还没有 DevHaven 专属配置，则会回退到独立 Ghostty 的现有全局配置。首次点击“编辑 Ghostty 配置文件”时，会自动创建 `~/.devhaven/ghostty/config`。")
                         .font(.caption)
                         .foregroundStyle(NativeTheme.textSecondary)
-                    Text(ghosttyConfigFileURL.path)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(NativeTheme.textPrimary)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(NativeTheme.elevated)
-                        .clipShape(.rect(cornerRadius: 12))
-                }
 
-                HStack(spacing: 12) {
-                    Button("编辑 Ghostty 配置文件") {
-                        editGhosttyConfigFile()
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("当前直达路径")
+                            .font(.caption)
+                            .foregroundStyle(NativeTheme.textSecondary)
+                        Text(ghosttyConfigFileURL.path)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(NativeTheme.textPrimary)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(NativeTheme.elevated)
+                            .clipShape(.rect(cornerRadius: 12))
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(NativeTheme.accent)
 
-                    Button("打开配置目录") {
-                        openGhosttyConfigDirectory()
+                    HStack(spacing: 12) {
+                        Button("编辑 Ghostty 配置文件") {
+                            editGhosttyConfigFile()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(NativeTheme.accent)
+
+                        Button("打开配置目录") {
+                            openGhosttyConfigDirectory()
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
-                }
 
-                if let terminalConfigStatusMessage {
-                    terminalConfigNotice(terminalConfigStatusMessage, isError: false)
-                }
+                    if let terminalConfigStatusMessage {
+                        terminalConfigNotice(terminalConfigStatusMessage, isError: false)
+                    }
 
-                if let terminalConfigErrorMessage {
-                    terminalConfigNotice(terminalConfigErrorMessage, isError: true)
+                    if let terminalConfigErrorMessage {
+                        terminalConfigNotice(terminalConfigErrorMessage, isError: true)
+                    }
                 }
+            }
+
+            settingsCard(
+                title: "工作区通知",
+                description: "控制工作区内的 bell、系统通知与收到事件后的排序提升策略。"
+            ) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("应用内工作区通知", isOn: $workspaceInAppNotificationsEnabled)
+                    Toggle("提示音", isOn: $workspaceNotificationSoundEnabled)
+                    Toggle("系统通知", isOn: $workspaceSystemNotificationsEnabled)
+                    Toggle("收到通知时将 worktree 置顶", isOn: $moveNotifiedWorktreeToTop)
+                }
+                .toggleStyle(.switch)
             }
         }
     }
@@ -371,6 +394,10 @@ struct SettingsView: View {
             gitIdentities: normalizedGitIdentities,
             projectListViewMode: originalSettings.projectListViewMode,
             sharedScriptsRoot: sharedScriptsRoot,
+            workspaceInAppNotificationsEnabled: workspaceInAppNotificationsEnabled,
+            workspaceNotificationSoundEnabled: workspaceNotificationSoundEnabled,
+            workspaceSystemNotificationsEnabled: workspaceSystemNotificationsEnabled,
+            moveNotifiedWorktreeToTop: moveNotifiedWorktreeToTop,
             viteDevPort: originalSettings.viteDevPort,
             webEnabled: originalSettings.webEnabled,
             webBindHost: originalSettings.webBindHost,
@@ -387,6 +414,10 @@ struct SettingsView: View {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !$0.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+            || workspaceInAppNotificationsEnabled != originalSettings.workspaceInAppNotificationsEnabled
+            || workspaceNotificationSoundEnabled != originalSettings.workspaceNotificationSoundEnabled
+            || workspaceSystemNotificationsEnabled != originalSettings.workspaceSystemNotificationsEnabled
+            || moveNotifiedWorktreeToTop != originalSettings.moveNotifiedWorktreeToTop
     }
 
     private func handleClose() {

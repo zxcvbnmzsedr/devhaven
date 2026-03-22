@@ -56,6 +56,7 @@ struct WorkspaceShellView: View {
                 onRequestDeleteWorktree: { rootProjectPath, worktreePath in
                     pendingDeleteRequest = WorktreeDeleteRequest(rootProjectPath: rootProjectPath, worktreePath: worktreePath)
                 },
+                onFocusNotification: viewModel.focusWorkspaceNotification,
                 onCloseProject: viewModel.closeWorkspaceProject,
                 onExit: viewModel.exitWorkspace
             )

@@ -100,6 +100,10 @@ final class LegacyCompatStoreMutationTests: XCTestCase {
         XCTAssertEqual(editor["futureEditorFlag"] as? Bool, true)
         XCTAssertEqual(settings["terminalTheme"] as? String, "iTerm2 Solarized Dark")
         XCTAssertEqual(settings["viteDevPort"] as? Int, 1410)
+        XCTAssertEqual(settings["workspaceInAppNotificationsEnabled"] as? Bool, true)
+        XCTAssertEqual(settings["workspaceNotificationSoundEnabled"] as? Bool, true)
+        XCTAssertEqual(settings["workspaceSystemNotificationsEnabled"] as? Bool, false)
+        XCTAssertEqual(settings["moveNotifiedWorktreeToTop"] as? Bool, true)
     }
 
     func testTodoMarkdownRoundTripUsesChecklistSyntax() {

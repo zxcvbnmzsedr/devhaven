@@ -119,6 +119,36 @@ final class GhosttySurfaceHostTests: XCTestCase {
         XCTAssertFalse(visibleText.contains("pwdpwd"), "预编辑提交后不应重复成 pwdpwd，实际：\(visibleText)")
     }
 
+    func testAcquireSurfaceViewBridgesNotificationTaskStatusAndBellCallbacks() {
+        let model = GhosttySurfaceHostModel(request: makeRequest())
+        var receivedNotification: (String, String)?
+        var statuses: [WorkspaceTaskStatus] = []
+        var bellCount = 0
+
+        model.onNotificationEvent = { title, body in
+            receivedNotification = (title, body)
+        }
+        model.onTaskStatusChange = { status in
+            statuses.append(status)
+        }
+        model.onBell = {
+            bellCount += 1
+        }
+
+        let view = model.acquireSurfaceView()
+        view.bridge.onDesktopNotification?("任务完成", "构建通过")
+        view.bridge.onTaskStatusChange?(.running)
+        view.bridge.onTaskStatusChange?(.idle)
+        view.bridge.onBell?()
+
+        XCTAssertEqual(receivedNotification?.0, "任务完成")
+        XCTAssertEqual(receivedNotification?.1, "构建通过")
+        XCTAssertEqual(statuses, [.running, .idle])
+        XCTAssertEqual(model.taskStatus, .idle)
+        XCTAssertEqual(model.bellCount, 1)
+        XCTAssertEqual(bellCount, 1)
+    }
+
     func testGhosttyControlDExitTearsDownSurfaceWithoutLockingHost() throws {
         try requireSmokeEnabled()
 

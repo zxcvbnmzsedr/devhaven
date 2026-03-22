@@ -17,6 +17,14 @@ final class WorkspaceProjectListViewTests: XCTestCase {
         )
     }
 
+
+    func testWorktreeRowsRenderNotificationPopoverAndBellIcon() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("WorkspaceNotificationPopoverButton"), "worktree 行应复用通知 popover 入口")
+        XCTAssertTrue(source.contains("bell.fill"), "有未读通知时应显示 bell.fill 图标")
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

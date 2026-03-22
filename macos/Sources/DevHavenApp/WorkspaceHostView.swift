@@ -196,12 +196,34 @@ struct WorkspaceHostView: View {
             onFocusChange: { focused in
                 guard focused else { return }
                 workspace.focusPane(pane.id)
+                viewModel.markWorkspaceNotificationsRead(projectPath: pane.request.projectPath, paneID: pane.id)
             },
             onSurfaceExit: {
                 workspace.closePane(pane.id)
             },
             onTabTitleChange: { title in
                 workspace.updateTitle(for: pane.request.tabId, title: title)
+            },
+            onNotificationEvent: { title, body in
+                viewModel.recordWorkspaceNotification(
+                    projectPath: pane.request.projectPath,
+                    tabID: pane.request.tabId,
+                    paneID: pane.id,
+                    title: title,
+                    body: body
+                )
+                WorkspaceNotificationPresenter.presentIfNeeded(
+                    title: title,
+                    body: body,
+                    settings: viewModel.snapshot.appState.settings
+                )
+            },
+            onTaskStatusChange: { status in
+                viewModel.updateWorkspaceTaskStatus(
+                    projectPath: pane.request.projectPath,
+                    paneID: pane.id,
+                    status: status
+                )
             },
             onNewTab: {
                 _ = workspace.createTab()

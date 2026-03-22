@@ -285,12 +285,17 @@ final class GhosttySurfaceHostModel: ObservableObject {
     @Published var rendererHealthy = true
     @Published var appearance: GhosttySurfaceAppearance = .fallback
     @Published var processState: GhosttySurfaceProcessState = .starting
+    @Published var taskStatus: WorkspaceTaskStatus = .idle
+    @Published var bellCount = 0
     @Published private(set) var hasPreparedSurfaceView = false
 
     private let appRuntime: GhosttyAppRuntime
     private let onFocusChange: ((Bool) -> Void)?
     private let onSurfaceExit: (() -> Void)?
     private let onTabTitleChange: ((String) -> Void)?
+    var onNotificationEvent: ((String, String) -> Void)?
+    var onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)?
+    var onBell: (() -> Void)?
     private let onNewTab: (() -> Bool)?
     private let onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)?
     private let onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)?
@@ -311,6 +316,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
         onFocusChange: ((Bool) -> Void)? = nil,
         onSurfaceExit: (() -> Void)? = nil,
         onTabTitleChange: ((String) -> Void)? = nil,
+        onNotificationEvent: ((String, String) -> Void)? = nil,
+        onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)? = nil,
+        onBell: (() -> Void)? = nil,
         onNewTab: (() -> Bool)? = nil,
         onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)? = nil,
         onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
@@ -324,6 +332,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
         self.onFocusChange = onFocusChange
         self.onSurfaceExit = onSurfaceExit
         self.onTabTitleChange = onTabTitleChange
+        self.onNotificationEvent = onNotificationEvent
+        self.onTaskStatusChange = onTaskStatusChange
+        self.onBell = onBell
         self.onNewTab = onNewTab
         self.onCloseTab = onCloseTab
         self.onGotoTab = onGotoTab
@@ -363,6 +374,24 @@ final class GhosttySurfaceHostModel: ObservableObject {
         }
         bridge.onAppearanceChange = { [weak self] appearance in
             self?.appearance = appearance
+        }
+        bridge.onDesktopNotification = { [weak self] title, body in
+            self?.onNotificationEvent?(title, body)
+        }
+        bridge.onTaskStatusChange = { [weak self] status in
+            guard let self else {
+                return
+            }
+            let resolvedStatus = self.mapTaskStatus(status)
+            self.taskStatus = resolvedStatus
+            self.onTaskStatusChange?(resolvedStatus)
+        }
+        bridge.onBell = { [weak self] in
+            guard let self else {
+                return
+            }
+            self.bellCount += 1
+            self.onBell?()
         }
         bridge.onCloseRequest = { [weak self] processAlive in
             self?.handleProcessExit(processAlive: processAlive)
@@ -493,11 +522,23 @@ final class GhosttySurfaceHostModel: ObservableObject {
         view.focusDidChange(lastSurfaceIsFocused)
     }
 
+    private func mapTaskStatus(_ status: GhosttySurfaceTaskStatus) -> WorkspaceTaskStatus {
+        switch status {
+        case .idle:
+            return .idle
+        case .running:
+            return .running
+        }
+    }
+
     var terminalStatusText: String {
         switch processState {
         case .starting:
             return "Ghostty 启动中"
         case .running:
+            if taskStatus == .running {
+                return "命令执行中"
+            }
             return rendererHealthy ? "Ghostty 渲染器正常" : "Ghostty 渲染器异常"
         case .exited:
             return "终端已退出"

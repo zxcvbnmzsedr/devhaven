@@ -132,12 +132,26 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
     public var worktree: ProjectWorktree
     public var isOpen: Bool
     public var isActive: Bool
+    public var notifications: [WorkspaceTerminalNotification]
+    public var unreadNotificationCount: Int
+    public var taskStatus: WorkspaceTaskStatus?
 
-    public init(rootProjectPath: String, worktree: ProjectWorktree, isOpen: Bool, isActive: Bool) {
+    public init(
+        rootProjectPath: String,
+        worktree: ProjectWorktree,
+        isOpen: Bool,
+        isActive: Bool,
+        notifications: [WorkspaceTerminalNotification] = [],
+        unreadNotificationCount: Int = 0,
+        taskStatus: WorkspaceTaskStatus? = nil
+    ) {
         self.rootProjectPath = rootProjectPath
         self.worktree = worktree
         self.isOpen = isOpen
         self.isActive = isActive
+        self.notifications = notifications
+        self.unreadNotificationCount = unreadNotificationCount
+        self.taskStatus = taskStatus
     }
 
     public var id: String { worktree.id }
@@ -147,20 +161,35 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
     public var status: String? { worktree.status }
     public var initStep: String? { worktree.initStep }
     public var initError: String? { worktree.initError }
+    public var hasUnreadNotifications: Bool { unreadNotificationCount > 0 }
 }
 
 public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     public var rootProject: Project
     public var worktrees: [WorkspaceSidebarWorktreeItem]
     public var isActive: Bool
+    public var notifications: [WorkspaceTerminalNotification]
+    public var unreadNotificationCount: Int
+    public var taskStatus: WorkspaceTaskStatus?
 
-    public init(rootProject: Project, worktrees: [WorkspaceSidebarWorktreeItem], isActive: Bool) {
+    public init(
+        rootProject: Project,
+        worktrees: [WorkspaceSidebarWorktreeItem],
+        isActive: Bool,
+        notifications: [WorkspaceTerminalNotification] = [],
+        unreadNotificationCount: Int = 0,
+        taskStatus: WorkspaceTaskStatus? = nil
+    ) {
         self.rootProject = rootProject
         self.worktrees = worktrees
         self.isActive = isActive
+        self.notifications = notifications
+        self.unreadNotificationCount = unreadNotificationCount
+        self.taskStatus = taskStatus
     }
 
     public var id: String { rootProject.id }
+    public var hasUnreadNotifications: Bool { unreadNotificationCount > 0 }
 }
 
 public struct WorktreeInteractionState: Equatable, Sendable {
