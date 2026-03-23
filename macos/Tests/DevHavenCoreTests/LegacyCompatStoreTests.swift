@@ -570,6 +570,105 @@ final class NativeAppViewModelTests: XCTestCase {
         XCTAssertEqual(appState["directProjectPaths"] as? [String], [betaURL.path()])
     }
 
+    func testAddDirectProjectsRejectsGitWorktreePathInsteadOfSilentlyPersistingInvalidSource() async throws {
+        let fixture = try TestFixture()
+        let worktreeURL = fixture.homeURL.appending(path: "Standalone/Worktree")
+        try FileManager.default.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        try """
+        gitdir: \(fixture.homeURL.appending(path: "repo/.git/worktrees/demo").path())
+        """.write(to: worktreeURL.appending(path: ".git"), atomically: true, encoding: .utf8)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": [],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects("[]")
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+
+        do {
+            try await viewModel.addDirectProjects([worktreeURL.path()])
+            XCTFail("预期直接添加 worktree 会抛错，但实际未抛错")
+        } catch {
+            XCTAssertTrue(
+                error.localizedDescription.contains("Git worktree"),
+                "直接添加 worktree 时应给出明确错误，而不是静默无反应"
+            )
+        }
+
+        XCTAssertEqual(viewModel.snapshot.appState.directProjectPaths, [])
+        XCTAssertEqual(viewModel.snapshot.projects, [])
+    }
+
+    func testAddProjectDirectoryRejectsGitWorktreeRootInsteadOfPersistingEmptyDirectorySource() throws {
+        let fixture = try TestFixture()
+        let worktreeURL = fixture.homeURL.appending(path: "Workspace/Worktree")
+        try FileManager.default.createDirectory(at: worktreeURL, withIntermediateDirectories: true)
+        try """
+        gitdir: \(fixture.homeURL.appending(path: "repo/.git/worktrees/demo").path())
+        """.write(to: worktreeURL.appending(path: ".git"), atomically: true, encoding: .utf8)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": [],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects("[]")
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+
+        XCTAssertThrowsError(
+            try viewModel.addProjectDirectory(worktreeURL.path())
+        ) { error in
+            XCTAssertTrue(
+                error.localizedDescription.contains("Git worktree"),
+                "添加工作目录命中 worktree 根目录时应直接提示不支持，而不是把空目录来源静默写进配置"
+            )
+        }
+
+        XCTAssertEqual(viewModel.snapshot.appState.directories, [])
+        XCTAssertEqual(viewModel.snapshot.projects, [])
+    }
+
     func testRemoveDirectProjectPersistsUpdatedPathsWithoutDeletingDiskProject() throws {
         let fixture = try TestFixture()
         let alphaURL = fixture.homeURL.appending(path: "Standalone/Alpha")
@@ -653,6 +752,74 @@ final class NativeAppViewModelTests: XCTestCase {
 
         let appState = try fixture.readJSON(named: "app_state.json")
         XCTAssertEqual(appState["directProjectPaths"] as? [String], [alphaURL.path()])
+    }
+
+    func testRemoveProjectDirectoryPersistsUpdatedDirectoriesAndClearsSelectedDirectoryFilter() async throws {
+        let fixture = try TestFixture()
+        let workspaceRoot = fixture.homeURL.appending(path: "Workspace")
+        let alphaURL = workspaceRoot.appending(path: "Alpha")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(workspaceRoot.path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects(
+            """
+            [
+              {
+                "id": "alpha",
+                "name": "Alpha",
+                "path": "\(alphaURL.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "alpha",
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              }
+            ]
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+        viewModel.selectDirectory(.directory(workspaceRoot.path()))
+
+        try await viewModel.removeProjectDirectory(workspaceRoot.path())
+
+        XCTAssertEqual(viewModel.snapshot.appState.directories, [])
+        XCTAssertEqual(viewModel.snapshot.projects, [])
+        XCTAssertEqual(viewModel.selectedDirectory, .all, "删除当前选中的工作目录后，应回退到“全部”筛选，避免 UI 落在已消失的目录项上")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: workspaceRoot.path()), "移除工作目录不应删除用户磁盘上的原始目录")
+
+        let appState = try fixture.readJSON(named: "app_state.json")
+        XCTAssertEqual(appState["directories"] as? [String], [])
     }
 
     func testHeatmapDateFilterOverridesTagSelectionAndBuildsActiveProjectList() throws {

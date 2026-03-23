@@ -10,6 +10,7 @@ struct ProjectSidebarView: View {
 
     @Bindable var viewModel: NativeAppViewModel
     @State private var pendingDirectoryImportAction: DirectoryImportAction?
+    @State private var isDirectoryImporterPresented = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,12 +19,44 @@ struct ProjectSidebarView: View {
                 directorySection {
                     VStack(spacing: 6) {
                         ForEach(viewModel.directoryRows) { row in
-                            sidebarRow(
-                                title: row.title,
-                                count: row.count,
-                                selected: row.filter == viewModel.selectedDirectory
-                            ) {
-                                viewModel.selectDirectory(row.filter)
+                            if !row.isSystemEntry, let directoryPath = directoryPath(for: row) {
+                                HStack(spacing: 8) {
+                                    sidebarRow(
+                                        title: row.title,
+                                        count: row.count,
+                                        selected: row.filter == viewModel.selectedDirectory
+                                    ) {
+                                        viewModel.selectDirectory(row.filter)
+                                    }
+
+                                    Button {
+                                        Task {
+                                            do {
+                                                try await viewModel.removeProjectDirectory(directoryPath)
+                                            } catch {
+                                                viewModel.errorMessage = error.localizedDescription
+                                            }
+                                        }
+                                    } label: {
+                                        Image(systemName: "minus.circle")
+                                            .font(.callout)
+                                            .foregroundStyle(NativeTheme.textSecondary)
+                                            .frame(width: 28, height: 28)
+                                            .background(Color.white.opacity(0.05))
+                                            .clipShape(.rect(cornerRadius: 8))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .focusable(false)
+                                    .help("移除此工作目录")
+                                }
+                            } else {
+                                sidebarRow(
+                                    title: row.title,
+                                    count: row.count,
+                                    selected: row.filter == viewModel.selectedDirectory
+                                ) {
+                                    viewModel.selectDirectory(row.filter)
+                                }
                             }
                         }
                     }
@@ -195,10 +228,7 @@ struct ProjectSidebarView: View {
             recycleBinFooter
         }
         .fileImporter(
-            isPresented: Binding(
-                get: { pendingDirectoryImportAction != nil },
-                set: { if !$0 { pendingDirectoryImportAction = nil } }
-            ),
+            isPresented: $isDirectoryImporterPresented,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: pendingDirectoryImportAction == .addProjects,
             onCompletion: handleDirectoryImport
@@ -250,9 +280,11 @@ struct ProjectSidebarView: View {
                 Menu {
                     Button("添加工作目录（扫描项目）") {
                         pendingDirectoryImportAction = .addDirectory
+                        isDirectoryImporterPresented = true
                     }
                     Button("直接添加为项目") {
                         pendingDirectoryImportAction = .addProjects
+                        isDirectoryImporterPresented = true
                     }
                     Button(viewModel.isRefreshingProjectCatalog ? "正在刷新项目列表…" : "刷新项目列表") {
                         Task { await refreshProjectList() }
@@ -301,35 +333,63 @@ struct ProjectSidebarView: View {
     private func handleDirectoryImport(_ result: Result<[URL], Error>) {
         let action = pendingDirectoryImportAction
         pendingDirectoryImportAction = nil
+        isDirectoryImporterPresented = false
 
         switch result {
         case let .success(urls):
-            let paths = importedPaths(from: urls)
-            guard !paths.isEmpty else {
-                return
-            }
-            Task {
-                await performDirectoryImport(paths: paths, action: action)
+            let diagnosticsAction = importDiagnosticsAction(for: action)
+            ProjectImportDiagnostics.shared.recordImporterCallback(action: diagnosticsAction, urlCount: urls.count)
+            Task { @MainActor in
+                await withSecurityScopedDirectoryImportAccess(urls, action: diagnosticsAction) {
+                    await performDirectoryImport(urls: urls, action: action)
+                }
             }
         case let .failure(error):
+            ProjectImportDiagnostics.shared.recordFailure(
+                action: importDiagnosticsAction(for: action),
+                errorDescription: error.localizedDescription
+            )
             viewModel.errorMessage = error.localizedDescription
         }
     }
 
-    private func importedPaths(from urls: [URL]) -> [String] {
-        urls.compactMap { url in
-            let didAccessSecurityScopedResource = url.startAccessingSecurityScopedResource()
-            defer {
-                if didAccessSecurityScopedResource {
-                    url.stopAccessingSecurityScopedResource()
-                }
+    @MainActor
+    private func withSecurityScopedDirectoryImportAccess(
+        _ urls: [URL],
+        action: ProjectImportAction?,
+        operation: @MainActor () async -> Void
+    ) async {
+        let accessedURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
+        ProjectImportDiagnostics.shared.recordSecurityScope(
+            action: action,
+            requestedCount: urls.count,
+            grantedCount: accessedURLs.count
+        )
+        defer {
+            for url in accessedURLs {
+                url.stopAccessingSecurityScopedResource()
             }
-            return url.standardizedFileURL.path()
         }
+        await operation()
+    }
+
+    private func directoryPath(for row: NativeAppViewModel.DirectoryRow) -> String? {
+        guard case let .directory(path) = row.filter else {
+            return nil
+        }
+        return path
     }
 
     @MainActor
-    private func performDirectoryImport(paths: [String], action: DirectoryImportAction?) async {
+    private func performDirectoryImport(urls: [URL], action: DirectoryImportAction?) async {
+        let paths = urls.map { $0.standardizedFileURL.path() }
+        guard !paths.isEmpty else {
+            return
+        }
+        let diagnosticsAction = importDiagnosticsAction(for: action)
+        if let diagnosticsAction {
+            ProjectImportDiagnostics.shared.recordImportAttempt(action: diagnosticsAction, paths: paths)
+        }
         do {
             switch action {
             case .addDirectory:
@@ -338,13 +398,39 @@ struct ProjectSidebarView: View {
                 }
                 try viewModel.addProjectDirectory(firstPath)
                 try await viewModel.refreshProjectCatalog()
+                viewModel.selectDirectory(.directory(firstPath))
+                ProjectImportDiagnostics.shared.recordSelectionApplied(
+                    action: .addDirectory,
+                    filter: "directory:\(firstPath)"
+                )
             case .addProjects:
                 try await viewModel.addDirectProjects(paths)
+                viewModel.selectDirectory(.directProjects)
+                ProjectImportDiagnostics.shared.recordSelectionApplied(
+                    action: .addProjects,
+                    filter: "direct-projects"
+                )
             case nil:
                 return
             }
         } catch {
-            viewModel.errorMessage = error.localizedDescription
+            let resolvedError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            ProjectImportDiagnostics.shared.recordFailure(
+                action: diagnosticsAction,
+                errorDescription: resolvedError
+            )
+            viewModel.errorMessage = resolvedError
+        }
+    }
+
+    private func importDiagnosticsAction(for action: DirectoryImportAction?) -> ProjectImportAction? {
+        switch action {
+        case .addDirectory:
+            .addDirectory
+        case .addProjects:
+            .addProjects
+        case nil:
+            nil
         }
     }
 

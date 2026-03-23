@@ -1053,3 +1053,175 @@
   - `test -d /tmp/devhaven-native-app-manual/DevHaven.app/Contents/Frameworks/Sparkle.framework`
   - `swift test --package-path macos`
   - `swift build --package-path macos`
+
+## 2026-03-23 直接添加为项目无反应排查
+- [x] 梳理“直接添加为项目”入口与调用链
+- [x] 复现并收集运行时证据
+- [x] 对比可用路径与失败路径，定位根因
+- [x] 更新任务状态并写入 Review
+
+## Review（2026-03-23 直接添加为项目无反应排查）
+- 结果：已定位“直接添加为项目”出现‘选目录后没有任何反应’的核心问题：这条链路对**被静默过滤的目录**没有任何错误提示。当前最典型的静默过滤场景是所选目录其实是 Git worktree；其次是目录元数据读取失败（例如权限 / 安全作用域在真正构建项目前已经失效）。
+- 直接原因：`ProjectSidebarView.handleDirectoryImport(...) -> performDirectoryImport(..., .addProjects) -> NativeAppViewModel.addDirectProjects(...) -> buildProjects(...) -> createProject(...)` 这条链路里，`createProject(...)` 会在两种情况下直接返回 `nil`：
+  1. `isGitWorktree(projectURL)` 为 true；
+  2. `resourceValues.isDirectory` 读取失败或不是目录。
+  `addDirectProjects(...)` 随后仍会静默继续，不抛错、不弹窗，因此用户只会看到“点了添加但没变化”。
+- 设计层诱因：存在明显的交互 / 责任边界缺陷。导入链路把“记录 directProjectPaths”和“真正构建可展示项目”混在一起，但没有把‘路径被过滤’作为显式结果返回 UI；因此业务层知道要丢弃，界面层却拿不到失败原因，只能表现成无反馈。另一个诱因是 `importedPaths(from:)` 在拿到路径字符串后立即停止 security-scoped access，若后续运行环境需要持续权限，真正的目录检查会在更后面静默失败。
+- 当前修复方案建议：
+  1. 在 `addDirectProjects` / `buildProjects` 返回结构化结果（成功数、被忽略路径、忽略原因）；
+  2. 对 worktree 明确提示“该目录是 Git worktree，请从根项目进入或走 worktree 流程”；
+  3. 对目录不可访问明确提示“无法读取目录元数据/权限不足”；
+  4. 若需要 security-scoped URL，应把访问范围覆盖到真正完成目录校验与项目构建，而不是只包住 `path()` 提取。
+- 长期改进建议：
+  1. 给“直接添加为项目”补最小回归测试，覆盖 worktree / 不可访问目录的显式报错；
+  2. 统一‘目录导入’结果模型，避免其它导入入口继续出现“业务失败但 UI 没提示”的静默失败；
+  3. 若产品上不打算支持 direct add worktree，菜单或文件选择说明里应提前写清限制，而不是让用户试完才发现没有反馈。
+- 验证证据：
+  - 代码调用链：`macos/Sources/DevHavenApp/ProjectSidebarView.swift:301-347`、`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift:1117-1133`、`2053-2104`、`2177-2191`
+  - 本机状态文件：`~/.devhaven/app_state.json` 当前已有 `directProjectPaths = ['/Users/zhaotianzeng/.codex']`，说明该功能并非完全不可用，而是对某些路径类型会静默失败。
+  - 本地 worktree 复现：临时仓库 `/tmp/devhaven-direct-add-2aQ3lC` 中 `wt/.git` 内容为 `gitdir: /private/tmp/devhaven-direct-add-2aQ3lC/repo/.git/worktrees/wt`，与 `isGitWorktree(...)` 的判定条件完全吻合，因此此类目录会在 `createProject(...)` 中被直接过滤掉。
+
+## 2026-03-23 目录移除能力修复
+
+- [x] 定位“添加目录后不可移除”的直接原因与影响范围
+- [x] 先补能稳定复现该问题的失败测试
+- [x] 以最小改动实现目录移除能力
+- [x] 运行定向验证并补充 Review（含直接原因/设计诱因/修复方案/长期建议）
+
+## Review（2026-03-23 目录移除能力修复）
+
+- 直接原因：
+  1. `ProjectSidebarView` 的“目录”分区只提供了添加与刷新入口，用户添加的工作目录行没有任何减号 / 移除动作；
+  2. `NativeAppViewModel` 只实现了 `addProjectDirectory(_:)`，没有对称的 `removeProjectDirectory(_:)`，导致 UI 就算想提供入口也无业务 API 可调用。
+- 设计层诱因：
+  1. 目录来源配置（`app_state.json.directories`）和当前项目快照（`snapshot.projects` / `projects.json`）虽然都存在，但“移除来源后如何重建目录快照”此前没有被收口成一条对称链路；
+  2. 特别是当最后一个目录被移除时，现有 `refreshProjectCatalog()` 会因“没有任何来源目录 / 直接项目”而直接返回，如果没有额外清空逻辑，就会把旧项目快照残留在内存和磁盘里。
+  3. 未发现明显系统设计缺陷，但“添加有链路、移除没链路”确实是这次缺陷的直接诱因。
+- 当前修复方案：
+  1. 在 `NativeAppViewModel` 新增 `removeProjectDirectory(_:) async throws`，负责：
+     - 更新并持久化 `app_state.json.directories`；
+     - 若当前正选中被删除目录，则把筛选回退到 `.all`；
+     - 若已无任何目录来源与直接项目，则同步清空 `projects.json` / `snapshot.projects`；
+     - 否则走现有 `refreshProjectCatalog()` 重建项目目录快照。
+  2. 在 `ProjectSidebarView` 中，仅对用户添加的目录行（非系统项“全部 / 直接添加”）显示 `minus.circle` 移除按钮，并直接调用 `viewModel.removeProjectDirectory(...)`。
+  3. 新增回归测试覆盖：
+     - 目录行存在移除动作；
+     - 移除目录后会持久化配置、清空项目快照、回退目录筛选，且不会删除磁盘原目录。
+- 长期改进建议：
+  1. 继续把“项目来源配置变更后如何重建 / 清空项目快照”抽成统一 helper，减少 direct project / scanned directory 两条链路未来再次分叉；
+  2. 后续可补一条 UI 层交互测试，验证点击目录减号后的行为，而不只做源码结构断言。
+- 验证证据：
+  - `swift test --package-path macos --filter DevHavenCoreTests.NativeAppViewModelTests/testRemoveProjectDirectoryPersistsUpdatedDirectoriesAndClearsSelectedDirectoryFilter`
+  - `swift test --package-path macos --filter DevHavenAppTests.ProjectSidebarViewTests/testUserAddedDirectoryRowsExposeRemoveAction`
+  - `swift test --package-path macos` → 244 tests，5 skipped，0 failures
+
+## 2026-03-23 添加工作目录/直接添加项目无反应修复
+
+- [x] 复核两条导入链路（添加工作目录 / 直接添加为项目）的共同入口与直接原因
+- [x] 先补可稳定复现“导入后无反馈”的失败测试
+- [x] 以最小改动修复导入无反应问题
+- [x] 运行定向验证与全量验证，并在 Review 记录根因/诱因/修复/证据
+
+## Review（2026-03-23 添加工作目录/直接添加项目无反应修复）
+
+- 直接原因：
+  1. 成功导入后，`ProjectSidebarView` 没有自动切换到新导入内容对应的筛选：添加工作目录后不选中新目录，直接添加项目后也不切到“直接添加”，因此新增内容很容易被当前筛选状态遮住，表现成“选完目录没任何反应”。
+  2. `NativeAppViewModel` 之前会把 Git worktree 根目录静默写进 `directories` / `directProjectPaths`，但后续构建项目时又把 worktree 过滤掉，结果就是配置被写了、列表却没变化，用户没有任何明确反馈。
+- 设计层诱因：
+  1. 导入链路缺少“路径校验 + 结构化结果”这一层，导致“能否真正导入成项目”和“是否写入来源配置”没有统一收口；
+  2. 另一个实现诱因是 `ProjectSidebarView` 之前只在 `importedPaths(from:)` 中短暂持有 security-scoped URL，再在真正导入前就释放访问权限，这会增加文件选择器导入在部分环境下的脆弱性。这里属于基于代码路径的实现分析，不是单独复现出的唯一根因，但本次一并收口了。
+  3. 未发现明显系统设计缺陷，但导入验证、来源持久化与 UI 反馈之间确实存在边界断裂。
+- 当前修复方案：
+  1. 在 `NativeAppViewModel` 增加导入前目录校验，若选中的是 Git worktree 或不可访问目录，直接抛出中文错误，阻止静默写入无效来源。
+  2. `addDirectProjects(_:)` 现在只持久化真正可导入的项目路径；当全部路径都不可导入时，会明确报错而不是“看起来什么都没发生”。
+  3. `ProjectSidebarView` 现在会在整个导入执行期间保持 security-scoped access，并在成功后主动切换到：
+     - 新增工作目录对应的目录筛选；
+     - 或“直接添加”筛选。
+  4. 新增回归测试覆盖：
+     - 直接添加 worktree 必须报错，且不能静默写入 directProjectPaths；
+     - 添加工作目录命中 worktree 根目录必须报错，且不能静默写入 directories；
+     - 导入成功后必须切换到对应筛选，避免“无反应”。
+- 长期改进建议：
+  1. 后续可把“导入结果”升级为明确的数据结构（成功项 / 忽略项 / 警告项），而不是继续让 ViewModel 通过 `errorMessage` 承担全部 UI 反馈；
+  2. 若未来继续使用系统文件选择器导入目录，建议把 security-scoped URL 处理抽成统一 helper，避免其它导入入口再次出现“先拿 path、后释放权限、真正读取时才失败”的问题。
+- 验证证据：
+  - `swift test --package-path macos --filter DevHavenCoreTests.NativeAppViewModelTests/testAddDirectProjectsRejectsGitWorktreePathInsteadOfSilentlyPersistingInvalidSource`
+  - `swift test --package-path macos --filter DevHavenCoreTests.NativeAppViewModelTests/testAddProjectDirectoryRejectsGitWorktreeRootInsteadOfPersistingEmptyDirectorySource`
+  - `swift test --package-path macos --filter DevHavenAppTests.ProjectSidebarViewTests/testSuccessfulImportSelectsImportedFilterToAvoidNoReaction`
+  - `swift test --package-path macos` → 247 tests，5 skipped，0 failures
+
+## 2026-03-23 导入链路日志埋点
+
+- [x] 盘点当前导入链路与现有日志基础设施，确定日志落点
+- [x] 先补回归测试，约束导入链路包含关键日志埋点
+- [x] 以最小改动为 fileImporter / 目录校验 / 持久化结果补统一日志
+- [x] 运行定向验证并在 Review 记录日志点、查看方式与证据
+
+## Review（2026-03-23 导入链路日志埋点）
+
+- 结果：已为“添加工作目录 / 直接添加为项目”链路补齐统一的 `ProjectImport` unified log，日志前缀统一为 `[project-import]`，并覆盖 fileImporter 回调、security-scoped access、真正导入尝试、目录校验、持久化成功、筛选切换和失败原因。
+- 直接原因：
+  1. 用户反馈“还是没有反应”后，现有代码虽然已有部分行为修复，但缺少足够的运行时观测点，无法快速判断问题是卡在文件选择器回调、URL 权限、路径校验、配置持久化还是筛选切换。
+  2. 原先 unified log 只有 workspace launch 相关诊断，没有项目导入专项诊断。
+- 设计层诱因：
+  1. 导入是一条跨 UI / 文件权限 / ViewModel / 存储层的多边界链路，没有结构化日志时，任何一步静默失败看起来都会像“没反应”；
+  2. 未发现明显系统设计缺陷，但可观测性此前明显不足。
+- 当前修复方案：
+  1. 新增 `macos/Sources/DevHavenCore/Diagnostics/ProjectImportDiagnostics.swift`，统一输出 `subsystem=DevHavenNative`、`category=ProjectImport` 的日志。
+  2. `ProjectSidebarView` 在以下节点打日志：
+     - importer 成功回调收到多少个 URL；
+     - security-scoped access 请求数 / 实际授予数；
+     - 真正开始导入的 action / paths；
+     - 失败时的错误；
+     - 成功后应用了哪个筛选。
+  3. `NativeAppViewModel` 在以下节点打日志：
+     - 每个导入路径校验 accepted / rejected；
+     - 工作目录持久化成功；
+     - 直接导入项目 requested / accepted / rejected / total 汇总。
+- 查看方式：
+  - 开发态推荐直接运行：`./dev --logs app`
+  - 然后在输出里搜：`[project-import]`
+  - 若要单独看导入日志，也可直接运行：
+    `log stream --style compact --level debug --predicate 'subsystem == "DevHavenNative" && category == "ProjectImport"'`
+- 验证证据：
+  - `swift test --package-path macos --filter DevHavenCoreTests.ProjectImportDiagnosticsTests`
+  - `swift test --package-path macos --filter DevHavenAppTests.ProjectSidebarViewTests/testImportFlowRecordsDiagnosticsAtImporterBoundary`
+  - `swift test --package-path macos --filter DevHavenCoreTests.NativeAppViewModelTests/testAddDirectProjectsRejectsGitWorktreePathInsteadOfSilentlyPersistingInvalidSource`
+  - `swift test --package-path macos` → 249 tests，5 skipped，0 failures
+
+## 2026-03-23 fileImporter 动作丢失修复
+
+- [x] 根据用户日志确认 action=unknown 的直接原因与触发链路
+- [x] 先补失败测试，约束 fileImporter dismiss 不得提前清空导入动作
+- [x] 以最小改动修复导入动作状态丢失
+- [x] 运行定向验证并在 Review 记录日志证据与修复结果
+
+## Review（2026-03-23 fileImporter 动作丢失修复）
+
+- 结果：已确认并修复 `fileImporter` 导致的导入动作丢失问题。根据用户提供的 live 日志：
+  - `[project-import] importer-callback action=unknown urlCount=1`
+  - `[project-import] security-scope action=unknown requested=1 granted=1`
+  可知目录 URL 已成功返回且权限也拿到了，但在回调执行时动作类型已经被提前清空，因此后续无法判断该走“添加工作目录”还是“直接添加为项目”链路。
+- 直接原因：
+  1. `ProjectSidebarView` 之前把 `pendingDirectoryImportAction` 同时用作：
+     - fileImporter 是否展示的状态；
+     - 导入完成后要执行哪条链路的动作类型。
+  2. `.fileImporter(isPresented: Binding(... set: { if !$0 { pendingDirectoryImportAction = nil } }))` 会在 importer dismiss 时先把 `pendingDirectoryImportAction` 清空，导致 `handleDirectoryImport(...)` 回调执行时 `action == nil`，日志里就表现为 `action=unknown`。
+- 设计层诱因：
+  1. “展示态”与“业务动作态”被错误地耦合在同一个状态变量上，这是典型的状态源职责不清；
+  2. 未发现明显系统设计缺陷，但这属于明确的状态建模错误。
+- 当前修复方案：
+  1. 新增独立状态 `isDirectoryImporterPresented`，仅表示 fileImporter 是否展示；
+  2. `pendingDirectoryImportAction` 只保存业务动作，不再由 `isPresented` setter 隐式清空；
+  3. 现在的顺序改为：
+     - 点击菜单项时：先写入 `pendingDirectoryImportAction`，再置 `isDirectoryImporterPresented = true`
+     - `handleDirectoryImport(...)` 回调时：先读取 action，再清理状态
+  4. 因此后续日志中的 `action=unknown` 应该消失，并出现明确的 `action=add-directory` 或 `action=add-projects`。
+- 长期改进建议：
+  1. 所有“弹窗是否展示”和“弹窗完成后要执行什么动作”都应拆成两个独立状态，不要再复用一个 optional 状态做双重职责；
+  2. 若未来继续扩展导入入口，建议直接把导入动作抽成可测试的 request model，避免 UI state 再次吞掉业务语义。
+- 验证证据：
+  - `swift test --package-path macos --filter DevHavenAppTests.ProjectSidebarViewTests/testFileImporterPresentationStateDoesNotClearPendingActionBeforeCompletion`
+  - `swift test --package-path macos --filter DevHavenAppTests.ProjectSidebarViewTests/testImportFlowRecordsDiagnosticsAtImporterBoundary`
+  - `swift test --package-path macos --filter DevHavenAppTests.ProjectSidebarViewTests/testSuccessfulImportSelectsImportedFilterToAvoidNoReaction`
+  - `swift test --package-path macos` → 250 tests，5 skipped，0 failures

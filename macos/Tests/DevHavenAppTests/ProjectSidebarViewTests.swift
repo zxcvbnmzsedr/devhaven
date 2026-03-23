@@ -70,6 +70,82 @@ final class ProjectSidebarViewTests: XCTestCase {
         )
     }
 
+    func testUserAddedDirectoryRowsExposeRemoveAction() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("if !row.isSystemEntry"),
+            "用户添加的目录行应与系统固定分组区分开，才能只对可移除目录显示减号动作"
+        )
+        XCTAssertTrue(
+            source.contains("viewModel.removeProjectDirectory(directoryPath)"),
+            "目录侧边栏应为用户添加的工作目录提供移除入口"
+        )
+        XCTAssertTrue(
+            source.contains("Image(systemName: \"minus.circle\")"),
+            "目录移除动作应使用减号图标，和现有“移除直接添加项目”语义保持一致"
+        )
+    }
+
+    func testSuccessfulImportSelectsImportedFilterToAvoidNoReaction() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("viewModel.selectDirectory(.directory(firstPath))"),
+            "成功添加工作目录后应切换到新目录筛选，避免用户感觉“选完目录没有任何反应”"
+        )
+        XCTAssertTrue(
+            source.contains("viewModel.selectDirectory(.directProjects)"),
+            "成功直接添加项目后应切换到“直接添加”筛选，避免新增项目被当前筛选条件隐藏"
+        )
+    }
+
+    func testImportFlowRecordsDiagnosticsAtImporterBoundary() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("ProjectImportDiagnostics.shared.recordImporterCallback"),
+            "fileImporter 成功回调时应打日志，确认系统文件选择器是否真的回来了 URL"
+        )
+        XCTAssertTrue(
+            source.contains("ProjectImportDiagnostics.shared.recordSecurityScope"),
+            "导入链路应记录 security-scoped access 获得情况，排查“选到了目录但后续读不到”"
+        )
+        XCTAssertTrue(
+            source.contains("ProjectImportDiagnostics.shared.recordImportAttempt"),
+            "真正执行导入前应记录 action 和 paths，方便排查路径是否被正确传递"
+        )
+        XCTAssertTrue(
+            source.contains("ProjectImportDiagnostics.shared.recordFailure"),
+            "导入失败时应显式打日志，而不是只改 errorMessage"
+        )
+    }
+
+    func testFileImporterPresentationStateDoesNotClearPendingActionBeforeCompletion() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("@State private var isDirectoryImporterPresented = false"),
+            "目录导入弹窗应使用独立的 presented 状态，避免把动作类型和是否展示耦合在同一个状态变量上"
+        )
+        XCTAssertTrue(
+            source.contains("isPresented: $isDirectoryImporterPresented"),
+            "fileImporter 应绑定独立的展示状态，而不是通过 pending action 的 setter 提前清空动作"
+        )
+        XCTAssertTrue(
+            source.contains("pendingDirectoryImportAction = .addDirectory\n                        isDirectoryImporterPresented = true"),
+            "点击“添加工作目录”时应先记录动作，再展示 importer"
+        )
+        XCTAssertTrue(
+            source.contains("pendingDirectoryImportAction = .addProjects\n                        isDirectoryImporterPresented = true"),
+            "点击“直接添加为项目”时应先记录动作，再展示 importer"
+        )
+        XCTAssertTrue(
+            source.contains("let action = pendingDirectoryImportAction\n        pendingDirectoryImportAction = nil\n        isDirectoryImporterPresented = false"),
+            "应在 onCompletion 中先捕获动作，再清理状态，避免回调回来时 action 变成 unknown"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

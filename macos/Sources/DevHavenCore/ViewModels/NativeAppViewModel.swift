@@ -11,6 +11,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let gitDailyCollectorAsync: @Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult]
     @ObservationIgnored private let projectCatalogRefresher: @Sendable (ProjectCatalogRefreshRequest) async throws -> [Project]
     @ObservationIgnored private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
+    @ObservationIgnored private let projectImportDiagnostics: ProjectImportDiagnostics
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
     @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
@@ -109,6 +110,7 @@ public final class NativeAppViewModel {
         gitDailyCollectorAsync: (@Sendable ([String], [GitIdentity], @escaping @Sendable (Int, Int) async -> Void) async -> [GitDailyRefreshResult])? = nil,
         projectCatalogRefresher: (@Sendable (ProjectCatalogRefreshRequest) async throws -> [Project])? = nil,
         workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics = .shared,
+        projectImportDiagnostics: ProjectImportDiagnostics = .shared,
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
         worktreeService: (any NativeWorktreeServicing)? = nil,
         agentSignalStore: WorkspaceAgentSignalStore? = nil
@@ -119,6 +121,7 @@ public final class NativeAppViewModel {
         self.gitDailyCollectorAsync = gitDailyCollectorAsync ?? collectGitDailyAsync
         self.projectCatalogRefresher = projectCatalogRefresher ?? rebuildProjectCatalogSnapshot
         self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
+        self.projectImportDiagnostics = projectImportDiagnostics
         self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.worktreeService = worktreeService ?? NativeGitWorktreeService()
         self.agentSignalStore = agentSignalStore ?? WorkspaceAgentSignalStore(
@@ -1099,10 +1102,7 @@ public final class NativeAppViewModel {
     }
 
     public func addProjectDirectory(_ path: String) throws {
-        let normalizedPath = normalizePathForCompare(path)
-        guard !normalizedPath.isEmpty else {
-            return
-        }
+        let normalizedPath = try validateImportedDirectoryPath(path, diagnostics: projectImportDiagnostics)
 
         let nextDirectories = normalizePathList(snapshot.appState.directories + [normalizedPath])
         guard nextDirectories != snapshot.appState.directories else {
@@ -1111,6 +1111,37 @@ public final class NativeAppViewModel {
         }
         try store.updateDirectories(nextDirectories)
         snapshot.appState.directories = nextDirectories
+        projectImportDiagnostics.recordDirectoryPersisted(path: normalizedPath, totalCount: nextDirectories.count)
+        errorMessage = nil
+    }
+
+    public func removeProjectDirectory(_ path: String) async throws {
+        let normalizedPath = normalizePathForCompare(path)
+        guard !normalizedPath.isEmpty else {
+            return
+        }
+
+        let nextDirectories = snapshot.appState.directories.filter {
+            normalizePathForCompare($0) != normalizedPath
+        }
+        guard nextDirectories != snapshot.appState.directories else {
+            errorMessage = nil
+            return
+        }
+
+        try store.updateDirectories(nextDirectories)
+        snapshot.appState.directories = nextDirectories
+        if case let .directory(selectedPath) = selectedDirectory,
+           normalizePathForCompare(selectedPath) == normalizedPath {
+            selectedDirectory = .all
+        }
+
+        if nextDirectories.isEmpty && snapshot.appState.directProjectPaths.isEmpty {
+            try persistProjects([])
+            applyProjects([])
+        } else {
+            try await refreshProjectCatalog()
+        }
         errorMessage = nil
     }
 
@@ -1120,17 +1151,51 @@ public final class NativeAppViewModel {
             return
         }
 
+        let existingDirectProjectPaths = Set(snapshot.appState.directProjectPaths.map(normalizePathForCompare))
+        var importablePaths = [String]()
+        var importErrors = [String]()
+        for path in normalizedPaths {
+            if existingDirectProjectPaths.contains(path) {
+                continue
+            }
+            do {
+                importablePaths.append(try validateImportedDirectoryPath(path, diagnostics: projectImportDiagnostics))
+            } catch {
+                importErrors.append((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
+            }
+        }
+
+        guard !importablePaths.isEmpty else {
+            if let firstError = importErrors.first {
+                projectImportDiagnostics.recordFailure(action: .addProjects, errorDescription: firstError)
+                throw ProjectImportError.importRejected(firstError)
+            }
+            errorMessage = nil
+            return
+        }
+
         let existingProjects = snapshot.projects
         let builtProjects = await Task.detached(priority: .userInitiated) {
-            buildProjects(paths: normalizedPaths, existing: existingProjects)
+            buildProjects(paths: importablePaths, existing: existingProjects)
         }.value
+        let builtProjectPaths = Set(builtProjects.map { normalizePathForCompare($0.path) })
+        let acceptedProjectPaths = importablePaths.filter { builtProjectPaths.contains(normalizePathForCompare($0)) }
+        guard !acceptedProjectPaths.isEmpty else {
+            throw ProjectImportError.importRejected("所选目录无法作为项目导入，请确认目录可访问且不是 Git worktree。")
+        }
         let nextProjects = mergeProjectsByPath(existing: existingProjects, updates: builtProjects)
-        let nextDirectProjectPaths = normalizePathList(snapshot.appState.directProjectPaths + normalizedPaths)
+        let nextDirectProjectPaths = normalizePathList(snapshot.appState.directProjectPaths + acceptedProjectPaths)
 
         try store.updateDirectProjectPaths(nextDirectProjectPaths)
         snapshot.appState.directProjectPaths = nextDirectProjectPaths
         try persistProjects(nextProjects)
-        errorMessage = nil
+        projectImportDiagnostics.recordDirectProjectsPersisted(
+            requestedCount: normalizedPaths.count,
+            acceptedCount: acceptedProjectPaths.count,
+            rejectedCount: normalizedPaths.count - acceptedProjectPaths.count,
+            totalCount: nextDirectProjectPaths.count
+        )
+        errorMessage = importErrors.isEmpty ? nil : importErrors.joined(separator: "\n")
     }
 
     public func refreshProjectCatalog() async throws {
@@ -1945,6 +2010,53 @@ private func normalizePathList(_ paths: [String]) -> [String] {
         .map(normalizePathForCompare)
         .filter { !$0.isEmpty }
         .filter { seen.insert($0).inserted }
+}
+
+private enum ProjectImportError: LocalizedError {
+    case importRejected(String)
+    case unsupportedGitWorktree(String)
+    case invalidDirectory(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .importRejected(message):
+            return message
+        case let .unsupportedGitWorktree(path):
+            return "不支持导入 Git worktree：\(path)"
+        case let .invalidDirectory(path):
+            return "无法读取目录：\(path)"
+        }
+    }
+}
+
+@MainActor
+private func validateImportedDirectoryPath(
+    _ path: String,
+    diagnostics: ProjectImportDiagnostics
+) throws -> String {
+    let normalizedPath = normalizePathForCompare(path)
+    guard !normalizedPath.isEmpty else {
+        let error = ProjectImportError.invalidDirectory(path)
+        diagnostics.recordValidationRejected(path: path, reason: error.localizedDescription)
+        throw error
+    }
+
+    let directoryURL = URL(fileURLWithPath: normalizedPath, isDirectory: true)
+    let keys: Set<URLResourceKey> = [.isDirectoryKey]
+    guard let resourceValues = try? directoryURL.resourceValues(forKeys: keys),
+          resourceValues.isDirectory == true
+    else {
+        let error = ProjectImportError.invalidDirectory(normalizedPath)
+        diagnostics.recordValidationRejected(path: normalizedPath, reason: error.localizedDescription)
+        throw error
+    }
+    guard !isGitWorktree(directoryURL) else {
+        let error = ProjectImportError.unsupportedGitWorktree(normalizedPath)
+        diagnostics.recordValidationRejected(path: normalizedPath, reason: error.localizedDescription)
+        throw error
+    }
+    diagnostics.recordValidationAccepted(path: normalizedPath)
+    return normalizedPath
 }
 
 private func mergeProjectsByPath(existing: [Project], updates: [Project]) -> [Project] {
