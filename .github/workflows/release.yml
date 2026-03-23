@@ -343,7 +343,7 @@ jobs:
           cp "${{ steps.universal-archive.outputs.zip_path }}" "$archives_dir/"
           gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json body --jq '.body' > "$archives_dir/DevHaven-macos-universal.txt"
 
-          bash macos/scripts/generate-appcast.sh             --archives-dir "$archives_dir"             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG"             --output "$archives_dir/appcast-staged.xml"             --maximum-versions 3             --maximum-deltas 0             --link "https://github.com/${GITHUB_REPOSITORY}"             --full-release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/$RELEASE_TAG"
+          bash macos/scripts/generate-appcast.sh             --archives-dir "$archives_dir"             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG/"             --output "$archives_dir/appcast-staged.xml"             --maximum-versions 3             --maximum-deltas 0             --link "https://github.com/${GITHUB_REPOSITORY}/releases/tag/$RELEASE_TAG"             --full-release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/$RELEASE_TAG"
 
           echo "appcast_path=$archives_dir/appcast-staged.xml" >> "$GITHUB_OUTPUT"
 

@@ -91,6 +91,13 @@ APPCAST_PATH="$(resolve_path "$APPCAST_PATH")"
 [[ -n "${GH_TOKEN:-}" ]] || fail "必须提供 GH_TOKEN，供 gh release 上传"
 
 RELEASE_TITLE="${RELEASE_TITLE:-$RELEASE_TAG}"
+staged_upload_dir="$(mktemp -d "${TMPDIR:-/tmp}/devhaven-promote-appcast.XXXXXX")"
+staged_upload_path="$staged_upload_dir/$ASSET_NAME"
+
+cleanup() {
+  rm -rf "$staged_upload_dir"
+}
+trap cleanup EXIT
 
 if gh release view "$RELEASE_TAG" -R "$REPO" >/dev/null 2>&1; then
   gh release edit "$RELEASE_TAG" -R "$REPO" --title "$RELEASE_TITLE" >/dev/null
@@ -102,6 +109,7 @@ else
   gh "${create_args[@]}" >/dev/null
 fi
 
-gh release upload "$RELEASE_TAG" "$APPCAST_PATH#$ASSET_NAME" -R "$REPO" --clobber >/dev/null
+cp "$APPCAST_PATH" "$staged_upload_path"
+gh release upload "$RELEASE_TAG" "$staged_upload_path" -R "$REPO" --clobber >/dev/null
 printf 'PROMOTED_RELEASE=%s\n' "$RELEASE_TAG"
 printf 'PROMOTED_ASSET=%s\n' "$ASSET_NAME"
