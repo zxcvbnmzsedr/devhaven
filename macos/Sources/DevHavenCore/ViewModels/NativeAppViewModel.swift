@@ -1,6 +1,12 @@
 import Foundation
 import Observation
 
+private struct WorktreeCreateContext {
+    let request: NativeWorktreeCreateRequest
+    let rootProjectPath: String
+    let previewPath: String
+}
+
 @MainActor
 @Observable
 public final class NativeAppViewModel {
@@ -1016,6 +1022,50 @@ public final class NativeAppViewModel {
         autoOpen: Bool,
         targetPath: String? = nil
     ) async throws {
+        let context = try prepareCreateWorkspaceWorktree(
+            from: rootProjectPath,
+            branch: branch,
+            createBranch: createBranch,
+            baseBranch: baseBranch,
+            targetPath: targetPath
+        )
+        try await runCreateWorkspaceWorktree(context, autoOpen: autoOpen)
+    }
+
+    public func startCreateWorkspaceWorktree(
+        from rootProjectPath: String,
+        branch: String,
+        createBranch: Bool,
+        baseBranch: String?,
+        autoOpen: Bool,
+        targetPath: String? = nil
+    ) throws {
+        let context = try prepareCreateWorkspaceWorktree(
+            from: rootProjectPath,
+            branch: branch,
+            createBranch: createBranch,
+            baseBranch: baseBranch,
+            targetPath: targetPath
+        )
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                try await self.runCreateWorkspaceWorktree(context, autoOpen: autoOpen)
+            } catch {
+                // `runCreateWorkspaceWorktree` 已把失败状态、错误文案和交互锁清理回主状态，这里无需重复处理。
+            }
+        }
+    }
+
+    private func prepareCreateWorkspaceWorktree(
+        from rootProjectPath: String,
+        branch: String,
+        createBranch: Bool,
+        baseBranch: String?,
+        targetPath: String?
+    ) throws -> WorktreeCreateContext {
         guard worktreeInteractionState == nil else {
             throw NativeWorktreeError.operationInProgress("已有 worktree 创建任务正在进行中，请稍候")
         }
@@ -1060,25 +1110,38 @@ public final class NativeAppViewModel {
             message: "准备创建 worktree..."
         )
 
+        return WorktreeCreateContext(
+            request: request,
+            rootProjectPath: rootProjectPath,
+            previewPath: previewPath
+        )
+    }
+
+    private func runCreateWorkspaceWorktree(
+        _ context: WorktreeCreateContext,
+        autoOpen: Bool
+    ) async throws {
         do {
             let result = try await Task.detached(priority: .userInitiated) {
-                try self.worktreeService.createWorktree(request) { progress in
+                try self.worktreeService.createWorktree(context.request) { progress in
                     Task { @MainActor in
-                        self.applyWorktreeProgress(progress, rootProjectPath: rootProjectPath)
+                        self.applyWorktreeProgress(progress, rootProjectPath: context.rootProjectPath)
                     }
                 }
             }.value
 
-            await MainActor.run {
-                self.finishCreateWorkspaceWorktree(
-                    result,
-                    rootProjectPath: rootProjectPath,
-                    autoOpen: autoOpen
-                )
-            }
+            finishCreateWorkspaceWorktree(
+                result,
+                rootProjectPath: context.rootProjectPath,
+                autoOpen: autoOpen
+            )
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            markWorktreeAsFailed(worktreePath: previewPath, rootProjectPath: rootProjectPath, errorMessage: message)
+            markWorktreeAsFailed(
+                worktreePath: context.previewPath,
+                rootProjectPath: context.rootProjectPath,
+                errorMessage: message
+            )
             worktreeInteractionState = nil
             errorMessage = message
             throw error

@@ -1571,7 +1571,56 @@
 
 ## 2026-03-23 创建 git worktree 进度弹窗未置前
 
-- [ ] 复现并定位创建 worktree 时进度弹窗未显示在最前面的直接原因
-- [ ] 先补失败测试或最小验证手段，约束进度弹窗在创建开始时立即置前
-- [ ] 实施最小修复，必要时同步更新相关文档/注释
-- [ ] 运行定向验证，并在 Review 中记录根因、设计诱因、修复方案与证据
+- [x] 复现并定位创建 worktree 时进度弹窗未显示在最前面的直接原因
+- [x] 先补失败测试或最小验证手段，约束进度弹窗在创建开始时立即置前
+- [x] 实施最小修复，必要时同步更新相关文档/注释
+- [x] 运行定向验证，并在 Review 中记录根因、设计诱因、修复方案与证据
+
+## Review（2026-03-23 创建 git worktree 进度弹窗未置前）
+
+- 结果：
+  1. 创建 git worktree 后，管理对话框现在会在任务真正启动后立即退出，进度弹窗能直接显示在最前面，不再需要先手动点“取消”。
+  2. 立即校验失败（例如已有任务占用锁、项目不存在）仍然保留在原对话框内返回错误；只有通过前置校验后，才切到全局进度弹窗继续展示后台进度。
+- 直接原因：
+  1. `WorkspaceWorktreeDialogView.submit()` 之前会一直 `await onCreateWorktree(...)` 到整个 worktree 创建流程结束；
+  2. worktree 管理对话框本身是 `.sheet`，而真正的进度 UI 在 `AppRootView` 的全局 overlay 中；sheet 不退出时，全局 overlay 会被它压在下面。
+- 设计层诱因：
+  1. 当前链路把“前置校验/占坑”和“耗时创建/进度推进”塞进同一个 await 生命周期里，导致局部表单 sheet 持有了整段长任务的前台层级；
+  2. 未发现明显系统设计缺陷；问题主要是异步交互边界没有按 UI 层级拆开。
+- 当前修复方案：
+  1. 在 `NativeAppViewModel` 中把创建链路拆成“同步准备阶段”与“后台执行阶段”；
+  2. 新增 `startCreateWorkspaceWorktree(...)`：先完成立即可失败的校验、占坑和 `worktreeInteractionState` 建立，再把真实创建流程放到后台 Task；
+  3. `WorkspaceShellView` 的创建入口改为调用该“先启动后后台执行”的 API，让 sheet 可以立刻关闭，而全局 overlay 接手展示进度；
+  4. 保留原 `createWorkspaceWorktree(...)` 供需要等待完整结果的调用和既有测试使用。
+- 长期改进建议：
+  1. 后续凡是“局部 sheet 发起、全局 overlay 展示”的长任务，都应统一采用“先通过前置校验，再切换到全局进度态”的交互协议，避免再次出现层级互相遮挡。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter 'WorkspaceShellViewTests|NativeAppViewModelWorkspaceEntryTests'`（实现前）→ 编译失败：`NativeAppViewModel` 缺少 `startCreateWorkspaceWorktree`
+  - 绿灯验证：`swift test --package-path macos --filter 'WorkspaceShellViewTests|NativeAppViewModelWorkspaceEntryTests'` → 38 tests，0 failures
+  - 构建验证：`swift build --package-path macos` → `Build complete! (0.15s)`，exit 0
+
+## 2026-03-23 提交 worktree 进度弹窗置前修复
+
+- [x] 复核本轮修复改动范围，确认仅包含 worktree 进度弹窗置前相关变更
+- [x] 运行 fresh 验证并确认提交前状态
+- [x] 执行 git add / git commit / git push
+- [x] 处理 PR：若已有当前分支 PR，则更新并记录；否则创建新 PR
+- [x] 在 Review 中记录提交信息、PR 信息与验证证据
+
+## Review（2026-03-23 提交 worktree 进度弹窗置前修复）
+
+- 结果：
+  1. 已将本轮 worktree 创建进度弹窗置前修复提交为 `967615c`（`fix: 让 worktree 创建进度弹窗及时置前`），并推送到 `origin/session-restore`。
+  2. 当前分支历史上已有一个已合并 PR：#34 `feat: 支持非 live 工作区快照恢复`；本轮新增 commit 推送后，已基于同一 `session-restore` 分支创建新的 PR：#35 `fix: 让 worktree 创建进度弹窗及时置前`。
+  3. 新 PR 链接：`https://github.com/zxcvbnmzsedr/devhaven/pull/35`，当前状态 `OPEN`，base=`main`，head=`session-restore`，非 draft。
+  4. 提交后本地工作区已 clean，没有遗留未提交改动。
+- 验证证据：
+  - `git diff --stat -- ...` → 仅包含 `WorkspaceShellView.swift`、`NativeAppViewModel.swift`、两份测试文件与 `tasks/{todo,lessons}.md`
+  - `swift test --package-path macos` → 278 tests，5 skipped，0 failures
+  - `swift build --package-path macos` → `Build complete! (0.15s)`，exit 0
+  - `git diff --check` → 无输出
+  - `git commit -m "fix: 让 worktree 创建进度弹窗及时置前"` → commit `967615c`
+  - `git push origin HEAD:session-restore` → 远端分支从 `77957a2` 推进到 `967615c`
+  - `gh pr list --head session-restore --state all --json number,title,state,url,headRefName,baseRefName,isDraft`（创建前）→ 仅发现已合并 PR #34
+  - `gh pr create --base main --head session-restore ...` → `https://github.com/zxcvbnmzsedr/devhaven/pull/35`
+  - `gh pr view 35 --json number,title,state,url,headRefName,baseRefName,isDraft` → `state=OPEN`，`isDraft=false`

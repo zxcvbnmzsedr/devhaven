@@ -422,6 +422,69 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path])
     }
 
+    func testStartCreateWorkspaceWorktreeSeedsProgressImmediatelyAndFinishesInBackground() async throws {
+        let service = TestWorktreeService()
+        service.managedPath = "/tmp/.devhaven/worktrees/devhaven/feature/background"
+        service.createProgress = [
+            NativeWorktreeProgress(
+                worktreePath: "/tmp/.devhaven/worktrees/devhaven/feature/background",
+                branch: "feature/background",
+                baseBranch: "develop",
+                step: .checkingBranch,
+                message: "执行中：校验分支与基线可用性..."
+            ),
+            NativeWorktreeProgress(
+                worktreePath: "/tmp/.devhaven/worktrees/devhaven/feature/background",
+                branch: "feature/background",
+                baseBranch: "develop",
+                step: .ready,
+                message: "创建完成"
+            ),
+        ]
+        service.createResult = NativeWorktreeCreateResult(
+            worktreePath: "/tmp/.devhaven/worktrees/devhaven/feature/background",
+            branch: "feature/background",
+            baseBranch: "develop",
+            warning: nil
+        )
+        service.createStarted = expectation(description: "createWorktree started")
+        service.createSemaphore = DispatchSemaphore(value: 0)
+
+        let viewModel = makeViewModel(worktreeService: service)
+        let project = makeProject(path: "/tmp/devhaven")
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        try viewModel.startCreateWorkspaceWorktree(
+            from: project.path,
+            branch: "feature/background",
+            createBranch: true,
+            baseBranch: "develop",
+            autoOpen: true
+        )
+
+        let creating = try XCTUnwrap(viewModel.workspaceSidebarGroups.first?.worktrees.first)
+        XCTAssertEqual(creating.path, "/tmp/.devhaven/worktrees/devhaven/feature/background")
+        XCTAssertEqual(creating.status, "creating")
+        XCTAssertEqual(viewModel.worktreeInteractionState?.step, .pending)
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, project.path)
+
+        await fulfillment(of: [try XCTUnwrap(service.createStarted)], timeout: 1.0)
+
+        service.createSemaphore?.signal()
+        let didFinish = await waitUntil(timeout: 1.0) {
+            viewModel.worktreeInteractionState == nil
+        }
+        XCTAssertTrue(didFinish, "后台创建完成后，应释放交互锁并收起全局进度状态")
+
+        let tracked = try XCTUnwrap(viewModel.workspaceSidebarGroups.first?.worktrees.first)
+        XCTAssertEqual(tracked.status, "ready")
+        XCTAssertEqual(tracked.initStep, "ready")
+        XCTAssertNil(viewModel.worktreeInteractionState)
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, tracked.path)
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path, tracked.path])
+    }
+
     func testWorkspaceNotificationsTrackUnreadAndMoveNotifiedWorktreeToTop() throws {
         let viewModel = makeViewModel()
         let first = makeWorktree(path: "/tmp/devhaven-first", branch: "feature/first")
@@ -928,6 +991,8 @@ private final class TestWorktreeService: NativeWorktreeServicing, @unchecked Sen
         warning: nil
     )
     var createError: Error?
+    var createStarted: XCTestExpectation?
+    var createSemaphore: DispatchSemaphore?
     var removedRequests = [NativeWorktreeRemoveRequest]()
 
     func managedWorktreePath(for sourceProjectPath: String, branch: String) throws -> String {
@@ -950,6 +1015,8 @@ private final class TestWorktreeService: NativeWorktreeServicing, @unchecked Sen
         _ request: NativeWorktreeCreateRequest,
         progress: @escaping @Sendable (NativeWorktreeProgress) -> Void
     ) throws -> NativeWorktreeCreateResult {
+        createStarted?.fulfill()
+        createSemaphore?.wait()
         for update in createProgress {
             progress(update)
         }
@@ -990,4 +1057,17 @@ private func XCTAssertThrowsErrorAsync(
     } catch {
         // expected
     }
+}
+
+@MainActor
+private func waitUntil(
+    timeout: TimeInterval,
+    pollInterval: TimeInterval = 0.01,
+    condition: @escaping @MainActor () -> Bool
+) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() && Date() < deadline {
+        try? await Task.sleep(for: .seconds(pollInterval))
+    }
+    return condition()
 }
