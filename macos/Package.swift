@@ -15,12 +15,16 @@ let package = Package(
             name: "GhosttyKit",
             path: "Vendor/GhosttyKit.xcframework"
         ),
+        .binaryTarget(
+            name: "Sparkle",
+            path: "Vendor/Sparkle.xcframework"
+        ),
         .target(
             name: "DevHavenCore"
         ),
         .executableTarget(
             name: "DevHavenApp",
-            dependencies: ["DevHavenCore", "GhosttyKit"],
+            dependencies: ["DevHavenCore", "GhosttyKit", "Sparkle"],
             resources: [
                 .copy("GhosttyResources"),
                 .copy("AgentResources"),

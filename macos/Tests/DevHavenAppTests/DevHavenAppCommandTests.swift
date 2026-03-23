@@ -10,6 +10,15 @@ final class DevHavenAppCommandTests: XCTestCase {
         )
     }
 
+    func testCommandsExposeCheckForUpdatesAction() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("检查更新"),
+            "应用菜单应提供手动“检查更新”入口，方便用户主动触发 Sparkle 检查"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

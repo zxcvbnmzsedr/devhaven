@@ -46,3 +46,5 @@ macos/Vendor/GhosttyKit.xcframework/
 
 # Swift Package local workspace state
 .swiftpm/
+macos/Vendor/Sparkle.xcframework/
+macos/Vendor/SparkleTools/

@@ -92,6 +92,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var terminalOpenTool: OpenToolSettings
     public var terminalUseWebglRenderer: Bool
     public var terminalTheme: String
+    public var updateChannel: UpdateChannel
+    public var updateAutomaticallyChecks: Bool
+    public var updateAutomaticallyDownloads: Bool
     public var gitIdentities: [GitIdentity]
     public var projectListViewMode: ProjectListViewMode
     public var workspaceSidebarWidth: Double
@@ -110,6 +113,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         terminalOpenTool: OpenToolSettings = .init(commandPath: "", arguments: []),
         terminalUseWebglRenderer: Bool = true,
         terminalTheme: String = "DevHaven Dark",
+        updateChannel: UpdateChannel = .stable,
+        updateAutomaticallyChecks: Bool = true,
+        updateAutomaticallyDownloads: Bool = false,
         gitIdentities: [GitIdentity] = [],
         projectListViewMode: ProjectListViewMode = .card,
         workspaceSidebarWidth: Double = 280,
@@ -127,6 +133,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.terminalOpenTool = terminalOpenTool
         self.terminalUseWebglRenderer = terminalUseWebglRenderer
         self.terminalTheme = terminalTheme
+        self.updateChannel = updateChannel
+        self.updateAutomaticallyChecks = updateAutomaticallyChecks
+        self.updateAutomaticallyDownloads = updateAutomaticallyDownloads
         self.gitIdentities = gitIdentities
         self.projectListViewMode = projectListViewMode
         self.workspaceSidebarWidth = workspaceSidebarWidth
@@ -146,6 +155,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case terminalOpenTool
         case terminalUseWebglRenderer
         case terminalTheme
+        case updateChannel
+        case updateAutomaticallyChecks
+        case updateAutomaticallyDownloads
         case gitIdentities
         case projectListViewMode
         case workspaceSidebarWidth
@@ -166,6 +178,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.terminalOpenTool = try container.decodeIfPresent(OpenToolSettings.self, forKey: .terminalOpenTool) ?? .init(commandPath: "", arguments: [])
         self.terminalUseWebglRenderer = try container.decodeIfPresent(Bool.self, forKey: .terminalUseWebglRenderer) ?? true
         self.terminalTheme = try container.decodeIfPresent(String.self, forKey: .terminalTheme) ?? "DevHaven Dark"
+        self.updateChannel = try container.decodeIfPresent(UpdateChannel.self, forKey: .updateChannel) ?? .stable
+        self.updateAutomaticallyChecks = try container.decodeIfPresent(Bool.self, forKey: .updateAutomaticallyChecks) ?? true
+        self.updateAutomaticallyDownloads = try container.decodeIfPresent(Bool.self, forKey: .updateAutomaticallyDownloads) ?? false
         self.gitIdentities = try container.decodeIfPresent([GitIdentity].self, forKey: .gitIdentities) ?? []
         self.projectListViewMode = try container.decodeIfPresent(ProjectListViewMode.self, forKey: .projectListViewMode) ?? .card
         self.workspaceSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .workspaceSidebarWidth) ?? 280

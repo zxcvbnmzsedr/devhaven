@@ -60,6 +60,15 @@ final class ReleaseWorkflowTests: XCTestCase {
         )
     }
 
+    func testReleaseWorkflowDoesNotMarkStableTagAsPrerelease() throws {
+        let source = try String(contentsOf: workflowFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(
+            source.contains("--prerelease"),
+            "stable release workflow 不应把 v* 正式版本统一创建为 prerelease，否则 stable tag 与 stable-appcast 语义会继续错位"
+        )
+    }
+
     private func workflowFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

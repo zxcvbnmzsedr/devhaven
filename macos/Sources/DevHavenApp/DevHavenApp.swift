@@ -4,6 +4,7 @@ import DevHavenCore
 @main
 struct DevHavenApp: App {
     @State private var viewModel = NativeAppViewModel()
+    @StateObject private var updateController = DevHavenUpdateController()
 
     init() {
         _ = GhosttyAppRuntime.shared.runtime
@@ -11,7 +12,7 @@ struct DevHavenApp: App {
 
     var body: some Scene {
         WindowGroup("DevHaven Native") {
-            AppRootView(viewModel: viewModel)
+            AppRootView(viewModel: viewModel, updateController: updateController)
                 .frame(minWidth: 1280, minHeight: 820)
         }
         .defaultSize(width: 1480, height: 920)
@@ -25,6 +26,14 @@ struct DevHavenApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command])
                 .disabled(viewModel.isRefreshingProjectCatalog)
+
+                Divider()
+
+                Button("检查更新") {
+                    updateController.checkForUpdates()
+                }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
+                .disabled(!updateController.isSupported)
 
                 Divider()
 

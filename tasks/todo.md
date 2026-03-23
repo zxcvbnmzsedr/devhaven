@@ -1,5 +1,10 @@
 # Todo
 
+- [x] 盘点当前 staged / unstaged / untracked 变更范围
+- [x] 阅读关键 diff 与新增文件，记录潜在风险
+- [x] 输出按优先级排序的 review findings
+- [x] 在 tasks/todo.md 追加本次 review 结论与证据
+
 - [x] 收集 GitHub workflow 失败 run 的日志与错误位置
 
 - [x] 根据日志定位直接原因与是否存在设计层诱因
@@ -51,6 +56,90 @@
 - [x] 收集 arm64 Swift test 失败明细并定位是代码回归还是测试脆弱性
 - [x] 以最小改动修复两条 AppKit 时序脆弱测试
 - [ ] 跑本地定向测试与完整 swift test 验证后重新触发 release workflow
+
+## 2026-03-23 升级方案对标调研（cmux / supacode / ghostty）
+
+- [x] 梳理 DevHaven 当前升级相关现状与已知约束
+- [x] 对比 cmux、supacode、ghostty 的升级实现路径与发布形态
+- [x] 基于 DevHaven 当前架构给出建议、风险与落地顺序
+
+## 2026-03-23 升级终局方案架构图与模块拆分
+
+- [x] 明确“最完美方案”的范围边界（仅架构，不进入实现）
+- [x] 输出升级终局方案的架构图、模块职责与数据流
+- [x] 与用户确认该设计方向是否成立
+
+## 2026-03-23 升级终局方案实现
+
+- [x] 落升级终局设计文档与实现计划
+- [x] 为更新设置与版本元数据补失败测试
+- [x] 实现更新设置模型、菜单与设置页入口
+- [x] 接入 Sparkle runtime 与开发态禁用策略
+- [x] 补 Sparkle vendor / 打包脚本 / release workflow / nightly workflow
+- [x] 更新 README / AGENTS / Review 并完成验证
+
+## 2026-03-23 无苹果账号升级模式收口
+
+- [x] 为 manual-download 更新模式补失败测试
+- [x] 实现 appcast 手动检查与“打开下载页” fallback
+- [x] 同步打包元数据 / README / AGENTS 并完成验证
+
+## 2026-03-23 Sparkle 启动崩溃修复
+
+- [x] 把 Sparkle dyld 缺库问题登记到 tasks/todo.md，并明确验证闭环
+- [x] 收集打包产物内 Sparkle.framework 布局与 DevHavenApp rpath 证据，确认直接原因
+- [x] 先为打包脚本补回归测试，约束必须为 Frameworks 注入运行时 rpath
+- [x] 修复 build-native-app.sh 的 Sparkle 运行时查找路径
+- [x] 重新打包并验证启动不再因缺少 Sparkle.framework 崩溃
+- [x] 在 Review 中记录直接原因、设计层诱因、修复方案与验证证据
+
+## 2026-03-23 stable appcast 404 排查
+
+- [x] 把 stable appcast 404 排查任务登记到 tasks/todo.md
+- [ ] 核对 GitHub 上 stable-appcast / nightly 相关 release 与 appcast 资产实际状态
+- [ ] 对照本地 AppMetadata 与 workflow，定位 404 的直接原因与设计层诱因
+- [ ] 先补回归测试，再实施最小修复
+- [ ] 完成验证并在 Review 记录结论、证据与后续发布方式
+
+## 2026-03-23 首次 stable-appcast 正式发布
+
+- [x] 把首次 stable-appcast 正式发布任务登记到 tasks/todo.md
+- [ ] 核对当前 git 工作区、版本号、tag、远端 release 与 feed 基线
+- [ ] 收口发布前必要改动并完成验证
+- [ ] 提交并推送发布改动，创建/更新正式版本 tag
+- [ ] 执行首次 stable-appcast 正式发布并验证 feed / 下载链路
+- [ ] 在 Review 中记录发布结果、证据与后续维护方式
+
+## Review
+
+## Review（2026-03-23 Sparkle 启动崩溃修复）
+
+- 直接原因：打包脚本虽然已把 `Sparkle.framework` 复制到 `DevHaven.app/Contents/Frameworks/`，但主可执行文件 `DevHavenApp` 没有注入 `@executable_path/../Frameworks` 这个 `LC_RPATH`，dyld 启动时无法从 app bundle 内解析 `@rpath/Sparkle.framework/Versions/B/Sparkle`，因此在进程刚启动阶段直接 abort。
+- 设计层诱因：未发现明显系统设计缺陷；但当前打包验证此前只覆盖“Framework 是否被复制进 bundle”，没有覆盖“主可执行文件的 runtime search path 是否指向 Contents/Frameworks”，因此把一个运行时装载问题漏到了用户启动时才暴露。
+- 当前修复方案：
+  1. 在 `macos/Tests/DevHavenCoreTests/NativeBuildScriptUpdateSupportTests.swift` 新增回归断言，要求打包脚本显式包含 `install_name_tool` 与 `@executable_path/../Frameworks`。
+  2. 在 `macos/scripts/build-native-app.sh` 中新增 `list_rpaths` / `ensure_binary_rpath`，在组装 `.app` 时对 `Contents/MacOS/DevHavenApp` 做幂等 rpath 注入。
+  3. 保持注入发生在签名之前，避免后续签名链被二次修改破坏。
+- 长期改进建议：后续所有“嵌入第三方动态 Framework”的打包链路，建议固定补一条 launch-time 验证：至少检查 `otool -l` 中存在目标 `rpath`，必要时再跑一次最小启动 smoke test，避免只看 bundle 文件布局就误判为可运行。
+- 验证证据：
+  - `otool -l /tmp/devhaven-native-app-manual/DevHaven.app/Contents/MacOS/DevHavenApp | rg -n 'LC_RPATH|path '`（修复前）→ 只有 `/usr/lib/swift`、`@loader_path`、Xcode Swift runtime 路径，没有 `@executable_path/../Frameworks`。
+  - `swift test --package-path macos --filter NativeBuildScriptUpdateSupportTests`（补测试后、修复前）→ 2 failures，失败点正是缺少 `install_name_tool` / `@executable_path/../Frameworks` 断言。
+  - `swift test --package-path macos --filter NativeBuildScriptUpdateSupportTests`（修复后）→ 2 tests，0 failures。
+  - `swift test --package-path macos` → 240 tests，5 skipped，0 failures。
+  - `bash macos/scripts/build-native-app.sh --release --no-open --skip-sign --output-dir /tmp/devhaven-native-app-manual --build-number 3000003` → exit 0，日志包含 `为主可执行文件注入 rpath：@executable_path/../Frameworks`。
+  - `otool -l /tmp/devhaven-native-app-manual/DevHaven.app/Contents/MacOS/DevHavenApp | rg -n 'LC_RPATH|path '`（修复后）→ 新增 `path @executable_path/../Frameworks (offset 12)`。
+  - `/tmp/devhaven-native-app-manual/DevHaven.app/Contents/MacOS/DevHavenApp` 后台启动并等待 3 秒 → `LAUNCH_STATUS=running`，说明已不再于 dyld 阶段因缺少 Sparkle.framework 立即崩溃。
+
+## Review（2026-03-23 当前变更代码审查）
+
+- 结论：本次审查基于当前工作树的 unstaged / untracked 变更完成，识别出 3 个需要优先处理的问题：
+  1. Nightly 构建虽然在 `Info.plist` 写入了默认更新通道，但运行时完全没有读取该字段，首次启动仍会回到 `AppSettings()` 的 stable，导致 Nightly 安装后默认跟随 stable feed。
+  2. stable release workflow 在 `prepare-release` 阶段把正式 `v*` release 一律创建 / 编辑为 prerelease，后续也没有切回正式 release。
+  3. universal `.app` 是通过复制 arm64 `.app` 后再 `lipo` 替换主可执行文件生成的；但 workflow 把重新签名标记为“可选”，当 Developer ID secrets 缺失时仍会继续发布，留下签名失效的 universal 安装包。
+- 验证证据：
+  - `git status --short --branch`
+  - `git diff --stat`
+  - `swift test --package-path macos --filter '(DevHavenBuildMetadataTests|AppSettingsUpdatePreferencesTests|NativeBuildScriptUpdateSupportTests|ReleaseWorkflowUpdateInfrastructureTests|DevHavenAppCommandTests|SettingsViewTests)'` → 14 tests, 0 failures
 
 ## Review
 
@@ -826,3 +915,92 @@
 - [ ] 提交当前修复到 `main`
 - [ ] 将 `v3.0.0` 覆盖到新提交并推送 branch/tag
 - [ ] 观察 GitHub Actions / release 状态并回填 Review
+
+## Review（2026-03-23 升级方案对标调研：cmux / supacode / ghostty）
+
+- 结果：已对比 cmux、Supacode、Ghostty 三个 macOS 原生项目的升级主链，并回到 DevHaven 当前发布形态给出建议。结论是：**不要直接在当前 `swift build + 手工拼 .app + zip 上传` 链路上硬接完整升级功能**；更稳的路径是先补齐 release-grade 打包基座（至少单调递增 build number、Sparkle 运行所需 bundle 结构、Developer ID 签名 / notarization、appcast 发布顺序），再上最小可用的 Sparkle 升级能力。三者里最值得借鉴的是 **Ghostty 的“资产先上传、appcast 最后发布”操作顺序** + **cmux 的“单调 build number / 稳定 nightly/stable feed 管理”**；Supacode 的 delta / history / merged appcast 方案更强，但对 DevHaven 当前阶段偏重。
+- 直接原因：DevHaven 当前 release workflow 只产出 `DevHaven-macos-*.zip` 并上传到 GitHub Release，`macos/scripts/build-native-app.sh` 仍把 `CFBundleVersion` 固定写成 `1`，且没有 `SUPublicEDKey` / `SUFeedURL` / Sparkle framework / notarization / appcast 主链，因此“升级”问题本质上不是某个 UI 开关没做，而是**底层发布介质与升级协议尚未建立**。
+- 设计层诱因：当前 DevHaven 把“开发态可运行”与“发布态可升级”复用为同一条轻量脚本链路；这对快速构建够用，但一旦进入自升级场景，就会把 bundle 组装、框架嵌入、签名、公钥注入、版本号语义、appcast 发布时序等多种职责挤到同一层，容易出现“能打包但不能可靠升级”的结构性问题。未发现明显系统设计缺陷，但**发布链路目前缺少独立的升级基座层**。
+- 当前建议：
+  1. **先学 Ghostty / cmux 的基座，不先学 Supacode 的高级玩法。** 第一阶段只做 stable channel、完整包更新、不做 delta。
+  2. **把 `CFBundleVersion` 改成单调递增的构建号真相源**，不要继续固定为 `1`；`CFBundleShortVersionString` 继续表达用户可见版本（如 `3.0.0`），`CFBundleVersion` 专门用于升级比较。cmux 已明确为 Sparkle 修过“build number 落后于 appcast 导致无法升级”的问题。
+  3. **为发布态引入真正的 macOS app 打包壳**（推荐 Xcode app target / project，继续复用现有 Swift Package 里的业务代码），因为 cmux / Supacode / Ghostty 的 Sparkle 集成全部建立在 Xcode app bundle、框架嵌入和单独 codesign Sparkle 组件的前提上。若继续坚持纯脚本手工拼 bundle，也要接受后续在脚本里手工拷贝并签 Sparkle.framework / Updater.app / Autoupdate / XPCServices 的复杂度。
+  4. **发布顺序采用 Ghostty 模式：先上传所有安装资产，再发布 appcast。** 不要像现在一样把“发布元数据”和“可触发升级的 feed”混在一起同步暴露。最稳妥是：`DevHaven.dmg` / `DevHaven.app.zip` 先上传到稳定 URL，验活后再把 `appcast.xml` 提升为正式 feed。
+  5. **初期 channel 设计用“两个 feed，少做魔法”。** stable 一个 feed；如果以后要 nightly/tip，可学 Ghostty/cmux：要么单独 nightly feed，要么再加 bundle id 区分。不要一开始就上 Supacode 那套 merged appcast + history assets + delta patch。
+  6. **UI 只做最小闭环**：菜单里的“检查更新”、设置中的“自动检查 / 自动下载”即可；等发布链路稳定后，再考虑 cmux 那种自定义 popover / update logs。
+- 长期改进建议：
+  1. 若 DevHaven 后续稳定版 / nightly 都要长期维护，可继续向 Ghostty 靠拢：用独立静态托管（GitHub Pages / R2 / 自有域名）承载 appcast 与安装包，不再依赖 GitHub `latest/download` 语义。
+  2. 若下载体积和升级频率真的成为痛点，再评估 Supacode 的 delta updates；但在当前阶段，它会显著放大发布链路复杂度与故障面。
+  3. 若仍保留 GitHub Release 作为主分发面，至少把 stable release 从当前 `--prerelease` 语义中分离出来，否则未来即使接 Sparkle，`latest` / stable feed 语义也会持续混乱。
+- 验证证据：
+  - 2026-03-23 阅读 `DevHaven/.github/workflows/release.yml` 与 `macos/scripts/build-native-app.sh`，确认当前只上传 zip、且脚本生成的 `Info.plist` 把 `CFBundleVersion` 固定为 `1`。
+  - 2026-03-23 阅读 `cmux/Resources/Info.plist`、`cmux/Sources/Update/{UpdateController,UpdateDelegate}.swift`、`cmux/scripts/{build-sign-upload,bump-version}.sh`、`cmux/.github/workflows/nightly.yml`，确认其采用 Sparkle、稳定/夜版 feed、单调 build number 与完整签名 / notarization / appcast 生成链路。
+  - 2026-03-23 阅读 `supacode/supacode/Clients/Updates/UpdaterClient.swift`、`supacode/.github/workflows/{release,release-tip}.yml`，确认其采用 Sparkle + stable/tip channel + delta/history appcast 方案。
+  - 2026-03-23 阅读 `ghostty/macos/Sources/Features/Update/{UpdateController,UpdateDelegate}.swift`、`ghostty/.github/workflows/{release-tag,publish-tag}.yml`、`ghostty/dist/macos/update_appcast_{tag,tip}.py`，确认其采用 Sparkle、stable/tip 分离 feed，以及“资产先上传、appcast staged 后发布”的两阶段发布顺序。
+
+
+
+## Review（2026-03-23 升级终局方案实现）
+
+- 结果：已为 DevHaven 落地完整的 macOS 自升级主链，覆盖客户端设置/菜单、Sparkle runtime、Sparkle vendor、本地打包元数据、stable staged appcast、nightly 独立 workflow，以及 universal 更新包合成链路。
+- 直接原因：当前仓库虽然已经有原生打包能力，但缺少“客户端可消费的升级协议 + 发布侧可持续维护的固定 feed”，导致 release 只能手动下载，无法形成稳定的自升级闭环。
+- 设计层诱因：原先发布主链只关心“按架构上传 zip”，没有把版本单调性、feed 固定 URL、升级签名元数据、客户端更新偏好、以及 universal 安装包这些升级系统必须收口的真相源统一起来。
+- 当前修复方案：
+  1. 在 `AppSettings` 中新增 `updateChannel`、`updateAutomaticallyChecks`、`updateAutomaticallyDownloads`，并保持旧配置兼容回退。
+  2. 在设置页与 App 菜单增加“检查更新”入口，并接入 `DevHavenUpdateController`。
+  3. 新增 `DevHavenBuildMetadata` / `DevHavenUpdateDiagnostics` / `DevHavenUpdateController`，让开发态默认禁用 updater，release `.app` 通过 Sparkle feed + 公钥启用升级。
+  4. 新增 `setup-sparkle-framework.sh`、`generate-appcast.sh`、`promote-appcast.sh`、`create-universal-app.sh`，并让 `build-native-app.sh` 嵌入 `Sparkle.framework`、写入 `CFBundleVersion` / `SUFeedURL` / `SUPublicEDKey`。
+  5. 重写 `.github/workflows/release.yml` 与新增 `.github/workflows/nightly.yml`：矩阵构建 arm64/x86_64，后置 job 合成 universal 包，生成 `appcast-staged.xml`，再 promote 到 `stable-appcast/appcast.xml` 与 `nightly/appcast.xml`。
+  6. 同步更新 `README.md` 与 `AGENTS.md`，把 Sparkle vendor、更新设置、发布 alias feed 与 universal 打包约定写回文档。
+- 长期改进建议：
+  1. 当前 workflow 已预留可选 Developer ID 签名 / notarization 步骤，但仍依赖仓库 secrets；上线前应在真实 GitHub runner 上完成一次完整冒烟，确认 Sparkle key、Apple 签名与 notary 配置可用。
+  2. 当前 appcast 先以完整包更新为主，`maximum-deltas=0`；若后续 nightly/stable 体积压力明显，再沿现有脚本把历史 universal 归档下载回本地生成 delta。
+  3. 若以后需要更细粒度的 phased rollout 或 beta channel，可继续在 `generate-appcast.sh` 基础上增加 channel / rollout 参数，而不必再改客户端协议。
+- 验证证据：
+  - `bash macos/scripts/setup-sparkle-framework.sh --verify-only`
+  - `bash -n macos/scripts/create-universal-app.sh`
+  - `bash -n macos/scripts/generate-appcast.sh`
+  - `bash -n macos/scripts/promote-appcast.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); YAML.load_file(".github/workflows/nightly.yml"); puts "workflows ok"'`
+  - `swift test --package-path macos --filter 'AppSettingsUpdatePreferencesTests|SettingsViewTests|DevHavenAppCommandTests|DevHavenBuildMetadataTests|NativeBuildScriptUpdateSupportTests|ReleaseWorkflowTests|ReleaseWorkflowUpdateInfrastructureTests'`
+  - `swift test --package-path macos`
+  - `swift build --package-path macos`
+  - `bash macos/scripts/build-native-app.sh --release --no-open --skip-sign --output-dir /tmp/devhaven-native-app-updater --build-number 3000001 --sparkle-public-key test-public-key`
+  - `plutil -p /tmp/devhaven-native-app-updater/DevHaven.app/Contents/Info.plist | rg 'CFBundleVersion|SUFeedURL|DevHavenStableFeedURL|DevHavenNightlyFeedURL|SUPublicEDKey|DevHavenDefaultUpdateChannel'`
+  - `test -d /tmp/devhaven-native-app-updater/DevHaven.app/Contents/Frameworks/Sparkle.framework`
+
+## 2026-03-23 修复 Nightly 默认升级通道回退 stable
+
+- [x] 核实 Nightly 构建默认升级通道未闭环的直接原因与影响链路
+- [ ] 设计 bundle 默认通道与持久化设置的收口方案，并获得确认
+- [ ] 先补失败测试，覆盖 fresh install / legacy settings 对默认通道的行为
+- [ ] 实施最小修复，确保 Nightly 首次启动默认跟随 nightly feed
+- [ ] 运行定向验证并在本文件追加 Review
+
+
+
+## Review（2026-03-23 无苹果账号升级模式收口）
+
+- 结果：已把 DevHaven 的升级体验收口为“无苹果开发者账号可正式交付”的形态：正式 `.app` 现在默认采用 `manualDownload` 交付模式，应用内可继续 stable / nightly 检查更新、导出诊断、打开下载页，但不会再把自动安装更新作为默认承诺。
+- 直接原因：用户当前没有 Apple Developer Program 账号，无法提供 Developer ID 签名与 notarization，因此继续把 Sparkle 自动安装当成默认交付路径，会让客户端能力与实际分发信任链不一致。
+- 设计层诱因：上一版虽然已经补齐 Sparkle runtime / appcast / workflow 主链，但客户端仍把“支持检查更新”和“支持自动安装更新”混成一个布尔语义，缺少无账号场景下的正式 fallback 模式。
+- 当前修复方案：
+  1. 新增 `DevHavenUpdateDeliveryMode`，并在 `AppMetadata.json` / `Info.plist` 中写入 `manualDownload`、stable/nightly 下载页 URL。
+  2. `DevHavenBuildMetadata` 改为区分 `supportsUpdateChecks` 与 `supportsAutomaticUpdates`：正式 `.app` + feed 存在即可检查更新；只有 `automatic` 模式且存在 `SUPublicEDKey` 时才允许自动安装。
+  3. 新增 `DevHavenAppcastParser`，在 manual-download 模式下直接读取 appcast，解析最新版本、build、下载链接 / release notes 链接。
+  4. `DevHavenUpdateController` 新增 manual-check 分支：保留“立即检查更新”，检查到新版本后给出“请打开下载页完成更新”，并支持 `openDownloadPage()`。
+  5. `SettingsView` 新增“打开下载页”按钮，并在自动下载不可用时禁用“自动下载更新”开关。
+  6. 同步更新 `README.md` 与 `AGENTS.md`，明确默认交付模式是 manual-download，未来补齐 Apple Developer ID / notarization 后再切到 `automatic`。
+- 长期改进建议：
+  1. 以后如果补齐 Apple Developer 账号，可直接把 `AppMetadata.json` 的 `updateDeliveryMode` 切到 `automatic`，并在 CI 配置 Developer ID / notarization secrets；当前主链无需重写。
+  2. 当前 manual-download 模式主要依赖 appcast 的最新条目与下载页 fallback；若后续要做更精细的“跳过版本 / phased rollout / 增量提醒”，可继续沿 appcast 解析层演进，而不必回退到 GitHub API 特判。
+- 验证证据：
+  - `swift test --package-path macos --filter 'DevHavenBuildMetadataTests|DevHavenAppcastParserTests|SettingsViewTests|NativeBuildScriptUpdateSupportTests'`
+  - `bash macos/scripts/setup-sparkle-framework.sh --verify-only`
+  - `bash -n macos/scripts/build-native-app.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); YAML.load_file(".github/workflows/nightly.yml"); puts "workflows ok"'`
+  - `bash macos/scripts/build-native-app.sh --release --no-open --skip-sign --output-dir /tmp/devhaven-native-app-manual --build-number 3000002`
+  - `plutil -p /tmp/devhaven-native-app-manual/DevHaven.app/Contents/Info.plist | rg 'CFBundleVersion|SUFeedURL|DevHavenStableFeedURL|DevHavenNightlyFeedURL|DevHavenUpdateDeliveryMode|DevHavenStableDownloadsPageURL|DevHavenNightlyDownloadsPageURL|SUPublicEDKey'`
+  - `test -d /tmp/devhaven-native-app-manual/DevHaven.app/Contents/Frameworks/Sparkle.framework`
+  - `swift test --package-path macos`
+  - `swift build --package-path macos`

@@ -43,8 +43,19 @@ struct SettingsView: View {
     private let originalSettings: AppSettings
     private let onCancel: () -> Void
     private let onSave: (AppSettings) -> Void
+    private let updateSupportDescription: String
+    private let updateDiagnostics: String
+    private let isUpdaterSupported: Bool
+    private let supportsAutomaticUpdates: Bool
+    private let canOpenUpdateDownloadPage: Bool
+    private let onCheckForUpdates: () -> Void
+    private let onOpenUpdateDownloadPage: () -> Void
+    private let onCopyUpdateDiagnostics: () -> Void
 
     @State private var gitIdentities: [GitIdentity]
+    @State private var updateChannel: UpdateChannel
+    @State private var updateAutomaticallyChecks: Bool
+    @State private var updateAutomaticallyDownloads: Bool
     @State private var workspaceInAppNotificationsEnabled: Bool
     @State private var workspaceNotificationSoundEnabled: Bool
     @State private var workspaceSystemNotificationsEnabled: Bool
@@ -53,11 +64,34 @@ struct SettingsView: View {
     @State private var terminalConfigStatusMessage: String?
     @State private var terminalConfigErrorMessage: String?
 
-    init(settings: AppSettings, onCancel: @escaping () -> Void, onSave: @escaping (AppSettings) -> Void) {
+    init(
+        settings: AppSettings,
+        onCancel: @escaping () -> Void,
+        onSave: @escaping (AppSettings) -> Void,
+        updateSupportDescription: String = "当前运行态不支持自动升级。",
+        updateDiagnostics: String = "",
+        isUpdaterSupported: Bool = false,
+        supportsAutomaticUpdates: Bool = false,
+        canOpenUpdateDownloadPage: Bool = false,
+        onCheckForUpdates: @escaping () -> Void = {},
+        onOpenUpdateDownloadPage: @escaping () -> Void = {},
+        onCopyUpdateDiagnostics: @escaping () -> Void = {}
+    ) {
         self.originalSettings = settings
         self.onCancel = onCancel
         self.onSave = onSave
+        self.updateSupportDescription = updateSupportDescription
+        self.updateDiagnostics = updateDiagnostics
+        self.isUpdaterSupported = isUpdaterSupported
+        self.supportsAutomaticUpdates = supportsAutomaticUpdates
+        self.canOpenUpdateDownloadPage = canOpenUpdateDownloadPage
+        self.onCheckForUpdates = onCheckForUpdates
+        self.onOpenUpdateDownloadPage = onOpenUpdateDownloadPage
+        self.onCopyUpdateDiagnostics = onCopyUpdateDiagnostics
         _gitIdentities = State(initialValue: settings.gitIdentities)
+        _updateChannel = State(initialValue: settings.updateChannel)
+        _updateAutomaticallyChecks = State(initialValue: settings.updateAutomaticallyChecks)
+        _updateAutomaticallyDownloads = State(initialValue: settings.updateAutomaticallyDownloads)
         _workspaceInAppNotificationsEnabled = State(initialValue: settings.workspaceInAppNotificationsEnabled)
         _workspaceNotificationSoundEnabled = State(initialValue: settings.workspaceNotificationSoundEnabled)
         _workspaceSystemNotificationsEnabled = State(initialValue: settings.workspaceSystemNotificationsEnabled)
@@ -196,6 +230,66 @@ struct SettingsView: View {
                 Text("仓库内仅保留 `macos/` 原生应用主线；旧的 React / Vite / Tauri 源码与对应打包入口已从仓库移除。数据文件仍继续兼容 `~/.devhaven/*`。")
                     .font(.caption)
                     .foregroundStyle(NativeTheme.textSecondary)
+            }
+
+            settingsCard(title: "应用升级", description: "管理稳定版 / Nightly 通道，以及自动检查和自动下载策略。") {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("升级通道")
+                            .font(.caption)
+                            .foregroundStyle(NativeTheme.textSecondary)
+
+                        Picker("升级通道", selection: $updateChannel) {
+                            ForEach(UpdateChannel.allCases) { channel in
+                                Text(channel.title).tag(channel)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    Toggle("自动检查更新", isOn: $updateAutomaticallyChecks)
+                        .toggleStyle(.switch)
+
+                    Toggle("自动下载更新", isOn: $updateAutomaticallyDownloads)
+                        .toggleStyle(.switch)
+                        .disabled(!updateAutomaticallyChecks || !supportsAutomaticUpdates)
+
+                    Text(updateSupportDescription)
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textSecondary)
+
+                    HStack {
+                        Button("立即检查更新") {
+                            onCheckForUpdates()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(NativeTheme.accent)
+                        .disabled(!isUpdaterSupported)
+
+                        Button("打开下载页") {
+                            onOpenUpdateDownloadPage()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!canOpenUpdateDownloadPage)
+
+                        Button("复制升级诊断") {
+                            onCopyUpdateDiagnostics()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Spacer()
+                    }
+
+                    Text(updateDiagnostics)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(NativeTheme.textSecondary)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(NativeTheme.elevated)
+                        .clipShape(.rect(cornerRadius: 12))
+                }
             }
         }
     }
@@ -391,6 +485,9 @@ struct SettingsView: View {
             terminalOpenTool: originalSettings.terminalOpenTool,
             terminalUseWebglRenderer: originalSettings.terminalUseWebglRenderer,
             terminalTheme: originalSettings.terminalTheme,
+            updateChannel: updateChannel,
+            updateAutomaticallyChecks: updateAutomaticallyChecks,
+            updateAutomaticallyDownloads: updateAutomaticallyDownloads,
             gitIdentities: normalizedGitIdentities,
             projectListViewMode: originalSettings.projectListViewMode,
             workspaceSidebarWidth: originalSettings.workspaceSidebarWidth,
@@ -415,6 +512,9 @@ struct SettingsView: View {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !$0.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+            || updateChannel != originalSettings.updateChannel
+            || updateAutomaticallyChecks != originalSettings.updateAutomaticallyChecks
+            || updateAutomaticallyDownloads != originalSettings.updateAutomaticallyDownloads
             || workspaceInAppNotificationsEnabled != originalSettings.workspaceInAppNotificationsEnabled
             || workspaceNotificationSoundEnabled != originalSettings.workspaceNotificationSoundEnabled
             || workspaceSystemNotificationsEnabled != originalSettings.workspaceSystemNotificationsEnabled

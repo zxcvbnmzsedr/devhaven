@@ -1,87 +1,62 @@
-name: release
+name: nightly
 
 on:
-  push:
-    tags:
-      - "v*"
+  schedule:
+    - cron: "15 18 * * *"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Optional tag to release (e.g. v3.0.1). Leave empty to use the triggering ref."
-        required: false
-        type: string
 
 permissions:
   contents: write
 
 env:
   GHOSTTY_SOURCE_REF: da10707f93104c5466cd4e64b80ff48f789238a0
-  STABLE_APPCAST_ALIAS_TAG: stable-appcast
+  NIGHTLY_APPCAST_ALIAS_TAG: nightly
 
 jobs:
-  prepare-release:
+  prepare-nightly:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.resolve-tag.outputs.tag }}
-      version: ${{ steps.resolve-tag.outputs.version }}
-      build_number: ${{ steps.resolve-tag.outputs.build_number }}
+      tag: ${{ steps.resolve-nightly.outputs.tag }}
+      version: ${{ steps.resolve-nightly.outputs.version }}
+      build_number: ${{ steps.resolve-nightly.outputs.build_number }}
 
     steps:
-      - name: Resolve release tag
-        id: resolve-tag
+      - uses: actions/checkout@v4
+
+      - name: Resolve nightly version and tag
+        id: resolve-nightly
         shell: bash
         run: |
           set -euo pipefail
-          tag="${{ inputs.tag || github.ref_name }}"
-          if [[ -z "$tag" ]]; then
-            echo "缺少 release tag，无法继续发布。" >&2
-            exit 1
-          fi
-          version="${tag#v}"
-          if [[ "$version" == "$tag" ]]; then
-            echo "release tag 必须以 v 开头，例如 v3.0.1。" >&2
-            exit 1
-          fi
+          version="$(python3 - <<'PY2'
+          import json
+          from pathlib import Path
+          data = json.loads(Path('macos/Resources/AppMetadata.json').read_text())
+          print(data['version'])
+          PY2
+          )"
+          tag="nightly-$(date -u +%Y%m%d-%H%M%S)"
           build_number="$(date -u +%Y%m%d%H%M%S)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
 
-      - name: Remove duplicate draft releases for tag
+      - name: Ensure immutable nightly release exists
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.resolve-tag.outputs.tag }}
+          RELEASE_TAG: ${{ steps.resolve-nightly.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
-          draft_ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[] | select(.tag_name == env.RELEASE_TAG and .draft == true) | .id')"
-          if [[ -z "$draft_ids" ]]; then
-            echo "未发现需要清理的重复 draft release。"
-            exit 0
-          fi
-
-          while IFS= read -r release_id; do
-            [[ -n "$release_id" ]] || continue
-            echo "删除重复 draft release: $release_id"
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/$release_id"
-          done <<< "$draft_ids"
-
-      - name: Ensure GitHub release exists
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.resolve-tag.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_name="DevHaven ${RELEASE_TAG}"
+          release_name="DevHaven Nightly ${RELEASE_TAG}"
           if gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --title "$release_name"
+            gh release edit "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --title "$release_name" --prerelease
           else
-            gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --title "$release_name" --notes ""
+            gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --title "$release_name" --prerelease --notes ""
           fi
 
   build-macos-native:
-    needs: prepare-release
+    needs: prepare-nightly
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$SPARKLE_PUBLIC_ED_KEY" ]] || {
-            echo "缺少 secrets.SPARKLE_PUBLIC_ED_KEY，无法产出支持自动升级的 release 构建。" >&2
+            echo "缺少 secrets.SPARKLE_PUBLIC_ED_KEY，无法产出支持自动升级的 nightly 构建。" >&2
             exit 1
           }
 
@@ -146,23 +121,23 @@ jobs:
         if: ${{ matrix.arch == 'x86_64' }}
         run: swift build --package-path macos -c debug --triple "${{ matrix.swift_triple }}"
 
-      - name: Build native app
+      - name: Build nightly app
         env:
           DEVHAVEN_NATIVE_TRIPLE: ${{ matrix.swift_triple }}
           DEVHAVEN_SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
         shell: bash
         run: |
           set -euo pipefail
-          bash macos/scripts/build-native-app.sh             --release             --no-open             --output-dir "$RUNNER_TEMP/native-app"             --version "${{ needs.prepare-release.outputs.version }}"             --build-number "${{ needs.prepare-release.outputs.build_number }}"             --update-channel stable
+          bash macos/scripts/build-native-app.sh             --release             --no-open             --output-dir "$RUNNER_TEMP/native-app"             --version "${{ needs.prepare-nightly.outputs.version }}"             --build-number "${{ needs.prepare-nightly.outputs.build_number }}"             --update-channel nightly
 
-      - name: Archive native app
+      - name: Archive nightly app
         id: archive
         shell: bash
         run: |
           set -euo pipefail
           app_path="$(find "$RUNNER_TEMP/native-app" -maxdepth 1 -name '*.app' -print -quit)"
           if [[ -z "$app_path" ]]; then
-            echo "未找到原生 .app 产物" >&2
+            echo "未找到 nightly .app 产物" >&2
             exit 1
           fi
           zip_path="$RUNNER_TEMP/DevHaven-macos-${{ matrix.arch }}.zip"
@@ -173,29 +148,29 @@ jobs:
       - name: Upload archive artifact for universal merge
         uses: actions/upload-artifact@v4
         with:
-          name: native-app-zip-${{ matrix.arch }}
+          name: nightly-native-app-zip-${{ matrix.arch }}
           path: ${{ steps.archive.outputs.zip_path }}
           if-no-files-found: error
 
-      - name: Publish native release asset
+      - name: Publish nightly release asset
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+          RELEASE_TAG: ${{ needs.prepare-nightly.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
           gh release upload "$RELEASE_TAG" "${{ steps.archive.outputs.zip_path }}" --clobber
 
-  publish-appcast:
+  publish-nightly:
     needs:
-      - prepare-release
+      - prepare-nightly
       - build-macos-native
     runs-on: macos-26
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
-      RELEASE_VERSION: ${{ needs.prepare-release.outputs.version }}
-      RELEASE_BUILD_NUMBER: ${{ needs.prepare-release.outputs.build_number }}
+      RELEASE_TAG: ${{ needs.prepare-nightly.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.prepare-nightly.outputs.version }}
+      RELEASE_BUILD_NUMBER: ${{ needs.prepare-nightly.outputs.build_number }}
       DEVHAVEN_SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
 
     steps:
@@ -229,24 +204,24 @@ jobs:
       - name: Download arm64 archive artifact
         uses: actions/download-artifact@v4
         with:
-          name: native-app-zip-arm64
+          name: nightly-native-app-zip-arm64
           path: ${{ runner.temp }}/download/arm64
 
       - name: Download x86_64 archive artifact
         uses: actions/download-artifact@v4
         with:
-          name: native-app-zip-x86_64
+          name: nightly-native-app-zip-x86_64
           path: ${{ runner.temp }}/download/x86_64
 
-      - name: Assemble universal .app
+      - name: Assemble universal nightly .app
         id: universal
         shell: bash
         run: |
           set -euo pipefail
           arm64_zip="$(find "$RUNNER_TEMP/download/arm64" -name '*.zip' -print -quit)"
           x86_zip="$(find "$RUNNER_TEMP/download/x86_64" -name '*.zip' -print -quit)"
-          [[ -n "$arm64_zip" ]] || { echo "缺少 arm64 zip artifact" >&2; exit 1; }
-          [[ -n "$x86_zip" ]] || { echo "缺少 x86_64 zip artifact" >&2; exit 1; }
+          [[ -n "$arm64_zip" ]] || { echo "缺少 arm64 nightly zip artifact" >&2; exit 1; }
+          [[ -n "$x86_zip" ]] || { echo "缺少 x86_64 nightly zip artifact" >&2; exit 1; }
 
           arm64_extract="$RUNNER_TEMP/extract/arm64"
           x86_extract="$RUNNER_TEMP/extract/x86_64"
@@ -256,15 +231,15 @@ jobs:
 
           arm64_app="$(find "$arm64_extract" -maxdepth 2 -name '*.app' -print -quit)"
           x86_app="$(find "$x86_extract" -maxdepth 2 -name '*.app' -print -quit)"
-          [[ -n "$arm64_app" ]] || { echo "未找到 arm64 .app" >&2; exit 1; }
-          [[ -n "$x86_app" ]] || { echo "未找到 x86_64 .app" >&2; exit 1; }
+          [[ -n "$arm64_app" ]] || { echo "未找到 arm64 nightly .app" >&2; exit 1; }
+          [[ -n "$x86_app" ]] || { echo "未找到 x86_64 nightly .app" >&2; exit 1; }
 
-          universal_app="$RUNNER_TEMP/DevHaven-universal/DevHaven.app"
+          universal_app="$RUNNER_TEMP/DevHaven-nightly-universal/DevHaven.app"
           bash macos/scripts/create-universal-app.sh             --arm64-app "$arm64_app"             --x86-app "$x86_app"             --output "$universal_app"
 
           echo "app_path=$universal_app" >> "$GITHUB_OUTPUT"
 
-      - name: Optionally sign universal app with Developer ID
+      - name: Optionally sign universal nightly app with Developer ID
         env:
           APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
           APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
@@ -292,7 +267,7 @@ jobs:
           codesign --force --deep --options runtime --sign "$APPLE_DEVELOPER_ID_APPLICATION_IDENTITY" "${{ steps.universal.outputs.app_path }}"
           codesign --verify --deep --strict "${{ steps.universal.outputs.app_path }}"
 
-      - name: Optionally notarize universal app
+      - name: Optionally notarize universal nightly app
         env:
           APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
@@ -313,7 +288,7 @@ jobs:
           xcrun notarytool submit "$pre_notary_zip"             --key "$key_path"             --key-id "$APPLE_NOTARY_KEY_ID"             --issuer "$APPLE_NOTARY_ISSUER_ID"             --wait
           xcrun stapler staple "${{ steps.universal.outputs.app_path }}"
 
-      - name: Archive universal app
+      - name: Archive universal nightly app
         id: universal-archive
         shell: bash
         run: |
@@ -322,13 +297,13 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent "${{ steps.universal.outputs.app_path }}" "$universal_zip"
           echo "zip_path=$universal_zip" >> "$GITHUB_OUTPUT"
 
-      - name: Publish universal release asset
+      - name: Publish universal nightly asset
         shell: bash
         run: |
           set -euo pipefail
           gh release upload "$RELEASE_TAG" "${{ steps.universal-archive.outputs.zip_path }}" --clobber
 
-      - name: Generate appcast-staged.xml
+      - name: Generate nightly appcast.xml
         id: generate-appcast
         shell: bash
         run: |
@@ -336,25 +311,26 @@ jobs:
           archives_dir="$RUNNER_TEMP/appcast-archives"
           mkdir -p "$archives_dir"
 
-          if gh release download "$STABLE_APPCAST_ALIAS_TAG" -R "$GITHUB_REPOSITORY" --pattern appcast.xml --dir "$archives_dir/existing" >/dev/null 2>&1; then
-            cp "$archives_dir/existing/appcast.xml" "$archives_dir/appcast-staged.xml"
+          # alias feed 固定地址：https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/appcast.xml
+          if gh release download "$NIGHTLY_APPCAST_ALIAS_TAG" -R "$GITHUB_REPOSITORY" --pattern appcast.xml --dir "$archives_dir/existing" >/dev/null 2>&1; then
+            cp "$archives_dir/existing/appcast.xml" "$archives_dir/appcast.xml"
           fi
 
           cp "${{ steps.universal-archive.outputs.zip_path }}" "$archives_dir/"
-          gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json body --jq '.body' > "$archives_dir/DevHaven-macos-universal.txt"
+          printf 'Nightly build %s\n' "$RELEASE_TAG" > "$archives_dir/DevHaven-macos-universal.txt"
 
-          bash macos/scripts/generate-appcast.sh             --archives-dir "$archives_dir"             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG"             --output "$archives_dir/appcast-staged.xml"             --maximum-versions 3             --maximum-deltas 0             --link "https://github.com/${GITHUB_REPOSITORY}"             --full-release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/$RELEASE_TAG"
+          bash macos/scripts/generate-appcast.sh             --archives-dir "$archives_dir"             --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/$RELEASE_TAG"             --output "$archives_dir/appcast.xml"             --channel nightly             --maximum-versions 5             --maximum-deltas 0             --link "https://github.com/${GITHUB_REPOSITORY}"             --full-release-notes-url "https://github.com/${GITHUB_REPOSITORY}/releases/tag/$RELEASE_TAG"
 
-          echo "appcast_path=$archives_dir/appcast-staged.xml" >> "$GITHUB_OUTPUT"
+          echo "appcast_path=$archives_dir/appcast.xml" >> "$GITHUB_OUTPUT"
 
-      - name: Publish staged appcast asset
+      - name: Publish staged nightly appcast asset
         shell: bash
         run: |
           set -euo pipefail
           gh release upload "$RELEASE_TAG" "${{ steps.generate-appcast.outputs.appcast_path }}#appcast-staged.xml" --clobber
 
-      - name: Promote stable appcast
+      - name: Promote nightly feed
         shell: bash
         run: |
           set -euo pipefail
-          bash macos/scripts/promote-appcast.sh             --repo "$GITHUB_REPOSITORY"             --release-tag "$STABLE_APPCAST_ALIAS_TAG"             --appcast "${{ steps.generate-appcast.outputs.appcast_path }}"             --asset-name appcast.xml             --title "DevHaven Stable Appcast"
+          bash macos/scripts/promote-appcast.sh             --repo "$GITHUB_REPOSITORY"             --release-tag "$NIGHTLY_APPCAST_ALIAS_TAG"             --appcast "${{ steps.generate-appcast.outputs.appcast_path }}"             --asset-name appcast.xml             --title "DevHaven Nightly Appcast"             --prerelease

@@ -31,6 +31,16 @@ final class SettingsViewTests: XCTestCase {
         )
     }
 
+    func testGeneralSettingsExposeUpdateControls() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("升级通道"), "设置页应暴露升级通道，允许 stable/nightly 切换")
+        XCTAssertTrue(source.contains("自动检查更新"), "设置页应允许用户配置自动检查更新")
+        XCTAssertTrue(source.contains("自动下载更新"), "设置页应允许用户配置自动下载更新")
+        XCTAssertTrue(source.contains("立即检查更新"), "设置页应提供手动检查更新入口")
+        XCTAssertTrue(source.contains("打开下载页"), "无苹果开发者账号模式下，设置页应提供打开下载页入口")
+    }
+
     func testWorkspaceSettingsExposeNotificationControls() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 

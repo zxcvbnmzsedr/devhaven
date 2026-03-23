@@ -4,6 +4,12 @@ import DevHavenCore
 
 struct AppRootView: View {
     @Bindable var viewModel: NativeAppViewModel
+    @ObservedObject var updateController: DevHavenUpdateController
+
+    init(viewModel: NativeAppViewModel, updateController: DevHavenUpdateController = DevHavenUpdateController()) {
+        self.viewModel = viewModel
+        self.updateController = updateController
+    }
 
     var body: some View {
         let chromePolicy = WorkspaceChromePolicy.resolve(isWorkspacePresented: viewModel.isWorkspacePresented)
@@ -62,7 +68,15 @@ struct AppRootView: View {
                 onSave: { settings in
                     viewModel.saveSettings(settings)
                     viewModel.hideSettings()
-                }
+                },
+                updateSupportDescription: updateController.supportDescription,
+                updateDiagnostics: updateController.diagnosticsText,
+                isUpdaterSupported: updateController.isSupported,
+                supportsAutomaticUpdates: updateController.supportsAutomaticUpdates,
+                canOpenUpdateDownloadPage: updateController.canOpenDownloadPage,
+                onCheckForUpdates: { updateController.checkForUpdates() },
+                onOpenUpdateDownloadPage: { updateController.openDownloadPage() },
+                onCopyUpdateDiagnostics: { updateController.copyDiagnosticsToPasteboard() }
             )
             .preferredColorScheme(.dark)
         }
@@ -84,11 +98,16 @@ struct AppRootView: View {
         } message: {
             Text(viewModel.errorMessage ?? "未知错误")
         }
+        .onChange(of: viewModel.snapshot.appState.settings) { _, settings in
+            updateController.apply(settings: settings)
+        }
         .task {
             guard !viewModel.hasLoadedInitialData else {
+                updateController.apply(settings: viewModel.snapshot.appState.settings)
                 return
             }
             viewModel.load()
+            updateController.apply(settings: viewModel.snapshot.appState.settings)
         }
     }
 
