@@ -1544,6 +1544,31 @@
   - `swift build --package-path macos` → `Build complete! (0.39s)`，exit 0
   - `git diff --check` → 无输出
 
+## 2026-03-23 提交 session-restore PR 到 main
+
+- [x] 确认当前分支、main 基线与是否已有现成 PR
+- [x] 运行 fresh 验证并做提交前本地 review
+- [x] 推送当前分支到 origin
+- [x] 创建指向 `main` 的 PR
+- [x] 追加本次 PR Review，记录 PR 编号、链接与验证证据
+
+## Review（2026-03-23 提交 session-restore PR 到 main）
+
+- 结果：
+  1. 已将 `session-restore` 分支推送到 `origin/session-restore`，并创建指向 `main` 的 PR：#34 `feat: 支持非 live 工作区快照恢复`
+  2. PR 链接：`https://github.com/zxcvbnmzsedr/devhaven/pull/34`
+  3. 当前 GitHub PR 状态为 `OPEN`，base=`main`，head=`session-restore`，非 draft。
+  4. 本地在跑 `swift test --package-path macos` 后出现两份**未提交**测试文件脏改动：`macos/Tests/DevHavenAppTests/WorkspaceShellViewTests.swift`、`macos/Tests/DevHavenCoreTests/NativeAppViewModelWorkspaceEntryTests.swift`；它们**不在已推送的 PR 内容里**，后续需单独判断是否保留。
+- 验证证据：
+  - `git merge-base HEAD main` → `f93181fc66094baae3ec6cb17b1307423e4c7a21`
+  - `gh pr list --head session-restore --state all --json number,title,state,url,headRefName,baseRefName`（创建前）→ `[]`
+  - `swift test --package-path macos` → 276 tests，5 skipped，0 failures
+  - `swift build --package-path macos` → `Build complete! (1.99s)`，exit 0
+  - `git diff --check main...HEAD` → 无输出
+  - `git push -u origin HEAD:session-restore` → 已创建远端分支并设置 tracking
+  - `gh pr create --base main --head session-restore ...` → `https://github.com/zxcvbnmzsedr/devhaven/pull/34`
+  - `gh pr view 34 --json number,title,state,url,headRefName,baseRefName,isDraft` → `state=OPEN`，`isDraft=false`
+
 ## 2026-03-23 创建 git worktree 进度弹窗未置前
 
 - [ ] 复现并定位创建 worktree 时进度弹窗未显示在最前面的直接原因
