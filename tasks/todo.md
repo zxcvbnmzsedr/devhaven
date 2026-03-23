@@ -96,21 +96,70 @@
 ## 2026-03-23 stable appcast 404 排查
 
 - [x] 把 stable appcast 404 排查任务登记到 tasks/todo.md
-- [ ] 核对 GitHub 上 stable-appcast / nightly 相关 release 与 appcast 资产实际状态
-- [ ] 对照本地 AppMetadata 与 workflow，定位 404 的直接原因与设计层诱因
-- [ ] 先补回归测试，再实施最小修复
-- [ ] 完成验证并在 Review 记录结论、证据与后续发布方式
+- [x] 核对 GitHub 上 stable-appcast / nightly 相关 release 与 appcast 资产实际状态
+- [x] 对照本地 AppMetadata 与 workflow，定位 404 的直接原因与设计层诱因
+- [x] 先补回归测试，再实施最小修复
+- [x] 完成验证并在 Review 记录结论、证据与后续发布方式
 
 ## 2026-03-23 首次 stable-appcast 正式发布
 
 - [x] 把首次 stable-appcast 正式发布任务登记到 tasks/todo.md
-- [ ] 核对当前 git 工作区、版本号、tag、远端 release 与 feed 基线
-- [ ] 收口发布前必要改动并完成验证
-- [ ] 提交并推送发布改动，创建/更新正式版本 tag
-- [ ] 执行首次 stable-appcast 正式发布并验证 feed / 下载链路
-- [ ] 在 Review 中记录发布结果、证据与后续维护方式
+- [x] 核对当前 git 工作区、版本号、tag、远端 release 与 feed 基线
+- [x] 收口发布前必要改动并完成验证
+- [x] 提交并推送发布改动，创建/更新正式版本 tag
+- [x] 执行首次 stable-appcast 正式发布并验证 feed / 下载链路
+- [x] 在 Review 中记录发布结果、证据与后续维护方式
 
 ## Review
+
+## Review（2026-03-23 stable appcast 404 排查）
+
+- 直接原因：
+  1. 用户本地 `3.0.0 (3000002)` 已经带有 stable feed URL：`https://github.com/zxcvbnmzsedr/devhaven/releases/download/stable-appcast/appcast.xml`；
+  2. 但截至排查时，远端 GitHub 上并不存在 `stable-appcast` / `nightly` alias release，因此客户端第一次检查更新直接得到 HTTP 404。
+- 设计层诱因：
+  1. 客户端 update 能力已本地实现，但远端第一次 appcast alias 发布尚未真正落地，导致“客户端先上线、feed 后上线”的时序错位；
+  2. 未发现明显系统设计缺陷，但发布验证此前没有覆盖“固定 feed URL 是否真实可访问”这一条线上证据。
+- 当前修复方案：
+  1. 先完成首次 stable release / stable-appcast alias 正式发布；
+  2. 对 live `stable-appcast` alias 做热修，确保固定 URL 命中真实 `appcast.xml`；
+  3. 把后续 workflow / promote 脚本中的 feed 命名与 URL 生成问题补回归测试并修复，避免再出现“workflow success 但客户端 feed 仍错误”的假成功。
+- 验证证据：
+  - `gh release view stable-appcast --json ...`（排查前）→ `release not found`
+  - `gh release view nightly --json ...`（排查前）→ `release not found`
+  - `curl -I -L https://github.com/zxcvbnmzsedr/devhaven/releases/download/stable-appcast/appcast.xml`（排查前）→ `HTTP/2 404`
+  - `gh release download stable-appcast --pattern appcast.xml`（发布后）可下载成功，说明 alias 资产真实存在
+  - `curl -L https://github.com/zxcvbnmzsedr/devhaven/releases/download/stable-appcast/appcast.xml | sed -n '1,160p'`（热修后）→ appcast 已返回 `3.0.1 / 20260323013003` 且 enclosure 指向 `v3.0.1/DevHaven-macos-universal.zip`
+
+## Review（2026-03-23 首次 stable-appcast 正式发布）
+
+- 结果：已成功发布 `v3.0.1` 正式 release，并完成首个 `stable-appcast` alias feed 发布；当前稳定通道 feed 已返回 200，内容指向 `v3.0.1` 的 universal 安装包。
+- 直接原因：
+  1. 需要把本地升级基础设施第一次真正发布到远端，才能让客户端的 stable feed 不再 404；
+  2. 发布过程中暴露出两个真实问题：`release.yml` 仍把 stable `v*` release 创建成 prerelease，以及 `promote-appcast.sh` 误把 `gh release upload file#label` 当成“改资产文件名”的手段。
+- 设计层诱因：
+  1. release workflow 的 appcast 发布链路此前只验证“job 是否成功”，没有验证最终 GitHub 固定 URL、asset 文件名与 appcast 内容是否真正符合客户端约定；
+  2. `generate_appcast` 的 `download-url-prefix` 需要尾部斜杠这一细节此前没有被测试覆盖，导致第一次 live 发布生成了错误的 enclosure URL。
+- 当前修复方案：
+  1. 生成 Sparkle signing key，并把 `SPARKLE_PUBLIC_ED_KEY` / `SPARKLE_PRIVATE_ED_KEY` 写入 repo secrets；
+  2. 提交升级基础设施并发布 `v3.0.1`；
+  3. 修复 `release.yml`，确保 stable release 不再被标记为 prerelease；
+  4. 修复 `promote-appcast.sh`，改为先复制成目标文件名再上传，避免 alias 资产名错误；
+  5. 修复 release/nightly workflow 的 appcast 参数：`download-url-prefix` 带尾部 `/`，`--link` 指向具体 release 页面；
+  6. 对当前 live `stable-appcast/appcast.xml` 做人工热修，确保现有客户端立即可用。
+- 长期改进建议：
+  1. 后续每次 release 固定增加两条线上验证：`curl stable-appcast/appcast.xml` 与 `curl vX.Y.Z/DevHaven-macos-universal.zip`；
+  2. 若未来要继续增强 manual-download 体验，可再把客户端 appcast 解析逻辑从“优先 item link”收口为“优先 enclosure/download，再回退 release notes”，减少对 feed 文案排序的耦合。
+- 验证证据：
+  - 2026-03-23 `swift test --package-path macos` → 242 tests，5 skipped，0 failures。
+  - 2026-03-23 `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/release.yml"); YAML.load_file(".github/workflows/nightly.yml"); puts "workflows ok"'` → `workflows ok`
+  - 2026-03-23 `gh secret list -R zxcvbnmzsedr/devhaven` → 已包含 `SPARKLE_PUBLIC_ED_KEY` / `SPARKLE_PRIVATE_ED_KEY`
+  - 2026-03-23 `git push origin main` → `8e04767` 发布提交已推送；随后 `git push origin refs/tags/v3.0.1` 成功
+  - 2026-03-23 `gh run view 23417576947 --json status,conclusion,jobs,url` → `status: completed`, `conclusion: success`
+  - 2026-03-23 `gh release view v3.0.1 --json assets` → 包含 `DevHaven-macos-arm64.zip`、`DevHaven-macos-x86_64.zip`、`DevHaven-macos-universal.zip`、`appcast-staged.xml`
+  - 2026-03-23 `gh release view stable-appcast --json assets` → 包含 `appcast.xml`
+  - 2026-03-23 `curl -I -L https://github.com/zxcvbnmzsedr/devhaven/releases/download/stable-appcast/appcast.xml` → 最终返回 `HTTP/2 200`
+  - 2026-03-23 `curl -L https://github.com/zxcvbnmzsedr/devhaven/releases/download/stable-appcast/appcast.xml | sed -n '1,160p'` → 返回 `3.0.1 / 20260323013003`，且 `enclosure url` 为 `https://github.com/zxcvbnmzsedr/devhaven/releases/download/v3.0.1/DevHaven-macos-universal.zip`
 
 ## Review（2026-03-23 Sparkle 启动崩溃修复）
 
