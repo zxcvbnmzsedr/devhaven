@@ -168,7 +168,7 @@ struct WorkspaceShellView: View {
                 loadWorktrees: { try await viewModel.listProjectWorktrees(for: $0) },
                 managedPathPreview: { try viewModel.managedWorktreePathPreview(for: $0, branch: $1) },
                 onCreateWorktree: { branch, createBranch, baseBranch, autoOpen in
-                    try await viewModel.createWorkspaceWorktree(
+                    try viewModel.startCreateWorkspaceWorktree(
                         from: dialogProject.project.path,
                         branch: branch,
                         createBranch: createBranch,

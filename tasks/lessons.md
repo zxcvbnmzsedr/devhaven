@@ -98,3 +98,4 @@
   2. 跨线程时只捕获 context；
   3. 真正执行时再向 context 解析当前 active 对象；
   4. teardown 开始时先 invalidation，让晚到回调统一 no-op。
+- 当一个长任务是由局部 `.sheet` 发起、却要由全局 overlay 展示进度时，不能让 sheet 一直 await 到后台任务完成；更稳的做法是先完成立即可失败的前置校验与占坑，再把耗时流程切到后台，让 sheet 立即退出，否则全局进度层会被 sheet 压住，用户体感就是“进度弹窗没置前”。

@@ -49,6 +49,15 @@ final class WorkspaceShellViewTests: XCTestCase {
         XCTAssertTrue(source.contains("codexDisplayRefreshState"), "WorkspaceShellView 应保留 Codex 展示态刷新所需的运行时观测状态")
     }
 
+    func testWorkspaceShellStartsWorktreeCreationWithoutWaitingForFullProgressFlow() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("startCreateWorkspaceWorktree"),
+            "WorkspaceShellView 应调用“先启动、后后台执行”的创建入口，让 worktree 对话框能立即退出并把全局进度弹窗露到最前面"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
