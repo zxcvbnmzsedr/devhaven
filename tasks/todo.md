@@ -1603,6 +1603,24 @@
 
 - [x] 复核本轮修复改动范围，确认仅包含 worktree 进度弹窗置前相关变更
 - [x] 运行 fresh 验证并确认提交前状态
-- [ ] 执行 git add / git commit / git push
-- [ ] 处理 PR：若已有当前分支 PR，则更新并记录；否则创建新 PR
-- [ ] 在 Review 中记录提交信息、PR 信息与验证证据
+- [x] 执行 git add / git commit / git push
+- [x] 处理 PR：若已有当前分支 PR，则更新并记录；否则创建新 PR
+- [x] 在 Review 中记录提交信息、PR 信息与验证证据
+
+## Review（2026-03-23 提交 worktree 进度弹窗置前修复）
+
+- 结果：
+  1. 已将本轮 worktree 创建进度弹窗置前修复提交为 `967615c`（`fix: 让 worktree 创建进度弹窗及时置前`），并推送到 `origin/session-restore`。
+  2. 当前分支历史上已有一个已合并 PR：#34 `feat: 支持非 live 工作区快照恢复`；本轮新增 commit 推送后，已基于同一 `session-restore` 分支创建新的 PR：#35 `fix: 让 worktree 创建进度弹窗及时置前`。
+  3. 新 PR 链接：`https://github.com/zxcvbnmzsedr/devhaven/pull/35`，当前状态 `OPEN`，base=`main`，head=`session-restore`，非 draft。
+  4. 提交后本地工作区已 clean，没有遗留未提交改动。
+- 验证证据：
+  - `git diff --stat -- ...` → 仅包含 `WorkspaceShellView.swift`、`NativeAppViewModel.swift`、两份测试文件与 `tasks/{todo,lessons}.md`
+  - `swift test --package-path macos` → 278 tests，5 skipped，0 failures
+  - `swift build --package-path macos` → `Build complete! (0.15s)`，exit 0
+  - `git diff --check` → 无输出
+  - `git commit -m "fix: 让 worktree 创建进度弹窗及时置前"` → commit `967615c`
+  - `git push origin HEAD:session-restore` → 远端分支从 `77957a2` 推进到 `967615c`
+  - `gh pr list --head session-restore --state all --json number,title,state,url,headRefName,baseRefName,isDraft`（创建前）→ 仅发现已合并 PR #34
+  - `gh pr create --base main --head session-restore ...` → `https://github.com/zxcvbnmzsedr/devhaven/pull/35`
+  - `gh pr view 35 --json number,title,state,url,headRefName,baseRefName,isDraft` → `state=OPEN`，`isDraft=false`
