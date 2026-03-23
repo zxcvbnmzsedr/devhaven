@@ -270,6 +270,12 @@ struct GhosttySurfaceHost: View {
                             .padding(14)
                             .allowsHitTesting(false)
                     }
+
+                    if let surfaceView = model.currentSurfaceView,
+                       surfaceView.bridge.state.searchNeedle != nil {
+                        GhosttySurfaceSearchOverlay(surfaceView: surfaceView)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    }
                 }
             }
         }
@@ -575,6 +581,27 @@ final class GhosttySurfaceHostModel: ObservableObject {
         case .running:
             return .running
         }
+    }
+
+    func startSearch() {
+        currentSurfaceView?.performBindingAction("start_search")
+    }
+
+    func searchSelection() {
+        currentSurfaceView?.performBindingAction("search_selection")
+    }
+
+    func navigateSearchNext() {
+        currentSurfaceView?.performBindingAction("navigate_search:next")
+    }
+
+    func navigateSearchPrevious() {
+        currentSurfaceView?.performBindingAction("navigate_search:previous")
+    }
+
+    func endSearch() {
+        currentSurfaceView?.performBindingAction("end_search")
+        currentSurfaceView?.requestFocus()
     }
 
     var terminalStatusText: String {

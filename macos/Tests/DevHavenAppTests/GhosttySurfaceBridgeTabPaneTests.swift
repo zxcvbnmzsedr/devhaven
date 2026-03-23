@@ -112,6 +112,37 @@ final class GhosttySurfaceBridgeTabPaneTests: XCTestCase {
         XCTAssertEqual(statuses, [.running, .idle])
     }
 
+    func testHandleActionUpdatesSearchStateFromGhosttySearchCallbacks() {
+        let bridge = GhosttySurfaceBridge()
+
+        var startSearch = makeAction(GHOSTTY_ACTION_START_SEARCH)
+        "hello".withCString { needlePointer in
+            startSearch.action.start_search = ghostty_action_start_search_s(needle: needlePointer)
+            XCTAssertTrue(bridge.handleAction(target: ghostty_target_s(), action: startSearch))
+        }
+
+        XCTAssertEqual(bridge.state.searchNeedle, "hello")
+        XCTAssertEqual(bridge.state.searchFocusCount, 1)
+        XCTAssertNil(bridge.state.searchTotal)
+        XCTAssertNil(bridge.state.searchSelected)
+
+        var total = makeAction(GHOSTTY_ACTION_SEARCH_TOTAL)
+        total.action.search_total = ghostty_action_search_total_s(total: 7)
+        XCTAssertTrue(bridge.handleAction(target: ghostty_target_s(), action: total))
+        XCTAssertEqual(bridge.state.searchTotal, 7)
+
+        var selected = makeAction(GHOSTTY_ACTION_SEARCH_SELECTED)
+        selected.action.search_selected = ghostty_action_search_selected_s(selected: 2)
+        XCTAssertTrue(bridge.handleAction(target: ghostty_target_s(), action: selected))
+        XCTAssertEqual(bridge.state.searchSelected, 2)
+
+        let end = makeAction(GHOSTTY_ACTION_END_SEARCH)
+        XCTAssertTrue(bridge.handleAction(target: ghostty_target_s(), action: end))
+        XCTAssertNil(bridge.state.searchNeedle)
+        XCTAssertNil(bridge.state.searchTotal)
+        XCTAssertNil(bridge.state.searchSelected)
+    }
+
     private func makeAction(_ tag: ghostty_action_tag_e) -> ghostty_action_s {
         var action = ghostty_action_s()
         action.tag = tag

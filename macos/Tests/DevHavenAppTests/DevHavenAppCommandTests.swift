@@ -19,6 +19,15 @@ final class DevHavenAppCommandTests: XCTestCase {
         )
     }
 
+    func testCommandsExposeGhosttySearchActions() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("WorkspaceTerminalCommands()"),
+            "DevHavenApp 应挂接独立的 WorkspaceTerminalCommands，把 terminal 搜索命令接入应用级菜单"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

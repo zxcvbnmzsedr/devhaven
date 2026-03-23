@@ -106,6 +106,11 @@ struct WorkspaceShellView: View {
             }
         }
         .background(NativeTheme.window)
+        .focusedSceneValue(\.startTerminalSearchAction, startTerminalSearchAction)
+        .focusedSceneValue(\.searchSelectionAction, searchSelectionAction)
+        .focusedSceneValue(\.navigateTerminalSearchNextAction, navigateTerminalSearchNextAction)
+        .focusedSceneValue(\.navigateTerminalSearchPreviousAction, navigateTerminalSearchPreviousAction)
+        .focusedSceneValue(\.endTerminalSearchAction, endTerminalSearchAction)
         .onReceive(codexDisplayRefreshTimer) { _ in
             refreshCodexDisplayStates()
         }
@@ -277,6 +282,50 @@ struct WorkspaceShellView: View {
         ) { projectPath, paneID in
             terminalStoreRegistry.modelIfLoaded(for: projectPath, paneID: paneID)?.currentVisibleText()
         }
+    }
+
+    private var startTerminalSearchAction: (() -> Void)? {
+        terminalSearchAction { $0.startSearch() }
+    }
+
+    private var searchSelectionAction: (() -> Void)? {
+        terminalSearchAction { $0.searchSelection() }
+    }
+
+    private var navigateTerminalSearchNextAction: (() -> Void)? {
+        terminalSearchAction { $0.navigateSearchNext() }
+    }
+
+    private var navigateTerminalSearchPreviousAction: (() -> Void)? {
+        terminalSearchAction { $0.navigateSearchPrevious() }
+    }
+
+    private var endTerminalSearchAction: (() -> Void)? {
+        terminalSearchAction { $0.endSearch() }
+    }
+
+    private func terminalSearchAction(
+        _ perform: @escaping (GhosttySurfaceHostModel) -> Void
+    ) -> (() -> Void)? {
+        guard viewModel.activeWorkspaceController?.selectedPane != nil else {
+            return nil
+        }
+        return {
+            guard let model = resolvedActiveTerminalSearchModel() else {
+                return
+            }
+            perform(model)
+        }
+    }
+
+    private func resolvedActiveTerminalSearchModel() -> GhosttySurfaceHostModel? {
+        guard let activeProjectPath = viewModel.activeWorkspaceProjectPath,
+              let controller = viewModel.activeWorkspaceController,
+              let selectedPane = controller.selectedPane
+        else {
+            return nil
+        }
+        return terminalStoreRegistry.store(for: activeProjectPath).model(for: selectedPane)
     }
 }
 

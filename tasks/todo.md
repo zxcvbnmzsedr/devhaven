@@ -110,6 +110,117 @@
 - [x] 执行首次 stable-appcast 正式发布并验证 feed / 下载链路
 - [x] 在 Review 中记录发布结果、证据与后续维护方式
 
+## 2026-03-23 Ghostty 搜索功能排查
+
+- [x] 把 Ghostty 搜索功能排查任务登记到 tasks/todo.md
+- [x] 对比 Supacode 与 DevHaven 的 Ghostty / libghostty 搜索相关接入代码
+- [x] 定位 DevHaven 当前“没有搜索”的直接原因与是否存在设计层诱因
+- [x] 如需改动，给出最小实现方案与验证路径
+- [x] 在 Review 中记录结论与证据
+
+## 2026-03-23 Ghostty 搜索功能实现
+
+- [x] 落搜索功能设计文档与实施计划
+- [x] 先补 Ghostty 搜索 bridge / 菜单 / overlay 的失败测试
+- [x] 运行定向测试确认红灯
+- [x] 实现搜索状态、搜索浮层与菜单/快捷键入口
+- [x] 更新 AGENTS 与相关源码注释/文档
+- [x] 运行定向测试与构建验证
+- [x] 在 Review 中记录修复结论与证据
+
+## 2026-03-23 Ghostty 搜索浮层右上角定位
+
+- [x] 落右上角定位设计与实施计划
+- [x] 先补搜索浮层右上角定位的失败测试
+- [x] 运行定向测试确认红灯
+- [x] 以最小改动将搜索浮层固定到右上角
+- [x] 运行定向测试与构建验证
+- [x] 在 Review 中记录结论与证据
+
+## 2026-03-23 会话恢复方案对标调研（Ghostty / Supacode / cmux）
+
+- [ ] 梳理 DevHaven 当前终端/工作区状态模型与会话恢复相关约束
+- [ ] 检索 Ghostty、Supacode、cmux 是否已有会话恢复实现、边界与实现线索
+- [ ] 基于调研结果给出 DevHaven 可借鉴点、缺口与建议
+
+## Review（2026-03-23 Ghostty 搜索功能排查）
+
+- 结论：
+  1. Supacode 的搜索不是“自动开关打开后 libghostty 自己弹出来”的，而是 **宿主 App 自己实现了一层搜索 UI/命令桥接**，再通过 `ghostty_surface_binding_action(...)` 把 `start_search` / `search:<needle>` / `navigate_search:*` / `end_search` 发回 libghostty。
+  2. DevHaven 当前没有搜索，不是因为底层 GhosttyKit 不支持，而是 **宿主侧没有接完整搜索链路**。
+- 直接原因：
+  1. `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceBridge.swift` 目前只处理 title / pwd / scrollbar / config / notification / progress / bell 等 action，没有处理 `GHOSTTY_ACTION_START_SEARCH`、`GHOSTTY_ACTION_END_SEARCH`、`GHOSTTY_ACTION_SEARCH_TOTAL`、`GHOSTTY_ACTION_SEARCH_SELECTED`。
+  2. `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceState.swift` 没有搜索相关状态字段（如 `searchNeedle` / `searchTotal` / `searchSelected` / `searchFocusCount`）。
+  3. `macos/Sources/DevHavenApp/WorkspaceTerminalPaneView.swift` / `GhosttySurfaceHost.swift` 没有像 Supacode 那样在 terminal 上层叠加搜索条 overlay。
+  4. `macos/Sources/DevHavenApp/DevHavenApp.swift` 也没有接入 Find 菜单 / FocusedValue / scene action，因此没有 App 级搜索入口。
+- 设计层诱因：
+  1. DevHaven 当前对 Ghostty 的接入重点放在 tab / split / agent 状态 / 通知，没有把“需要宿主提供 UI 的 libghostty action”抽象成统一能力层，导致搜索这类功能天然缺口。
+  2. 未发现明显系统设计缺陷；但存在一处能力边界未收口：DevHaven 已经有 `performBindingAction(_:)` 这样的底层发送能力，却没有在更高层建立“搜索 UI + menu command + bridge state”的闭环。
+- 当前修复方案（建议的最小实现）：
+  1. 在 `GhosttySurfaceState` 增加搜索状态字段；
+  2. 在 `GhosttySurfaceBridge` 增加 4 个 search action case；
+  3. 参考 Supacode 增加 `GhosttySurfaceSearchOverlay`，并在 terminal pane 上层按 `searchNeedle != nil` 显示；
+  4. 为当前 focused pane 增加 `startSearch / searchSelection / navigateSearchNext / navigateSearchPrevious / endSearch` 入口；
+  5. 在 `DevHavenApp.swift` 增加 Find 菜单项与快捷键桥接；
+  6. 保留现有 `ghostty_surface_binding_action(...)` 作为真正发往 libghostty 的唯一出口。
+- 长期改进建议：
+  1. 把这类“Ghostty action -> 宿主 UI/命令”的能力抽成统一的 command surface，而不是以后再在 `WorkspaceHostView` / `DevHavenApp` 分散补丁式加功能。
+  2. 为搜索链路补最少两类测试：bridge action 状态测试、overlay 显隐与按钮行为测试。
+- 验证证据：
+  - `macos/Vendor/GhosttyKit.xcframework/macos-arm64_x86_64/Headers/ghostty.h` 明确包含 `GHOSTTY_ACTION_START_SEARCH` / `END_SEARCH` / `SEARCH_TOTAL` / `SEARCH_SELECTED` 与 `ghostty_surface_binding_action(...)`。
+  - `macos/Sources/DevHavenApp/GhosttyResources/ghostty/doc/ghostty.5.md` 明确包含 `search` / `search_selection` / `navigate_search` / `start_search` / `end_search`。
+  - Supacode 侧已有完整接入：`GhosttySurfaceBridge.swift`、`GhosttySurfaceState.swift`、`GhosttySurfaceSearchOverlay.swift`、`TerminalCommands.swift`、`WorktreeDetailView.swift`、`WorktreeTerminalManager.swift`、`TerminalSplitTreeView.swift`。
+  - DevHaven 侧当前缺失对应接入：`GhosttySurfaceBridge.swift`、`GhosttySurfaceState.swift`、`WorkspaceTerminalPaneView.swift`、`DevHavenApp.swift`。
+
+## Review（2026-03-23 Ghostty 搜索功能实现）
+
+- 结果：
+  1. DevHaven 已补齐 Ghostty 搜索的宿主闭环：菜单入口、focused pane 路由、search action bridge、搜索浮层与 binding action 下发。
+  2. 当前已支持：`查找…`、`查找下一个`、`查找上一个`、`隐藏查找栏`、`使用所选内容查找`。
+- 直接原因：
+  1. 此前 `GhosttySurfaceBridge` 没有处理 `START_SEARCH / END_SEARCH / SEARCH_TOTAL / SEARCH_SELECTED`；
+  2. `GhosttySurfaceState` 没有搜索状态字段；
+  3. App 菜单与当前 pane 之间缺少 focused action 路由；
+  4. 终端宿主层没有搜索浮层。
+- 设计层诱因：
+  1. DevHaven 之前已经有 `performBindingAction(...)` 这条底层通道，但没有把“菜单命令 -> 当前 pane -> 搜索 UI -> libghostty action”收成完整能力；
+  2. 未发现明显系统设计缺陷；本次通过 `WorkspaceTerminalCommands + FocusedValue + GhosttySurfaceSearchOverlay` 把职责边界补齐。
+- 当前修复方案：
+  1. 在 `GhosttySurfaceState` 增加 `searchNeedle / searchTotal / searchSelected / searchFocusCount`；
+  2. 在 `GhosttySurfaceBridge` 中桥接 4 个 search action；
+  3. 新增 `GhosttySurfaceSearchOverlay.swift`，通过 `search:<needle>`、`navigate_search:*`、`end_search` 驱动 libghostty；
+  4. 在 `GhosttySurfaceHostModel` 中补充当前 pane 搜索动作入口；
+  5. 新增 `WorkspaceTerminalCommands.swift`，通过 `FocusedValue` 将 App 菜单命令路由到当前 active pane；
+  6. 更新 `AGENTS.md`，记录搜索相关关键文件和边界约束。
+- 长期改进建议：
+  1. 如后续继续增强 Ghostty 宿主能力，建议把 command-palette / search / readonly / inspector 一类“宿主 UI + Ghostty action”继续沿同一 command surface 扩展，而不要散落在全局菜单或 ViewModel 中；
+  2. 若后续要提升体验，可再补搜索输入节流、环绕导航与 UI 级交互测试。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter GhosttySurfaceBridgeTabPaneTests`（实现前）→ 编译失败，明确提示 `GhosttySurfaceState` 缺少 `searchNeedle / searchFocusCount / searchTotal / searchSelected`
+  - 绿灯验证：`swift test --package-path macos --filter 'GhosttySurfaceBridgeTabPaneTests|DevHavenAppCommandTests|WorkspaceTerminalCommandsTests|GhosttySurfaceSearchOverlayTests'` → 12 tests，0 failures
+  - 构建验证：`swift build --package-path macos` → `Build complete! (0.53s)`，exit 0
+
+## Review（2026-03-23 Ghostty 搜索浮层右上角定位）
+
+- 结果：Ghostty 搜索浮层已从左上角改为固定显示在 terminal 区域右上角；搜索行为本身未改动。
+- 直接原因：
+  1. `GhosttySurfaceHost` 当前使用 `ZStack(alignment: .topLeading)` 承载 startup overlay 与 search overlay；
+  2. 搜索浮层此前直接放进该 `ZStack`，未显式声明自己的对齐方式，因此默认落在左上角。
+- 设计层诱因：
+  1. 未发现明显系统设计缺陷；
+  2. 这是一个宿主 overlay 布局细节没有被单独声明的问题：startup overlay 与 search overlay 共用父级左上角对齐，但搜索浮层本应有独立定位语义。
+- 当前修复方案：
+  1. 保持 `GhosttySurfaceSearchOverlay` 的输入、上下一个、关闭等逻辑不变；
+  2. 仅在 `GhosttySurfaceHost.swift` 中给搜索浮层增加 `frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)`，让其固定到右上角；
+  3. 不改 startup overlay 的原有左上角位置。
+- 长期改进建议：
+  1. 如果未来还会新增更多 Ghostty 浮层，建议再考虑统一 overlay 布局策略；
+  2. 当前阶段继续保持“单个浮层各自声明定位语义”的轻量做法即可，避免过度设计。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter GhosttySurfaceSearchOverlayTests`（实现前）→ 1 failure，明确提示“搜索浮层应固定对齐到 terminal 区域右上角”
+  - 绿灯验证：`swift test --package-path macos --filter GhosttySurfaceSearchOverlayTests`（实现后）→ 2 tests，0 failures
+  - 构建验证：`swift build --package-path macos` → `Build complete! (1.98s)`，exit 0
+
 ## Review
 
 ## Review（2026-03-23 stable appcast 404 排查）
@@ -1255,3 +1366,32 @@
 - 验证证据：
   - `swift test --package-path macos` → `250 tests, 5 skipped, 0 failures`
 
+## 2026-03-23 macOS quarantine 运行门槛排查
+
+- [x] 查看本地打包脚本中的签名方式与默认行为
+- [x] 查看 release/nightly workflow 的 Developer ID / notarization 条件分支
+- [x] 结合现有 Review 与文档，确认当前发布包为何需要移除 quarantine 才能运行
+- [x] 在 Review 中记录直接原因、设计层诱因、当前建议与验证证据
+
+## Review（2026-03-23 macOS quarantine 运行门槛排查）
+
+- 结论：当前 DevHaven 发布包之所以常需要用户手动执行 `xattr -r -d com.apple.quarantine`，不是因为 macOS 对所有第三方 App 都“必须这样”，而是因为 **下载得到的 `.app` 会带 quarantine 属性，而 DevHaven 当前发布链路默认又没有稳定补齐 Apple Developer ID 签名 + notarization 信任链**；因此 Gatekeeper 会把它当作未建立可信来源的互联网下载应用拦下。
+- 直接原因：
+  1. `macos/scripts/build-native-app.sh` 默认只做本地 `ad-hoc` 签名：`codesign --force --deep --sign -`，这不等于 Developer ID 签名，也不能替代 notarization。
+  2. `.github/workflows/release.yml` / `nightly.yml` 中的 Developer ID 签名与 notarization 都是“可选步骤”；当相关 secrets 缺失时，workflow 会直接输出“跳过 Apple 代码签名 / 跳过 notarization”并继续发布。
+  3. `macos/scripts/create-universal-app.sh` 是先复制 arm64 `.app` 再 `lipo` 替换主可执行文件；如果后续没有重新签名，universal `.app` 的签名会失效。
+  4. 用户从 GitHub Release / 浏览器下载 zip 后，解压得到的 `.app` 会保留 `com.apple.quarantine`；一旦应用缺少可验证的 Apple 信任链，首次启动就会被 Gatekeeper 阻止。
+- 设计层诱因：
+  1. 当前发布链路把“是否完成 Apple 信任链”设计成可选项，因此即使签名/公证缺失也能继续产出并发布面向终端用户的安装包；这会让“可下载”与“可直接在 macOS 上无提示运行”之间出现落差。
+  2. 未发现明显系统设计缺陷；但发布验收目前更偏向构建成功与资产上传成功，对“终端用户首次安装是否能在保留 quarantine 的前提下直接通过 Gatekeeper”这条证据还不够强约束。
+- 当前建议：
+  1. 短期：如果继续分发当前这类未完成信任链的包，至少应在下载说明里明确提示用户可能需要右键“打开”或移除 quarantine；通常不建议把 `sudo xattr ...` 当作默认安装步骤公开要求。
+  2. 中期：补齐 `APPLE_DEVELOPER_ID_*` 与 `APPLE_NOTARY_*` secrets，让 workflow 对 universal `.app` 重新签名、notarize 并 staple。
+  3. 长期：把“面向用户发布”与“Apple 信任链完成”绑定；若 secrets 缺失，应阻止正式 release 对外发布，避免继续产出需要用户手工绕过 Gatekeeper 的安装包。
+- 验证证据：
+  - `macos/scripts/build-native-app.sh` 第 340-343 行：默认执行 `codesign --force --deep --sign -`（ad-hoc 签名）。
+  - `.github/workflows/release.yml` 第 275-276 行：缺少 Developer ID secrets 时输出“未配置 Developer ID 签名 secrets，跳过 Apple 代码签名。”。
+  - `.github/workflows/release.yml` 第 303-304 行：缺少 notary secrets 时输出“未配置 notary secrets，跳过 notarization。”。
+  - `.github/workflows/nightly.yml` 第 250-251、278-279 行：nightly 同样在 secrets 缺失时跳过签名与 notarization。
+  - `macos/scripts/create-universal-app.sh` 第 107-110 行：复制 arm64 `.app` 后执行 `lipo -create` 替换主可执行文件，若不重新签名会破坏已有签名。
+  - `README.md` 第 163 行：文档已明确当前正式构建默认采用 `manual-download`，未来补齐 Apple Developer ID / notarization 后才切到 `automatic`。

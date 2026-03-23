@@ -13,4 +13,8 @@ final class GhosttySurfaceState {
     var appearance: GhosttySurfaceAppearance = .fallback
     var taskStatus: GhosttySurfaceTaskStatus = .idle
     var bellCount = 0
+    var searchNeedle: String?
+    var searchTotal: Int?
+    var searchSelected: Int?
+    var searchFocusCount = 0
 }

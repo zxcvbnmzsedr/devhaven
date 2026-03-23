@@ -55,6 +55,8 @@ struct DevHavenApp: App {
                 .keyboardShortcut("d", modifiers: [.command])
                 .disabled(viewModel.activeWorkspaceController?.selectedPane == nil)
             }
+
+            WorkspaceTerminalCommands()
         }
     }
 }
