@@ -4,7 +4,7 @@
 
 ### 🚀 macOS 原生多项目管理与终端工作区
 
-[![version](https://img.shields.io/badge/version-3.0.1-blue)](https://github.com/zxcvbnmzsedr/DevHaven)
+[![version](https://img.shields.io/badge/version-3.0.2-blue)](https://github.com/zxcvbnmzsedr/DevHaven)
 [![license](https://img.shields.io/badge/license-GPL--3.0-green)](./LICENSE)
 [![macOS](https://img.shields.io/badge/macOS-Native-black)](https://developer.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-6.0-orange)](https://www.swift.org/)

@@ -1225,3 +1225,33 @@
   - `swift test --package-path macos --filter DevHavenAppTests.ProjectSidebarViewTests/testImportFlowRecordsDiagnosticsAtImporterBoundary`
   - `swift test --package-path macos --filter DevHavenAppTests.ProjectSidebarViewTests/testSuccessfulImportSelectsImportedFilterToAvoidNoReaction`
   - `swift test --package-path macos` → 250 tests，5 skipped，0 failures
+
+## 2026-03-23 v3.0.2 整理代码与发布
+
+- [x] 盘点当前工作区改动、版本真相源与远端基线
+- [x] 记录本次计划到 docs/plans 与 tasks/todo.md
+- [x] 整理当前 ProjectSidebarView 最近改动，收口目录行代码
+- [x] 升级版本到 3.0.2 并同步 build number / README
+- [x] 运行 macOS 相关验证并记录 Review 证据
+- [ ] 提交本次变更、创建 v3.0.2 tag、push 分支与 tag
+
+## Review（2026-03-23 v3.0.2 整理代码与发布）
+
+- 结果：已将仓库版本真相源升级到 `3.0.2` / `3002000`，并收口 `ProjectSidebarView` 中用户目录行的渲染职责。当前目录行仍保持整行点击、hover 显示移除动作与既有删除语义不变。
+- 直接原因：
+  1. `ProjectSidebarView` 目录列表里，用户目录行的“整行选择 + 移除目录”逻辑直接内嵌在 `ForEach` 中，渲染细节与业务动作混在父视图里，可读性和后续维护性都偏差。
+  2. 当前仓库版本真相源仍停留在 `3.0.1` / `3001000`，与本次发布目标 `v3.0.2` 不一致。
+- 设计层诱因：
+  1. 目录行的局部交互职责没有收口到单独组件，父视图承担了过多行内渲染细节；
+  2. 未发现明显系统设计缺陷，当前更多是局部职责边界和发布元数据未及时推进的问题。
+- 当前修复方案：
+  1. 抽出 `DirectoryRowView`，把用户目录行的 hover/移除交互封装在单独视图中；
+  2. 将目录移除按钮改为与选择按钮并列的 `ZStack` 结构，并在非 hover 时禁用 hit testing，避免把交互建立在嵌套按钮之上；
+  3. 更新 `macos/Resources/AppMetadata.json` 中的 `version=3.0.2`、`buildNumber=3002000`；
+  4. 更新 `README.md` 首页版本徽章到 `3.0.2`。
+- 长期改进建议：
+  1. 如果目录行、标签行、普通 sidebar 行后续继续分化，可以进一步抽象共享的 sidebar row 样式层，避免视觉参数再次散落；
+  2. 后续每次 release 准备都可固定检查 `AppMetadata` 与 README 徽章，避免版本展示与构建真相源再次漂移。
+- 验证证据：
+  - `swift test --package-path macos` → `250 tests, 5 skipped, 0 failures`
+

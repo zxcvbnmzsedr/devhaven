@@ -20,16 +20,11 @@ struct ProjectSidebarView: View {
                     VStack(spacing: 6) {
                         ForEach(viewModel.directoryRows) { row in
                             if !row.isSystemEntry, let directoryPath = directoryPath(for: row) {
-                                HStack(spacing: 8) {
-                                    sidebarRow(
-                                        title: row.title,
-                                        count: row.count,
-                                        selected: row.filter == viewModel.selectedDirectory
-                                    ) {
-                                        viewModel.selectDirectory(row.filter)
-                                    }
-
-                                    Button {
+                                DirectoryRowView(
+                                    row: row,
+                                    isSelected: row.filter == viewModel.selectedDirectory,
+                                    onSelect: { viewModel.selectDirectory(row.filter) },
+                                    onRemove: {
                                         Task {
                                             do {
                                                 try await viewModel.removeProjectDirectory(directoryPath)
@@ -37,18 +32,8 @@ struct ProjectSidebarView: View {
                                                 viewModel.errorMessage = error.localizedDescription
                                             }
                                         }
-                                    } label: {
-                                        Image(systemName: "minus.circle")
-                                            .font(.callout)
-                                            .foregroundStyle(NativeTheme.textSecondary)
-                                            .frame(width: 28, height: 28)
-                                            .background(Color.white.opacity(0.05))
-                                            .clipShape(.rect(cornerRadius: 8))
                                     }
-                                    .buttonStyle(.plain)
-                                    .focusable(false)
-                                    .help("移除此工作目录")
-                                }
+                                )
                             } else {
                                 sidebarRow(
                                     title: row.title,
@@ -472,6 +457,61 @@ struct ProjectSidebarView: View {
             .contentShape(.rect(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct DirectoryRowView: View {
+    let row: NativeAppViewModel.DirectoryRow
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onRemove: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button(action: onSelect) {
+                HStack(spacing: 10) {
+                    Text(row.title)
+                        .font(.callout)
+                        .foregroundStyle(NativeTheme.textPrimary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("\(row.count)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(isSelected ? Color.white : NativeTheme.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(isSelected ? NativeTheme.accent.opacity(0.85) : Color.white.opacity(0.05))
+                        .clipShape(.rect(cornerRadius: 6))
+                        .opacity(isHovering ? 0 : 1)
+                        .animation(.easeInOut(duration: 0.15), value: isHovering)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isSelected ? NativeTheme.accent.opacity(0.18) : Color.clear)
+                .clipShape(.rect(cornerRadius: 8))
+                .contentShape(.rect(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onRemove) {
+                Image(systemName: "minus.circle")
+                    .font(.caption)
+                    .foregroundStyle(NativeTheme.textSecondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .focusable(false)
+            .help("移除此工作目录")
+            .padding(.trailing, 10)
+            .opacity(isHovering ? 1 : 0)
+            .allowsHitTesting(isHovering)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
+        }
+        .onHover { isHovering = $0 }
     }
 }
 

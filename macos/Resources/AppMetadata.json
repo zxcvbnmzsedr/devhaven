@@ -1,8 +1,8 @@
 {
   "productName": "DevHaven",
   "bundleIdentifier": "com.devhaven",
-  "version": "3.0.1",
-  "buildNumber": "3001000",
+  "version": "3.0.2",
+  "buildNumber": "3002000",
   "stableFeedURL": "https://github.com/zxcvbnmzsedr/devhaven/releases/download/stable-appcast/appcast.xml",
   "nightlyFeedURL": "https://github.com/zxcvbnmzsedr/devhaven/releases/download/nightly/appcast.xml",
   "updateDeliveryMode": "manualDownload",
