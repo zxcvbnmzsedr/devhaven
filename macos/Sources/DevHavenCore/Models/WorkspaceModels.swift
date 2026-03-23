@@ -1,5 +1,28 @@
 import Foundation
 
+public struct WorkspaceTerminalRestoreContext: Equatable, Sendable {
+    public var workingDirectory: String?
+    public var title: String?
+    public var snapshotText: String?
+    public var agentSummary: String?
+
+    public init(
+        workingDirectory: String?,
+        title: String?,
+        snapshotText: String?,
+        agentSummary: String?
+    ) {
+        self.workingDirectory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.title = title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.snapshotText = snapshotText?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.agentSummary = agentSummary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+
+    public var isEmpty: Bool {
+        workingDirectory == nil && title == nil && snapshotText == nil && agentSummary == nil
+    }
+}
+
 public struct WorkspaceTerminalLaunchRequest: Equatable, Sendable {
     public var projectPath: String
     public var workspaceId: String
@@ -8,6 +31,8 @@ public struct WorkspaceTerminalLaunchRequest: Equatable, Sendable {
     public var surfaceId: String
     public var terminalSessionId: String
     public var terminalRuntime: String
+    public var workingDirectoryOverride: String?
+    public var restoreContext: WorkspaceTerminalRestoreContext?
 
     public init(
         projectPath: String,
@@ -16,7 +41,9 @@ public struct WorkspaceTerminalLaunchRequest: Equatable, Sendable {
         paneId: String,
         surfaceId: String,
         terminalSessionId: String,
-        terminalRuntime: String = "ghostty"
+        terminalRuntime: String = "ghostty",
+        workingDirectoryOverride: String? = nil,
+        restoreContext: WorkspaceTerminalRestoreContext? = nil
     ) {
         self.projectPath = projectPath
         self.workspaceId = workspaceId
@@ -25,6 +52,14 @@ public struct WorkspaceTerminalLaunchRequest: Equatable, Sendable {
         self.surfaceId = surfaceId
         self.terminalSessionId = terminalSessionId
         self.terminalRuntime = terminalRuntime
+        self.workingDirectoryOverride = workingDirectoryOverride?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.restoreContext = restoreContext
+    }
+
+    public var workingDirectory: String {
+        workingDirectoryOverride
+            ?? restoreContext?.workingDirectory
+            ?? projectPath
     }
 
     public var environment: [String: String] {
@@ -37,5 +72,11 @@ public struct WorkspaceTerminalLaunchRequest: Equatable, Sendable {
             "DEVHAVEN_TERMINAL_SESSION_ID": terminalSessionId,
             "DEVHAVEN_TERMINAL_RUNTIME": terminalRuntime,
         ]
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }

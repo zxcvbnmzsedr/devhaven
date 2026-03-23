@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
+import Combine
 import DevHavenCore
 
 struct AppRootView: View {
     @Bindable var viewModel: NativeAppViewModel
     @ObservedObject var updateController: DevHavenUpdateController
+    @Environment(\.scenePhase) private var scenePhase
 
     init(viewModel: NativeAppViewModel, updateController: DevHavenUpdateController = DevHavenUpdateController()) {
         self.viewModel = viewModel
@@ -100,6 +102,17 @@ struct AppRootView: View {
         }
         .onChange(of: viewModel.snapshot.appState.settings) { _, settings in
             updateController.apply(settings: settings)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            switch newPhase {
+            case .inactive, .background:
+                viewModel.flushWorkspaceRestoreSnapshotNow()
+            default:
+                break
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            viewModel.flushWorkspaceRestoreSnapshotNow()
         }
         .task {
             guard !viewModel.hasLoadedInitialData else {

@@ -248,7 +248,7 @@ final class GhosttyRuntime {
         }
 
         let configuration = GhosttyTerminalSurfaceConfiguration(
-            workingDirectory: request.projectPath,
+            workingDirectory: request.workingDirectory,
             environmentVariables: extraEnvironment
         )
 

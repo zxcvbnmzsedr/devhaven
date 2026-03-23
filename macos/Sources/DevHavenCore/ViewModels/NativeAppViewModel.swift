@@ -15,6 +15,8 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
     @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
+    @ObservationIgnored private let workspaceRestoreCoordinator: WorkspaceRestoreCoordinator
+    @ObservationIgnored private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider?
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
     @ObservationIgnored private var isAgentSignalObservationStarted = false
@@ -113,7 +115,9 @@ public final class NativeAppViewModel {
         projectImportDiagnostics: ProjectImportDiagnostics = .shared,
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
         worktreeService: (any NativeWorktreeServicing)? = nil,
-        agentSignalStore: WorkspaceAgentSignalStore? = nil
+        agentSignalStore: WorkspaceAgentSignalStore? = nil,
+        workspaceRestoreStore: WorkspaceRestoreStore? = nil,
+        workspaceRestoreAutosaveDelayNanoseconds: UInt64 = 400_000_000
     ) {
         self.store = store
         self.projectDocumentLoader = projectDocumentLoader ?? loadProjectDocumentFromDisk
@@ -127,6 +131,11 @@ public final class NativeAppViewModel {
         self.agentSignalStore = agentSignalStore ?? WorkspaceAgentSignalStore(
             baseDirectoryURL: store.agentStatusSessionsDirectoryURL
         )
+        self.workspaceRestoreCoordinator = WorkspaceRestoreCoordinator(
+            store: workspaceRestoreStore ?? WorkspaceRestoreStore(homeDirectoryURL: store.backgroundWorkHomeDirectoryURL),
+            autosaveDelayNanoseconds: workspaceRestoreAutosaveDelayNanoseconds
+        )
+        self.workspacePaneSnapshotProvider = nil
         self.snapshot = NativeAppSnapshot()
         self.selectedProjectPath = nil
         self.openWorkspaceSessions = []
@@ -577,11 +586,32 @@ public final class NativeAppViewModel {
 
         do {
             projectDocumentCache.removeAll()
+            let shouldApplyWorkspaceRestore = !hasLoadedInitialData && openWorkspaceSessions.isEmpty
             snapshot = try store.loadSnapshot()
             alignSelectionAfterReload()
+            if shouldApplyWorkspaceRestore {
+                applyWorkspaceRestoreSnapshotIfAvailable()
+            }
             scheduleSelectedProjectDocumentRefresh()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    public func setWorkspacePaneSnapshotProvider(_ provider: WorkspacePaneSnapshotProvider?) {
+        workspacePaneSnapshotProvider = provider
+    }
+
+    public func flushWorkspaceRestoreSnapshotNow() {
+        do {
+            try workspaceRestoreCoordinator.flushNow(
+                activeProjectPath: activeWorkspaceProjectPath,
+                selectedProjectPath: selectedProjectPath,
+                sessions: openWorkspaceSessions,
+                paneSnapshotProvider: workspacePaneSnapshotProvider
+            )
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
@@ -690,6 +720,7 @@ public final class NativeAppViewModel {
         }
         selectedProjectPath = path
         scheduleSelectedProjectDocumentRefresh()
+        scheduleWorkspaceRestoreAutosave()
     }
 
     public func enterWorkspace(_ path: String) {
@@ -704,6 +735,7 @@ public final class NativeAppViewModel {
             )
         }
         scheduleSelectedProjectDocumentRefresh()
+        scheduleWorkspaceRestoreAutosave()
     }
 
     public func enterOrResumeWorkspace() {
@@ -728,6 +760,7 @@ public final class NativeAppViewModel {
         let homePath = FileManager.default.homeDirectoryForCurrentUser.path
         openWorkspaceSessionIfNeeded(for: homePath, rootProjectPath: homePath, isQuickTerminal: true)
         activateWorkspaceProject(homePath)
+        scheduleWorkspaceRestoreAutosave()
     }
 
     public func activateWorkspaceProject(_ path: String) {
@@ -745,6 +778,7 @@ public final class NativeAppViewModel {
         if !isQuickTerminalSessionPath(path) {
             scheduleSelectedProjectDocumentRefresh()
         }
+        scheduleWorkspaceRestoreAutosave()
     }
 
     public func closeWorkspaceProject(_ path: String) {
@@ -767,6 +801,7 @@ public final class NativeAppViewModel {
         if openWorkspaceSessions.isEmpty {
             activeWorkspaceProjectPath = nil
             isDetailPanelPresented = false
+            scheduleWorkspaceRestoreAutosave()
             return
         }
 
@@ -778,11 +813,13 @@ public final class NativeAppViewModel {
             isDetailPanelPresented = false
             scheduleSelectedProjectDocumentRefresh()
         }
+        scheduleWorkspaceRestoreAutosave()
     }
 
     public func exitWorkspace() {
         activeWorkspaceProjectPath = nil
         isDetailPanelPresented = false
+        scheduleWorkspaceRestoreAutosave()
     }
 
     public func openWorkspaceWorktree(_ worktreePath: String, from rootProjectPath: String) {
@@ -807,6 +844,7 @@ public final class NativeAppViewModel {
         activeWorkspaceProjectPath = worktree.path
         isDetailPanelPresented = false
         scheduleSelectedProjectDocumentRefresh()
+        scheduleWorkspaceRestoreAutosave()
     }
 
     public func createWorkspaceTab(in projectPath: String? = nil) {
@@ -1620,15 +1658,99 @@ public final class NativeAppViewModel {
         }
     }
 
+    private func scheduleWorkspaceRestoreAutosave() {
+        workspaceRestoreCoordinator.scheduleAutosave(
+            activeProjectPath: activeWorkspaceProjectPath,
+            selectedProjectPath: selectedProjectPath,
+            sessions: openWorkspaceSessions,
+            paneSnapshotProvider: workspacePaneSnapshotProvider
+        )
+    }
+
+    private func applyWorkspaceRestoreSnapshotIfAvailable() {
+        guard let restoredSnapshot = workspaceRestoreCoordinator.loadSnapshot() else {
+            return
+        }
+
+        let restoredSessions = restoredSnapshot.sessions.compactMap { sessionSnapshot -> OpenWorkspaceSessionState? in
+            guard canRestoreWorkspaceSession(sessionSnapshot) else {
+                return nil
+            }
+
+            let controller = GhosttyWorkspaceController(
+                projectPath: sessionSnapshot.projectPath,
+                workspaceId: sessionSnapshot.workspaceId
+            )
+            controller.restore(from: sessionSnapshot)
+            registerWorkspaceRestoreObserver(for: controller)
+
+            if sessionSnapshot.projectPath == sessionSnapshot.rootProjectPath, !sessionSnapshot.isQuickTerminal {
+                refreshCurrentBranch(for: sessionSnapshot.projectPath)
+            }
+
+            return OpenWorkspaceSessionState(
+                projectPath: sessionSnapshot.projectPath,
+                rootProjectPath: sessionSnapshot.rootProjectPath,
+                controller: controller,
+                isQuickTerminal: sessionSnapshot.isQuickTerminal
+            )
+        }
+
+        guard !restoredSessions.isEmpty else {
+            return
+        }
+
+        openWorkspaceSessions = restoredSessions
+        syncAttentionStateWithOpenSessions()
+
+        let restoredActiveProjectPath = restoredSnapshot.activeProjectPath.flatMap { candidate in
+            openWorkspaceProjectPaths.contains(candidate) ? candidate : nil
+        } ?? restoredSessions.last?.projectPath
+
+        activeWorkspaceProjectPath = restoredActiveProjectPath
+        selectedProjectPath = restoredSnapshot.selectedProjectPath.flatMap { candidate in
+            if openWorkspaceProjectPaths.contains(candidate) {
+                return candidate
+            }
+            return resolveDisplayProject(for: candidate) == nil ? nil : candidate
+        } ?? restoredActiveProjectPath ?? selectedProjectPath
+
+        if let restoredActiveProjectPath,
+           let paneID = workspaceController(for: restoredActiveProjectPath)?.selectedPane?.id {
+            markWorkspaceNotificationsRead(projectPath: restoredActiveProjectPath, paneID: paneID)
+        }
+        isDetailPanelPresented = false
+    }
+
+    private func canRestoreWorkspaceSession(_ sessionSnapshot: ProjectWorkspaceRestoreSnapshot) -> Bool {
+        if sessionSnapshot.isQuickTerminal {
+            return !sessionSnapshot.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return resolveDisplayProject(
+            for: sessionSnapshot.projectPath,
+            rootProjectPath: sessionSnapshot.rootProjectPath
+        ) != nil
+    }
+
+    private func registerWorkspaceRestoreObserver(for controller: GhosttyWorkspaceController) {
+        controller.onChange = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.scheduleWorkspaceRestoreAutosave()
+            }
+        }
+    }
+
     private func openWorkspaceSessionIfNeeded(for path: String, rootProjectPath: String, isQuickTerminal: Bool = false) {
         guard !openWorkspaceProjectPaths.contains(path) else {
             return
         }
+        let controller = GhosttyWorkspaceController(projectPath: path)
+        registerWorkspaceRestoreObserver(for: controller)
         openWorkspaceSessions.append(
             OpenWorkspaceSessionState(
                 projectPath: path,
                 rootProjectPath: rootProjectPath,
-                controller: GhosttyWorkspaceController(projectPath: path),
+                controller: controller,
                 isQuickTerminal: isQuickTerminal
             )
         )

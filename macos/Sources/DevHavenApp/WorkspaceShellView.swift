@@ -115,6 +115,7 @@ struct WorkspaceShellView: View {
             refreshCodexDisplayStates()
         }
         .onAppear {
+            viewModel.setWorkspacePaneSnapshotProvider(workspacePaneSnapshotProvider)
             viewModel.startWorkspaceAgentSignalObservation()
             syncTerminalStores()
             warmActiveWorkspace()
@@ -126,6 +127,7 @@ struct WorkspaceShellView: View {
         }
         .onDisappear {
             viewModel.stopWorkspaceAgentSignalObservation()
+            viewModel.setWorkspacePaneSnapshotProvider(nil)
         }
         .onChange(of: viewModel.openWorkspaceProjectPaths) { _, _ in
             syncTerminalStores()
@@ -284,6 +286,15 @@ struct WorkspaceShellView: View {
         }
     }
 
+    private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider {
+        { projectPath, paneID in
+            terminalStoreRegistry
+                .modelIfLoaded(for: projectPath, paneID: paneID)?
+                .snapshotContext()
+                .restoreContext
+        }
+    }
+
     private var startTerminalSearchAction: (() -> Void)? {
         terminalSearchAction { $0.startSearch() }
     }
@@ -326,6 +337,17 @@ struct WorkspaceShellView: View {
             return nil
         }
         return terminalStoreRegistry.store(for: activeProjectPath).model(for: selectedPane)
+    }
+}
+
+private extension GhosttySurfaceHostModel.SnapshotContext {
+    var restoreContext: WorkspaceTerminalRestoreContext {
+        WorkspaceTerminalRestoreContext(
+            workingDirectory: workingDirectory,
+            title: title,
+            snapshotText: visibleText,
+            agentSummary: agentSummary
+        )
     }
 }
 

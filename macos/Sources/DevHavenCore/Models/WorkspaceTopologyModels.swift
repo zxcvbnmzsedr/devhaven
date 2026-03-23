@@ -26,7 +26,7 @@ public enum WorkspacePaneFocusDirection: Sendable {
     case down
 }
 
-public enum WorkspaceSplitAxis: String, Equatable, Sendable {
+public enum WorkspaceSplitAxis: String, Codable, Equatable, Sendable {
     case horizontal
     case vertical
 }
@@ -713,13 +713,31 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         projectPath: String,
         workspaceId: String = "workspace:\(UUID().uuidString.lowercased())"
     ) {
+        self.init(
+            projectPath: projectPath,
+            workspaceId: workspaceId,
+            tabs: [],
+            selectedTabId: nil,
+            nextTabNumber: 1,
+            nextPaneNumber: 1
+        )
+        _ = createTab()
+    }
+
+    init(
+        projectPath: String,
+        workspaceId: String,
+        tabs: [WorkspaceTabState],
+        selectedTabId: String?,
+        nextTabNumber: Int,
+        nextPaneNumber: Int
+    ) {
         self.workspaceId = workspaceId
         self.projectPath = projectPath
-        self.tabs = []
-        self.selectedTabId = nil
-        self.nextTabNumber = 1
-        self.nextPaneNumber = 1
-        _ = createTab()
+        self.tabs = tabs
+        self.selectedTabId = selectedTabId
+        self.nextTabNumber = max(nextTabNumber, 1)
+        self.nextPaneNumber = max(nextPaneNumber, 1)
     }
 
     public var selectedTab: WorkspaceTabState? {
@@ -937,5 +955,160 @@ public struct WorkspaceSessionState: Equatable, Sendable {
                 terminalSessionId: "\(workspaceId)/session:\(paneNumber)"
             )
         )
+    }
+
+    public init(restoring snapshot: ProjectWorkspaceRestoreSnapshot) {
+        let restoredTabs = snapshot.tabs.map { tab in
+            WorkspaceTabState(
+                id: tab.id,
+                title: tab.title,
+                tree: WorkspacePaneTree(restoring: tab.tree, projectPath: snapshot.projectPath, workspaceId: snapshot.workspaceId, tabID: tab.id),
+                focusedPaneId: tab.focusedPaneId
+            )
+        }
+        let selectedTabId = snapshot.selectedTabId.flatMap { candidate in
+            restoredTabs.contains(where: { $0.id == candidate }) ? candidate : nil
+        } ?? restoredTabs.first?.id
+        self.init(
+            projectPath: snapshot.projectPath,
+            workspaceId: snapshot.workspaceId,
+            tabs: restoredTabs.isEmpty
+                ? [WorkspaceSessionState(projectPath: snapshot.projectPath, workspaceId: snapshot.workspaceId).selectedTab!]
+                : restoredTabs,
+            selectedTabId: selectedTabId,
+            nextTabNumber: snapshot.nextTabNumber,
+            nextPaneNumber: snapshot.nextPaneNumber
+        )
+    }
+
+    public func makeRestoreSnapshot(
+        rootProjectPath: String,
+        isQuickTerminal: Bool
+    ) -> ProjectWorkspaceRestoreSnapshot {
+        ProjectWorkspaceRestoreSnapshot(
+            projectPath: projectPath,
+            rootProjectPath: rootProjectPath,
+            isQuickTerminal: isQuickTerminal,
+            workspaceId: workspaceId,
+            selectedTabId: selectedTabId,
+            nextTabNumber: nextTabNumber,
+            nextPaneNumber: nextPaneNumber,
+            tabs: tabs.map { tab in
+                WorkspaceTabRestoreSnapshot(
+                    id: tab.id,
+                    title: tab.title,
+                    focusedPaneId: tab.focusedPaneId,
+                    tree: tab.tree.makeRestoreSnapshot()
+                )
+            }
+        )
+    }
+}
+
+private extension WorkspacePaneTree {
+    init(
+        restoring snapshot: WorkspacePaneTreeRestoreSnapshot,
+        projectPath: String,
+        workspaceId: String,
+        tabID: String
+    ) {
+        self.init(
+            root: Self.makeNode(
+                from: snapshot.root,
+                projectPath: projectPath,
+                workspaceId: workspaceId,
+                tabID: tabID
+            ),
+            zoomedPaneId: snapshot.zoomedPaneId
+        )
+    }
+
+    func makeRestoreSnapshot() -> WorkspacePaneTreeRestoreSnapshot {
+        guard let root else {
+            preconditionFailure("Workspace tab 缺少 pane tree root，无法导出恢复快照")
+        }
+        return WorkspacePaneTreeRestoreSnapshot(
+            root: root.makeRestoreSnapshot(),
+            zoomedPaneId: zoomedPaneId
+        )
+    }
+
+    static func makeNode(
+        from snapshot: WorkspacePaneTreeRestoreSnapshot.Node,
+        projectPath: String,
+        workspaceId: String,
+        tabID: String
+    ) -> WorkspacePaneTree.Node {
+        switch snapshot {
+        case let .leaf(pane):
+            let restoreContext = WorkspaceTerminalRestoreContext(
+                workingDirectory: pane.restoredWorkingDirectory,
+                title: pane.restoredTitle,
+                snapshotText: pane.snapshotText,
+                agentSummary: pane.agentSummary
+            )
+            return .leaf(
+                WorkspacePaneState(
+                    request: WorkspaceTerminalLaunchRequest(
+                        projectPath: projectPath,
+                        workspaceId: workspaceId,
+                        tabId: tabID,
+                        paneId: pane.paneId,
+                        surfaceId: pane.surfaceId,
+                        terminalSessionId: pane.terminalSessionId,
+                        workingDirectoryOverride: pane.restoredWorkingDirectory,
+                        restoreContext: restoreContext.isEmpty ? nil : restoreContext
+                    )
+                )
+            )
+        case let .split(split):
+            return .split(
+                WorkspaceSplitState(
+                    direction: split.direction,
+                    ratio: split.ratio,
+                    left: makeNode(
+                        from: split.left,
+                        projectPath: projectPath,
+                        workspaceId: workspaceId,
+                        tabID: tabID
+                    ),
+                    right: makeNode(
+                        from: split.right,
+                        projectPath: projectPath,
+                        workspaceId: workspaceId,
+                        tabID: tabID
+                    )
+                )
+            )
+        }
+    }
+}
+
+private extension WorkspacePaneTree.Node {
+    func makeRestoreSnapshot() -> WorkspacePaneTreeRestoreSnapshot.Node {
+        switch self {
+        case let .leaf(pane):
+            return .leaf(
+                WorkspacePaneRestoreSnapshot(
+                    paneId: pane.id,
+                    surfaceId: pane.request.surfaceId,
+                    terminalSessionId: pane.request.terminalSessionId,
+                    restoredWorkingDirectory: pane.request.restoreContext?.workingDirectory,
+                    restoredTitle: pane.request.restoreContext?.title,
+                    agentSummary: pane.request.restoreContext?.agentSummary,
+                    snapshotTextRef: nil,
+                    snapshotText: pane.request.restoreContext?.snapshotText
+                )
+            )
+        case let .split(split):
+            return .split(
+                WorkspaceSplitRestoreSnapshot(
+                    direction: split.direction,
+                    ratio: split.ratio,
+                    left: split.left.makeRestoreSnapshot(),
+                    right: split.right.makeRestoreSnapshot()
+                )
+            )
+        }
     }
 }
