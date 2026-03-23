@@ -139,9 +139,41 @@
 
 ## 2026-03-23 会话恢复方案对标调研（Ghostty / Supacode / cmux）
 
-- [ ] 梳理 DevHaven 当前终端/工作区状态模型与会话恢复相关约束
-- [ ] 检索 Ghostty、Supacode、cmux 是否已有会话恢复实现、边界与实现线索
+- [x] 梳理 DevHaven 当前终端/工作区状态模型与会话恢复相关约束
+- [x] 检索 Ghostty、Supacode、cmux 是否已有会话恢复实现、边界与实现线索
 - [ ] 基于调研结果给出 DevHaven 可借鉴点、缺口与建议
+
+## 2026-03-23 pane 文本回退链修复
+
+- [x] 确认 review 提到的 pane 文本丢失问题在当前 `WorkspaceRestoreStore` 提交顺序中成立
+- [x] 先补回归测试，覆盖不同 pane id、相同 pane id 文本覆盖、主 manifest 写失败三种场景
+- [x] 修复 `WorkspaceRestoreStore` 的保存协议：pane 文本 ref 改为每次保存唯一、成功写入 manifest 后再 prune、prune 保留 current + prev 两代引用
+- [x] 更新 `AGENTS.md` 中 session-restore 存储语义描述
+- [x] 运行定向测试并在 Review 追加直接原因、设计诱因、修复方案与验证证据
+
+## Review（2026-03-23 pane 文本回退链修复）
+
+- 结果：
+  1. `manifest.prev.json` 回退链现在会保留完整的 pane 文本引用；不同 pane id 和相同 pane id 文本更新两种场景都能正确回退到旧文本。
+  2. 当新一轮保存在写 `manifest.json` 这一步失败时，原有 current 快照和其 pane 文本不会再被提前 prune 或覆盖。
+- 直接原因：
+  1. 原实现先写新 pane 文本、再 prune、最后才备份旧 manifest 并写新 manifest，导致旧 manifest 仍在引用的 pane 文件可能被提前删除。
+  2. 原实现把 `snapshotTextRef` 当成 pane 的长期身份复用；同一 pane id 二次保存时，新文本会覆盖旧文本文件，使 `manifest.prev.json` 退回后仍读到新文本。
+- 设计层诱因：
+  1. 旧实现把 manifest 做成“两代回退”，但 pane 文本文件没有同步版本化，manifest 与 pane 文件之间缺少统一提交协议。
+  2. `snapshotTextRef` 语义此前偏向“pane 身份”，而不是“某次保存的 immutable 文本版本指针”，这会天然破坏 prev 回退语义。
+- 当前修复方案：
+  1. `WorkspaceRestoreStore.saveSnapshot()` 在每次保存时为带文本的 pane 生成新的 `snapshotTextRef`，不再复用旧 ref；
+  2. 先写新 pane 文本，再把“保存前可解析的主 manifest”原子写成 `manifest.prev.json`，再原子写新的 `manifest.json`；
+  3. `prune` 延后到主 manifest 成功写入之后，并且同时保留 current + prev 两代 manifest 引用到的 pane 文本文件；
+  4. 新增 `manifestWriter` 注入 seam，用稳定单测覆盖“主 manifest 写失败但现有快照不能被污染”的场景。
+- 长期改进建议：
+  1. 如果后续 session-restore 还会继续扩展，可再把 current/prev 升级成 generation 目录模型，进一步让 manifest 与 pane 文件的切换完全代际化；
+  2. 当前阶段保持 store 层集中收口已经足够，避免把版本化逻辑扩散到 coordinator / UI 层。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter WorkspaceRestoreStoreTests`（实现前）→ 编译失败，明确提示 `WorkspaceRestoreStore` 缺少 `manifestWriter` 注入点，表明“主 manifest 写失败保护”场景尚不可测试/实现
+  - 绿灯验证：`swift test --package-path macos --filter WorkspaceRestoreStoreTests` → 7 tests，0 failures
+  - 回归验证：`swift test --package-path macos --filter 'WorkspaceRestoreStoreTests|WorkspaceRestoreCoordinatorTests|GhosttyWorkspaceRestoreSnapshotTests|NativeAppViewModelWorkspaceRestoreTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceRestorePresentationTests'` → 20 tests，0 failures
 
 ## Review（2026-03-23 Ghostty 搜索功能排查）
 
@@ -1395,3 +1427,151 @@
   - `.github/workflows/nightly.yml` 第 250-251、278-279 行：nightly 同样在 secrets 缺失时跳过签名与 notarization。
   - `macos/scripts/create-universal-app.sh` 第 107-110 行：复制 arm64 `.app` 后执行 `lipo -create` 替换主可执行文件，若不重新签名会破坏已有签名。
   - `README.md` 第 163 行：文档已明确当前正式构建默认采用 `manual-download`，未来补齐 Apple Developer ID / notarization 后才切到 `automatic`。
+
+## 2026-03-23 会话恢复终局方案调研（Ghostty / Supacode / cmux）
+
+- [x] 梳理 DevHaven 当前终端/工作区状态模型与会话恢复相关约束
+- [x] 检索 Ghostty、Supacode、cmux 是否已有会话恢复实现、边界与实现线索
+- [x] 基于调研结果给出 DevHaven 终局会话恢复方案（非 MVP）
+
+## Review（2026-03-23 会话恢复终局方案调研）
+
+- 结论：
+  1. **Ghostty** 在 macOS 上已实现窗口级 state restoration，但只覆盖 window / split tree / focused surface / quick terminal screen state 这一类宿主层状态；没有为 DevHaven 直接提供“关闭 App 后继续保活 shell 进程并重连”的能力。
+  2. **cmux** 已实现更完整的 app-level session snapshot：窗口 / workspace / pane 布局、工作目录、terminal scrollback（best effort）、browser history，并有 autosave / startup restore / display geometry remap；但 README 已明确它**不恢复 live terminal process state**。
+  3. **Supacode** 当前未见完整会话恢复实现；代码里主要持久化 repository roots / pinned / archived / 排序 / last focused worktree，且退出提示明确写着“会关闭所有 terminal sessions”。
+  4. 对 DevHaven 而言，若目标是“关闭 App 后会话真正恢复回来”，**仅做 snapshot 不够**；根因是当前 Ghostty pane 生命周期与子 shell 进程生命周期仍然 1:1 耦合。终局方案必须把“pane 里的真实会话”移到 App 进程之外，由独立 session backend 持有。
+- 直接原因：
+  1. DevHaven 当前 `openWorkspaceSessions` / `GhosttyWorkspaceController.projection` 仅存在内存，没有独立的 workspace restore store；重启后天然丢失。
+  2. `GhosttySurfaceHostModel` 创建的是直接承载 shell 的 `GhosttyTerminalSurfaceView`；`GhosttyTerminalSurfaceView.tearDown()` 会 `ghostty_surface_free(surface)`，因此当前 pane 销毁时并没有“detach but keep process alive”的中间层。
+  3. `WorkspaceTerminalLaunchRequest` 当前只携带 `workingDirectory + environment`，没有“attach 到既有后台会话”的启动协议。
+- 设计层诱因：
+  1. 存在明显的状态源与生命周期耦合问题：UI 拓扑（项目 / tab / pane）与 terminal 进程生命周期混在同一条 Ghostty surface 链路上，导致无法单独保活 pane 状态。
+  2. 未发现明显系统设计缺陷；但当前架构确实缺少一层“会话真相源”（session daemon / attach protocol / restore manifest），这是不能实现终局恢复的关键缺口。
+- 终局方案方向：
+  1. 项目 / tab / pane 布局采用 **cmux 风格的独立 snapshot store**；
+  2. pane 内真实 shell / agent / TUI 状态采用 **DevHaven 自己的持久会话后端（推荐 session daemon）** 脱离 App 进程保活；
+  3. 若后台会话缺失，再回退到“同 cwd + best-effort scrollback replay”的降级恢复。
+- 验证证据：
+  - Ghostty：`ghostty/macos/Sources/Features/Terminal/TerminalRestorable.swift`、`QuickTerminalRestorableState.swift`、`TerminalController.swift`、`LastWindowPosition.swift`
+  - cmux：`cmux/Sources/SessionPersistence.swift`、`Workspace.swift`、`TabManager.swift`、`AppDelegate.swift`、`cmuxTests/SessionPersistenceTests.swift`、`README.md` 的 `Session restore (current behavior)` 段落
+  - Supacode：`supacode/Clients/Repositories/RepositoryPersistenceClient.swift`、`Features/Repositories/Reducer/RepositoriesFeature.swift`、`Features/App/Reducer/AppFeature.swift`
+  - DevHaven：`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift`、`GhosttyWorkspaceController.swift`、`WorkspaceTopologyModels.swift`、`GhosttySurfaceHost.swift`、`GhosttySurfaceView.swift`
+
+## 2026-03-23 非 live 工作区快照恢复实现
+
+- [x] 落盘实现计划文档并记录本次实现任务
+- [x] 先为恢复快照模型与存储层补失败测试
+- [x] 实现恢复快照模型、存储层与主/回退 manifest 读写
+- [x] 先为工作区拓扑导出/恢复补失败测试
+- [x] 实现 GhosttyWorkspaceController / WorkspaceSessionState 的恢复快照导出与重建
+- [x] 先为 pane 上下文快照与展示提示补失败测试
+- [x] 实现 pane 快照采集、恢复提示与 fresh shell cwd 恢复
+- [x] 先为启动恢复 / 自动保存协调补失败测试
+- [x] 实现 WorkspaceRestoreCoordinator、ViewModel 集成与应用生命周期 flush
+- [x] 更新 AGENTS / 设计文档并完成全量验证
+
+## Review（2026-03-23 非 live 工作区快照恢复实现）
+
+- 结果：
+  1. DevHaven 已具备 **非 live 工作区快照恢复**：重启后可恢复已打开项目、每个项目的 tab/pane 布局，以及 pane 的 cwd / 标题 / 文本快照提示。
+  2. 恢复后的 pane 一律启动 fresh shell，不恢复原终端进程；不会额外展示恢复提示弹窗。
+  3. 运行期变更已接入自动保存：打开/关闭项目、切换 active project、tab/pane 拓扑变化，以及应用进入 `inactive/background` / `willTerminate` 时都会刷新快照。
+- 直接原因：
+  1. 之前只有运行时 `NativeAppViewModel -> GhosttyWorkspaceController -> WorkspaceSessionState` 状态，没有独立的工作区恢复快照模型和持久化层；
+  2. pane 的 cwd / 标题 / 可见文本只存在 App 运行内存，没有 bridge 回 Core 层参与恢复；
+  3. 启动时 `load()` 不会读取任何 workspace restore manifest，退出时也没有统一 flush。
+- 设计层诱因：
+  1. 旧实现把工作区状态完全视为内存态，没有“关闭 App 后重建上下文”的明确真相源；
+  2. 未发现明显系统设计缺陷；本次通过把恢复职责收口到 `WorkspaceRestoreStore + WorkspaceRestoreCoordinator + NativeAppViewModel`，避免继续在 App/UI/Storage 多点散落补丁。
+- 当前修复方案：
+  1. 新增 `WorkspaceRestoreSnapshot / ProjectWorkspaceRestoreSnapshot / WorkspacePaneRestoreSnapshot` 等恢复模型；
+  2. 新增 `WorkspaceRestoreStore`，使用 `~/.devhaven/session-restore/manifest.json`、`manifest.prev.json` 与 `panes/*.txt` 保存主/回退 manifest 和 pane 文本；
+  3. 新增 `WorkspaceRestoreCoordinator`，负责 hydrate pane 文本、自动保存节流、pane 上下文 merge，以及空工作区时删除恢复快照；
+  4. `WorkspaceSessionState` / `WorkspacePaneTree` 现已支持从恢复快照重建 pane request，并把 restore context 注入 fresh shell 启动；
+  5. `NativeAppViewModel` 仅在首轮 `load()` 且当前没有打开会话时应用恢复快照，避免后续 reload 覆盖运行中的 workspace；
+  6. `WorkspaceShellView` 会把已加载 pane 的 `snapshotContext()` 回传给 ViewModel；`AppRootView` 在 scene 生命周期与应用终止通知上执行同步 flush。
+- 长期改进建议：
+  1. 如果后续要继续增强“工作上下文恢复”，可以在当前 snapshot 模型上继续补 scrollback 摘要、最近命令、手动恢复入口，但不要越界演进成 PTY/daemon 保活；
+  2. 若后续需要降低写盘频率，可把 autosave debounce 与 pane 文本大小上限继续参数化，但当前先保持正确性优先。
+- 验证证据：
+  - `swift test --package-path macos --filter 'WorkspaceRestoreCoordinatorTests|NativeAppViewModelWorkspaceRestoreTests'` → 7 tests，0 failures
+  - `swift test --package-path macos --filter 'WorkspaceRestoreStoreTests|GhosttyWorkspaceRestoreSnapshotTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceRestorePresentationTests|WorkspaceRestoreCoordinatorTests|NativeAppViewModelWorkspaceRestoreTests'` → 17 tests，0 failures
+  - `swift test --package-path macos` → 273 tests，5 skipped，0 failures
+  - `swift build --package-path macos` → `Build complete! (2.31s)`，exit 0
+
+## 2026-03-23 恢复上下文提示弹窗移除
+
+- [x] 盘点恢复提示弹窗的实现与引用点，确认最小改动范围
+- [x] 先修改测试，约束恢复后不再展示提示弹窗
+- [x] 移除 Ghostty 恢复提示 UI，并同步清理文档文案
+- [x] 运行定向验证并追加 Review 证据
+
+## Review（2026-03-23 恢复上下文提示弹窗移除）
+
+- 结果：
+  1. 恢复上下文快照能力保留不变：pane 仍会使用 restore context 恢复 cwd / 标题 / 文本快照。
+  2. `GhosttySurfaceHost` 已不再展示“已恢复工作上下文快照 / 原终端进程未恢复”的提示弹窗。
+- 直接原因：
+  1. 上一版在 `GhosttySurfaceHost` 中额外叠加了一层 restore overlay，把恢复提示作为常驻 UI 展示；
+  2. 这层提示不影响恢复能力本身，只是宿主层展示策略。
+- 设计层诱因：
+  1. 未发现明显系统设计缺陷；
+  2. 这是一次产品层收口：恢复上下文是底层能力，但不一定需要显式前台提示。
+- 当前修复方案：
+  1. 删除 `GhosttySurfaceHost` 对 restore overlay 的渲染；
+  2. 清理 `GhosttySurfaceHostModel` 中仅服务于该弹窗的展示状态；
+  3. 保留 `WorkspaceTerminalRestoreContext` 与 fresh shell cwd 恢复逻辑，不动恢复主链；
+  4. 同步更新 `WorkspaceRestorePresentationTests`、计划文档与 `AGENTS.md` 文案。
+- 验证证据：
+  - `swift test --package-path macos --filter 'GhosttySurfaceHostModelSnapshotTests|WorkspaceRestorePresentationTests'` → 4 tests，0 failures
+  - `swift build --package-path macos` → `Build complete! (5.54s)`，exit 0
+
+## 2026-03-23 非 live 工作区快照恢复提交
+
+- [x] 复核本次 workspace snapshot restore 的代码 / 测试 / 文档改动范围
+- [x] 运行 fresh 验证并确认提交前状态
+- [x] 执行 git add / git commit
+- [x] 追加本次提交 Review，记录提交信息与验证证据
+
+## Review（2026-03-23 非 live 工作区快照恢复提交）
+
+- 结果：
+  1. 已将 workspace snapshot restore 主链相关源码、测试、计划文档与 AGENTS 说明整理为单次提交范围。
+  2. 提交信息收口为 `feat: 支持非 live 工作区快照恢复`，避免把本轮恢复链路拆成多段零散提交。
+- 验证证据：
+  - `swift test --package-path macos` → 276 tests，5 skipped，0 failures
+  - `swift build --package-path macos` → `Build complete! (0.39s)`，exit 0
+  - `git diff --check` → 无输出
+
+## 2026-03-23 提交 session-restore PR 到 main
+
+- [x] 确认当前分支、main 基线与是否已有现成 PR
+- [x] 运行 fresh 验证并做提交前本地 review
+- [x] 推送当前分支到 origin
+- [x] 创建指向 `main` 的 PR
+- [x] 追加本次 PR Review，记录 PR 编号、链接与验证证据
+
+## Review（2026-03-23 提交 session-restore PR 到 main）
+
+- 结果：
+  1. 已将 `session-restore` 分支推送到 `origin/session-restore`，并创建指向 `main` 的 PR：#34 `feat: 支持非 live 工作区快照恢复`
+  2. PR 链接：`https://github.com/zxcvbnmzsedr/devhaven/pull/34`
+  3. 当前 GitHub PR 状态为 `OPEN`，base=`main`，head=`session-restore`，非 draft。
+  4. 本地在跑 `swift test --package-path macos` 后出现两份**未提交**测试文件脏改动：`macos/Tests/DevHavenAppTests/WorkspaceShellViewTests.swift`、`macos/Tests/DevHavenCoreTests/NativeAppViewModelWorkspaceEntryTests.swift`；它们**不在已推送的 PR 内容里**，后续需单独判断是否保留。
+- 验证证据：
+  - `git merge-base HEAD main` → `f93181fc66094baae3ec6cb17b1307423e4c7a21`
+  - `gh pr list --head session-restore --state all --json number,title,state,url,headRefName,baseRefName`（创建前）→ `[]`
+  - `swift test --package-path macos` → 276 tests，5 skipped，0 failures
+  - `swift build --package-path macos` → `Build complete! (1.99s)`，exit 0
+  - `git diff --check main...HEAD` → 无输出
+  - `git push -u origin HEAD:session-restore` → 已创建远端分支并设置 tracking
+  - `gh pr create --base main --head session-restore ...` → `https://github.com/zxcvbnmzsedr/devhaven/pull/34`
+  - `gh pr view 34 --json number,title,state,url,headRefName,baseRefName,isDraft` → `state=OPEN`，`isDraft=false`
+
+## 2026-03-23 创建 git worktree 进度弹窗未置前
+
+- [ ] 复现并定位创建 worktree 时进度弹窗未显示在最前面的直接原因
+- [ ] 先补失败测试或最小验证手段，约束进度弹窗在创建开始时立即置前
+- [ ] 实施最小修复，必要时同步更新相关文档/注释
+- [ ] 运行定向验证，并在 Review 中记录根因、设计诱因、修复方案与证据

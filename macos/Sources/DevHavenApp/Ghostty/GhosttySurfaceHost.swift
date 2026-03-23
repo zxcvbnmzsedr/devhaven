@@ -268,6 +268,7 @@ struct GhosttySurfaceHost: View {
                     ) {
                         startupOverlay
                             .padding(14)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .allowsHitTesting(false)
                     }
 
@@ -313,6 +314,13 @@ struct GhosttySurfaceHost: View {
 
 @MainActor
 final class GhosttySurfaceHostModel: ObservableObject {
+    struct SnapshotContext: Equatable, Sendable {
+        var workingDirectory: String?
+        var title: String?
+        var visibleText: String?
+        var agentSummary: String?
+    }
+
     let request: WorkspaceTerminalLaunchRequest
     let terminalRuntime: GhosttyRuntime?
 
@@ -353,9 +361,20 @@ final class GhosttySurfaceHostModel: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty
         else {
-            return nil
+            return request.restoreContext?.snapshotText
         }
         return text
+    }
+
+    func snapshotContext() -> SnapshotContext {
+        SnapshotContext(
+            workingDirectory: surfaceWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? request.restoreContext?.workingDirectory,
+            title: surfaceTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                ?? request.restoreContext?.title,
+            visibleText: currentVisibleText(),
+            agentSummary: request.restoreContext?.agentSummary
+        )
     }
 
     init(
@@ -389,10 +408,11 @@ final class GhosttySurfaceHostModel: ObservableObject {
         self.onSplitAction = onSplitAction
         self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
         self.terminalRuntime = appRuntime.runtime
-        self.surfaceWorkingDirectory = request.projectPath
+        self.surfaceWorkingDirectory = request.workingDirectory
         self.appearance = terminalRuntime?.appearance ?? .fallback
         self.initializationError = appRuntime.initializationError ?? terminalRuntime?.initializationError
         self.processState = initializationError == nil ? .running : .failed
+        self.surfaceTitle = request.restoreContext?.title
     }
 
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
@@ -618,5 +638,11 @@ final class GhosttySurfaceHostModel: ObservableObject {
         case .failed:
             return "Ghostty 初始化失败"
         }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
