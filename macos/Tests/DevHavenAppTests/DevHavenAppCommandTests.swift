@@ -28,6 +28,19 @@ final class DevHavenAppCommandTests: XCTestCase {
         )
     }
 
+    func testCommandsExposeWorkspaceOpenProjectAction() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("WorkspaceProjectCommands("),
+            "DevHavenApp 应挂接独立的 WorkspaceProjectCommands，把 workspace 打开项目命令接入应用级菜单"
+        )
+        XCTAssertTrue(
+            source.contains("workspaceOpenProjectShortcut"),
+            "打开项目菜单快捷键应来自设置里的 workspaceOpenProjectShortcut，而不是写死在命令层"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

@@ -111,6 +111,7 @@ struct WorkspaceShellView: View {
         .focusedSceneValue(\.navigateTerminalSearchNextAction, navigateTerminalSearchNextAction)
         .focusedSceneValue(\.navigateTerminalSearchPreviousAction, navigateTerminalSearchPreviousAction)
         .focusedSceneValue(\.endTerminalSearchAction, endTerminalSearchAction)
+        .focusedSceneValue(\.openWorkspaceProjectPickerAction, openWorkspaceProjectPickerAction)
         .onReceive(codexDisplayRefreshTimer) { _ in
             refreshCodexDisplayStates()
         }
@@ -313,6 +314,15 @@ struct WorkspaceShellView: View {
 
     private var endTerminalSearchAction: (() -> Void)? {
         terminalSearchAction { $0.endSearch() }
+    }
+
+    private var openWorkspaceProjectPickerAction: (() -> Void)? {
+        guard !viewModel.availableWorkspaceProjects.isEmpty else {
+            return nil
+        }
+        return {
+            isProjectPickerPresented = true
+        }
     }
 
     private func terminalSearchAction(

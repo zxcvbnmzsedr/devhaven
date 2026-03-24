@@ -8,6 +8,10 @@ final class AppSettingsUpdatePreferencesTests: XCTestCase {
         XCTAssertEqual(settings.updateChannel, .stable)
         XCTAssertTrue(settings.updateAutomaticallyChecks)
         XCTAssertFalse(settings.updateAutomaticallyDownloads)
+        XCTAssertEqual(settings.workspaceOpenProjectShortcut.key.rawValue, "k")
+        XCTAssertFalse(settings.workspaceOpenProjectShortcut.usesShift)
+        XCTAssertFalse(settings.workspaceOpenProjectShortcut.usesOption)
+        XCTAssertFalse(settings.workspaceOpenProjectShortcut.usesControl)
     }
 
     func testDecodingLegacySettingsFallsBackToUpdateDefaults() throws {
@@ -39,5 +43,9 @@ final class AppSettingsUpdatePreferencesTests: XCTestCase {
         XCTAssertEqual(settings.updateChannel, .stable)
         XCTAssertTrue(settings.updateAutomaticallyChecks)
         XCTAssertFalse(settings.updateAutomaticallyDownloads)
+        XCTAssertEqual(settings.workspaceOpenProjectShortcut.key.rawValue, "k")
+        XCTAssertFalse(settings.workspaceOpenProjectShortcut.usesShift)
+        XCTAssertFalse(settings.workspaceOpenProjectShortcut.usesOption)
+        XCTAssertFalse(settings.workspaceOpenProjectShortcut.usesControl)
     }
 }

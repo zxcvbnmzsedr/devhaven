@@ -87,11 +87,87 @@ public enum NativeGitFilter: String, Sendable, CaseIterable, Identifiable {
     }
 }
 
+public enum AppMenuShortcutKey: String, Codable, CaseIterable, Sendable, Identifiable {
+    case a
+    case b
+    case c
+    case d
+    case e
+    case f
+    case g
+    case h
+    case i
+    case j
+    case k
+    case l
+    case m
+    case n
+    case o
+    case p
+    case q
+    case r
+    case s
+    case t
+    case u
+    case v
+    case w
+    case x
+    case y
+    case z
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        rawValue.uppercased()
+    }
+}
+
+public struct AppMenuShortcut: Codable, Equatable, Sendable {
+    public var key: AppMenuShortcutKey
+    public var usesShift: Bool
+    public var usesOption: Bool
+    public var usesControl: Bool
+
+    public init(
+        key: AppMenuShortcutKey = .k,
+        usesShift: Bool = false,
+        usesOption: Bool = false,
+        usesControl: Bool = false
+    ) {
+        self.key = key
+        self.usesShift = usesShift
+        self.usesOption = usesOption
+        self.usesControl = usesControl
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case key
+        case usesShift
+        case usesOption
+        case usesControl
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawKey = try container.decodeIfPresent(String.self, forKey: .key) ?? AppMenuShortcutKey.k.rawValue
+        self.key = AppMenuShortcutKey(rawValue: rawKey.lowercased()) ?? .k
+        self.usesShift = try container.decodeIfPresent(Bool.self, forKey: .usesShift) ?? false
+        self.usesOption = try container.decodeIfPresent(Bool.self, forKey: .usesOption) ?? false
+        self.usesControl = try container.decodeIfPresent(Bool.self, forKey: .usesControl) ?? false
+    }
+
+    public var displayLabel: String {
+        let modifierLabel = "\(usesControl ? "⌃" : "")\(usesOption ? "⌥" : "")\(usesShift ? "⇧" : "")⌘"
+        return "\(modifierLabel)\(key.title)"
+    }
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
     public var editorOpenTool: OpenToolSettings
     public var terminalOpenTool: OpenToolSettings
     public var terminalUseWebglRenderer: Bool
     public var terminalTheme: String
+    public var workspaceOpenProjectShortcut: AppMenuShortcut
     public var updateChannel: UpdateChannel
     public var updateAutomaticallyChecks: Bool
     public var updateAutomaticallyDownloads: Bool
@@ -113,6 +189,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         terminalOpenTool: OpenToolSettings = .init(commandPath: "", arguments: []),
         terminalUseWebglRenderer: Bool = true,
         terminalTheme: String = "DevHaven Dark",
+        workspaceOpenProjectShortcut: AppMenuShortcut = .init(),
         updateChannel: UpdateChannel = .stable,
         updateAutomaticallyChecks: Bool = true,
         updateAutomaticallyDownloads: Bool = false,
@@ -133,6 +210,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.terminalOpenTool = terminalOpenTool
         self.terminalUseWebglRenderer = terminalUseWebglRenderer
         self.terminalTheme = terminalTheme
+        self.workspaceOpenProjectShortcut = workspaceOpenProjectShortcut
         self.updateChannel = updateChannel
         self.updateAutomaticallyChecks = updateAutomaticallyChecks
         self.updateAutomaticallyDownloads = updateAutomaticallyDownloads
@@ -155,6 +233,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case terminalOpenTool
         case terminalUseWebglRenderer
         case terminalTheme
+        case workspaceOpenProjectShortcut
         case updateChannel
         case updateAutomaticallyChecks
         case updateAutomaticallyDownloads
@@ -178,6 +257,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.terminalOpenTool = try container.decodeIfPresent(OpenToolSettings.self, forKey: .terminalOpenTool) ?? .init(commandPath: "", arguments: [])
         self.terminalUseWebglRenderer = try container.decodeIfPresent(Bool.self, forKey: .terminalUseWebglRenderer) ?? true
         self.terminalTheme = try container.decodeIfPresent(String.self, forKey: .terminalTheme) ?? "DevHaven Dark"
+        self.workspaceOpenProjectShortcut = try container.decodeIfPresent(AppMenuShortcut.self, forKey: .workspaceOpenProjectShortcut) ?? .init()
         self.updateChannel = try container.decodeIfPresent(UpdateChannel.self, forKey: .updateChannel) ?? .stable
         self.updateAutomaticallyChecks = try container.decodeIfPresent(Bool.self, forKey: .updateAutomaticallyChecks) ?? true
         self.updateAutomaticallyDownloads = try container.decodeIfPresent(Bool.self, forKey: .updateAutomaticallyDownloads) ?? false

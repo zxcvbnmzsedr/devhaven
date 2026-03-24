@@ -1,5 +1,24 @@
 # Todo
 
+
+## 2026-03-24 workspace 打开项目快捷键在终端焦点下无效排查
+
+- [x] 读取 Ghostty 键盘事件/菜单分发代码，确认快捷键在终端焦点下的实际路由
+- [x] 复现并锁定 root cause：是菜单未尝试还是 focused action 为 nil
+- [x] 先补失败测试，覆盖终端聚焦时应用菜单快捷键仍能命中菜单命令
+- [x] 实施最小修复并回归 workspace 打开项目快捷键
+- [x] 运行定向验证并在 Review 记录直接原因、设计诱因、修复方案与证据
+
+
+## 2026-03-24 workspace 打开项目快捷键与弹窗焦点调整
+
+- [x] 阅读 AGENTS / 相关记忆 / 最近提交，确认现有 workspace 打开项目入口、设置页与焦点实现位置
+- [x] 确认“设计页面”配置范围与默认快捷键语义（默认 Command+K）
+- [x] 给出最小实现方案并等待用户确认
+- [x] 先补失败测试，覆盖快捷键配置持久化、命令入口与弹窗默认焦点
+- [x] 实现快捷键配置、菜单/命令接线与弹窗焦点修复
+- [x] 运行定向验证并在本文件追加 Review（直接原因、设计层诱因、修复方案、长期建议、证据）
+
 - [x] 盘点当前 staged / unstaged / untracked 变更范围
 - [x] 阅读关键 diff 与新增文件，记录潜在风险
 - [x] 输出按优先级排序的 review findings
@@ -2011,3 +2030,65 @@
   - 提交结果：`git commit -m "fix(ghostty): normalize clicked local paths before open"` → 生成提交 `f3f0560`
   - 推送结果：`git push -u origin fix/issue-42-ghostty-open-url` → 远端分支创建成功并建立 tracking
   - PR：`gh pr create --base main --head fix/issue-42-ghostty-open-url ...` → 返回 `https://github.com/zxcvbnmzsedr/devhaven/pull/43`
+
+## Review（2026-03-24 workspace 打开项目快捷键与弹窗焦点调整）
+
+- 结果：
+  1. 已为 workspace 新增“打开项目”菜单命令，默认快捷键为 `⌘K`，并且该快捷键现在可在设置页中配置。
+  2. 新增 `WorkspaceProjectCommands.swift`，通过 `FocusedValue` 把 App 菜单动作路由到 `WorkspaceShellView` 的 project picker 展示态，没有把这类壳层状态下沉到 `NativeAppViewModel`。
+  3. `WorkspaceProjectPickerView` 现在会在弹窗出现时显式把焦点放到搜索输入框，并让“关闭”按钮不再抢默认 focus。
+- 直接原因：
+  1. 之前 workspace 的“打开项目”只有侧边栏加号按钮入口，没有对应的 App 菜单命令与快捷键路由，因此无法通过键盘直接打开。
+  2. `WorkspaceProjectPickerView` 没有显式 `FocusState`，同时“关闭”按钮也没有排除在 key-view 抢占之外，导致弹窗默认焦点容易落到“关闭”而不是搜索框。
+- 设计层诱因：
+  1. project picker 的展示态此前只和局部按钮点击绑定，没有抽象成可复用的 scene 级命令入口，所以菜单/快捷键层无从接入。
+  2. 焦点语义此前依赖 SwiftUI/AppKit 默认 key-view 顺序，属于隐式行为；未发现更大的系统设计缺陷，但这类 UX 关键路径不应继续依赖默认焦点分配。
+- 当前修复方案：
+  1. 在 `AppSettings` 中新增 `workspaceOpenProjectShortcut`，默认值为 `⌘K`，并保持旧配置缺失字段时自动回退默认值。
+  2. 新增 `WorkspaceProjectCommands.swift`，使用 `FocusedValue` + `WorkspaceShellView.openWorkspaceProjectPickerAction` 把“打开项目”菜单命令桥接到当前 workspace 壳层。
+  3. 在 `SettingsView` 常规页新增“打开项目快捷键”配置卡片，支持主按键选择和 `Shift / Option / Control` 附加修饰键。
+  4. 在 `WorkspaceProjectPickerView` 中新增 `@FocusState`、`requestInitialSearchFocus()` 和 `.focusable(false)`，把默认 focus 收口到搜索框。
+- 长期改进建议：
+  1. 如果后续还要继续开放更多 workspace / app 菜单快捷键，建议把当前 `AppMenuShortcut` 扩展成统一的命令快捷键模型，而不是在设置页逐个堆叠专用状态。
+  2. 若用户后续希望录制任意组合键，可再独立补一个真正的快捷键录入控件；本轮先保持“菜单快捷键 + 轻量配置”的最小闭环。
+- 验证证据：
+  - 红灯（模型缺失）：`swift test --package-path macos --filter 'AppSettingsUpdatePreferencesTests|SettingsViewTests|DevHavenAppCommandTests|WorkspaceShellViewTests|WorkspaceProjectPickerViewTests'` → 失败，报错 `AppSettings` 缺少 `workspaceOpenProjectShortcut`，随后 source-based 断言也确认设置页/命令/焦点实现尚未存在。
+  - 绿灯（定向回归）：`swift test --package-path macos --filter 'AppSettingsUpdatePreferencesTests|SettingsViewTests|DevHavenAppCommandTests|WorkspaceShellViewTests|WorkspaceProjectPickerViewTests'` → 20 tests，0 failures。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+
+## Review（2026-03-24 workspace 打开项目快捷键在终端焦点下无效排查）
+
+- 结果：
+  1. 已定位并修复“workspace 打开项目快捷键在终端焦点下按了没反应”的问题。
+  2. 修复后，Ghostty 终端聚焦时会先把 `⌘ / ⌃` 组合键交给 App 主菜单尝试处理；若主菜单没有对应命令，再继续回落到终端自身绑定。
+  3. 这样 `⌘K` 的“打开项目”菜单命令在终端界面下不再被 Ghostty 键位链路吞掉，同时不会影响普通文本输入。
+- 直接原因：
+  1. `GhosttyTerminalSurfaceView.performKeyEquivalent(with:)` 之前只有在 `bindingFlags(for:)` 返回某些特定 consumed/non-performable 结果时，才会尝试 `NSApp.mainMenu.performKeyEquivalent(with:)`。
+  2. 对像 `⌘K` 这种应用菜单快捷键来说，终端聚焦时事件先进入 Ghostty surface；如果该按键未走到那条“binding 后再尝试菜单”的窄路径，主菜单就根本拿不到机会。
+  3. 所以问题不在 `WorkspaceProjectCommands` 的 focused action 为 nil，而在于**Ghostty 键盘事件分发顺序把 App 菜单快捷键拦在了终端层前面**。
+- 设计层诱因：
+  1. 现有 `performKeyEquivalent` 把“菜单快捷键是否应该优先”这一策略隐含在 Ghostty binding flag 的分支里，导致新的 App 级命令只有在碰巧符合那组 flag 时才能生效。
+  2. 这属于**菜单路由策略与终端绑定查询耦合过深**：App 级菜单快捷键不应依赖 Ghostty 是否把某个组合键识别成 binding 才有机会执行。未发现更大的系统设计缺陷，但菜单优先级策略此前不够显式。
+- 当前修复方案：
+  1. 新增 `GhosttySurfaceMenuShortcutRoutingPolicy.swift`，把“哪些快捷键应先尝试主菜单”收口成独立策略。
+  2. `GhosttySurfaceView.performKeyEquivalent(with:)` 现在会先对 `⌘ / ⌃` 组合键执行一次 `NSApp.mainMenu.performKeyEquivalent(with:)`；命中则直接返回，不再把事件继续交给终端。
+  3. 旧的 binding-after-menu fallback 仍保留，只是改为复用同一个 routing policy，避免回退逻辑丢失。
+- 长期改进建议：
+  1. 后续如果继续给 workspace / app 增加菜单快捷键，优先复用同一 routing policy，而不要在 `GhosttySurfaceView` 里继续内联更多特判。
+  2. 若未来需要更细的优先级（例如某些终端命令必须压过 App 菜单），可以再把 routing policy 扩成显式的 shortcut ownership 表，而不是继续让 Ghostty binding flag 间接决定 App 菜单是否可达。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter GhosttySurfaceMenuShortcutRoutingPolicyTests` → 失败，报错 `cannot find 'GhosttySurfaceMenuShortcutRoutingPolicy' in scope`，说明测试先约束了缺失的菜单路由策略入口。
+  - 绿灯（路由策略）：`swift test --package-path macos --filter GhosttySurfaceMenuShortcutRoutingPolicyTests` → 5 tests，0 failures。
+  - 绿灯（相关回归）：`swift test --package-path macos --filter 'GhosttySurfaceMenuShortcutRoutingPolicyTests|AppSettingsUpdatePreferencesTests|SettingsViewTests|DevHavenAppCommandTests|WorkspaceShellViewTests|WorkspaceProjectPickerViewTests|WorkspaceTerminalCommandsTests'` → 27 tests，0 failures。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+
+## 2026-03-24 合并 focus 与 feature/38 worktree
+
+- [x] 审计 current main、focus、feature/38 的提交关系、ahead/behind 与未提交状态
+- [x] 确认本次只合并两个 worktree 的已提交内容，并记录可能冲突文件（`AGENTS.md`、`SettingsView.swift`、`AppModels.swift`、`tasks/todo.md`）
+- [x] 先将 focus 合并到当前 main，处理必要冲突
+- [ ] 再将 feature/38 合并到当前 main，处理必要冲突
+- [ ] 运行针对性测试 / 构建验证合并结果
+- [ ] 复核 git 状态并在本文件追加 Review（含直接原因、设计层诱因、修复方案、长期建议、验证证据）

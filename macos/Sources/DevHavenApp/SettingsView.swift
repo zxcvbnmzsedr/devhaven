@@ -53,6 +53,7 @@ struct SettingsView: View {
     private let onCopyUpdateDiagnostics: () -> Void
 
     @State private var gitIdentities: [GitIdentity]
+    @State private var workspaceOpenProjectShortcut: AppMenuShortcut
     @State private var updateChannel: UpdateChannel
     @State private var updateAutomaticallyChecks: Bool
     @State private var updateAutomaticallyDownloads: Bool
@@ -89,6 +90,7 @@ struct SettingsView: View {
         self.onOpenUpdateDownloadPage = onOpenUpdateDownloadPage
         self.onCopyUpdateDiagnostics = onCopyUpdateDiagnostics
         _gitIdentities = State(initialValue: settings.gitIdentities)
+        _workspaceOpenProjectShortcut = State(initialValue: settings.workspaceOpenProjectShortcut)
         _updateChannel = State(initialValue: settings.updateChannel)
         _updateAutomaticallyChecks = State(initialValue: settings.updateAutomaticallyChecks)
         _updateAutomaticallyDownloads = State(initialValue: settings.updateAutomaticallyDownloads)
@@ -223,6 +225,33 @@ struct SettingsView: View {
                 HStack(spacing: 10) {
                     infoBadge(title: "当前版本", value: versionLabel)
                     infoBadge(title: "运行范围", value: "仅 macOS")
+                }
+            }
+
+            settingsCard(title: "打开项目快捷键", description: "配置 workspace 中“打开项目”菜单命令的快捷键；Command（⌘）固定启用。") {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .center, spacing: 12) {
+                        labeledField(title: "主按键") {
+                            Picker("主按键", selection: $workspaceOpenProjectShortcut.key) {
+                                ForEach(AppMenuShortcutKey.allCases) { key in
+                                    Text(key.title).tag(key)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                        }
+
+                        Toggle("Shift（⇧）", isOn: $workspaceOpenProjectShortcut.usesShift)
+                            .toggleStyle(.switch)
+                        Toggle("Option（⌥）", isOn: $workspaceOpenProjectShortcut.usesOption)
+                            .toggleStyle(.switch)
+                        Toggle("Control（⌃）", isOn: $workspaceOpenProjectShortcut.usesControl)
+                            .toggleStyle(.switch)
+                    }
+
+                    Text("当前预览：\(workspaceOpenProjectShortcut.displayLabel)")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textSecondary)
                 }
             }
 
@@ -485,6 +514,7 @@ struct SettingsView: View {
             terminalOpenTool: originalSettings.terminalOpenTool,
             terminalUseWebglRenderer: originalSettings.terminalUseWebglRenderer,
             terminalTheme: originalSettings.terminalTheme,
+            workspaceOpenProjectShortcut: workspaceOpenProjectShortcut,
             updateChannel: updateChannel,
             updateAutomaticallyChecks: updateAutomaticallyChecks,
             updateAutomaticallyDownloads: updateAutomaticallyDownloads,
@@ -512,6 +542,7 @@ struct SettingsView: View {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !$0.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+            || workspaceOpenProjectShortcut != originalSettings.workspaceOpenProjectShortcut
             || updateChannel != originalSettings.updateChannel
             || updateAutomaticallyChecks != originalSettings.updateAutomaticallyChecks
             || updateAutomaticallyDownloads != originalSettings.updateAutomaticallyDownloads
