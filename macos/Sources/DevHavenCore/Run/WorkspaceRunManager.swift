@@ -16,8 +16,14 @@ public final class WorkspaceRunManager: WorkspaceRunManaging {
     public func start(_ request: WorkspaceRunStartRequest) throws -> WorkspaceRunSession {
         let logFileURL = try logStore.createLogFile(scriptName: request.configurationName, sessionID: request.sessionID)
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "exec \(request.command)"]
+        switch request.executable {
+        case let .shell(command):
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", command]
+        case let .process(program, arguments):
+            process.executableURL = URL(fileURLWithPath: program)
+            process.arguments = arguments
+        }
         process.currentDirectoryURL = URL(fileURLWithPath: request.workingDirectory, isDirectory: true)
 
         let outputPipe = Pipe()
@@ -32,6 +38,10 @@ public final class WorkspaceRunManager: WorkspaceRunManaging {
             outputHandle: outputPipe.fileHandleForReading,
             errorHandle: errorPipe.fileHandleForReading
         )
+        controller.sessionID = request.sessionID
+        let commandHeader = commandLogHeader(for: request)
+        try? logStore.append(commandHeader, to: logFileURL)
+        onEvent?(.output(projectPath: request.projectPath, sessionID: request.sessionID, chunk: commandHeader))
         installReadHandler(for: outputPipe.fileHandleForReading, controller: controller)
         installReadHandler(for: errorPipe.fileHandleForReading, controller: controller)
         let logStore = self.logStore
@@ -51,7 +61,6 @@ public final class WorkspaceRunManager: WorkspaceRunManaging {
         }
 
         try process.run()
-        controller.sessionID = request.sessionID
         controller.processID = process.processIdentifier
         controllers[request.sessionID] = controller
 
@@ -62,7 +71,7 @@ public final class WorkspaceRunManager: WorkspaceRunManaging {
             configurationSource: request.configurationSource,
             projectPath: request.projectPath,
             rootProjectPath: request.rootProjectPath,
-            command: request.command,
+            command: request.displayCommand,
             workingDirectory: request.workingDirectory,
             state: .running,
             processID: process.processIdentifier,
@@ -153,6 +162,15 @@ public final class WorkspaceRunManager: WorkspaceRunManaging {
         } catch {
             return []
         }
+    }
+
+    private func commandLogHeader(for request: WorkspaceRunStartRequest) -> String {
+        """
+        [DevHaven] 执行目录：\(request.workingDirectory)
+        [DevHaven] 执行命令：
+        \(request.displayCommand)
+
+        """
     }
 }
 

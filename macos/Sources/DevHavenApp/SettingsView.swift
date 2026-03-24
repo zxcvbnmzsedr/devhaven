@@ -8,7 +8,6 @@ struct SettingsView: View {
     private enum Category: String, CaseIterable, Identifiable {
         case general
         case terminal
-        case scripts
         case workflow
 
         var id: String { rawValue }
@@ -23,8 +22,6 @@ struct SettingsView: View {
                 return "常规"
             case .terminal:
                 return "终端"
-            case .scripts:
-                return "脚本"
             case .workflow:
                 return "协作"
             }
@@ -36,8 +33,6 @@ struct SettingsView: View {
                 return "应用版本、发布边界与兼容说明。"
             case .terminal:
                 return "直接编辑 Ghostty 配置文件与查看生效路径。"
-            case .scripts:
-                return "通用脚本目录与后续迁移进度。"
             case .workflow:
                 return "Git 身份与提交协作信息。"
             }
@@ -126,7 +121,7 @@ struct SettingsView: View {
                 Text("设置")
                     .font(.system(size: 28, weight: .bold))
                     .foregroundStyle(NativeTheme.textPrimary)
-                Text("统一管理应用阶段、终端体验、脚本目录与 Git 协作配置。")
+                Text("统一管理应用阶段、终端体验与 Git 协作配置。")
                     .font(.subheadline)
                     .foregroundStyle(NativeTheme.textSecondary)
             }
@@ -204,8 +199,6 @@ struct SettingsView: View {
                         generalContent
                     case .terminal:
                         terminalContent
-                    case .scripts:
-                        scriptsContent
                     case .workflow:
                         workflowContent
                     }
@@ -364,10 +357,6 @@ struct SettingsView: View {
         }
     }
 
-    private var scriptsContent: some View {
-        SharedScriptsManagerView(root: sharedScriptsRoot)
-    }
-
     private var workflowContent: some View {
         settingsCard(title: "Git 身份", description: "维护常用提交身份，保存时会自动清理空行。") {
             if gitIdentities.isEmpty {
@@ -480,11 +469,6 @@ struct SettingsView: View {
         }
     }
 
-    private var sharedScriptsRoot: String {
-        let trimmed = originalSettings.sharedScriptsRoot.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "~/.devhaven/scripts" : trimmed
-    }
-
     private var nextSettings: AppSettings {
         AppSettings(
             editorOpenTool: originalSettings.editorOpenTool,
@@ -497,7 +481,6 @@ struct SettingsView: View {
             gitIdentities: normalizedGitIdentities,
             projectListViewMode: originalSettings.projectListViewMode,
             workspaceSidebarWidth: originalSettings.workspaceSidebarWidth,
-            sharedScriptsRoot: sharedScriptsRoot,
             workspaceInAppNotificationsEnabled: workspaceInAppNotificationsEnabled,
             workspaceNotificationSoundEnabled: workspaceNotificationSoundEnabled,
             workspaceSystemNotificationsEnabled: workspaceSystemNotificationsEnabled,

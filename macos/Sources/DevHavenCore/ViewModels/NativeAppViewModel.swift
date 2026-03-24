@@ -326,9 +326,9 @@ public final class NativeAppViewModel {
             return []
         }
 
-        return project.scripts.map {
+        return project.runConfigurations.map {
             makeProjectRunConfiguration(
-                script: $0,
+                configuration: $0,
                 projectPath: projectPath,
                 rootProjectPath: session.rootProjectPath
             )
@@ -393,7 +393,7 @@ public final class NativeAppViewModel {
             configurationSource: configuration.source,
             projectPath: projectPath,
             rootProjectPath: session.rootProjectPath,
-            command: configuration.command,
+            command: configuration.displayCommand,
             workingDirectory: configuration.workingDirectory,
             state: .starting,
             startedAt: Date()
@@ -417,7 +417,8 @@ public final class NativeAppViewModel {
                     configurationSource: configuration.source,
                     projectPath: projectPath,
                     rootProjectPath: session.rootProjectPath,
-                    command: configuration.command,
+                    executable: configuration.executable,
+                    displayCommand: configuration.displayCommand,
                     workingDirectory: configuration.workingDirectory
                 )
             )
@@ -523,7 +524,7 @@ public final class NativeAppViewModel {
         }
     }
 
-    public func saveWorkspaceScripts(_ scripts: [ProjectScript], in projectPath: String? = nil) throws {
+    public func saveWorkspaceRunConfigurations(_ runConfigurations: [ProjectRunConfiguration], in projectPath: String? = nil) throws {
         guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
               let ownerProjectPath = resolveWorkspaceScriptOwnerProjectPath(for: projectPath),
               let ownerIndex = snapshot.projects.firstIndex(where: {
@@ -536,7 +537,7 @@ public final class NativeAppViewModel {
         }
 
         var projects = snapshot.projects
-        projects[ownerIndex].scripts = scripts
+        projects[ownerIndex].runConfigurations = runConfigurations
         try persistProjects(projects)
         errorMessage = nil
     }
@@ -1747,10 +1748,6 @@ public final class NativeAppViewModel {
         isSettingsPresented = true
     }
 
-    public func revealSharedScriptsSettings() {
-        revealSettings(section: .scripts)
-    }
-
     public func revealDashboard() {
         isDashboardPresented = true
     }
@@ -2084,36 +2081,126 @@ public final class NativeAppViewModel {
     }
 
     private func makeProjectRunConfiguration(
-        script: ProjectScript,
+        configuration: ProjectRunConfiguration,
         projectPath: String,
         rootProjectPath: String
     ) -> WorkspaceRunConfiguration {
-        let resolution = ScriptTemplateSupport.resolveCommand(
-            template: script.start,
-            paramSchema: script.paramSchema,
-            explicitValues: script.templateParams
-        )
-        let emptyCommand = script.start.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let missingReason = resolution.missingRequiredKeys.isEmpty
-            ? nil
-            : "缺少必填参数：\(resolution.missingRequiredKeys.joined(separator: "、"))"
-        return WorkspaceRunConfiguration(
-            id: workspaceProjectRunConfigurationID(projectPath: projectPath, scriptID: script.id),
-            projectPath: projectPath,
-            rootProjectPath: rootProjectPath,
-            source: .projectScript,
-            sourceID: script.id,
-            name: script.name,
-            command: resolution.command,
-            workingDirectory: projectPath,
-            isShared: false,
-            canRun: !emptyCommand && missingReason == nil,
-            disabledReason: emptyCommand ? "命令为空，请先完善项目脚本。" : missingReason
+        switch configuration.kind {
+        case .customShell:
+            let command = configuration.customShell?.command.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return WorkspaceRunConfiguration(
+                id: workspaceProjectRunConfigurationID(projectPath: projectPath, configurationID: configuration.id),
+                projectPath: projectPath,
+                rootProjectPath: rootProjectPath,
+                source: .projectRunConfiguration,
+                sourceID: configuration.id,
+                name: configuration.name,
+                executable: .shell(command: command),
+                displayCommand: command,
+                workingDirectory: projectPath,
+                isShared: false,
+                canRun: !command.isEmpty,
+                disabledReason: command.isEmpty ? "命令为空，请先完善自定义 Shell 配置。" : nil
+            )
+        case .remoteLogViewer:
+            let resolution = resolveRemoteLogViewerExecutable(configuration.remoteLogViewer)
+            return WorkspaceRunConfiguration(
+                id: workspaceProjectRunConfigurationID(projectPath: projectPath, configurationID: configuration.id),
+                projectPath: projectPath,
+                rootProjectPath: rootProjectPath,
+                source: .projectRunConfiguration,
+                sourceID: configuration.id,
+                name: configuration.name,
+                executable: resolution.executable,
+                displayCommand: resolution.displayCommand,
+                workingDirectory: projectPath,
+                isShared: false,
+                canRun: resolution.canRun,
+                disabledReason: resolution.disabledReason
+            )
+        }
+    }
+
+    private func workspaceProjectRunConfigurationID(projectPath: String, configurationID: String) -> String {
+        "project::\(projectPath)::\(configurationID)"
+    }
+
+    private struct RemoteLogViewerExecutableResolution {
+        var executable: WorkspaceRunExecutable
+        var displayCommand: String
+        var canRun: Bool
+        var disabledReason: String?
+    }
+
+    private func resolveRemoteLogViewerExecutable(_ configuration: ProjectRunRemoteLogViewerConfiguration?) -> RemoteLogViewerExecutableResolution {
+        guard let configuration else {
+            return RemoteLogViewerExecutableResolution(
+                executable: .process(program: "/usr/bin/ssh", arguments: []),
+                displayCommand: "/usr/bin/ssh",
+                canRun: false,
+                disabledReason: "远程日志配置缺失，请重新创建该运行配置。"
+            )
+        }
+
+        let server = configuration.server.trimmingCharacters(in: .whitespacesAndNewlines)
+        let logPath = configuration.logPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !server.isEmpty, !logPath.isEmpty else {
+            return RemoteLogViewerExecutableResolution(
+                executable: .process(program: "/usr/bin/ssh", arguments: []),
+                displayCommand: "/usr/bin/ssh",
+                canRun: false,
+                disabledReason: "远程日志配置缺少服务器或日志路径。"
+            )
+        }
+
+        var args = [String]()
+        let user = configuration.user?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !user.isEmpty {
+            args.append(contentsOf: ["-l", user])
+        }
+        if let port = configuration.port, port > 0 {
+            args.append(contentsOf: ["-p", String(port)])
+        }
+        let identityFile = configuration.identityFile?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !identityFile.isEmpty {
+            args.append(contentsOf: ["-i", identityFile])
+        }
+        let strictHostKeyChecking = configuration.strictHostKeyChecking?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !strictHostKeyChecking.isEmpty {
+            args.append(contentsOf: ["-o", "StrictHostKeyChecking=\(strictHostKeyChecking)"])
+        }
+        if !configuration.allowPasswordPrompt {
+            args.append(contentsOf: ["-o", "BatchMode=yes"])
+        }
+
+        let lines = max(1, configuration.lines ?? 200)
+        let remoteCommand = remoteTailCommand(logPath: logPath, lines: lines, follow: configuration.follow)
+        args.append(server)
+        args.append(remoteCommand)
+
+        return RemoteLogViewerExecutableResolution(
+            executable: .process(program: "/usr/bin/ssh", arguments: args),
+            displayCommand: processDisplayCommand(program: "/usr/bin/ssh", arguments: args),
+            canRun: true,
+            disabledReason: nil
         )
     }
 
-    private func workspaceProjectRunConfigurationID(projectPath: String, scriptID: String) -> String {
-        "project::\(projectPath)::\(scriptID)"
+    private func remoteTailCommand(logPath: String, lines: Int, follow: Bool) -> String {
+        var components = ["tail", "-n", String(lines)]
+        if follow {
+            components.append("-F")
+        }
+        components.append(shellQuote(logPath))
+        return components.joined(separator: " ")
+    }
+
+    private func processDisplayCommand(program: String, arguments: [String]) -> String {
+        ([program] + arguments.map(shellQuote)).joined(separator: " ")
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     private func resolveWorkspaceRunProjectPath(_ projectPath: String?) -> String? {
@@ -2713,7 +2800,7 @@ private func createProject(path: String, existingByPath: [String: Project]) -> P
             name: projectURL.lastPathComponent.isEmpty ? normalizedPath : projectURL.lastPathComponent,
             path: normalizedPath,
             tags: existing.tags,
-            scripts: existing.scripts,
+            runConfigurations: existing.runConfigurations,
             worktrees: existing.worktrees,
             mtime: swiftDateFromDate(modificationDate),
             size: size,
@@ -2733,7 +2820,7 @@ private func createProject(path: String, existingByPath: [String: Project]) -> P
         name: projectURL.lastPathComponent.isEmpty ? normalizedPath : projectURL.lastPathComponent,
         path: normalizedPath,
         tags: [],
-        scripts: [],
+        runConfigurations: [],
         worktrees: [],
         mtime: swiftDateFromDate(modificationDate),
         size: size,
@@ -2880,7 +2967,7 @@ private func buildWorktreeVirtualProject(sourceProject: Project, worktree: Proje
         name: worktree.name,
         path: worktree.path,
         tags: sourceProject.tags,
-        scripts: sourceProject.scripts,
+        runConfigurations: sourceProject.runConfigurations,
         worktrees: [],
         mtime: sourceProject.mtime,
         size: sourceProject.size,

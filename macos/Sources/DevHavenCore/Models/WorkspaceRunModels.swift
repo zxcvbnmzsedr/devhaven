@@ -1,17 +1,19 @@
 import Foundation
 
 public enum WorkspaceRunConfigurationSource: String, Equatable, Sendable {
-    case projectScript
-    case sharedScript
+    case projectRunConfiguration
 
     public var displayTitle: String {
         switch self {
-        case .projectScript:
-            return "项目脚本"
-        case .sharedScript:
-            return "通用脚本"
+        case .projectRunConfiguration:
+            return "项目运行配置"
         }
     }
+}
+
+public enum WorkspaceRunExecutable: Equatable, Sendable {
+    case shell(command: String)
+    case process(program: String, arguments: [String])
 }
 
 public struct WorkspaceRunConfiguration: Identifiable, Equatable, Sendable {
@@ -21,11 +23,44 @@ public struct WorkspaceRunConfiguration: Identifiable, Equatable, Sendable {
     public var source: WorkspaceRunConfigurationSource
     public var sourceID: String
     public var name: String
-    public var command: String
+    public var executable: WorkspaceRunExecutable
+    public var displayCommand: String
     public var workingDirectory: String
     public var isShared: Bool
     public var canRun: Bool
     public var disabledReason: String?
+
+    public var command: String {
+        displayCommand
+    }
+
+    public init(
+        id: String,
+        projectPath: String,
+        rootProjectPath: String,
+        source: WorkspaceRunConfigurationSource,
+        sourceID: String,
+        name: String,
+        executable: WorkspaceRunExecutable,
+        displayCommand: String,
+        workingDirectory: String,
+        isShared: Bool,
+        canRun: Bool = true,
+        disabledReason: String? = nil
+    ) {
+        self.id = id
+        self.projectPath = projectPath
+        self.rootProjectPath = rootProjectPath
+        self.source = source
+        self.sourceID = sourceID
+        self.name = name
+        self.executable = executable
+        self.displayCommand = displayCommand
+        self.workingDirectory = workingDirectory
+        self.isShared = isShared
+        self.canRun = canRun
+        self.disabledReason = disabledReason
+    }
 
     public init(
         id: String,
@@ -40,17 +75,20 @@ public struct WorkspaceRunConfiguration: Identifiable, Equatable, Sendable {
         canRun: Bool = true,
         disabledReason: String? = nil
     ) {
-        self.id = id
-        self.projectPath = projectPath
-        self.rootProjectPath = rootProjectPath
-        self.source = source
-        self.sourceID = sourceID
-        self.name = name
-        self.command = command
-        self.workingDirectory = workingDirectory
-        self.isShared = isShared
-        self.canRun = canRun
-        self.disabledReason = disabledReason
+        self.init(
+            id: id,
+            projectPath: projectPath,
+            rootProjectPath: rootProjectPath,
+            source: source,
+            sourceID: sourceID,
+            name: name,
+            executable: .shell(command: command),
+            displayCommand: command,
+            workingDirectory: workingDirectory,
+            isShared: isShared,
+            canRun: canRun,
+            disabledReason: disabledReason
+        )
     }
 }
 
@@ -163,8 +201,35 @@ public struct WorkspaceRunStartRequest: Equatable, Sendable {
     public var configurationSource: WorkspaceRunConfigurationSource
     public var projectPath: String
     public var rootProjectPath: String
-    public var command: String
+    public var executable: WorkspaceRunExecutable
+    public var displayCommand: String
     public var workingDirectory: String
+
+    public var command: String {
+        displayCommand
+    }
+
+    public init(
+        sessionID: String,
+        configurationID: String,
+        configurationName: String,
+        configurationSource: WorkspaceRunConfigurationSource,
+        projectPath: String,
+        rootProjectPath: String,
+        executable: WorkspaceRunExecutable,
+        displayCommand: String,
+        workingDirectory: String
+    ) {
+        self.sessionID = sessionID
+        self.configurationID = configurationID
+        self.configurationName = configurationName
+        self.configurationSource = configurationSource
+        self.projectPath = projectPath
+        self.rootProjectPath = rootProjectPath
+        self.executable = executable
+        self.displayCommand = displayCommand
+        self.workingDirectory = workingDirectory
+    }
 
     public init(
         sessionID: String,
@@ -176,14 +241,17 @@ public struct WorkspaceRunStartRequest: Equatable, Sendable {
         command: String,
         workingDirectory: String
     ) {
-        self.sessionID = sessionID
-        self.configurationID = configurationID
-        self.configurationName = configurationName
-        self.configurationSource = configurationSource
-        self.projectPath = projectPath
-        self.rootProjectPath = rootProjectPath
-        self.command = command
-        self.workingDirectory = workingDirectory
+        self.init(
+            sessionID: sessionID,
+            configurationID: configurationID,
+            configurationName: configurationName,
+            configurationSource: configurationSource,
+            projectPath: projectPath,
+            rootProjectPath: rootProjectPath,
+            executable: .shell(command: command),
+            displayCommand: command,
+            workingDirectory: workingDirectory
+        )
     }
 }
 

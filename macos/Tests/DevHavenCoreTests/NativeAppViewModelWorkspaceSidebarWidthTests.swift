@@ -56,7 +56,6 @@ private struct WorkspaceSidebarSettingsFixture {
             "gitIdentities": [],
             "projectListViewMode": "card",
             "workspaceSidebarWidth": \(workspaceSidebarWidth),
-            "sharedScriptsRoot": "~/.devhaven/scripts",
             "viteDevPort": 1420,
             "webEnabled": true,
             "webBindHost": "0.0.0.0",

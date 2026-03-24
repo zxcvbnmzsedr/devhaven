@@ -9,8 +9,9 @@ final class WorkspaceHostViewRunConsoleTests: XCTestCase {
         XCTAssertTrue(source.contains("viewModel.runSelectedWorkspaceConfiguration"), "WorkspaceHostView 应把 Run 动作桥接到运行配置级 ViewModel API")
         XCTAssertTrue(source.contains("viewModel.stopSelectedWorkspaceRunSession"), "WorkspaceHostView 应把 Stop 动作桥接到 ViewModel")
         XCTAssertTrue(source.contains("viewModel.toggleWorkspaceRunConsole"), "WorkspaceHostView 应把 Logs 展开/收起桥接到 ViewModel")
-        XCTAssertTrue(source.contains("WorkspaceScriptConfigurationSheet("), "WorkspaceHostView 的配置入口应打开项目脚本配置面板")
-        XCTAssertFalse(source.contains("viewModel.revealSettings(section: .scripts)"), "WorkspaceHostView 不应再把配置按钮直接指向通用脚本设置页")
+        XCTAssertTrue(source.contains("WorkspaceRunConfigurationSheet("), "WorkspaceHostView 的配置入口应打开 typed 运行配置面板")
+        XCTAssertFalse(source.contains("revealSharedScriptsSettings"), "WorkspaceHostView 不应再保留 shared scripts 设置跳转")
+        XCTAssertFalse(source.contains("viewModel.revealSettings(section: .scripts)"), "WorkspaceHostView 不应再把配置按钮直接指向脚本模板设置页")
     }
 
     private func sourceFileURL() -> URL {

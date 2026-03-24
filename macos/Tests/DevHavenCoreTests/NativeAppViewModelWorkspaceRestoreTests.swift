@@ -157,7 +157,7 @@ private struct NativeAppWorkspaceRestoreFixture {
             name: "DevHaven",
             path: "/tmp/devhaven",
             tags: [],
-            scripts: [],
+            runConfigurations: [],
             worktrees: [worktree],
             mtime: 1,
             size: 0,

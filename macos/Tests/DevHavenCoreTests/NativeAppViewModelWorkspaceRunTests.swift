@@ -3,19 +3,29 @@ import XCTest
 
 @MainActor
 final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
-    func testSelectionDefaultsToFirstProjectConfigurationAndRunCreatesVisibleSession() throws {
+    func testSelectionDefaultsToFirstRunConfigurationAndRunCreatesVisibleSession() throws {
         let runManager = TestWorkspaceRunManager()
         let viewModel = makeViewModel(runManager: runManager)
         let project = makeProject(
-            scripts: [
-                ProjectScript(id: "dev", name: "Dev", start: "npm run dev"),
-                ProjectScript(id: "worker", name: "Worker", start: "python worker.py")
+            runConfigurations: [
+                ProjectRunConfiguration(
+                    id: "dev",
+                    name: "Dev",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "npm run dev")
+                ),
+                ProjectRunConfiguration(
+                    id: "worker",
+                    name: "Worker",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "python worker.py")
+                )
             ]
         )
         viewModel.snapshot.projects = [project]
         viewModel.enterWorkspace(project.path)
 
-        XCTAssertEqual(viewModel.selectedWorkspaceRunConfiguration()?.source, .projectScript)
+        XCTAssertEqual(viewModel.selectedWorkspaceRunConfiguration()?.source, .projectRunConfiguration)
         XCTAssertEqual(viewModel.selectedWorkspaceRunConfiguration()?.sourceID, "dev")
 
         viewModel.selectWorkspaceRunConfiguration("project::\(project.path)::worker")
@@ -23,7 +33,8 @@ final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
 
         XCTAssertEqual(runManager.startedRequests.last?.configurationID, "project::\(project.path)::worker")
         XCTAssertEqual(runManager.startedRequests.last?.configurationName, "Worker")
-        XCTAssertEqual(runManager.startedRequests.last?.command, "python worker.py")
+        XCTAssertEqual(runManager.startedRequests.last?.displayCommand, "python worker.py")
+        XCTAssertEqual(runManager.startedRequests.last?.executable, .shell(command: "python worker.py"))
         let state = try XCTUnwrap(viewModel.workspaceRunConsoleState(for: project.path))
         XCTAssertTrue(state.isVisible)
         XCTAssertEqual(state.sessions.count, 1)
@@ -31,50 +42,102 @@ final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
         XCTAssertEqual(state.selectedSession?.configurationID, "project::\(project.path)::worker")
     }
 
-    func testAvailableConfigurationsIgnoreSharedScriptsAndOnlyExposeProjectScripts() throws {
+    func testRemoteLogViewerConfigurationResolvesToSSHProcessExecutable() throws {
         let runManager = TestWorkspaceRunManager()
-        let homeURL = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        let store = LegacyCompatStore(homeDirectoryURL: homeURL)
-        let sharedRoot = homeURL.appending(path: "shared-scripts", directoryHint: .isDirectory)
-        try store.saveSharedScriptsManifest(
-            [
-                SharedScriptManifestScript(
-                    id: "shared-log",
-                    name: "通用日志查看",
-                    path: "ops/shared-log.sh",
-                    commandTemplate: "bash \"${scriptPath}\" --lines \"${lines}\"",
-                    params: [
-                        ScriptParamField(key: "lines", label: "输出行数", type: .number, required: true, defaultValue: "200", description: nil)
-                    ]
+        let viewModel = makeViewModel(runManager: runManager)
+        let project = makeProject(
+            runConfigurations: [
+                ProjectRunConfiguration(
+                    id: "remote-log",
+                    name: "远程日志",
+                    kind: .remoteLogViewer,
+                    remoteLogViewer: ProjectRunRemoteLogViewerConfiguration(
+                        server: "192.168.0.131",
+                        logPath: "/var/log/app.log",
+                        user: "root",
+                        port: 2222,
+                        identityFile: "~/.ssh/id_rsa",
+                        lines: 200,
+                        follow: true,
+                        strictHostKeyChecking: "accept-new",
+                        allowPasswordPrompt: false
+                    )
                 )
-            ],
-            rootOverride: sharedRoot.path
+            ]
         )
-        try store.writeSharedScriptFile(
-            relativePath: "ops/shared-log.sh",
-            content: "#!/usr/bin/env bash\necho shared\n",
-            rootOverride: sharedRoot.path
-        )
-
-        let viewModel = makeViewModel(runManager: runManager, store: store)
-        var settings = viewModel.snapshot.appState.settings
-        settings.sharedScriptsRoot = sharedRoot.path
-        viewModel.snapshot.appState.settings = settings
-
-        let project = makeProject(scripts: [ProjectScript(id: "dev", name: "Dev", start: "npm run dev")])
         viewModel.snapshot.projects = [project]
         viewModel.enterWorkspace(project.path)
+        try viewModel.runSelectedWorkspaceConfiguration(in: project.path)
 
-        let configurations = viewModel.availableWorkspaceRunConfigurations(in: project.path)
-        XCTAssertEqual(configurations.count, 1)
-        XCTAssertEqual(configurations.map(\.source), [.projectScript])
-        XCTAssertEqual(configurations.first?.sourceID, "dev")
+        let request = try XCTUnwrap(runManager.startedRequests.last)
+        XCTAssertEqual(request.executable, .process(program: "/usr/bin/ssh", arguments: [
+            "-l", "root",
+            "-p", "2222",
+            "-i", "~/.ssh/id_rsa",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "BatchMode=yes",
+            "192.168.0.131",
+            "tail -n 200 -F '/var/log/app.log'",
+        ]))
+        XCTAssertTrue(request.displayCommand.contains("/usr/bin/ssh"))
+        XCTAssertTrue(request.displayCommand.contains("tail -n 200 -F"))
+    }
+
+    func testLegacyScriptsDecodeFlattensToCustomShellRunConfigurations() throws {
+        let data = Data(
+            """
+            {
+              "id": "project-legacy",
+              "name": "Legacy",
+              "path": "/tmp/legacy",
+              "tags": [],
+              "scripts": [
+                {
+                  "id": "remote-log",
+                  "name": "Remote",
+                  "start": "server=${server}\\nexec printf '%s\\\\n' \\"$server\\"",
+                  "paramSchema": [
+                    {"key":"server","label":"服务器","type":"text","required":true}
+                  ],
+                  "templateParams": {
+                    "server": "root@192.168.0.131"
+                  }
+                }
+              ],
+              "worktrees": [],
+              "mtime": 1,
+              "size": 0,
+              "checksum": "sum",
+              "git_commits": 0,
+              "git_last_commit": 0,
+              "created": 1,
+              "checked": 1
+            }
+            """.utf8
+        )
+        let project = try JSONDecoder().decode(Project.self, from: data)
+        let configuration = try XCTUnwrap(project.runConfigurations.first)
+
+        XCTAssertEqual(project.runConfigurations.count, 1)
+        XCTAssertEqual(configuration.kind, .customShell)
+        XCTAssertEqual(configuration.id, "remote-log")
+        XCTAssertTrue(configuration.customShell?.command.contains("server='root@192.168.0.131'") ?? false)
+        XCTAssertTrue(configuration.customShell?.command.contains("exec printf '%s\\n' \"$server\"") ?? false)
     }
 
     func testRunManagerEventsAppendOutputAndUpdateFinalState() throws {
         let runManager = TestWorkspaceRunManager()
         let viewModel = makeViewModel(runManager: runManager)
-        let project = makeProject(scripts: [ProjectScript(id: "dev", name: "Dev", start: "npm run dev")])
+        let project = makeProject(
+            runConfigurations: [
+                ProjectRunConfiguration(
+                    id: "dev",
+                    name: "Dev",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "npm run dev")
+                )
+            ]
+        )
         viewModel.snapshot.projects = [project]
         viewModel.enterWorkspace(project.path)
         try viewModel.runSelectedWorkspaceConfiguration()
@@ -91,7 +154,16 @@ final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
     func testRerunningSameConfigurationReusesSingleTabAndRestartsInPlace() throws {
         let runManager = TestWorkspaceRunManager()
         let viewModel = makeViewModel(runManager: runManager)
-        let project = makeProject(scripts: [ProjectScript(id: "dev", name: "Dev", start: "npm run dev")])
+        let project = makeProject(
+            runConfigurations: [
+                ProjectRunConfiguration(
+                    id: "dev",
+                    name: "Dev",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "npm run dev")
+                )
+            ]
+        )
         viewModel.snapshot.projects = [project]
         viewModel.enterWorkspace(project.path)
 
@@ -111,9 +183,19 @@ final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
         let runManager = TestWorkspaceRunManager()
         let viewModel = makeViewModel(runManager: runManager)
         let project = makeProject(
-            scripts: [
-                ProjectScript(id: "dev", name: "Dev", start: "npm run dev"),
-                ProjectScript(id: "worker", name: "Worker", start: "python worker.py")
+            runConfigurations: [
+                ProjectRunConfiguration(
+                    id: "dev",
+                    name: "Dev",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "npm run dev")
+                ),
+                ProjectRunConfiguration(
+                    id: "worker",
+                    name: "Worker",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "python worker.py")
+                )
             ]
         )
         viewModel.snapshot.projects = [project]
@@ -135,7 +217,16 @@ final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
     func testTogglingConsoleVisibilityAndClosingWorkspaceClearsRunState() throws {
         let runManager = TestWorkspaceRunManager()
         let viewModel = makeViewModel(runManager: runManager)
-        let project = makeProject(scripts: [ProjectScript(id: "dev", name: "Dev", start: "npm run dev")])
+        let project = makeProject(
+            runConfigurations: [
+                ProjectRunConfiguration(
+                    id: "dev",
+                    name: "Dev",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "npm run dev")
+                )
+            ]
+        )
         viewModel.snapshot.projects = [project]
         viewModel.enterWorkspace(project.path)
         try viewModel.runSelectedWorkspaceConfiguration()
@@ -163,13 +254,13 @@ final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
         )
     }
 
-    private func makeProject(scripts: [ProjectScript]) -> Project {
+    private func makeProject(runConfigurations: [ProjectRunConfiguration]) -> Project {
         Project(
             id: "project-1",
             name: "DevHaven",
             path: "/tmp/devhaven",
             tags: [],
-            scripts: scripts,
+            runConfigurations: runConfigurations,
             worktrees: [],
             mtime: 1,
             size: 0,
@@ -200,7 +291,7 @@ private final class TestWorkspaceRunManager: WorkspaceRunManaging {
             configurationSource: request.configurationSource,
             projectPath: request.projectPath,
             rootProjectPath: request.rootProjectPath,
-            command: request.command,
+            command: request.displayCommand,
             workingDirectory: request.workingDirectory,
             state: .running,
             processID: 100,

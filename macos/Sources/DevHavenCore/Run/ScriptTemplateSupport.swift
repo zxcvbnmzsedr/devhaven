@@ -11,59 +11,6 @@ public struct ResolvedScriptCommand: Equatable, Sendable {
 }
 
 public enum ScriptTemplateSupport {
-    private static let templateParamPattern = try! NSRegularExpression(pattern: #"\$\{([A-Za-z_][A-Za-z0-9_]*)\}"#)
-    private static let reservedTemplateKeys: Set<String> = ["scriptPath"]
-
-    public static func mergeParamSchema(command: String, schema: [ScriptParamField]) -> [ScriptParamField] {
-        let normalizedSchema = normalizeSchema(schema)
-        let schemaByKey = Dictionary(uniqueKeysWithValues: normalizedSchema.map { ($0.key, $0) })
-        let inferredKeys = collectTemplateParamKeys(in: command)
-        guard !inferredKeys.isEmpty else {
-            return []
-        }
-
-        return inferredKeys.map { key in
-            schemaByKey[key]
-                ?? ScriptParamField(
-                    key: key,
-                    label: key,
-                    type: .text,
-                    required: false,
-                    defaultValue: nil,
-                    description: nil
-                )
-        }
-    }
-
-    public static func buildTemplateParams(
-        schema: [ScriptParamField],
-        explicitValues: [String: String]
-    ) -> [String: String] {
-        var result = [String: String]()
-        for field in schema {
-            if let current = explicitValues[field.key] {
-                result[field.key] = current
-            } else if let defaultValue = field.defaultValue {
-                result[field.key] = defaultValue
-            } else {
-                result[field.key] = ""
-            }
-        }
-        return result
-    }
-
-    public static func applySharedScriptTemplate(
-        commandTemplate: String,
-        absolutePath: String
-    ) -> String {
-        let resolvedTemplate = normalizeShellTemplateText(commandTemplate).trimmingCharacters(in: .whitespacesAndNewlines)
-        let template = resolvedTemplate.isEmpty ? #"bash "${scriptPath}""# : resolvedTemplate
-        let escapedPath = absolutePath
-            .replacingOccurrences(of: "\\", with: "/")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return replaceTemplateVariable(in: template, key: "scriptPath", replacement: escapedPath)
-    }
-
     public static func resolveCommand(
         template: String,
         paramSchema: [ScriptParamField],
@@ -142,44 +89,6 @@ public enum ScriptTemplateSupport {
                 description: field.description
             )
         }
-    }
-
-    private static func collectTemplateParamKeys(in command: String) -> [String] {
-        let source = normalizeShellTemplateText(command)
-        let fullRange = NSRange(source.startIndex..<source.endIndex, in: source)
-        var keys = [String]()
-        var seen = Set<String>()
-        for match in templateParamPattern.matches(in: source, range: fullRange) {
-            guard match.numberOfRanges > 1,
-                  let keyRange = Range(match.range(at: 1), in: source)
-            else {
-                continue
-            }
-            let key = String(source[keyRange])
-            guard !reservedTemplateKeys.contains(key),
-                  !key.isEmpty,
-                  !seen.contains(key),
-                  key.range(of: #"^[A-Z0-9_]+$"#, options: .regularExpression) == nil
-            else {
-                continue
-            }
-            seen.insert(key)
-            keys.append(key)
-        }
-        return keys
-    }
-
-    private static func replaceTemplateVariable(
-        in source: String,
-        key: String,
-        replacement: String
-    ) -> String {
-        let escapedKey = NSRegularExpression.escapedPattern(for: key)
-        return source.replacingOccurrences(
-            of: "\\$\\{\(escapedKey)\\}",
-            with: replacement,
-            options: .regularExpression
-        )
     }
 
     private static func shellQuoted(_ value: String) -> String {

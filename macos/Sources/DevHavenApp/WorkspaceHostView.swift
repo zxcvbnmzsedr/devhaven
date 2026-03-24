@@ -135,10 +135,9 @@ struct WorkspaceHostView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(NativeTheme.window)
         .sheet(isPresented: $isRunConfigurationSheetPresented) {
-            WorkspaceScriptConfigurationSheet(
+            WorkspaceRunConfigurationSheet(
                 viewModel: viewModel,
-                project: project,
-                onManageSharedScripts: openSharedScriptsSettings
+                project: project
             )
         }
         .background {
@@ -236,10 +235,6 @@ struct WorkspaceHostView: View {
         .padding(.vertical, 8)
         .background(NativeTheme.surface)
         .clipShape(.rect(cornerRadius: 10))
-    }
-
-    private func openSharedScriptsSettings() {
-        viewModel.revealSharedScriptsSettings()
     }
 
     private var retainedPaneIDs: Set<String> {
