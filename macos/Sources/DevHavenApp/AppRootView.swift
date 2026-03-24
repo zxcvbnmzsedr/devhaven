@@ -6,11 +6,17 @@ import DevHavenCore
 struct AppRootView: View {
     @Bindable var viewModel: NativeAppViewModel
     @ObservedObject var updateController: DevHavenUpdateController
+    @ObservedObject var quitGuard: AppQuitGuard
     @Environment(\.scenePhase) private var scenePhase
 
-    init(viewModel: NativeAppViewModel, updateController: DevHavenUpdateController = DevHavenUpdateController()) {
+    init(
+        viewModel: NativeAppViewModel,
+        updateController: DevHavenUpdateController = DevHavenUpdateController(),
+        quitGuard: AppQuitGuard = AppQuitGuard()
+    ) {
         self.viewModel = viewModel
         self.updateController = updateController
+        self.quitGuard = quitGuard
     }
 
     var body: some View {
@@ -52,13 +58,29 @@ struct AppRootView: View {
                     .transition(.opacity)
             }
         }
+        .overlay(alignment: .top) {
+            if let toastMessage = quitGuard.toastMessage {
+                AppQuitToastView(message: toastMessage)
+                    .padding(.top, 18)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .background(NativeTheme.window.ignoresSafeArea())
+        .background(
+            MainWindowCloseShortcutBridge(onHandleCloseShortcut: handleMainWindowCloseShortcut)
+                .allowsHitTesting(false)
+        )
+        .background(
+            MainWindowCloseConfirmationBridge()
+                .allowsHitTesting(false)
+        )
         .background(
             InitialWindowActivationBridge()
                 .allowsHitTesting(false)
         )
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.18), value: viewModel.isDetailPanelPresented)
+        .animation(.easeInOut(duration: 0.16), value: quitGuard.toastMessage != nil)
         .sheet(isPresented: $viewModel.isDashboardPresented) {
             GitDashboardView(viewModel: viewModel)
                 .preferredColorScheme(.dark)
@@ -139,6 +161,64 @@ struct AppRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(NativeTheme.window)
+    }
+
+    private func handleMainWindowCloseShortcut() -> Bool {
+        let action = MainWindowCloseShortcutPlanner().action(for: mainWindowCloseShortcutContext)
+        switch action {
+        case .hideDashboard:
+            viewModel.hideDashboard()
+            return true
+        case .hideSettings:
+            viewModel.hideSettings()
+            return true
+        case .hideRecycleBin:
+            viewModel.hideRecycleBin()
+            return true
+        case .hideDetailPanel:
+            DetailPanelCloseAction.perform(for: viewModel)
+            return true
+        case let .closePane(paneID):
+            viewModel.closeWorkspacePane(paneID)
+            return true
+        case let .closeTab(tabID):
+            viewModel.closeWorkspaceTab(tabID)
+            return true
+        case .exitWorkspace:
+            viewModel.exitWorkspace()
+            return true
+        case .closeWindow:
+            return false
+        }
+    }
+
+    private var mainWindowCloseShortcutContext: MainWindowCloseShortcutContext {
+        MainWindowCloseShortcutContext(
+            isDashboardPresented: viewModel.isDashboardPresented,
+            isSettingsPresented: viewModel.isSettingsPresented,
+            isRecycleBinPresented: viewModel.isRecycleBinPresented,
+            isDetailPanelPresented: viewModel.isDetailPanelPresented,
+            workspace: activeWorkspaceCloseShortcutContext
+        )
+    }
+
+    private var activeWorkspaceCloseShortcutContext: MainWindowCloseShortcutWorkspaceContext? {
+        guard viewModel.isWorkspacePresented,
+              let workspace = viewModel.activeWorkspaceController
+        else {
+            return nil
+        }
+
+        let selectedTab = workspace.selectedTab
+        let selectedPaneID = workspace.selectedPane?.id ?? selectedTab?.focusedPaneId
+        let selectedTabID = workspace.selectedTabId ?? selectedTab?.id
+
+        return MainWindowCloseShortcutWorkspaceContext(
+            selectedPaneID: selectedPaneID,
+            selectedTabID: selectedTabID,
+            selectedTabPaneCount: selectedTab?.leaves.count ?? 0,
+            tabCount: workspace.tabCount
+        )
     }
 }
 
@@ -225,5 +305,233 @@ struct AppKitApplicationActivationProxy: ApplicationActivating {
 
     func activateIgnoringOtherApps() {
         NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+private struct MainWindowCloseShortcutBridge: NSViewRepresentable {
+    let onHandleCloseShortcut: () -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.onHandleCloseShortcut = onHandleCloseShortcut
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.onHandleCloseShortcut = onHandleCloseShortcut
+    }
+
+    @MainActor
+    final class Coordinator {
+        var onHandleCloseShortcut: () -> Bool = { false }
+        private var localMonitor: Any?
+
+        init() {
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else {
+                    return event
+                }
+                guard Self.matchesCloseShortcut(event) else {
+                    return event
+                }
+                return self.onHandleCloseShortcut() ? nil : event
+            }
+        }
+
+        private static func matchesCloseShortcut(_ event: NSEvent) -> Bool {
+            guard event.type == .keyDown else {
+                return false
+            }
+            let relevantModifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
+            guard relevantModifiers == .command else {
+                return false
+            }
+            return event.charactersIgnoringModifiers?.lowercased() == "w"
+        }
+
+        isolated deinit {
+            if let localMonitor {
+                NSEvent.removeMonitor(localMonitor)
+            }
+        }
+    }
+}
+
+enum MainWindowCloseShortcutAction: Equatable {
+    case hideDashboard
+    case hideSettings
+    case hideRecycleBin
+    case hideDetailPanel
+    case closePane(String)
+    case closeTab(String)
+    case exitWorkspace
+    case closeWindow
+}
+
+struct MainWindowCloseShortcutWorkspaceContext: Equatable {
+    var selectedPaneID: String?
+    var selectedTabID: String?
+    var selectedTabPaneCount: Int
+    var tabCount: Int
+}
+
+struct MainWindowCloseShortcutContext: Equatable {
+    var isDashboardPresented: Bool
+    var isSettingsPresented: Bool
+    var isRecycleBinPresented: Bool
+    var isDetailPanelPresented: Bool
+    var workspace: MainWindowCloseShortcutWorkspaceContext?
+}
+
+struct MainWindowCloseShortcutPlanner {
+    func action(for context: MainWindowCloseShortcutContext) -> MainWindowCloseShortcutAction {
+        if context.isSettingsPresented {
+            return .hideSettings
+        }
+        if context.isDashboardPresented {
+            return .hideDashboard
+        }
+        if context.isRecycleBinPresented {
+            return .hideRecycleBin
+        }
+        if context.isDetailPanelPresented {
+            return .hideDetailPanel
+        }
+        guard let workspace = context.workspace else {
+            return .closeWindow
+        }
+        if workspace.selectedTabPaneCount > 1,
+           let paneID = workspace.selectedPaneID {
+            return .closePane(paneID)
+        }
+        if workspace.tabCount > 1,
+           let tabID = workspace.selectedTabID {
+            return .closeTab(tabID)
+        }
+        return .exitWorkspace
+    }
+}
+
+private struct MainWindowCloseConfirmationBridge: NSViewRepresentable {
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = view.window else {
+                context.coordinator.detach()
+                return
+            }
+            if window.identifier == nil {
+                window.identifier = NSUserInterfaceItemIdentifier("main")
+            }
+            context.coordinator.attach(to: window)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSWindowDelegate {
+        private let handler = MainWindowCloseConfirmationHandler(prompt: AppKitMainWindowClosePrompt())
+        private weak var trackedWindow: NSWindow?
+        private weak var forwardedDelegate: (any NSWindowDelegate)?
+
+        func attach(to window: NSWindow) {
+            handler.track(windowNumber: window.windowNumber)
+
+            let delegateNeedsRefresh = trackedWindow !== window || window.delegate !== self
+            guard delegateNeedsRefresh else {
+                return
+            }
+            detach()
+            trackedWindow = window
+            forwardedDelegate = window.delegate
+            window.delegate = self
+        }
+
+        func detach() {
+            guard let trackedWindow else {
+                forwardedDelegate = nil
+                return
+            }
+            if trackedWindow.delegate === self {
+                trackedWindow.delegate = forwardedDelegate
+            }
+            self.trackedWindow = nil
+            forwardedDelegate = nil
+        }
+
+        func windowShouldClose(_ sender: NSWindow) -> Bool {
+            guard handler.shouldAllowClose(windowNumber: sender.windowNumber) else {
+                return false
+            }
+            return forwardedDelegate?.windowShouldClose?(sender) ?? true
+        }
+
+        isolated deinit {
+            detach()
+        }
+    }
+}
+
+@MainActor
+protocol MainWindowClosePrompting {
+    func confirmCloseMainWindow() -> Bool
+}
+
+struct MainWindowClosePromptCopy: Equatable {
+    var title: String
+    var informativeText: String
+    var confirmButtonTitle: String
+    var cancelButtonTitle: String
+}
+
+@MainActor
+final class MainWindowCloseConfirmationHandler {
+    private let prompt: any MainWindowClosePrompting
+    private var trackedWindowNumber: Int?
+
+    init(prompt: any MainWindowClosePrompting) {
+        self.prompt = prompt
+    }
+
+    func track(windowNumber: Int) {
+        trackedWindowNumber = windowNumber
+    }
+
+    func shouldAllowClose(windowNumber: Int) -> Bool {
+        guard windowNumber == trackedWindowNumber else {
+            return true
+        }
+        return prompt.confirmCloseMainWindow()
+    }
+}
+
+@MainActor
+struct AppKitMainWindowClosePrompt: MainWindowClosePrompting {
+    static let copy = MainWindowClosePromptCopy(
+        title: "关闭 DevHaven？",
+        informativeText: "这会关闭主窗口。",
+        confirmButtonTitle: "关闭窗口",
+        cancelButtonTitle: "取消"
+    )
+
+    func confirmCloseMainWindow() -> Bool {
+        let copy = Self.copy
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = copy.title
+        alert.informativeText = copy.informativeText
+        alert.addButton(withTitle: copy.confirmButtonTitle)
+        alert.addButton(withTitle: copy.cancelButtonTitle)
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }
