@@ -14,6 +14,14 @@ final class WorkspaceHostViewRunConsoleTests: XCTestCase {
         XCTAssertFalse(source.contains("viewModel.revealSettings(section: .scripts)"), "WorkspaceHostView 不应再把配置按钮直接指向脚本模板设置页")
     }
 
+    func testWorkspaceHostMakesBottomConsoleHeightResizable() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("DragGesture()"), "WorkspaceHostView 底部 Run Console 应提供拖拽改高入口")
+        XCTAssertTrue(source.contains("viewModel.updateWorkspaceRunConsolePanelHeight"), "WorkspaceHostView 拖拽底部分隔条后应把新高度写回 ViewModel 运行时状态")
+        XCTAssertTrue(source.contains("WorkspaceRunConsoleLayoutPolicy"), "WorkspaceHostView 应集中收口底部面板高度默认值与 clamp 策略")
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

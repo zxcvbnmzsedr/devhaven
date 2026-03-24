@@ -241,6 +241,41 @@ final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
         XCTAssertEqual(runManager.stoppedProjectPaths, [project.path])
     }
 
+    func testRunConsolePanelHeightLivesInRuntimeStateAndSurvivesVisibilityToggle() throws {
+        let runManager = TestWorkspaceRunManager()
+        let viewModel = makeViewModel(runManager: runManager)
+        let project = makeProject(
+            runConfigurations: [
+                ProjectRunConfiguration(
+                    id: "dev",
+                    name: "Dev",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "npm run dev")
+                )
+            ]
+        )
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        try viewModel.runSelectedWorkspaceConfiguration()
+
+        XCTAssertEqual(
+            viewModel.workspaceRunConsoleState(for: project.path)?.panelHeight,
+            WorkspaceRunConsoleState.defaultPanelHeight,
+            "首次打开底部 Run Console 时应使用统一默认高度"
+        )
+
+        viewModel.updateWorkspaceRunConsolePanelHeight(320, in: project.path)
+        XCTAssertEqual(viewModel.workspaceRunConsoleState(for: project.path)?.panelHeight, 320)
+
+        viewModel.toggleWorkspaceRunConsole(in: project.path)
+        viewModel.toggleWorkspaceRunConsole(in: project.path)
+        XCTAssertEqual(
+            viewModel.workspaceRunConsoleState(for: project.path)?.panelHeight,
+            320,
+            "底部面板收起再展开时，应保留本次 workspace 运行期内调整后的高度"
+        )
+    }
+
     private func makeViewModel(runManager: TestWorkspaceRunManager, store: LegacyCompatStore? = nil) -> NativeAppViewModel {
         NativeAppViewModel(
             store: store ?? LegacyCompatStore(

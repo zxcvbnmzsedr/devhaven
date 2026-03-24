@@ -2200,3 +2200,36 @@ exec bash -lc '''echo ok''''` → `zsh:1: command not found: password=WwS6P6AzfK
 - 验证证据：
   - 定向验证：`swift test --package-path macos --filter 'ScriptTemplateSupportTests|AppSettingsUpdatePreferencesTests|NativeAppViewModelWorkspaceRunTests|WorkspaceRunManagerTests|WorkspaceHostViewRunConsoleTests|WorkspaceScriptConfigurationSheetTests|SettingsViewTests|LegacyCompatStoreTests'` → 24 tests，0 failures。
   - 全量回归：`swift test --package-path macos` → 324 tests，5 skipped，0 failures。
+
+
+## 2026-03-24 底部 Run Console 面板拖拽高度
+
+- [x] 把底部 Run Console 拖拽高度任务登记到 tasks/todo.md，并明确本轮边界
+- [x] 先补失败测试，约束 run console state/host view 持有可调高度与拖拽入口
+- [x] 以最小改动实现底部面板拖拽改高，并将高度保存在 workspace runtime state
+- [x] 运行定向测试与构建验证，并在 Review 记录直接原因、设计诱因、修复方案与证据
+
+## Review（2026-03-24 底部 Run Console 面板拖拽高度）
+
+- 结果：
+  1. workspace 底部 Run Console 现在支持通过顶部拖拽条实时调整高度。
+  2. 调整后的高度保存在 `WorkspaceRunConsoleState` 运行时内存里；同一 workspace 内收起再展开会保留刚才的高度，但不会写入持久化配置。
+  3. 双击拖拽条会把底部面板重置回默认高度。
+- 直接原因：
+  1. `WorkspaceRunConsolePanel.swift` 之前把高度写死为 `220`，没有暴露可调高度输入。
+  2. `WorkspaceHostView.swift` 之前只负责“有无显示底部面板”，没有分隔条、拖拽手势，也没有把高度写回任何 runtime state。
+- 设计层诱因：
+  1. 底部 Run Console 已经有独立的 workspace runtime state，但此前只覆盖 session / selection / visible，没有把“面板尺寸”也纳入同一真相源，导致 UI 只能写死高度。
+  2. 未发现明显系统设计缺陷；主要是布局状态漏建模，而不是状态源分裂。
+- 当前修复方案：
+  1. 在 `WorkspaceRunConsoleState` 中新增 `panelHeight` 与默认高度常量，作为底部面板高度的 runtime 真相源。
+  2. 在 `NativeAppViewModel` 中新增 `updateWorkspaceRunConsolePanelHeight(...)`，由宿主视图把拖拽后的高度写回当前 workspace run state。
+  3. 在 `WorkspaceHostView` 中新增底部拖拽条与 `WorkspaceRunConsoleLayoutPolicy`，负责拖拽手势、默认值与高度 clamp。
+  4. `WorkspaceRunConsolePanel` 不再自己写死高度，改为消费宿主传入的 `height`。
+- 长期改进建议：
+  1. 如果后续用户希望“重启 App 后也记住高度”，再单独评估是否把该值提升到设置层；本轮先保持 runtime-only，避免把纯 UI 偏好扩散进持久化协议。
+  2. 若后续还会新增更多可调 panel，可考虑抽出统一的 panel resize handle/布局策略，避免各处重复实现。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceRunTests|WorkspaceHostViewRunConsoleTests'`（实现前）→ 编译失败，明确提示 `WorkspaceRunConsoleState` 缺少 `panelHeight/defaultPanelHeight`，且 `NativeAppViewModel` 缺少 `updateWorkspaceRunConsolePanelHeight`
+  - 绿灯验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceRunTests|WorkspaceHostViewRunConsoleTests'` → 10 tests，0 failures
+  - 构建验证：`swift build --package-path macos` → `Build complete!`，exit 0

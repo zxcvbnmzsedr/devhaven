@@ -160,21 +160,26 @@ public struct WorkspaceRunSession: Identifiable, Equatable, Sendable {
 }
 
 public struct WorkspaceRunConsoleState: Equatable, Sendable {
+    public static let defaultPanelHeight: Double = 220
+
     public var sessions: [WorkspaceRunSession]
     public var selectedSessionID: String?
     public var selectedConfigurationID: String?
     public var isVisible: Bool
+    public var panelHeight: Double
 
     public init(
         sessions: [WorkspaceRunSession] = [],
         selectedSessionID: String? = nil,
         selectedConfigurationID: String? = nil,
-        isVisible: Bool = false
+        isVisible: Bool = false,
+        panelHeight: Double = WorkspaceRunConsoleState.defaultPanelHeight
     ) {
         self.sessions = sessions
         self.selectedSessionID = selectedSessionID
         self.selectedConfigurationID = selectedConfigurationID
         self.isVisible = isVisible
+        self.panelHeight = panelHeight
     }
 
     public var selectedSession: WorkspaceRunSession? {

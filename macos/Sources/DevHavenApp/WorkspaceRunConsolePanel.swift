@@ -3,6 +3,7 @@ import DevHavenCore
 
 struct WorkspaceRunConsolePanel: View {
     let consoleState: WorkspaceRunConsoleState
+    let height: CGFloat
     let onSelectSession: (String) -> Void
     let onClear: () -> Void
     let onOpenLog: () -> Void
@@ -17,7 +18,7 @@ struct WorkspaceRunConsolePanel: View {
             footer
         }
         .frame(maxWidth: .infinity)
-        .frame(height: 220)
+        .frame(height: height)
         .background(NativeTheme.panel)
     }
 

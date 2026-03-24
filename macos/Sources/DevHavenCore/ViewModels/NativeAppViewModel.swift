@@ -496,6 +496,16 @@ public final class NativeAppViewModel {
         workspaceRunConsoleStateByProjectPath[projectPath] = state
     }
 
+    public func updateWorkspaceRunConsolePanelHeight(_ height: Double, in projectPath: String? = nil) {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              var state = workspaceRunConsoleStateByProjectPath[projectPath]
+        else {
+            return
+        }
+        state.panelHeight = height
+        workspaceRunConsoleStateByProjectPath[projectPath] = state
+    }
+
     public func clearSelectedWorkspaceRunConsoleBuffer(in projectPath: String? = nil) {
         guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
               var state = workspaceRunConsoleStateByProjectPath[projectPath],
