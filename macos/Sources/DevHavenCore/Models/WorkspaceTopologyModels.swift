@@ -65,12 +65,12 @@ public struct WorkspacePaneTree: Equatable, Sendable {
         case split(WorkspaceSplitState)
     }
 
-    public enum PathComponent: Equatable, Sendable {
+    public enum PathComponent: Hashable, Sendable {
         case left
         case right
     }
 
-    public struct Path: Equatable, Sendable {
+    public struct Path: Hashable, Sendable {
         public var components: [PathComponent]
 
         public init(components: [PathComponent]) {
@@ -86,9 +86,36 @@ public struct WorkspacePaneTree: Equatable, Sendable {
         }
     }
 
-    struct LeafFrame {
-        var pane: WorkspacePaneState
-        var frame: CGRect
+    public struct LeafFrame: Equatable, Sendable {
+        public var pane: WorkspacePaneState
+        public var frame: CGRect
+
+        public init(pane: WorkspacePaneState, frame: CGRect) {
+            self.pane = pane
+            self.frame = frame
+        }
+    }
+
+    public struct SplitHandle: Equatable, Sendable {
+        public var path: Path
+        public var direction: WorkspaceSplitAxis
+        public var splitBounds: CGRect
+        public var visibleFrame: CGRect
+        public var hitFrame: CGRect
+
+        public init(
+            path: Path,
+            direction: WorkspaceSplitAxis,
+            splitBounds: CGRect,
+            visibleFrame: CGRect,
+            hitFrame: CGRect
+        ) {
+            self.path = path
+            self.direction = direction
+            self.splitBounds = splitBounds
+            self.visibleFrame = visibleFrame
+            self.hitFrame = hitFrame
+        }
     }
 
     public var root: Node?
@@ -657,7 +684,7 @@ extension WorkspacePaneTree.Node {
         }
     }
 
-    func leafFrames(in frame: CGRect) -> [WorkspacePaneTree.LeafFrame] {
+    public func leafFrames(in frame: CGRect) -> [WorkspacePaneTree.LeafFrame] {
         switch self {
         case let .leaf(pane):
             return [WorkspacePaneTree.LeafFrame(pane: pane, frame: frame)]
@@ -674,6 +701,122 @@ extension WorkspacePaneTree.Node {
                 let bottomFrame = CGRect(x: frame.minX, y: frame.minY + topHeight, width: frame.width, height: frame.height - topHeight)
                 return split.left.leafFrames(in: topFrame) + split.right.leafFrames(in: bottomFrame)
             }
+        }
+    }
+
+    public func splitHandles(
+        in frame: CGRect,
+        path: WorkspacePaneTree.Path,
+        splitterVisibleSize: CGFloat = 1,
+        splitterInvisibleSize: CGFloat = 6
+    ) -> [WorkspacePaneTree.SplitHandle] {
+        switch self {
+        case .leaf:
+            return []
+        case let .split(split):
+            let handle = WorkspacePaneTree.SplitHandle(
+                path: path,
+                direction: split.direction,
+                splitBounds: frame,
+                visibleFrame: WorkspacePaneTree.visibleDividerFrame(
+                    in: frame,
+                    direction: split.direction,
+                    ratio: split.ratio,
+                    visibleSize: splitterVisibleSize
+                ),
+                hitFrame: WorkspacePaneTree.hitDividerFrame(
+                    in: frame,
+                    direction: split.direction,
+                    ratio: split.ratio,
+                    visibleSize: splitterVisibleSize,
+                    invisibleSize: splitterInvisibleSize
+                )
+            )
+
+            switch split.direction {
+            case .horizontal:
+                let leftWidth = frame.width * split.ratio
+                let leftFrame = CGRect(x: frame.minX, y: frame.minY, width: leftWidth, height: frame.height)
+                let rightFrame = CGRect(x: frame.minX + leftWidth, y: frame.minY, width: frame.width - leftWidth, height: frame.height)
+                return [handle]
+                    + split.left.splitHandles(
+                        in: leftFrame,
+                        path: path.appending(.left),
+                        splitterVisibleSize: splitterVisibleSize,
+                        splitterInvisibleSize: splitterInvisibleSize
+                    )
+                    + split.right.splitHandles(
+                        in: rightFrame,
+                        path: path.appending(.right),
+                        splitterVisibleSize: splitterVisibleSize,
+                        splitterInvisibleSize: splitterInvisibleSize
+                    )
+            case .vertical:
+                let topHeight = frame.height * split.ratio
+                let topFrame = CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: topHeight)
+                let bottomFrame = CGRect(x: frame.minX, y: frame.minY + topHeight, width: frame.width, height: frame.height - topHeight)
+                return [handle]
+                    + split.left.splitHandles(
+                        in: topFrame,
+                        path: path.appending(.left),
+                        splitterVisibleSize: splitterVisibleSize,
+                        splitterInvisibleSize: splitterInvisibleSize
+                    )
+                    + split.right.splitHandles(
+                        in: bottomFrame,
+                        path: path.appending(.right),
+                        splitterVisibleSize: splitterVisibleSize,
+                        splitterInvisibleSize: splitterInvisibleSize
+                    )
+            }
+        }
+    }
+}
+
+private extension WorkspacePaneTree {
+    static func dividerPosition(
+        in frame: CGRect,
+        direction: WorkspaceSplitAxis,
+        ratio: Double,
+        visibleSize: CGFloat
+    ) -> CGFloat {
+        switch direction {
+        case .horizontal:
+            return frame.minX + (frame.width * ratio) - (visibleSize / 2)
+        case .vertical:
+            return frame.minY + (frame.height * ratio) - (visibleSize / 2)
+        }
+    }
+
+    static func visibleDividerFrame(
+        in frame: CGRect,
+        direction: WorkspaceSplitAxis,
+        ratio: Double,
+        visibleSize: CGFloat
+    ) -> CGRect {
+        switch direction {
+        case .horizontal:
+            let x = dividerPosition(in: frame, direction: direction, ratio: ratio, visibleSize: visibleSize)
+            return CGRect(x: x, y: frame.minY, width: visibleSize, height: frame.height)
+        case .vertical:
+            let y = dividerPosition(in: frame, direction: direction, ratio: ratio, visibleSize: visibleSize)
+            return CGRect(x: frame.minX, y: y, width: frame.width, height: visibleSize)
+        }
+    }
+
+    static func hitDividerFrame(
+        in frame: CGRect,
+        direction: WorkspaceSplitAxis,
+        ratio: Double,
+        visibleSize: CGFloat,
+        invisibleSize: CGFloat
+    ) -> CGRect {
+        let visibleFrame = visibleDividerFrame(in: frame, direction: direction, ratio: ratio, visibleSize: visibleSize)
+        switch direction {
+        case .horizontal:
+            return visibleFrame.insetBy(dx: -invisibleSize / 2, dy: 0)
+        case .vertical:
+            return visibleFrame.insetBy(dx: 0, dy: -invisibleSize / 2)
         }
     }
 }

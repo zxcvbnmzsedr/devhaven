@@ -119,6 +119,12 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     func prepareForContainerReuse() {
+        GhosttySurfaceLifecycleDiagnostics.shared.recordPrepareForContainerReuse(
+            request: request,
+            hasWindow: hasAttachedWindow,
+            firstResponderOwned: ownsWindowFirstResponder,
+            isSurfaceFocused: isCurrentlyFocused
+        )
         cancelPendingFocusRequest()
         resignOwnedFirstResponderIfNeeded()
         focused = false
@@ -631,12 +637,23 @@ final class GhosttyTerminalSurfaceView: NSView {
         guard let surface else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
         ghostty_surface_set_content_scale(surface, scale, scale)
+        let lastBackingSize = attachmentState.lastBackingSize
         let backingSize = convertToBacking(bounds.size)
-        guard let decision = GhosttySurfaceResizePolicy.resizeDecision(
-            lastBackingSize: attachmentState.lastBackingSize,
+        let decision = GhosttySurfaceResizePolicy.resizeDecision(
+            lastBackingSize: lastBackingSize,
             newBackingSize: backingSize,
             cellSizeInPixels: backingCellSizeInPixels
-        ) else {
+        )
+        GhosttySurfaceLifecycleDiagnostics.shared.recordResizeDecision(
+            request: request,
+            lastBackingSize: lastBackingSize,
+            newBackingSize: backingSize,
+            cellSizeInPixels: backingCellSizeInPixels,
+            applied: decision != nil,
+            targetWidth: decision?.width,
+            targetHeight: decision?.height
+        )
+        guard let decision else {
             return
         }
         attachmentState.lastBackingSize = backingSize
@@ -721,15 +738,30 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     private func resignOwnedFirstResponderIfNeeded() {
-        guard let window,
-              let firstResponder = window.firstResponder as? NSView
-        else {
+        guard let window else {
             return
         }
-        guard firstResponder === self || firstResponder.isDescendant(of: self) else {
+        guard ownsWindowFirstResponder else {
             return
         }
         _ = window.makeFirstResponder(nil)
+    }
+
+    var hasAttachedWindow: Bool {
+        window != nil
+    }
+
+    var windowIsKeyWindowForDiagnostics: Bool {
+        window?.isKeyWindow ?? false
+    }
+
+    var ownsWindowFirstResponder: Bool {
+        guard let window,
+              let firstResponder = window.firstResponder as? NSView
+        else {
+            return false
+        }
+        return firstResponder === self || firstResponder.isDescendant(of: self)
     }
 
     func debugVisibleText() -> String {

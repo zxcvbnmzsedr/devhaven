@@ -151,6 +151,110 @@
 - [x] 更新 `AGENTS.md` 中 session-restore 存储语义描述
 - [x] 运行定向测试并在 Review 追加直接原因、设计诱因、修复方案与验证证据
 
+## 2026-03-24 聚焦 pane 分屏后原 pane 消失回归排查
+
+- [x] 回看 2026-03-20 的历史修复与当前 Ghostty/Workspace 代码差异，确认最可能的回归入口
+- [x] 先补能稳定复现“聚焦 pane 分屏后原 pane 消失”的失败测试，判断是 subtree remount 还是 surface attach/focus 复用问题
+- [x] 按失败测试实施最小修复，并同步必要文档/注释
+- [x] 运行定向验证并在本文件追加 Review（包含直接原因、设计层诱因、修复方案、长期建议、证据）
+
+## Review（2026-03-24 聚焦 pane 分屏后原 pane 消失回归排查）
+
+- 结果：
+  1. 已定位并修复这次“聚焦 pane 后再分屏，原 pane 画面消失”的回归；问题不是 2026-03-20 修掉的 `WorkspaceSplitTreeView` structural remount 又被打开，而是 **已有 surface 在 representable 重新挂载时没有先走 container reuse 协议**。
+  2. 现在 `makeNSView` 阶段会显式按“新容器附着”路径拿 surface，确保已有 `GhosttyTerminalSurfaceView` 在被复用到新的 split/container 前先执行 `prepareForContainerReuse()`；而普通 `updateNSView` 仍保持轻量复用，不会在每次更新都误做 reuse reset。
+- 直接原因：
+  1. `GhosttySurfaceRepresentableUpdatePolicy.resolvedSurfaceView(...)` 在 2026-03-21 的加固改动里为了避免 `updateNSView` 反复触发 reuse 副作用，改成了 `model.currentSurfaceView ?? model.acquireSurfaceView(...)`。
+  2. 这个改动同时覆盖了 `makeNSView` 路径，导致当 SwiftUI 因 split/tree 重排重新创建 representable 容器时，如果 model 已经持有 surface，就会直接返回 `currentSurfaceView`，从而 **绕过 `GhosttySurfaceHostModel.acquireSurfaceView()` 里唯一负责的 `prepareForContainerReuse()`**。
+  3. 一旦旧 surface 此时正持有窗口 `firstResponder`，它就会带着旧焦点身份直接被重挂到新的 split 容器；用户看到的表象就是“原 pane 屏幕空了/像消失了一样”。
+- 设计层诱因：
+  1. reuse 语义本来集中收口在 `GhosttySurfaceHostModel.acquireSurfaceView()`，但后续 representable update policy 为了规避另一类问题，直接旁路读取 `currentSurfaceView`，把“拿 surface”和“准备复用 surface”拆成了两条不一致的入口。
+  2. 这属于**复用协议被 helper 层绕开**的问题：调用方只想“拿一个 view”，却无意中跳过了附着前必须执行的状态迁移。未发现更大的系统设计缺陷，但 reuse protocol 的入口此前不够单一。
+- 当前修复方案：
+  1. 给 `GhosttySurfaceRepresentableUpdatePolicy.resolvedSurfaceView(...)` 增加 `prepareForAttachment` 参数，明确区分“新容器附着”与“同容器 update”两类调用。
+  2. `GhosttyTerminalView.makeNSView` 传 `prepareForAttachment: true`，强制走 `model.acquireSurfaceView(...)`，确保已有 surface 被复用到新 split/container 前一定先执行 `prepareForContainerReuse()`。
+  3. `GhosttyTerminalView.updateNSView` 传 `prepareForAttachment: false`，继续沿用轻量路径，避免每次 SwiftUI update 都误触发 reuse reset。
+  4. 新增 `GhosttySurfaceRepresentableUpdatePolicyTests.testResolvedSurfaceViewPreparesExistingSurfaceForContainerReuse`，直接复现“已有 surface 已拿到 firstResponder，再次解析代表 view 时应先释放旧 responder”的场景。
+- 长期改进建议：
+  1. 后续凡是“surface 复用 / 容器重挂载”的逻辑，都应继续收口在 `GhosttySurfaceHostModel` 这一层；helper 可以决定“这次是不是 attachment”，但不应再直接旁路 surface reuse protocol。
+  2. 若后续还要继续细分 representable 的 make/update 行为，建议把“attachment lifecycle”抽成更显式的 API（例如 `surfaceViewForAttachment` / `surfaceViewForUpdate`），避免布尔参数语义再次被误用。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter GhosttySurfaceRepresentableUpdatePolicyTests/testResolvedSurfaceViewPreparesExistingSurfaceForContainerReuse` → 失败，断言已有 surface 在 reuse 前没有释放 `firstResponder`，与用户“聚焦 pane 后分屏原 pane 消失”的现象一致。
+  - 绿灯：`swift test --package-path macos --filter GhosttySurfaceRepresentableUpdatePolicyTests` → 4 tests，0 failures。
+  - 回归验证：`swift test --package-path macos --filter 'GhosttySurfaceRepresentableUpdatePolicyTests|GhosttySurfaceHostTests|WorkspaceSplitTreeViewKeyPolicyTests|WorkspaceTerminalSessionStoreTests|WorkspaceTopologyTests|GhosttySurfaceScrollViewTests'` → 33 tests，0 failures，5 skipped。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+
+## 2026-03-24 为 Ghostty split/attach/focus/reuse 链路补运行期日志
+
+- [x] 梳理现有 diagnostics 模式并确认最小日志边界（make/update/acquire/reuse/attach/focus）
+- [x] 先补失败测试，约束 diagnostics 事件与关键调用点都存在
+- [x] 实现 unified log 与调用点接线，并同步 AGENTS / lessons
+- [x] 运行定向验证并在本文件追加 Review 证据
+
+## 2026-03-24 按 A 方案重构 workspace 分屏渲染为扁平 pane 布局
+
+- [x] 写实现计划文档，明确扁平 pane 布局 + 独立 divider overlay 的落地路径
+- [x] 先补失败测试，覆盖 split handle/path 纯布局能力与 `WorkspaceSplitTreeView` 扁平渲染约束
+- [x] 以最小改动实现扁平 pane 渲染，避免旧 pane 因递归宿主重建被重复挂载
+- [x] 同步更新 AGENTS / lessons，并完成定向验证与 Review 记录
+
+## Review（2026-03-24 按 A 方案重构 workspace 分屏渲染为扁平 pane 布局）
+
+- 结果：
+  1. 已按 A 方案把 `WorkspaceSplitTreeView` 从“递归 split 容器里嵌套 pane host”改成“扁平 leaf pane + 独立 split handle overlay”。
+  2. 旧 pane 在 split 后现在只改变 frame，不再因为从 root leaf 迁移到 child leaf 而创建第二个宿主去争抢同一个 `GhosttyTerminalSurfaceView`。
+  3. 旧的 `WorkspaceSplitTreeViewKeyPolicy` 已删除；当前不再依赖 subtree remount key 策略兜底，而是直接消除“pane host 跟着 split 树迁移”的结构性诱因。
+- 直接原因：
+  1. 现场 unified log 明确显示：同一个旧 pane 在一次 split 事务里会连续触发多次 `representable-make` + `acquire reused=true`；
+  2. 这说明旧 pane 的 SwiftUI 宿主在 split 重排时被重复创建，多个宿主去竞争同一个 surface，最终旧位置只剩空壳，看起来就像“原 pane 消失”。
+- 设计层诱因：
+  1. 旧实现让 `WorkspaceSplitTreeView` 递归渲染 `SubtreeView -> WorkspaceSplitView -> WorkspaceTerminalPaneView`；当 leaf 变成 split child 时，pane host 的父层级也跟着变。
+  2. 对普通 SwiftUI 视图这问题不大，但对“一个 pane 对应一个长生命周期 NSView surface”的 Ghostty 宿主，这会把树结构变化误放大成宿主层级变化。未发现更大的系统设计缺陷，但 pane 宿主边界此前没有从 split 树里剥离。
+- 当前方案：
+  1. 在 `WorkspacePaneTree.Node` 新增公开的 `splitHandles(in:path:...)`，和已有 `leafFrames(in:)` 一起作为扁平布局输入；
+  2. `WorkspaceSplitTreeView` 现在用 `GeometryReader + ZStack` 平铺 `root.leafFrames(in: canvasFrame)`；
+  3. split divider 改为独立 `SplitHandleOverlay`，拖拽时按对应 `splitBounds + path` 回写 `onSetSplitRatio(path, ratio)`，双击仍走 `onEqualize(tab.focusedPaneId)`；
+  4. 删除 `WorkspaceSplitTreeViewKeyPolicy.swift` 与其测试，避免保留过时的 subtree-remount 兜底路径。
+- 长期改进建议：
+  1. 后续如果还出现 pane 消失，优先继续看 unified log 中是否仍有“同一 pane 同轮多次 `representable-make`”现象；如果没有，再回到 focus/resize 分支继续排；
+  2. 若未来还要增强 split UX，可继续把 divider drag math 抽到 Core 纯布局 helper，但当前先保持最少修改即可。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceTopologyTests|WorkspaceSplitTreeViewFlatLayoutTests'`（实现前）→ 编译失败，提示 `splitHandles` 不存在；随后 source-based 测试也明确卡住 `WorkspaceSplitTreeView` 仍是递归 `SubtreeView`。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceTopologyTests|WorkspaceSplitTreeViewFlatLayoutTests'` → 12 tests，0 failures。
+  - 回归验证：`swift test --package-path macos --filter 'WorkspaceTopologyTests|WorkspaceSplitTreeViewFlatLayoutTests|WorkspaceSplitViewTests|GhosttySurfaceRepresentableUpdatePolicyTests|GhosttySurfaceLifecycleLoggingIntegrationTests|GhosttySurfaceHostTests|WorkspaceTerminalSessionStoreTests'` → 34 tests，0 failures，5 skipped。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+  - 说明：本轮尚未包含新的用户现场 GUI 复验，因此“代码/测试侧已落地”与“现场已确认彻底不复现”需继续分开表述。
+
+## Review（2026-03-24 为 Ghostty split/attach/focus/reuse 链路补运行期日志）
+
+- 结果：
+  1. 已为 Ghostty 分屏相关的关键生命周期边界补齐结构化 unified log，覆盖 `makeNSView`、`updateNSView`、`acquireSurfaceView`、`prepareForContainerReuse`、`surfaceViewDidAttach`、`requestFocusIfNeeded`、`restoreWindowResponderIfNeeded` 与 `updateSurfaceMetrics/resize decision`。
+  2. 新日志统一收口到 `GhosttySurfaceLifecycleDiagnostics`，使用 `workspace/tab/pane/surface` 标识 + focus/attachment/resize 状态字段，后续即使问题是“过一段时间才坏”，也能用现场 unified log 还原当次链路。
+- 直接原因：
+  1. 当前仓库已有 `WorkspaceLaunchDiagnostics`，但它主要覆盖“进入工作区 / 创建 surface”这类首开链路；
+  2. 这次 pane 消失问题真正需要排查的是 **steady-state 生命周期**：某次 split/update/reuse/attach/focus/resize 到底走了哪条路径、是否跳过了 reuse protocol、是否请求了焦点、是否被 resize policy 跳过；
+  3. 在没有这层运行期日志时，后续即使用户再次复现，也很难区分是 `makeNSView` 重建、`updateNSView` swap、旧 responder 没释放，还是 backing size / resize policy 异常。
+- 设计层诱因：
+  1. 现有 diagnostics 较偏“入口态”和“导入态”，对 Ghostty surface 这类长生命周期 UI primitive 缺少持续观测点；
+  2. 未发现明显系统设计缺陷，但诊断层此前没有把“surface steady-state lifecycle”建模成独立日志面，导致回归问题只能靠代码猜。
+- 当前方案：
+  1. 新增 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceLifecycleDiagnostics.swift`，统一输出 `[ghostty-surface] ...` 日志；
+  2. `GhosttyTerminalView` 记录 representable make/update；
+  3. `GhosttySurfaceHostModel` 记录 acquire/attach/focus-request/restore-responder；
+  4. `GhosttyTerminalSurfaceView` 记录 prepare-reuse 与 resize decision；
+  5. 日志默认 **不记录终端可见文本**，只记录结构化状态，降低噪音与敏感信息泄漏风险。
+- 长期改进建议：
+  1. 若后续用户再次给到 unified log，可优先按 `pane` / `surface` 把一条完整事件链串起来，再决定是否需要更细的单次事件日志；
+  2. 如果未来确认 resize 是高频但低价值噪音，可再给 `GhosttySurfaceLifecycleDiagnostics` 增加采样或 debug 开关；当前阶段先保证可排障优先。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'GhosttySurfaceLifecycleDiagnosticsTests|GhosttySurfaceLifecycleLoggingIntegrationTests'`（实现前）→ 编译失败，明确提示 `GhosttySurfaceLifecycleDiagnostics` / `recordResizeDecision` 等符号不存在。
+  - 绿灯：`swift test --package-path macos --filter 'GhosttySurfaceLifecycleDiagnosticsTests|GhosttySurfaceLifecycleLoggingIntegrationTests'` → 6 tests，0 failures。
+  - 回归验证：`swift test --package-path macos --filter 'GhosttySurfaceLifecycleDiagnosticsTests|GhosttySurfaceLifecycleLoggingIntegrationTests|GhosttySurfaceRepresentableUpdatePolicyTests|GhosttySurfaceHostTests|GhosttySurfaceScrollViewTests|WorkspaceSplitTreeViewKeyPolicyTests|WorkspaceTerminalSessionStoreTests|WorkspaceTopologyTests'` → 39 tests，0 failures，5 skipped。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+
 ## Review（2026-03-23 pane 文本回退链修复）
 
 - 结果：
@@ -1907,4 +2011,3 @@
   - 提交结果：`git commit -m "fix(ghostty): normalize clicked local paths before open"` → 生成提交 `f3f0560`
   - 推送结果：`git push -u origin fix/issue-42-ghostty-open-url` → 远端分支创建成功并建立 tracking
   - PR：`gh pr create --base main --head fix/issue-42-ghostty-open-url ...` → 返回 `https://github.com/zxcvbnmzsedr/devhaven/pull/43`
-

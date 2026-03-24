@@ -4,8 +4,12 @@ enum GhosttySurfaceRepresentableUpdatePolicy {
     @MainActor
     static func resolvedSurfaceView(
         for model: GhosttySurfaceHostModel,
-        preferredFocus: Bool
+        preferredFocus: Bool,
+        prepareForAttachment: Bool
     ) -> GhosttyTerminalSurfaceView {
-        model.currentSurfaceView ?? model.acquireSurfaceView(preferredFocus: preferredFocus)
+        if prepareForAttachment {
+            return model.acquireSurfaceView(preferredFocus: preferredFocus)
+        }
+        return model.currentSurfaceView ?? model.acquireSurfaceView(preferredFocus: preferredFocus)
     }
 }

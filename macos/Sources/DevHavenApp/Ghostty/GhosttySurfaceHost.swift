@@ -418,6 +418,12 @@ final class GhosttySurfaceHostModel: ObservableObject {
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
         _ = preferredFocus
         if let ownedSurfaceView {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordSurfaceAcquire(
+                request: request,
+                reused: true,
+                hasWindow: ownedSurfaceView.hasAttachedWindow,
+                firstResponderOwned: ownedSurfaceView.ownsWindowFirstResponder
+            )
             ownedSurfaceView.prepareForContainerReuse()
             hasPreparedSurfaceView = true
             workspaceLaunchDiagnostics.recordSurfaceReused(request: request)
@@ -491,6 +497,12 @@ final class GhosttySurfaceHostModel: ObservableObject {
             initializationError = error.localizedDescription
             processState = .failed
         } else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordSurfaceAcquire(
+                request: request,
+                reused: false,
+                hasWindow: view.hasAttachedWindow,
+                firstResponderOwned: view.ownsWindowFirstResponder
+            )
             workspaceLaunchDiagnostics.recordSurfaceCreationFinished(
                 request: request,
                 status: .success,
@@ -508,6 +520,13 @@ final class GhosttySurfaceHostModel: ObservableObject {
         guard let ownedSurfaceView else {
             return
         }
+        GhosttySurfaceLifecycleDiagnostics.shared.recordSurfaceAttached(
+            request: request,
+            preferredFocus: preferredFocus,
+            hasWindow: ownedSurfaceView.hasAttachedWindow,
+            windowIsKey: ownedSurfaceView.windowIsKeyWindowForDiagnostics,
+            firstResponderOwned: ownedSurfaceView.ownsWindowFirstResponder
+        )
         applyCachedSurfaceActivity(to: ownedSurfaceView)
         requestFocusIfNeeded(for: ownedSurfaceView, preferredFocus: preferredFocus)
     }
@@ -536,15 +555,43 @@ final class GhosttySurfaceHostModel: ObservableObject {
 
     func restoreWindowResponderIfNeeded() {
         guard lastSurfaceIsFocused, let ownedSurfaceView else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: currentSurfaceView?.hasAttachedWindow ?? false,
+                firstResponderOwned: currentSurfaceView?.ownsWindowFirstResponder ?? false,
+                performed: false,
+                reason: "surface-not-focused"
+            )
             return
         }
         guard let window = ownedSurfaceView.window else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: false,
+                firstResponderOwned: false,
+                performed: false,
+                reason: "window-missing"
+            )
             return
         }
         guard window.firstResponder !== ownedSurfaceView else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: true,
+                firstResponderOwned: true,
+                performed: false,
+                reason: "already-owned"
+            )
             return
         }
         window.makeFirstResponder(ownedSurfaceView)
+        GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+            request: request,
+            hasWindow: true,
+            firstResponderOwned: ownedSurfaceView.ownsWindowFirstResponder,
+            performed: true,
+            reason: "restored"
+        )
     }
 
     func releaseSurface() {
@@ -576,12 +623,22 @@ final class GhosttySurfaceHostModel: ObservableObject {
         for view: GhosttyTerminalSurfaceView,
         preferredFocus: Bool
     ) {
-        guard GhosttySurfaceFocusRequestPolicy.shouldRequestFocus(
+        let currentEventType = NSApp.currentEvent?.type
+        let shouldRequest = GhosttySurfaceFocusRequestPolicy.shouldRequestFocus(
             preferredFocus: preferredFocus,
             wasPreferredFocus: lastPreferredFocus,
             isSurfaceFocused: view.isCurrentlyFocused,
-            currentEventType: NSApp.currentEvent?.type
-        ) else {
+            currentEventType: currentEventType
+        )
+        GhosttySurfaceLifecycleDiagnostics.shared.recordFocusRequestDecision(
+            request: request,
+            preferredFocus: preferredFocus,
+            wasPreferredFocus: lastPreferredFocus,
+            isSurfaceFocused: view.isCurrentlyFocused,
+            currentEventType: currentEventType.map { String(describing: $0) },
+            shouldRequest: shouldRequest
+        )
+        guard shouldRequest else {
             lastPreferredFocus = preferredFocus
             return
         }

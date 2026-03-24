@@ -102,3 +102,29 @@
   3. 真正执行时再向 context 解析当前 active 对象；
   4. teardown 开始时先 invalidation，让晚到回调统一 no-op。
 - 当一个长任务是由局部 `.sheet` 发起、却要由全局 overlay 展示进度时，不能让 sheet 一直 await 到后台任务完成；更稳的做法是先完成立即可失败的前置校验与占坑，再把耗时流程切到后台，让 sheet 立即退出，否则全局进度层会被 sheet 压住，用户体感就是“进度弹窗没置前”。
+
+## 2026-03-24 representable helper 不能绕开 Ghostty surface 的 container reuse 协议
+
+- `GhosttySurfaceHostModel.acquireSurfaceView()` 不只是“拿一个现成 view”，它还负责在已有 surface 被复用到新容器前执行 `prepareForContainerReuse()`；这一步会释放旧 `firstResponder`，并清掉 attach-sensitive cache。
+- 如果上层 helper 为了“避免 update 副作用”直接返回 `model.currentSurfaceView`，就会把 reuse protocol 绕开；当 SwiftUI 因 split/tree 重排重新创建 representable 时，旧 surface 会带着旧 responder 身份直接挂到新 split 容器，用户侧就可能看到“原 pane 画面空白/消失”。
+- 更稳的做法是显式区分两类路径：
+  1. **新容器附着**：必须走 `acquireSurfaceView()`，确保 reuse protocol 完整执行；
+  2. **同容器 update**：才允许直接复用现有 `currentSurfaceView`，避免每帧 update 都误做 reset。
+
+## 2026-03-24 Ghostty 排障日志要打在“生命周期边界”，不要直接刷可见文本
+
+- 对这类“过一段时间才坏、现场不稳定复现”的 UI/终端问题，最有价值的不是整屏可见文本，而是 **make/update/acquire/reuse/attach/focus/resize** 这些边界上的结构化状态。
+- 更稳的日志面应至少回答：
+  1. 这次是 `makeNSView` 还是 `updateNSView`；
+  2. 当前 surface 是新建还是复用；
+  3. reuse 前是否仍持有旧 `firstResponder`；
+  4. attach 时窗口/焦点状态是什么；
+  5. 焦点策略为什么请求/不请求；
+  6. `ghostty_surface_set_size` 这次是应用了还是被 policy 跳过。
+- 默认不要把终端可见文本写进 unified log；一方面噪音太大，另一方面容易引入隐私和误导。先把生命周期状态打清楚，后续现场再按 run id / pane id / surface id 还原链路，效率更高。
+
+## 2026-03-24 terminal host 不要跟着 split 树父层级迁移
+
+- 对嵌入式终端这类“一个 pane 对应一个长生命周期宿主 view”的场景，`leaf -> split.left/right` 这种树结构变化不能直接映射成宿主 view 层级变化；否则 SwiftUI 在 split 事务里可能短时间同时创建旧 leaf host 和新 child host，最终两个 host 去抢同一个 terminal surface。
+- 更稳的做法是：让 `WorkspacePaneTree` 只负责产出 **leaf frame + split handle**，真正的 pane host 永远以 `pane.id` 为稳定键在同一平面里渲染；split 后旧 pane 只改 frame，不改宿主层级。
+- 如果现场日志里出现“同一个 pane 在一次 split 中连续多次 `representable-make` / `acquire reused=true`”，优先怀疑的不是 focus，而是 **同一个 pane 被重复宿主化**。

@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 @testable import DevHavenCore
 
 final class WorkspaceTopologyTests: XCTestCase {
@@ -122,5 +123,42 @@ final class WorkspaceTopologyTests: XCTestCase {
 
         let identityAfter = session.selectedTab?.tree.structuralIdentity
         XCTAssertEqual(identityBefore, identityAfter)
+    }
+
+    func testSplitHandlesExposeRootSplitPathAndDirection() throws {
+        var session = WorkspaceSessionState(projectPath: "/tmp/devhaven", workspaceId: "workspace:test")
+        _ = session.splitFocusedPane(direction: .right)
+
+        let root = try XCTUnwrap(session.selectedTab?.tree.root)
+        let handles = root.splitHandles(
+            in: CGRect(x: 0, y: 0, width: 100, height: 60),
+            path: WorkspacePaneTree.Path(components: [])
+        )
+
+        XCTAssertEqual(handles.count, 1)
+        XCTAssertEqual(handles.first?.path, WorkspacePaneTree.Path(components: []))
+        XCTAssertEqual(handles.first?.direction, .horizontal)
+        XCTAssertEqual(handles.first?.splitBounds, CGRect(x: 0, y: 0, width: 100, height: 60))
+    }
+
+    func testNestedSplitHandlesPreserveChildPath() throws {
+        var session = WorkspaceSessionState(projectPath: "/tmp/devhaven", workspaceId: "workspace:test")
+        let originalPaneID = try XCTUnwrap(session.selectedPane?.id)
+        _ = session.splitFocusedPane(direction: .right)
+        session.focusPane(originalPaneID)
+        _ = session.splitFocusedPane(direction: .down)
+
+        let root = try XCTUnwrap(session.selectedTab?.tree.root)
+        let handles = root.splitHandles(
+            in: CGRect(x: 0, y: 0, width: 120, height: 80),
+            path: WorkspacePaneTree.Path(components: [])
+        )
+
+        XCTAssertEqual(handles.count, 2)
+        XCTAssertEqual(handles.map(\.path), [
+            WorkspacePaneTree.Path(components: []),
+            WorkspacePaneTree.Path(components: [.left]),
+        ])
+        XCTAssertEqual(handles.map(\.direction), [.horizontal, .vertical])
     }
 }
