@@ -95,6 +95,9 @@ struct DevHavenApp: App {
             }
 
             WorkspaceTerminalCommands()
+            WorkspaceProjectCommands(
+                shortcut: viewModel.snapshot.appState.settings.workspaceOpenProjectShortcut
+            )
         }
     }
 }

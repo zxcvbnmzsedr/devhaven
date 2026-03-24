@@ -49,6 +49,14 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertTrue(source.contains("收到通知时将 worktree 置顶"), "设置页应允许用户控制通知后 worktree 置顶行为")
     }
 
+    func testGeneralSettingsExposeWorkspaceOpenProjectShortcutControls() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("打开项目快捷键"), "设置页常规项应暴露 workspace 打开项目快捷键配置入口")
+        XCTAssertTrue(source.contains("workspaceOpenProjectShortcut"), "设置页应维护打开项目快捷键的本地编辑状态")
+        XCTAssertTrue(source.contains("workspaceOpenProjectShortcut: workspaceOpenProjectShortcut"), "设置页保存时应写回打开项目快捷键配置")
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

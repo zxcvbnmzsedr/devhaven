@@ -411,8 +411,14 @@ final class GhosttyTerminalSurfaceView: NSView {
         guard let surface else { return false }
         guard focused else { return false }
 
+        if GhosttySurfaceMenuShortcutRoutingPolicy.shouldAttemptMenuBeforeBindings(for: event),
+           let menu = NSApp.mainMenu,
+           menu.performKeyEquivalent(with: event) {
+            return true
+        }
+
         if let bindingFlags = bindingFlags(for: event, surface: surface) {
-            if shouldAttemptMenu(for: bindingFlags),
+            if GhosttySurfaceMenuShortcutRoutingPolicy.shouldAttemptMenuAfterBinding(bindingFlags),
                let menu = NSApp.mainMenu,
                menu.performKeyEquivalent(with: event) {
                 return true
@@ -878,14 +884,6 @@ final class GhosttyTerminalSurfaceView: NSView {
             lastPerformKeyEvent = event.timestamp
             return nil
         }
-    }
-
-    private func shouldAttemptMenu(for flags: ghostty_binding_flags_e) -> Bool {
-        let raw = flags.rawValue
-        let isAll = (raw & GHOSTTY_BINDING_FLAGS_ALL.rawValue) != 0
-        let isPerformable = (raw & GHOSTTY_BINDING_FLAGS_PERFORMABLE.rawValue) != 0
-        let isConsumed = (raw & GHOSTTY_BINDING_FLAGS_CONSUMED.rawValue) != 0
-        return !isAll && !isPerformable && isConsumed
     }
 
     func performBindingAction(_ action: String) {

@@ -58,6 +58,19 @@ final class WorkspaceShellViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceShellProvidesFocusedOpenProjectPickerAction() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(".focusedSceneValue(\\.openWorkspaceProjectPickerAction, openWorkspaceProjectPickerAction)"),
+            "WorkspaceShellView 应向当前 scene 注入打开项目命令动作，供应用菜单快捷键路由"
+        )
+        XCTAssertTrue(
+            source.contains("private var openWorkspaceProjectPickerAction: (() -> Void)?"),
+            "WorkspaceShellView 应把打开项目命令封装为 focused action，而不是把命令状态散落到菜单层"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

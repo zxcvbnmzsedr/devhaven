@@ -7,6 +7,7 @@ struct WorkspaceProjectPickerView: View {
     let onClose: () -> Void
 
     @State private var searchQuery = ""
+    @FocusState private var isSearchFieldFocused: Bool
 
     private var filteredProjects: [Project] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -59,6 +60,9 @@ struct WorkspaceProjectPickerView: View {
         }
         .frame(minWidth: 420, minHeight: 460)
         .background(NativeTheme.window)
+        .onAppear {
+            requestInitialSearchFocus()
+        }
     }
 
     private var header: some View {
@@ -80,6 +84,7 @@ struct WorkspaceProjectPickerView: View {
                 .padding(.vertical, 6)
                 .background(NativeTheme.surface)
                 .clipShape(.rect(cornerRadius: 8))
+                .focusable(false)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -93,6 +98,7 @@ struct WorkspaceProjectPickerView: View {
             TextField("搜索项目名称或路径...", text: $searchQuery)
                 .textFieldStyle(.plain)
                 .foregroundStyle(NativeTheme.textPrimary)
+                .focused($isSearchFieldFocused)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -136,5 +142,11 @@ struct WorkspaceProjectPickerView: View {
         .clipShape(.rect(cornerRadius: 12))
         .contentShape(.rect(cornerRadius: 12))
         .help(project.path)
+    }
+
+    private func requestInitialSearchFocus() {
+        DispatchQueue.main.async {
+            isSearchFieldFocused = true
+        }
     }
 }
