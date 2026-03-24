@@ -529,6 +529,91 @@ final class NativeAppViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedDirectory, .all, "刷新项目列表不应偷偷改掉当前目录筛选")
     }
 
+    func testRefreshProjectCatalogPreservesExistingGitMetadataForGitRepos() async throws {
+        let fixture = try TestFixture()
+        let workspaceRoot = fixture.homeURL.appending(path: "Workspace")
+        let alphaURL = workspaceRoot.appending(path: "Alpha")
+        try fixture.createGitRepository(
+            at: alphaURL,
+            commits: [
+                .init(
+                    fileName: "README.md",
+                    content: "# Alpha\n",
+                    authorName: "Alice",
+                    authorEmail: "alice@example.com",
+                    iso8601Date: "2026-03-10T10:00:00Z",
+                    message: "feat: first"
+                ),
+                .init(
+                    fileName: "README.md",
+                    content: "# Alpha v2\n",
+                    authorName: "Alice",
+                    authorEmail: "alice@example.com",
+                    iso8601Date: "2026-03-11T10:00:00Z",
+                    message: "feat: second"
+                ),
+            ]
+        )
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(workspaceRoot.path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects(
+            """
+            [
+              {
+                "id": "alpha",
+                "name": "Alpha",
+                "path": "\(alphaURL.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "a",
+                "git_commits": 1,
+                "git_last_commit": 795000000,
+                "git_last_commit_message": "feat: first",
+                "git_daily": "2026-03-10:1",
+                "created": 795000000,
+                "checked": 795000111
+              }
+            ]
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+
+        try await viewModel.refreshProjectCatalog()
+
+        let project = try XCTUnwrap(viewModel.snapshot.projects.first)
+        XCTAssertTrue(project.isGitRepository)
+        XCTAssertEqual(project.gitCommits, 1)
+        XCTAssertEqual(project.gitLastCommitMessage, "feat: first")
+        XCTAssertEqual(project.gitDaily, "2026-03-10:1")
+    }
+
     func testAddDirectProjectsPersistsPathsAndBuildsProjectsLikeArchiveSidebarAction() async throws {
         let fixture = try TestFixture()
         let betaURL = fixture.homeURL.appending(path: "Standalone/Beta")
@@ -1333,6 +1418,170 @@ final class NativeAppViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.gitStatisticsProgressText)
         XCTAssertEqual(summary.updatedRepositories, 1)
         XCTAssertEqual(viewModel.snapshot.projects.first?.gitDaily, "2026-03-19:3")
+    }
+
+    @MainActor
+    func testRefreshGitStatisticsAsyncRefreshesGitMetadataForGitRepositoriesWithoutCommitCache() async throws {
+        let fixture = try TestFixture()
+        let root = fixture.homeURL.appending(path: "Workspace")
+        let alphaURL = root.appending(path: "Alpha")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(root.path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects(
+            """
+            [
+              {
+                "id": "alpha",
+                "name": "Alpha",
+                "path": "\(alphaURL.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "a",
+                "is_git_repository": true,
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              }
+            ]
+            """
+        )
+
+        let viewModel = NativeAppViewModel(
+            store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL),
+            gitDailyCollectorAsync: { paths, _, progress in
+                await progress(0, paths.count)
+                await progress(paths.count, paths.count)
+                return paths.map {
+                    GitDailyRefreshResult(
+                        path: $0,
+                        gitDaily: "2026-03-19:4",
+                        gitCommits: 4,
+                        gitLastCommit: 795000333,
+                        gitLastCommitMessage: "feat: async refresh",
+                        error: nil
+                    )
+                }
+            }
+        )
+        viewModel.load()
+
+        let summary = try await viewModel.refreshGitStatisticsAsync()
+
+        XCTAssertEqual(summary.updatedRepositories, 1)
+        let project = try XCTUnwrap(viewModel.snapshot.projects.first)
+        XCTAssertEqual(project.gitCommits, 4)
+        XCTAssertEqual(project.gitLastCommitMessage, "feat: async refresh")
+        XCTAssertEqual(project.gitDaily, "2026-03-19:4")
+    }
+
+    func testGitOnlyFilterUsesIsGitRepositoryInsteadOfCommitCount() throws {
+        let fixture = try TestFixture()
+        let root = fixture.homeURL.appending(path: "Workspace")
+        let alphaURL = root.appending(path: "Alpha")
+        let betaURL = root.appending(path: "Beta")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: betaURL, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(root.path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "sharedScriptsRoot": "~/.devhaven/scripts",
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects(
+            """
+            [
+              {
+                "id": "alpha",
+                "name": "Alpha",
+                "path": "\(alphaURL.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "a",
+                "is_git_repository": true,
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              },
+              {
+                "id": "beta",
+                "name": "Beta",
+                "path": "\(betaURL.path())",
+                "tags": [],
+                "scripts": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "b",
+                "is_git_repository": false,
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              }
+            ]
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+        viewModel.updateGitFilter(.gitOnly)
+
+        XCTAssertEqual(viewModel.filteredProjects.map(\.name), ["Alpha"])
     }
 
     func testSelectingAnotherProjectStartsAsyncDocumentLoad() throws {

@@ -181,6 +181,10 @@ struct MainContentView: View {
                         .padding(.vertical, 5)
                         .background(NativeTheme.accent.opacity(0.14))
                         .clipShape(.rect(cornerRadius: 8))
+                } else if project.isGitRepository {
+                    Text("Git 项目")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.accent)
                 } else {
                     Text("非 Git 项目")
                         .font(.caption)
@@ -220,7 +224,7 @@ struct MainContentView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Text(project.gitLastCommitMessage ?? "暂无提交摘要")
+            Text(project.isGitRepository ? (project.gitLastCommitMessage ?? "暂无提交摘要") : "--")
                 .font(.caption)
                 .foregroundStyle(NativeTheme.textSecondary)
                 .frame(maxWidth: 260, alignment: .leading)
@@ -230,6 +234,10 @@ struct MainContentView: View {
                 .frame(width: 120, alignment: .leading)
             if project.gitCommits > 0 {
                 Text("\(project.gitCommits) 次提交")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(NativeTheme.accent)
+            } else if project.isGitRepository {
+                Text("Git 项目")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(NativeTheme.accent)
             } else {

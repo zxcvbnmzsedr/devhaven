@@ -174,6 +174,9 @@ func buildGitHeatmapDays(projects: [Project], days: Int, now: Date = Date()) -> 
     var projectPathsByDate = [String: [String]]()
 
     for project in projects {
+        guard project.isGitRepository else {
+            continue
+        }
         for (dateKey, count) in parseGitDailyMap(project.gitDaily) where dateKey >= startKey && dateKey <= endKey {
             countsByDate[dateKey, default: 0] += count
             if count > 0 {
@@ -232,7 +235,7 @@ func buildGitDashboardSummary(
     let maxCommitsInDay = data.map(\.commitCount).max() ?? 0
     let projectCount = projects.count
     let gitProjectCount = projects.reduce(into: 0) { partialResult, project in
-        if project.gitCommits > 0 {
+        if project.isGitRepository {
             partialResult += 1
         }
     }
@@ -312,7 +315,10 @@ func buildGitDashboardProjectActivities(
 }
 
 func gitCommitCount(on dateKey: String, project: Project) -> Int {
-    parseGitDailyMap(project.gitDaily)[dateKey] ?? 0
+    guard project.isGitRepository else {
+        return 0
+    }
+    return parseGitDailyMap(project.gitDaily)[dateKey] ?? 0
 }
 
 func parseGitDailyMap(_ gitDaily: String?) -> [String: Int] {

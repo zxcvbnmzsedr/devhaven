@@ -1624,3 +1624,138 @@
   - `gh pr list --head session-restore --state all --json number,title,state,url,headRefName,baseRefName,isDraft`（创建前）→ 仅发现已合并 PR #34
   - `gh pr create --base main --head session-restore ...` → `https://github.com/zxcvbnmzsedr/devhaven/pull/35`
   - `gh pr view 35 --json number,title,state,url,headRefName,baseRefName,isDraft` → `state=OPEN`，`isDraft=false`
+
+## 2026-03-24 X 最近收藏总结
+
+- [ ] 检查 opencli/twitter 可用能力与登录态
+- [ ] 获取最近收藏内容并记录原始证据
+- [ ] 输出中文总结并在 Review 记录方法、限制与结果
+## 2026-03-24 发布前 commit 梳理
+
+- [x] 确认上个发布 tag、当前 HEAD 与工作区状态
+- [x] 提取上个发布 tag 到当前的 commit 列表并按主题归纳
+- [x] 生成 release 摘要、建议标题与发布前检查项
+
+## Review（2026-03-24 发布前 commit 梳理）
+
+- 结果：
+  1. 已按 **release 语义** 选取最近一个 semver tag `v3.0.2` 作为比较基线，而不是 `nightly` / `stable-appcast` 这类发布别名 tag。
+  2. `v3.0.2..HEAD` 共包含 7 个 commit，其中 2 个 merge commit、5 个非 merge commit；真正值得写进 release note 的主变更集中在 3 个提交：Ghostty 搜索、非 live 工作区快照恢复、worktree 创建进度弹窗置前修复。
+  3. 当前 `HEAD` 与 `origin/main` 一致，都是 `38ab435a6d38`；如果要从主线发版，远端基线已经对齐。
+  4. 当前本地工作区不是 clean：存在 `tasks/todo.md` 修改，以及 `.claude/skills/`、`.iflow/`、`.opencli/`、`skills-lock.json` 未跟踪项；发布前应确认这些本地改动不进入正式 release 操作。
+- 建议发布口径：
+  1. 如果按 SemVer 严格执行，这一批更像 **minor release**，建议优先考虑 `v3.1.0`，因为包含两个明确的用户可见新能力，而不是纯 bugfix。
+  2. 若你只是想快速滚一个保守版本，也可以发 patch，但从变更性质上说不如 minor 语义准确。
+- 验证证据：
+  - `git tag --list 'v*' --sort=-v:refname | head -n 5` → 最近 semver tag 为 `v3.0.2`
+  - `git log --date=short --pretty=format:'%h%x09%ad%x09%s' v3.0.2..HEAD` → 共 7 条 commit，核心为 `f93181f`、`739111a`、`967615c`
+  - `git diff --shortstat v3.0.2..HEAD` → `36 files changed, 3626 insertions(+), 27 deletions(-)`
+  - `git log --merges --date=short --pretty=format:'%h%x09%ad%x09%s' v3.0.2..HEAD` → merge PR #34 / #35
+  - `git rev-parse --short=12 origin/main` / `git rev-parse --short=12 HEAD` → 均为 `38ab435a6d38`
+  - `git status --short` → 工作区存在 `tasks/todo.md` 修改及若干未跟踪本地目录/文件
+
+## 2026-03-24 项目刷新链路排查
+
+- [x] 定位“刷新项目”按钮对应的 ViewModel / Core 调用入口
+- [x] 梳理 refresh 期间的扫描、Git 信息采集、持久化与 UI 回填链路
+- [x] 结合当前 `~/.devhaven` 实际数据估算主要耗时来源
+- [x] 在 Review 中记录直接原因、设计层诱因、当前结论与证据
+
+## Review（2026-03-24 项目刷新链路排查）
+
+- 结果：
+  1. “刷新项目”最终走的是 `NativeAppViewModel.refreshProjectCatalog()`，不是简单 reload 现有内存，而是一次 **全量重建项目 catalog**。
+  2. 当前实现会重新扫描 `app_state.json` 里的所有目录根（当前本机是 5 个目录根 + 4 个 direct project），重新生成完整项目列表，再整体写回 `~/.devhaven/projects.json`。
+  3. 真正的慢点不在目录遍历本身，而在 **每个候选项目都顺序跑 Git 子进程**：对 Git 仓库执行 `git rev-list --count HEAD` 和 `git log -n 1` 两条命令；以当前本机 130 个项目估算，仅这一步实测就约 3.5~3.7 秒。
+  4. 刷新完成后，UI 侧还会执行 selection realign，并异步重读当前选中项目的 `PROJECT_NOTES.md` / `PROJECT_TODO.md` / `README.md`，但这一段是次要成本，不是主瓶颈。
+- 直接原因：
+  1. `rebuildProjectCatalogSnapshot()` 每次刷新都会调用 `discoverProjects()` + `buildProjects()`，没有基于 mtime/checksum 或 git metadata 做增量跳过。
+  2. `buildProjects()` 内的 `createProject()` 会对每个候选路径调用 `loadGitInfo()`；而 `loadGitInfo()` 当前是同步串行 `Process + waitUntilExit`，每个 Git 仓库固定两次 `/usr/bin/git`。
+  3. `scanDirectoryWithGit()` 还会把每个目录根下的**一级子目录**直接作为项目候选加入，即使它不是 Git 仓库，也仍然会参与后续 stat / createProject 流程，扩大了刷新工作量。
+- 设计层诱因：
+  1. 当前 catalog refresh 的职责偏“全量重建快照”，没有拆成“发现候选项目”和“按需刷新 Git 元数据”两层，因此每次手动刷新都会做完整重算。
+  2. 未发现明显系统设计缺陷，但存在一个明确的性能边界未收口：项目发现、Git 元数据采集、持久化现在被绑成一条同步重建链，导致 repo 数量一多就线性变慢。
+- 当前结论：
+  1. 以当前本机数据，项目刷新体感慢是**真实的**，不是 UI 假象；主要成本来自约 100+ 仓库上的 Git 子进程串行执行。
+  2. 如果后续要优化，优先级最高的是：减少 Git 命令次数 / 做增量缓存 / 让 Git 元数据采集并行或延迟，而不是先纠结目录扫描和 JSON 写盘。
+- 长期改进建议：
+  1. 给 `Project` 引入“目录枚举结果”和“Git 元数据”两级缓存，目录没变时直接复用已有 `gitCommits/gitLastCommit/gitLastCommitMessage`。
+  2. 把 Git 信息采集改成限流并发，而不是当前完全串行；并为慢仓库提供阶段性进度文案。
+  3. 重新审视“一级子目录默认视为项目”的产品语义；如果不需要这么激进的发现策略，可显著降低候选数量。
+- 验证证据：
+  - 代码入口：`macos/Sources/DevHavenApp/ProjectSidebarView.swift` / `macos/Sources/DevHavenApp/DevHavenApp.swift` → 刷新入口都调用 `viewModel.refreshProjectCatalog()` 或 `viewModel.refresh()`
+  - Core 链路：`macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift` 中 `refreshProjectCatalog()` → `rebuildProjectCatalogSnapshot()` → `discoverProjects()` / `buildProjects()` / `loadGitInfo()`
+  - 当前本机配置：`~/.devhaven/app_state.json` → `directories=5`，`directProjectPaths=4`
+  - 当前项目规模：`~/.devhaven/projects.json` → `projects=130`
+  - 目录扫描估算：本机脚本复现 `discoverProjects` 规则 → `visited_dirs=323`，`unique_discovered_paths=126`，`elapsed_seconds=0.025`
+  - Git 成本实测：对当前 130 个项目顺序执行 `git rev-list --count HEAD` + `git log -n 1` → `git_command_runs=260`，`elapsed_seconds=3.48`
+  - 全链路估算：按当前 refresh 规则复现 → `discovered_paths=130`，`project_build_seconds=3.656`，`estimated_total_seconds=3.666`
+
+## 2026-03-24 目录刷新与 Git 统计职责拆分设计
+
+- [x] 明确“刷新目录不跑 git、旧值保留、Git 统计单独刷新”的目标边界
+- [x] 梳理当前 `gitCommits > 0` 被当作 Git 真相源的影响面
+- [x] 形成设计方案并写入仓库文档
+- [x] 在 Review 中记录本轮设计结论与证据
+
+## Review（2026-03-24 目录刷新与 Git 统计职责拆分设计）
+
+- 结果：
+  1. 已确认采用“**目录刷新只维护项目清单与目录元数据；Git 元数据统一由更新统计链路负责**”的新边界。
+  2. 已把设计文档写入 `docs/plans/2026-03-24-directory-refresh-git-metadata-split-design.md`，明确旧项目保留旧 Git 值、新项目只做轻量 Git 判定、不在目录刷新时执行任何 Git 子进程。
+  3. 设计中新增关键收口：`Project` 需要引入显式的轻量 Git 真相源（建议命名 `isGitRepository`），避免继续把 `gitCommits > 0` 误当成 repo 类型判断。
+- 直接原因：
+  1. 当前 `refreshProjectCatalog()` 同时负责“发现项目”和“刷新 Git 元数据”，导致一次目录刷新被昂贵 Git 子进程绑慢。
+  2. 当前多处 UI / 过滤逻辑把 `gitCommits > 0` 当成 Git / 非 Git 的真相源，使得“把 Git 调用挪出目录刷新”不能只删调用，必须同时补齐类型语义。
+- 设计层诱因：
+  1. 现有模型把 repo 类型判断和 Git 统计结果混在同一组字段里，职责边界不清晰。
+  2. 未发现明显系统设计缺陷，但存在一个持续放大性能问题的边界混淆：目录发现链路承担了不属于它的 Git 统计职责。
+- 当前设计方案：
+  1. 目录刷新阶段仅更新路径、名字、mtime、size、checksum、checked 与轻量 `isGitRepository` 判定；
+  2. 目录刷新不再执行 `git rev-list` / `git log` 等 Git 子进程；
+  3. 更新统计链路升级为统一刷新 `gitCommits`、`gitLastCommit`、`gitLastCommitMessage` 与 `gitDaily`；
+  4. 旧项目目录刷新后保留旧 Git 值；新发现 Git 项目在首次统计前显示为“Git 项目但统计未刷新”。
+- 长期改进建议：
+  1. 在职责拆分完成后，再考虑给 Git 统计链路加限流并发和增量缓存；
+  2. 后续如果用户希望更强的体感优化，可继续演进为“两阶段刷新：先出目录、再补 Git 元数据”。
+- 验证证据：
+  - 当前影响面检索：`rg -n "gitCommits|gitLastCommit|gitLastCommitMessage|gitDaily|refreshGitStatistics|gitStatistics" ...`
+  - 关键判定点：`NativeAppViewModel.matchesAllFilters(...)`、`MainContentView.swift`、`ProjectDetailRootView.swift`、`WorkspaceHostView.swift`
+  - 设计文档：`docs/plans/2026-03-24-directory-refresh-git-metadata-split-design.md`
+
+## 2026-03-24 目录刷新与 Git 统计职责拆分实现
+
+- [x] 落实施计划到 `docs/plans/2026-03-24-directory-refresh-git-metadata-split.md`
+- [x] 先补 Core 失败测试，覆盖目录刷新保留旧 Git 值 / 新增 `isGitRepository` / 统计刷新目标集迁移
+- [x] 实现 `Project` 轻量 Git 类型字段与目录刷新职责拆分
+- [x] 实现 Git 元数据统一刷新与存储层局部更新入口
+- [x] 调整过滤与 UI 文案语义，避免把未统计 Git 项目显示成非 Git
+- [x] 运行定向测试与必要回归，并在本文件追加 Review
+
+## Review（2026-03-24 目录刷新与 Git 统计职责拆分实现）
+
+- 结果：
+  1. 已把目录刷新与 Git 元数据刷新拆成两条链：`refreshProjectCatalog()` 不再调用 Git 子进程，只做目录发现、目录属性更新与轻量 Git 判定；`refreshGitStatistics{Async}` 统一负责提交数、最后提交摘要与 `gitDaily`。
+  2. 已在 `Project` 模型中新增 `isGitRepository`，并把 Git / 非 Git 过滤与 UI 展示从 `gitCommits > 0` 迁移到这个轻量真相源。
+  3. 目录刷新现在会对已有 Git 项目保留旧 Git 统计值；新发现的 Git 项目在首次统计前会显示为“Git 项目”，而不是误标成“非 Git”。
+  4. Git 统计链路已扩展为同时写回 `git_commits`、`git_last_commit`、`git_last_commit_message`、`git_daily`，并继续保留 `projects.json` 里的未知字段。
+- 直接原因：
+  1. 旧实现把目录发现与 Git 统计绑在同一条 refresh 链里，导致用户只想刷新目录时也要等待 `git rev-list` / `git log`。
+  2. 旧实现把 `gitCommits > 0` 误当成 repo 类型真相源，使得“目录刷新不跑 git”无法直接落地，否则新 Git 项目会被误判成非 Git。
+- 设计层诱因：
+  1. `Project` 之前缺少显式的 repo 类型字段，导致“Git 类型判断”和“Git 统计缓存”语义耦合。
+  2. 未发现明显系统设计缺陷，但存在职责边界混淆：目录刷新链路承担了不属于它的 Git 元数据职责。
+- 当前修复方案：
+  1. 在 `Project` 中新增 `isGitRepository`，向后兼容老快照 decode；
+  2. `NativeAppViewModel.createProject()` 改为只做轻量 Git 判定，不再调用 `loadGitInfo()`；
+  3. `refreshGitStatistics{Async}` 目标集改为 `visibleProjects.filter(\\.isGitRepository)`；
+  4. `GitDailyRefreshResult` / `GitDailyCollector` / `LegacyCompatStore` 升级为统一刷新并局部写回完整 Git 元数据；
+  5. `MainContentView`、`ProjectDetailRootView`、`WorkspaceHostView` 与 Git filter 全部改为接受“Git 项目但尚未统计”的中间态。
+- 长期改进建议：
+  1. 后续可继续在 Git 统计链路上加限流并发/增量缓存，进一步降低“更新统计”的 wall-clock；
+  2. 若需要更强 UX，可再把“刷新目录”和“刷新 Git 统计”做成更明确的两个入口或两阶段提示。
+- 验证证据：
+  - RED：`swift test --package-path macos --filter 'LegacyCompatStoreTests/testRefreshProjectCatalogPreservesExistingGitMetadataForGitRepos|LegacyCompatStoreTests/testRefreshGitStatisticsAsyncRefreshesGitMetadataForGitRepositoriesWithoutCommitCache|LegacyCompatStoreTests/testGitOnlyFilterUsesIsGitRepositoryInsteadOfCommitCount|MainContentViewTests|ProjectDetailRootViewTests'` → 编译失败，明确提示 `Project` 缺少 `isGitRepository`、`GitDailyRefreshResult` 缺少 Git 元数据字段
+  - 定向绿灯：`swift test --package-path macos --filter 'NativeAppViewModelTests/testRefreshProjectCatalogPreservesExistingGitMetadataForGitRepos|NativeAppViewModelTests/testRefreshGitStatisticsAsyncRefreshesGitMetadataForGitRepositoriesWithoutCommitCache|NativeAppViewModelTests/testGitOnlyFilterUsesIsGitRepositoryInsteadOfCommitCount|NativeAppViewModelTests/testRefreshGitStatisticsAsyncMarksRefreshingImmediatelyAndAppliesResults|NativeAppViewModelTests/testRefreshGitStatisticsReadsRealGitLogAndPreservesUnknownProjectFields|MainContentViewTests|ProjectDetailRootViewTests'` → 13 tests，0 failures
+  - 目录刷新/并发回归：`swift test --package-path macos --filter 'NativeAppViewModelTests|ProjectCatalogRefreshConcurrencyTests|MainContentViewTests|ProjectDetailRootViewTests'` → 32 tests，0 failures
+  - 全量回归：`swift test --package-path macos` → 283 tests，5 skipped，0 failures

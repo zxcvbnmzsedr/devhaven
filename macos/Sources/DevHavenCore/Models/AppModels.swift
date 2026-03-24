@@ -359,6 +359,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
     public var mtime: SwiftDate
     public var size: Int64
     public var checksum: String
+    public var isGitRepository: Bool
     public var gitCommits: Int
     public var gitLastCommit: SwiftDate
     public var gitLastCommitMessage: String?
@@ -376,6 +377,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         mtime: SwiftDate,
         size: Int64,
         checksum: String,
+        isGitRepository: Bool = false,
         gitCommits: Int,
         gitLastCommit: SwiftDate,
         gitLastCommitMessage: String? = nil,
@@ -392,6 +394,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         self.mtime = mtime
         self.size = size
         self.checksum = checksum
+        self.isGitRepository = isGitRepository
         self.gitCommits = gitCommits
         self.gitLastCommit = gitLastCommit
         self.gitLastCommitMessage = gitLastCommitMessage
@@ -410,6 +413,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         case mtime
         case size
         case checksum
+        case isGitRepository = "is_git_repository"
         case gitCommits = "git_commits"
         case gitLastCommit = "git_last_commit"
         case gitLastCommitMessage = "git_last_commit_message"
@@ -429,10 +433,19 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         self.mtime = try container.decodeIfPresent(SwiftDate.self, forKey: .mtime) ?? .zero
         self.size = try container.decodeIfPresent(Int64.self, forKey: .size) ?? .zero
         self.checksum = try container.decodeIfPresent(String.self, forKey: .checksum) ?? ""
-        self.gitCommits = try container.decodeIfPresent(Int.self, forKey: .gitCommits) ?? .zero
-        self.gitLastCommit = try container.decodeIfPresent(SwiftDate.self, forKey: .gitLastCommit) ?? .zero
-        self.gitLastCommitMessage = try container.decodeIfPresent(String.self, forKey: .gitLastCommitMessage)
-        self.gitDaily = try container.decodeIfPresent(String.self, forKey: .gitDaily)
+        let decodedGitCommits = try container.decodeIfPresent(Int.self, forKey: .gitCommits) ?? .zero
+        let decodedGitLastCommit = try container.decodeIfPresent(SwiftDate.self, forKey: .gitLastCommit) ?? .zero
+        let decodedGitLastCommitMessage = try container.decodeIfPresent(String.self, forKey: .gitLastCommitMessage)
+        let decodedGitDaily = try container.decodeIfPresent(String.self, forKey: .gitDaily)
+        self.isGitRepository = (try container.decodeIfPresent(Bool.self, forKey: .isGitRepository))
+            ?? (decodedGitCommits > 0
+            || decodedGitLastCommit != .zero
+            || decodedGitLastCommitMessage != nil
+            || decodedGitDaily != nil)
+        self.gitCommits = decodedGitCommits
+        self.gitLastCommit = decodedGitLastCommit
+        self.gitLastCommitMessage = decodedGitLastCommitMessage
+        self.gitDaily = decodedGitDaily
         self.created = try container.decodeIfPresent(SwiftDate.self, forKey: .created) ?? .zero
         self.checked = try container.decodeIfPresent(SwiftDate.self, forKey: .checked) ?? .zero
     }

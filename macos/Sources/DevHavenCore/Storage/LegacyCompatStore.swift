@@ -189,6 +189,10 @@ public final class LegacyCompatStore {
     }
 
     public func updateProjectsGitDaily(_ results: [GitDailyRefreshResult]) throws {
+        try updateProjectsGitMetadata(results)
+    }
+
+    public func updateProjectsGitMetadata(_ results: [GitDailyRefreshResult]) throws {
         guard !results.isEmpty else {
             return
         }
@@ -205,6 +209,11 @@ public final class LegacyCompatStore {
                 continue
             }
             project["git_daily"] = result.gitDaily.map { $0 as Any } ?? NSNull()
+            if let gitCommits = result.gitCommits {
+                project["git_commits"] = gitCommits
+                project["git_last_commit"] = result.gitLastCommit ?? 0
+                project["git_last_commit_message"] = result.gitLastCommitMessage.map { $0 as Any } ?? NSNull()
+            }
             document.root[index] = project
             didMutate = true
         }

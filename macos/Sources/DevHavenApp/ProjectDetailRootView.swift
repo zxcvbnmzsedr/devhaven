@@ -52,9 +52,14 @@ struct ProjectDetailRootView: View {
 
                     section("基础信息") {
                         detailRow("最近修改", formatSwiftDate(project.mtime))
-                        detailRow("Git 提交", project.gitCommits > 0 ? "\(project.gitCommits) 次" : "非 Git 项目")
+                        detailRow(
+                            "Git 提交",
+                            project.gitCommits > 0
+                                ? "\(project.gitCommits) 次"
+                                : (project.isGitRepository ? "Git 项目" : "非 Git 项目")
+                        )
                         detailRow("最后检查", formatSwiftDate(project.checked))
-                        detailRow("最后摘要", project.gitLastCommitMessage ?? "--")
+                        detailRow("最后摘要", project.isGitRepository ? (project.gitLastCommitMessage ?? "--") : "--")
                     }
 
                     section("标签") {

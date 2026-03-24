@@ -643,7 +643,7 @@ public final class NativeAppViewModel {
 
     @discardableResult
     public func refreshGitStatistics() throws -> GitStatisticsRefreshSummary {
-        let targetProjects = visibleProjects.filter { $0.gitCommits > 0 }
+        let targetProjects = visibleProjects.filter(\.isGitRepository)
         guard !targetProjects.isEmpty else {
             return GitStatisticsRefreshSummary(requestedRepositories: 0, updatedRepositories: 0, failedRepositories: 0)
         }
@@ -652,14 +652,14 @@ public final class NativeAppViewModel {
         defer { isRefreshingGitStatistics = false }
 
         let results = gitDailyCollector(targetProjects.map(\.path), snapshot.appState.settings.gitIdentities)
-        try store.updateProjectsGitDaily(results)
+        try store.updateProjectsGitMetadata(results)
         load()
 
         return makeGitStatisticsRefreshSummary(from: results)
     }
 
     public func refreshGitStatisticsAsync() async throws -> GitStatisticsRefreshSummary {
-        let targetProjects = visibleProjects.filter { $0.gitCommits > 0 }
+        let targetProjects = visibleProjects.filter(\.isGitRepository)
         guard !targetProjects.isEmpty else {
             return GitStatisticsRefreshSummary(requestedRepositories: 0, updatedRepositories: 0, failedRepositories: 0)
         }
@@ -685,7 +685,7 @@ public final class NativeAppViewModel {
         }
 
         gitStatisticsProgressText = "正在写入统计结果..."
-        try store.updateProjectsGitDaily(results)
+        try store.updateProjectsGitMetadata(results)
         gitStatisticsProgressText = "正在刷新项目列表..."
         load()
 
@@ -1656,9 +1656,9 @@ public final class NativeAppViewModel {
         switch selectedGitFilter {
         case .all:
             break
-        case .gitOnly where project.gitCommits <= 0:
+        case .gitOnly where !project.isGitRepository:
             return false
-        case .nonGitOnly where project.gitCommits > 0:
+        case .nonGitOnly where project.isGitRepository:
             return false
         default:
             break
@@ -1674,7 +1674,7 @@ public final class NativeAppViewModel {
         return project.name.lowercased().contains(query)
             || project.path.lowercased().contains(query)
             || project.tags.contains(where: { $0.lowercased().contains(query) })
-            || (project.gitLastCommitMessage?.lowercased().contains(query) ?? false)
+            || (project.isGitRepository && (project.gitLastCommitMessage?.lowercased().contains(query) ?? false))
     }
 
     private var directProjectPathSet: Set<String> {
@@ -2370,7 +2370,7 @@ private func createProject(path: String, existingByPath: [String: Project]) -> P
     let modificationDate = resourceValues.contentModificationDate ?? now
     let size = Int64(resourceValues.fileSize ?? 0)
     let checksum = "\(Int(modificationDate.timeIntervalSince1970))_\(size)"
-    let gitInfo = loadGitInfo(for: normalizedPath)
+    let isGitRepository = isGitRepo(projectURL)
 
     if let existing = existingByPath[normalizedPath] {
         return Project(
@@ -2383,9 +2383,10 @@ private func createProject(path: String, existingByPath: [String: Project]) -> P
             mtime: swiftDateFromDate(modificationDate),
             size: size,
             checksum: checksum,
-            gitCommits: gitInfo.commitCount,
-            gitLastCommit: gitInfo.lastCommit,
-            gitLastCommitMessage: gitInfo.lastCommitMessage,
+            isGitRepository: isGitRepository,
+            gitCommits: existing.gitCommits,
+            gitLastCommit: existing.gitLastCommit,
+            gitLastCommitMessage: existing.gitLastCommitMessage,
             gitDaily: existing.gitDaily,
             created: existing.created,
             checked: swiftDateFromDate(now)
@@ -2402,9 +2403,10 @@ private func createProject(path: String, existingByPath: [String: Project]) -> P
         mtime: swiftDateFromDate(modificationDate),
         size: size,
         checksum: checksum,
-        gitCommits: gitInfo.commitCount,
-        gitLastCommit: gitInfo.lastCommit,
-        gitLastCommitMessage: gitInfo.lastCommitMessage,
+        isGitRepository: isGitRepository,
+        gitCommits: 0,
+        gitLastCommit: .zero,
+        gitLastCommitMessage: nil,
         gitDaily: nil,
         created: swiftDateFromDate(now),
         checked: swiftDateFromDate(now)
@@ -2472,7 +2474,10 @@ private func runGitCommand(in path: String, arguments: [String]) -> String? {
 }
 
 private func isGitRepo(_ url: URL) -> Bool {
-    FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .notDirectory).path)
+    guard !isGitWorktree(url) else {
+        return false
+    }
+    return FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .notDirectory).path)
         || FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .isDirectory).path)
 }
 
@@ -2545,6 +2550,7 @@ private func buildWorktreeVirtualProject(sourceProject: Project, worktree: Proje
         mtime: sourceProject.mtime,
         size: sourceProject.size,
         checksum: "worktree:\(worktree.path)",
+        isGitRepository: sourceProject.isGitRepository,
         gitCommits: sourceProject.gitCommits,
         gitLastCommit: sourceProject.gitLastCommit,
         gitLastCommitMessage: sourceProject.gitLastCommitMessage,

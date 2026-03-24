@@ -64,11 +64,24 @@ public struct SharedScriptPresetRestoreResult: Codable, Equatable, Sendable {
 public struct GitDailyRefreshResult: Equatable, Sendable {
     public var path: String
     public var gitDaily: String?
+    public var gitCommits: Int?
+    public var gitLastCommit: SwiftDate?
+    public var gitLastCommitMessage: String?
     public var error: String?
 
-    public init(path: String, gitDaily: String?, error: String?) {
+    public init(
+        path: String,
+        gitDaily: String?,
+        gitCommits: Int? = nil,
+        gitLastCommit: SwiftDate? = nil,
+        gitLastCommitMessage: String? = nil,
+        error: String?
+    ) {
         self.path = path
         self.gitDaily = gitDaily
+        self.gitCommits = gitCommits
+        self.gitLastCommit = gitLastCommit
+        self.gitLastCommitMessage = gitLastCommitMessage
         self.error = error
     }
 }

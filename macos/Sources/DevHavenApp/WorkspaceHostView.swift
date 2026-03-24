@@ -144,7 +144,9 @@ struct WorkspaceHostView: View {
                     }
                 )
                 statChip(
-                    title: "\(project.gitCommits) 次提交",
+                    title: project.gitCommits > 0
+                        ? "\(project.gitCommits) 次提交"
+                        : (project.isGitRepository ? "Git 项目" : "非 Git 项目"),
                     systemImage: "point.3.connected.trianglepath.dotted"
                 )
                 statChip(

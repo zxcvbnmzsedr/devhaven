@@ -79,6 +79,15 @@ final class MainContentViewTests: XCTestCase {
         )
     }
 
+    func testGitProjectsWithoutCommitCacheShowGitProjectLabel() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("Text(\"Git 项目\")"),
+            "主列表/卡片在 `isGitRepository == true` 但尚未刷新统计时，应显示“Git 项目”，而不是误标成“非 Git”"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

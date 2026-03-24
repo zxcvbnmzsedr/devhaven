@@ -14,6 +14,15 @@ final class ProjectDetailRootViewTests: XCTestCase {
         )
     }
 
+    func testDetailPanelMentionsGitProjectWhenStatisticsHaveNotBeenRefreshed() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("Git 项目"),
+            "详情面板在 Git 仓库尚未刷新统计时，也应显示“Git 项目”而不是误判为“非 Git 项目”"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
