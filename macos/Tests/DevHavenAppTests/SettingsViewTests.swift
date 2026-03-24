@@ -57,6 +57,14 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertTrue(source.contains("workspaceOpenProjectShortcut: workspaceOpenProjectShortcut"), "设置页保存时应写回打开项目快捷键配置")
     }
 
+    func testSettingsRemovesScriptsCategoryAndSharedScriptManager() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("case scripts"), "破坏式升级后设置页不应保留 scripts 分类")
+        XCTAssertFalse(source.contains("SharedScriptsManagerView"), "设置页不应再挂载 shared scripts 管理入口")
+        XCTAssertFalse(source.contains("通用脚本"), "设置页文案中不应再出现通用脚本模板概念")
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

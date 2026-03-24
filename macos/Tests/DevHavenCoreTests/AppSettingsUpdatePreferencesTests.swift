@@ -25,7 +25,6 @@ final class AppSettingsUpdatePreferencesTests: XCTestCase {
               \"gitIdentities\": [],
               \"projectListViewMode\": \"card\",
               \"workspaceSidebarWidth\": 280,
-              \"sharedScriptsRoot\": \"~/.devhaven/scripts\",
               \"workspaceInAppNotificationsEnabled\": true,
               \"workspaceNotificationSoundEnabled\": true,
               \"workspaceSystemNotificationsEnabled\": false,

@@ -15,7 +15,7 @@ final class ProjectDetailPanelCloseActionTests: XCTestCase {
             name: "Alpha",
             path: "/tmp/alpha",
             tags: [],
-            scripts: [],
+            runConfigurations: [],
             worktrees: [],
             mtime: 0,
             size: 1,

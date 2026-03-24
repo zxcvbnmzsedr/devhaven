@@ -18,7 +18,6 @@ final class LegacyCompatStoreMutationTests: XCTestCase {
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
                 "projectListViewMode": "card",
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -65,7 +64,6 @@ final class LegacyCompatStoreMutationTests: XCTestCase {
                 "terminalTheme": "Old Theme",
                 "gitIdentities": [],
                 "projectListViewMode": "card",
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -85,7 +83,6 @@ final class LegacyCompatStoreMutationTests: XCTestCase {
                 terminalTheme: "iTerm2 Solarized Dark",
                 gitIdentities: [GitIdentity(name: "天增", email: "tianzeng@gmail.com")],
                 projectListViewMode: .list,
-                sharedScriptsRoot: "~/.devhaven/scripts",
                 viteDevPort: 1410,
                 webEnabled: true,
                 webBindHost: "0.0.0.0",
@@ -146,7 +143,6 @@ final class SnapshotLoadingTests: XCTestCase {
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
                 "projectListViewMode": "card",
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -163,7 +159,7 @@ final class SnapshotLoadingTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(projectURL.path())",
                 "tags": ["native"],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1024,
@@ -192,58 +188,6 @@ final class SnapshotLoadingTests: XCTestCase {
     }
 }
 
-final class SharedScriptsStoreTests: XCTestCase {
-    func testSharedScriptsManifestRoundTripAndFileEditing() throws {
-        let fixture = try TestFixture()
-        let store = LegacyCompatStore(homeDirectoryURL: fixture.homeURL)
-
-        try store.saveSharedScriptsManifest([
-            SharedScriptManifestScript(
-                id: "deploy",
-                name: "部署脚本",
-                path: "./ops/deploy.sh",
-                commandTemplate: "",
-                params: [
-                    ScriptParamField(
-                        key: "env",
-                        label: "",
-                        type: .text,
-                        required: true,
-                        defaultValue: "prod",
-                        description: ""
-                    )
-                ]
-            )
-        ])
-        try store.writeSharedScriptFile(relativePath: "ops/deploy.sh", content: "#!/usr/bin/env bash\necho deploy\n")
-
-        let listed = try store.listSharedScripts()
-        XCTAssertEqual(listed.count, 1)
-        XCTAssertEqual(listed.first?.id, "deploy")
-        XCTAssertEqual(listed.first?.name, "部署脚本")
-        XCTAssertEqual(listed.first?.relativePath, "ops/deploy.sh")
-        XCTAssertEqual(listed.first?.commandTemplate, "bash \"${scriptPath}\"")
-        XCTAssertEqual(listed.first?.params.first?.label, "env")
-        XCTAssertEqual(try store.readSharedScriptFile(relativePath: "ops/deploy.sh"), "#!/usr/bin/env bash\necho deploy\n")
-    }
-
-    func testRestoreSharedScriptPresetsCreatesManifestAndFilesWhenRootIsEmpty() throws {
-        let fixture = try TestFixture()
-        let store = LegacyCompatStore(homeDirectoryURL: fixture.homeURL)
-
-        let result = try store.restoreSharedScriptPresets()
-
-        XCTAssertEqual(result.addedScripts, 2)
-        XCTAssertEqual(result.createdFiles, 2)
-
-        let listed = try store.listSharedScripts()
-        XCTAssertEqual(Set(listed.map(\.id)), ["jenkins", "remote-log-viewer"])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.homeURL.appending(path: ".devhaven/scripts/manifest.json").path()))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.homeURL.appending(path: ".devhaven/scripts/jenkins-depoly").path()))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.homeURL.appending(path: ".devhaven/scripts/remote_log_viewer.sh").path()))
-    }
-}
-
 @MainActor
 final class NativeAppViewModelTests: XCTestCase {
     func testSelectingProjectOpensDetailDrawerAndLoadsNotes() throws {
@@ -266,7 +210,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -283,7 +226,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -335,7 +278,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -352,7 +294,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(rootA.appending(path: "Alpha").path())",
                 "tags": ["native"],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -369,7 +311,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Beta",
                 "path": "\(rootB.appending(path: "Beta").path())",
                 "tags": ["server"],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -422,7 +364,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -439,7 +380,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(workspaceAlpha.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -456,7 +397,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Beta",
                 "path": "\(directBeta.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -505,7 +446,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -569,7 +509,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -586,7 +525,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -633,7 +572,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -677,7 +615,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -727,7 +664,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -775,7 +711,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -792,7 +727,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -809,7 +744,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Beta",
                 "path": "\(betaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -859,7 +794,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -876,7 +810,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -934,7 +868,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -951,7 +884,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(rootA.appending(path: "Alpha").path())",
                 "tags": ["native"],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -968,7 +901,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Beta",
                 "path": "\(rootB.appending(path: "Beta").path())",
                 "tags": ["server"],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000100,
                 "size": 1,
@@ -1027,7 +960,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1044,7 +976,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(root.appending(path: "Alpha").path())",
                 "tags": ["native"],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1061,7 +993,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Beta",
                 "path": "\(root.appending(path: "Beta").path())",
                 "tags": ["tooling"],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000010,
                 "size": 1,
@@ -1135,7 +1067,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1152,7 +1083,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1201,7 +1132,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1218,7 +1148,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1294,7 +1224,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "gitIdentities": [
                   {"name": "Alice", "email": "alice@example.com"}
                 ],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1311,7 +1240,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(repoURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1360,7 +1289,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1377,7 +1305,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1441,7 +1369,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1458,7 +1385,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1525,7 +1452,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1542,7 +1468,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1560,7 +1486,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Beta",
                 "path": "\(betaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1608,7 +1534,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1625,7 +1550,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1642,7 +1567,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Beta",
                 "path": "\(betaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000010,
                 "size": 1,
@@ -1695,7 +1620,6 @@ final class NativeAppViewModelTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1712,7 +1636,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Alpha",
                 "path": "\(alphaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000000,
                 "size": 1,
@@ -1729,7 +1653,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Beta",
                 "path": "\(betaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000010,
                 "size": 1,
@@ -1746,7 +1670,7 @@ final class NativeAppViewModelTests: XCTestCase {
                 "name": "Gamma",
                 "path": "\(gammaURL.path())",
                 "tags": [],
-                "scripts": [],
+                "runConfigurations": [],
                 "worktrees": [],
                 "mtime": 795000020,
                 "size": 1,
@@ -1815,7 +1739,6 @@ final class ProjectCatalogRefreshConcurrencyTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",
@@ -1863,7 +1786,6 @@ final class ProjectCatalogRefreshConcurrencyTests: XCTestCase {
                 "terminalUseWebglRenderer": true,
                 "terminalTheme": "DevHaven Dark",
                 "gitIdentities": [],
-                "sharedScriptsRoot": "~/.devhaven/scripts",
                 "viteDevPort": 1420,
                 "webEnabled": true,
                 "webBindHost": "0.0.0.0",

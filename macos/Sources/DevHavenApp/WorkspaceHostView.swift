@@ -8,6 +8,8 @@ struct WorkspaceHostView: View {
     let workspace: GhosttyWorkspaceController
     let terminalSessionStore: WorkspaceTerminalSessionStore
     @State private var windowActivity: WindowActivityState = .inactive
+    @State private var isRunConfigurationSheetPresented = false
+    @State private var runConsoleResizeStartHeight: CGFloat?
 
     var body: some View {
         let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
@@ -17,20 +19,45 @@ struct WorkspaceHostView: View {
                 header
             }
 
-            WorkspaceTabBarView(
-                tabs: workspace.tabs,
-                selectedTabID: workspace.selectedTabId,
-                canSplit: workspace.selectedPane != nil,
-                onSelectTab: { workspace.selectTab($0) },
-                onCloseTab: { workspace.closeTab($0) },
-                onCreateTab: { _ = workspace.createTab() },
-                onSplitHorizontally: {
-                    _ = workspace.splitFocusedPane(direction: .down)
-                },
-                onSplitVertically: {
-                    _ = workspace.splitFocusedPane(direction: .right)
-                }
-            )
+            HStack(alignment: .center, spacing: 12) {
+                WorkspaceTabBarView(
+                    tabs: workspace.tabs,
+                    selectedTabID: workspace.selectedTabId,
+                    canSplit: workspace.selectedPane != nil,
+                    onSelectTab: { workspace.selectTab($0) },
+                    onCloseTab: { workspace.closeTab($0) },
+                    onCreateTab: { _ = workspace.createTab() },
+                    onSplitHorizontally: {
+                        _ = workspace.splitFocusedPane(direction: .down)
+                    },
+                    onSplitVertically: {
+                        _ = workspace.splitFocusedPane(direction: .right)
+                    }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                WorkspaceRunToolbarView(
+                    configurations: viewModel.availableWorkspaceRunConfigurations(in: project.path),
+                    selectedConfigurationID: viewModel.workspaceRunConsoleState(for: project.path)?.selectedConfigurationID
+                        ?? viewModel.selectedWorkspaceRunConfiguration(in: project.path)?.id,
+                    canRun: viewModel.selectedWorkspaceRunConfiguration(in: project.path)?.canRun ?? false,
+                    canStop: viewModel.workspaceRunConsoleState(for: project.path)?.selectedSession?.state.isActive ?? false,
+                    hasSessions: !(viewModel.workspaceRunConsoleState(for: project.path)?.sessions.isEmpty ?? true),
+                    isLogsVisible: viewModel.workspaceRunConsoleState(for: project.path)?.isVisible ?? false,
+                    onSelectConfiguration: { viewModel.selectWorkspaceRunConfiguration($0, in: project.path) },
+                    onRun: {
+                        do {
+                            try viewModel.runSelectedWorkspaceConfiguration(in: project.path)
+                        } catch {
+                            // 错误已由 ViewModel 收口
+                        }
+                    },
+                    onStop: { viewModel.stopSelectedWorkspaceRunSession(in: project.path) },
+                    onToggleLogs: { viewModel.toggleWorkspaceRunConsole(in: project.path) },
+                    onConfigure: { isRunConfigurationSheetPresented = true }
+                )
+            }
+
             ZStack {
                 ForEach(workspace.tabs) { tab in
                     WorkspaceSplitTreeView(
@@ -88,9 +115,21 @@ struct WorkspaceHostView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if let runConsoleState = viewModel.workspaceRunConsoleState(for: project.path),
+               runConsoleState.isVisible,
+               !runConsoleState.sessions.isEmpty {
+                runConsoleSection(runConsoleState: runConsoleState)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(NativeTheme.window)
+        .sheet(isPresented: $isRunConfigurationSheetPresented) {
+            WorkspaceRunConfigurationSheet(
+                viewModel: viewModel,
+                project: project
+            )
+        }
         .background {
             WindowFocusObserverView { activity in
                 windowActivity = activity
@@ -156,6 +195,62 @@ struct WorkspaceHostView: View {
                 Spacer(minLength: 0)
             }
         }
+    }
+
+    private func runConsoleSection(
+        runConsoleState: WorkspaceRunConsoleState
+    ) -> some View {
+        let panelHeight = WorkspaceRunConsoleLayoutPolicy.clampPanelHeight(CGFloat(runConsoleState.panelHeight))
+
+        return VStack(spacing: 0) {
+            WorkspaceRunConsoleResizeHandle(
+                onDragChanged: { translation in
+                    resizeRunConsole(translation: translation, currentHeight: panelHeight)
+                },
+                onDragEnded: { translation in
+                    resizeRunConsole(translation: translation, currentHeight: panelHeight)
+                    runConsoleResizeStartHeight = nil
+                },
+                onReset: {
+                    let resetHeight = WorkspaceRunConsoleLayoutPolicy.clampPanelHeight(
+                        WorkspaceRunConsoleLayoutPolicy.defaultPanelHeight
+                    )
+                    runConsoleResizeStartHeight = nil
+                    viewModel.updateWorkspaceRunConsolePanelHeight(Double(resetHeight), in: project.path)
+                }
+            )
+
+            WorkspaceRunConsolePanel(
+                consoleState: runConsoleState,
+                height: panelHeight,
+                onSelectSession: { viewModel.selectWorkspaceRunSession($0, in: project.path) },
+                onClear: { viewModel.clearSelectedWorkspaceRunConsoleBuffer(in: project.path) },
+                onOpenLog: {
+                    do {
+                        try viewModel.openSelectedWorkspaceRunLog(in: project.path)
+                    } catch {
+                        // 错误已由 ViewModel 收口
+                    }
+                },
+                onHide: {
+                    runConsoleResizeStartHeight = nil
+                    viewModel.toggleWorkspaceRunConsole(in: project.path)
+                }
+            )
+        }
+    }
+
+    private func resizeRunConsole(
+        translation: CGSize,
+        currentHeight: CGFloat
+    ) {
+        let startHeight = runConsoleResizeStartHeight ?? currentHeight
+        if runConsoleResizeStartHeight == nil {
+            runConsoleResizeStartHeight = currentHeight
+        }
+        let proposedHeight = startHeight - translation.height
+        let clampedHeight = WorkspaceRunConsoleLayoutPolicy.clampPanelHeight(proposedHeight)
+        viewModel.updateWorkspaceRunConsolePanelHeight(Double(clampedHeight), in: project.path)
     }
 
     private func actionButton(
@@ -334,5 +429,47 @@ struct WorkspaceHostView: View {
         }
         workspace.moveTab(id: tabID, by: amount)
         return true
+    }
+}
+
+private struct WorkspaceRunConsoleResizeHandle: View {
+    let onDragChanged: (CGSize) -> Void
+    let onDragEnded: (CGSize) -> Void
+    let onReset: () -> Void
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(NativeTheme.border.opacity(0.9))
+                .frame(height: 1)
+
+            Capsule()
+                .fill(NativeTheme.textSecondary.opacity(0.7))
+                .frame(width: 40, height: 4)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 12)
+        .background(NativeTheme.window)
+        .contentShape(.rect)
+        .gesture(
+            DragGesture()
+                .onChanged { gesture in
+                    onDragChanged(gesture.translation)
+                }
+                .onEnded { gesture in
+                    onDragEnded(gesture.translation)
+                }
+        )
+        .onTapGesture(count: 2, perform: onReset)
+    }
+}
+
+private enum WorkspaceRunConsoleLayoutPolicy {
+    static let defaultPanelHeight = CGFloat(WorkspaceRunConsoleState.defaultPanelHeight)
+    private static let minPanelHeight: CGFloat = 140
+    private static let maxPanelHeight: CGFloat = 420
+
+    static func clampPanelHeight(_ height: CGFloat) -> CGFloat {
+        min(max(height, minPanelHeight), maxPanelHeight)
     }
 }

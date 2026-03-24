@@ -2084,11 +2084,361 @@
   - 构建验证：`swift build --package-path macos` → Build complete。
   - 差异校验：`git diff --check` → 无输出。
 
+## 2026-03-24 Workspace Run Console 实现
+
+- [x] 搭建 Core 层运行模型与日志存储
+- [x] 实现 WorkspaceRunManager 的启动 / 输出 / 停止链路
+- [x] 把运行状态接入 NativeAppViewModel
+- [x] 接入 Workspace 顶部控制区与底部 Run Console UI
+- [x] 更新 AGENTS.md、补齐验证与 Review
+
+## Review（2026-03-24 Workspace Run Console 实现）
+
+- 结果：已为 workspace 接入基于 `Project.scripts` 的轻量 Run Console，支持同一 workspace 多命令并行运行、底部 session tabs 切换日志、顶部 Run / Stop / Logs 控制、日志落盘到 `~/.devhaven/run-logs/*.log`。
+- 直接原因：用户需要的是“像 IDEA 右上角 Run/Stop + 下方看日志”的交互结果，但底层只是运行命令，不需要完整 execution framework。
+- 设计层诱因：当前 workspace 架构天然偏向 terminal pane，如果直接把运行管理强塞进 Ghostty pane，会把“停止进程 / 关闭视图 / 查看日志”三种语义混在一起；因此本轮把命令执行抽到 `WorkspaceRunManager`，SwiftUI 只做控制和展示。未发现明显系统设计缺陷，但 run session 与 pane/session attention 原本是两条链路，本轮新增后要持续保持边界清晰。
+- 当前修复方案：
+  - Core：新增 `WorkspaceRunModels.swift`、`WorkspaceRunLogStore.swift`、`WorkspaceRunManager.swift`
+  - ViewModel：`NativeAppViewModel` 新增 workspace run state、script 选择、启动/停止/切换/展开日志 API，并在关闭 workspace 项目时停止该项目全部 run sessions
+  - App：新增 `WorkspaceRunToolbarView.swift` 与 `WorkspaceRunConsolePanel.swift`，并在 `WorkspaceHostView` 顶部右侧/底部接入
+  - 文档：`AGENTS.md` 新增 run console 模块与 `run-logs/*.log` 本地目录说明
+- 长期改进建议：
+  - 为 run session 增加历史清理策略与“关闭单个 session tab”动作
+  - 如果后续需要参数化执行，可在 `ProjectScript.paramSchema` 之上加参数输入层，而不是把 shell 逻辑继续堆在 UI 上
+  - 若未来要支持 Debug/Test，再考虑把当前轻量 run session 抽象成更完整的 executor 层
+- 验证证据：
+  - `swift test --package-path macos --filter WorkspaceRunLogStoreTests`
+  - `swift test --package-path macos --filter WorkspaceRunManagerTests`
+  - `swift test --package-path macos --filter NativeAppViewModelWorkspaceRunTests`
+  - `swift test --package-path macos --filter WorkspaceRunToolbarViewTests`
+  - `swift test --package-path macos --filter WorkspaceHostViewRunConsoleTests`
+  - `swift test --package-path macos` -> 315 tests, 5 skipped, 0 failures
+  - `swift build --package-path macos` -> Build complete
+- 验收步骤：
+  1. 打开任一带 `scripts` 的项目并进入 workspace。
+  2. 在顶部右侧脚本菜单选择一个脚本，点击 `Run`。
+  3. 观察底部 `Run Console` 自动展开，并出现对应 session tab 与实时日志。
+  4. 再选择另一个脚本点击 `Run`，确认底部新增第二个 session tab，两个命令可并行存在。
+  5. 点击不同 session tab，确认日志内容随之切换。
+  6. 点击顶部 `Stop`，确认只停止当前选中 session；未选中的其他 session 继续运行。
+  7. 点击顶部 `Logs`，确认仅收起/展开底部日志面板，不会停止进程。
+  8. 在底部点击“打开日志”，确认会用系统默认方式打开 `~/.devhaven/run-logs/` 下对应 `.log` 文件。
+
+## 2026-03-24 Workspace Run Console 收敛（配置复用 / 通用配置）
+
+- [x] 先补测试，约束“按配置复用 tab”而不是“每次 Run 新建 session tab”
+- [x] 把运行项从单纯 `Project.scripts` 收敛成运行配置（项目脚本 + 通用脚本）
+- [x] 接入配置入口，让 workspace 菜单里可直接跳到“配置运行项”
+- [x] 更新 AGENTS.md 与 Review，补 fresh 验证证据
+
+## Review（2026-03-24 Workspace Run Console 收敛）
+
+- 结果：Run Console 已从“execution history 视角”收敛为“运行配置视角”。顶部菜单现在统一展示项目脚本 + 通用脚本，底部 tab 按配置复用；同一配置再次 `Run` 时会 stop 旧进程并在原 tab 内 restart-in-place，不再每次追加新 tab。
+- 直接原因：上一版把 tab 真相源建在 `sessionID` 上，导致每次运行同一脚本都会生成新的会话标签，这更像终端历史而不是 IDEA 的 run configuration / reused content 心智。
+- 设计层诱因：之前缺少“运行配置”这一中间层，UI 直接拿 `Project.scripts` 驱动执行，再把每次执行结果 append 到 `sessions`。这样会让“配置选择”“执行实例”“底部 tab 复用策略”三件事耦在一起。当前已把这三者拆开：配置列表独立推导、执行仍是 session、tab 复用按 `configurationID` 收口。未发现明显新的系统设计缺陷。
+- 当前修复方案：
+  - Core：`WorkspaceRunModels.swift` 新增 `WorkspaceRunConfiguration` 与 `configurationID` 语义；`NativeAppViewModel` 负责把 `Project.scripts` + `sharedScriptsRoot` 下的通用脚本解析成可运行配置，并为同一配置复用同一个 console 槽位
+  - Shared Scripts：复用现有 `Settings -> 脚本` 管理器作为“公用配置”入口；workspace 直接消费其 manifest / 脚本文件，不再额外造第三套配置存储
+  - App：`WorkspaceRunToolbarView` 改为配置菜单 + `配置` 按钮；`WorkspaceHostView` 直接桥到 `viewModel.revealSettings(section: .scripts)`；`SettingsView` 支持按入口落到脚本分类
+  - Console：底部仍显示 session 运行态，但 tab 只保留每个配置的当前槽位；同配置重跑只替换该槽位的 session
+- 长期改进建议：
+  - 当前通用脚本参数仍主要依赖默认值；如果后续需要更像 IDEA 的临时参数编辑 / Before Launch / 环境变量面板，可在 `WorkspaceRunConfiguration` 之上再补参数表单层
+  - 若未来要支持“允许并行运行同一配置的多个实例”，应显式引入 `allowParallelRuns` 策略，而不是重新退回 append-only tab
+  - 若后续需要展示上次运行摘要 / 历史日志，可单独做 history 面板，不要把底部主 tab 再变回历史列表
+- 验证证据：
+  - `swift test --package-path macos --filter NativeAppViewModelWorkspaceRunTests`
+  - `swift test --package-path macos --filter 'WorkspaceRun(LogStoreTests|ManagerTests|ToolbarViewTests|HostViewRunConsoleTests)'`
+  - `swift test --package-path macos --filter WorkspaceHostViewRunConsoleTests`
+  - `swift test --package-path macos` -> 317 tests, 5 skipped, 0 failures
+  - `swift build --package-path macos` -> Build complete
+- 验收步骤：
+  1. 打开任一 workspace，确认顶部右侧运行菜单里同时能看到“项目脚本”和“通用脚本”两类配置（如果已在设置页配置过通用脚本）。
+  2. 先运行一个项目脚本，确认底部出现对应 tab，并持续输出日志。
+  3. 在同一个配置上再次点击 `Run`，确认不会新增第二个同名 tab，而是复用原 tab；旧进程被停止，新进程在原 tab 内继续输出。
+  4. 再运行另一个不同配置，确认底部新增第二个 tab，说明“不同配置可并行、同一配置复用”。
+  5. 点击顶部 `配置`，确认会直接打开设置页并落在“脚本”分类，可继续管理通用脚本。
+  6. 若某个通用脚本缺少必填默认参数，确认该配置不会误跑；补好默认值后重新打开 workspace 菜单即可运行。
+
+## 2026-03-24 workspace 通用脚本配置语义修正
+
+- [x] 对比当前 workspace run / script 配置实现与 archive/2.8.3，确认直接原因与设计层诱因
+- [x] 先补失败测试，约束“通用脚本只在配置脚本时参与选择，不直接出现在运行入口”
+- [x] 以最小改动修复当前实现，并同步必要文档/注释
+- [x] 运行定向验证并在 Review 记录证据、直接原因、设计层诱因、修复方案与长期建议
+
+## Review（2026-03-24 workspace 通用脚本配置语义修正）
+
+- 结果：
+  1. workspace 顶部 Run 菜单现在只展示当前项目的 `Project.scripts`，不再把 `sharedScriptsRoot` 下的通用脚本误当成可直接运行配置。
+  2. 顶部 `配置` 现在会打开新的 `WorkspaceScriptConfigurationSheet`；面板内提供 `archive/2.8.3` 同语义的“插入通用脚本（可选）”，用于把通用脚本模板展开成项目脚本命令与参数默认值，再保存回 `Project.scripts`。
+  3. `NativeAppViewModel.saveWorkspaceScripts(...)` 会把配置结果写回真实项目；若当前 workspace 是 worktree，则会落回其 root project 的 `scripts`，保持原有“worktree 继承脚本配置”的数据语义。
+- 直接原因：
+  1. 上一轮收敛把“通用脚本”错误理解成“运行配置来源”，于是 `availableWorkspaceRunConfigurations(...)` 直接把 `store.listSharedScripts(...)` 的结果拼进运行菜单。
+  2. `WorkspaceHostView` 的 `配置` 按钮也因此被错误地直接桥到设置页“脚本”分类，只能管理通用脚本，不能配置当前项目真正会运行的 `Project.scripts`。
+- 设计层诱因：
+  1. 之前把“运行配置”和“脚本模板来源”混成同一层概念：前者属于 workspace runtime，后者属于项目脚本编辑期；边界一旦混掉，就会自然把模板放进运行菜单。
+  2. 同时缺少原生版项目脚本配置面板，导致实现时为了给 `配置` 按钮找落点，错误复用了通用脚本管理页。未发现更深的系统性存储缺陷，问题主要是能力边界判断失真。
+- 当前修复方案：
+  1. Core：新增 `ScriptTemplateSupport`，把 shared-script template 应用、参数 schema 推导、默认参数构建、required 校验统一收口；`NativeAppViewModel` 运行配置重新只从 `Project.scripts` 推导，并新增 `saveWorkspaceScripts(...)` / `revealSharedScriptsSettings()`。
+  2. App：新增 `WorkspaceScriptConfigurationSheet`，提供项目脚本列表、命令编辑、参数值填写与“插入通用脚本（可选）”；`WorkspaceHostView` 的 `配置` 改为打开该面板，面板内如需管理通用脚本再跳设置页。
+  3. 文档：更新 `AGENTS.md`，明确 shared scripts 只属于脚本配置阶段，不属于 run menu 运行项。
+- 长期改进建议：
+  1. 当前脚本配置面板仍是轻量版；如果后续需要更像 IDEA 的 Before Launch、环境变量、临时参数覆盖，可在 `ProjectScript` 之上继续加编辑层，但不要再把通用脚本回退成 runtime config。
+  2. 若未来需要在主页/详情页也编辑项目脚本，建议复用同一份 `WorkspaceScriptConfigurationSheet` 内核，而不是再造第二套 shared-script 插入逻辑。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceRunTests|WorkspaceRunToolbarViewTests|WorkspaceHostViewRunConsoleTests|WorkspaceScriptConfigurationSheetTests|ScriptTemplateSupportTests'`（实现前）→ 编译失败，明确报错 `cannot find 'ScriptTemplateSupport' in scope`，说明新的模板工具 / 配置面板语义尚未落地。
+  - 绿灯验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceRunTests|WorkspaceRunToolbarViewTests|WorkspaceHostViewRunConsoleTests|WorkspaceScriptConfigurationSheetTests|ScriptTemplateSupportTests'` → 11 tests，0 failures。
+  - 回归验证：`swift test --package-path macos` → 320 tests，5 skipped，0 failures。
+
+## 2026-03-24 预制脚本模板变量赋值导致 zsh command not found 排查
+
+- [x] 复现当前预制脚本渲染结果，确认 `password=...` 被当成命令执行的直接原因
+- [x] 分析是否存在脚本模板/参数渲染协议层面的设计诱因
+- [x] 先补失败测试，覆盖以 shell 保留字命名的模板参数仍能安全赋值
+- [x] 以最小改动修复模板赋值/执行协议，并同步必要文档
+- [x] 运行定向验证并在 Review 记录证据、直接原因、设计层诱因、修复方案与长期建议
+
+
+## Review（2026-03-24 预制脚本模板变量赋值导致 zsh command not found 排查）
+
+- 结果：
+  1. 预制脚本里“先做变量赋值、再 `exec bash ...`”的写法现在可以正常运行，不会再出现 `zsh:1: command not found: password=...`。
+  2. `WorkspaceRunManager` 仍然支持已有的普通单行命令与 stop 流程；完整回归后未发现 run console 其它链路被这次修复带坏。
+- 直接原因：
+  1. `WorkspaceRunManager.start(...)` 之前把所有运行命令统一包装成 `zsh -lc "exec <request.command>"`。
+  2. 当 `request.command` 本身是一段多行 shell 脚本、并且前面含有 `password='...'`、`server='...'` 这类赋值语句时，shell 实际收到的是 `exec password='...'`，于是把 `password=...` 误当成“要执行的命令名”，直接报 `command not found`。
+- 设计层诱因：
+  1. 运行层此前默认假设“运行配置总是单个 shell command”，因此试图在进程入口统一外包一层 `exec`。
+  2. 但当前项目脚本/预制脚本已经允许用户写完整的多行 shell 程序，并且脚本内容内部自己就可能包含赋值、数组、条件分支乃至 `exec`；这说明执行层与脚本 authoring 层之间存在协议错位。未发现更深的存储模型缺陷，问题主要集中在 RunManager 的入口包装策略。
+- 当前修复方案：
+  1. 为 `WorkspaceRunManagerTests` 新增回归测试 `testStartSupportsMultilineCommandsWithAssignmentsBeforeInnerExec`，覆盖“前置赋值 + 内层 exec”场景。
+  2. `WorkspaceRunManager.start(...)` 不再对 `request.command` 统一追加外层 `exec `，而是直接交给 `zsh -lc` 执行，让多行脚本自己控制是否 `exec` 最终进程。
+- 长期改进建议：
+  1. 如果后续还要继续增强 run configuration，可以显式区分“单条命令模式”和“脚本模式”，避免执行层继续依赖隐式 shell 包装约定。
+  2. 对包含多行脚本、数组、trap、inner exec 的配置，建议继续把回归样例收在 `WorkspaceRunManagerTests`，不要只测单行 `printf` 这类 happy path。
+- 验证证据：
+  - 根因复现：`/bin/zsh -lc $'exec password=''WwS6P6AzfKHu''
+server=''example''
+exec bash -lc '''echo ok''''` → `zsh:1: command not found: password=WwS6P6AzfKHu`
+  - 红灯验证：`swift test --package-path macos --filter WorkspaceRunManagerTests`（修复前）→ `testStartSupportsMultilineCommandsWithAssignmentsBeforeInnerExec` 失败，并明确输出 `zsh:1: command not found: password=WwS6P6AzfKHu`
+  - 绿灯验证：`swift test --package-path macos --filter WorkspaceRunManagerTests` → 3 tests，0 failures
+  - 回归验证：`swift test --package-path macos` → 321 tests，5 skipped，0 failures
+
+## 2026-03-24 Run Console 日志补充最终执行命令
+
+- [x] 复现当前脚本执行链路，确认现有日志缺少最终执行命令且不利于继续定位参数注入问题
+- [x] 先补失败测试，约束 Run Console / log file 会输出最终执行命令与工作目录
+- [x] 以最小改动实现命令头日志，并确认不破坏现有输出/停止语义
+- [x] 运行定向验证与完整回归，并在 Review 记录风险、证据与后续排查方式
+
+
+## Review（2026-03-24 Run Console 日志补充最终执行命令）
+
+- 结果：
+  1. Run Console 与落盘 log 现在会在真实进程输出之前，先打印最终执行目录与最终执行命令，方便继续核对变量是否真的被注入到了脚本里。
+  2. 现有 run/stop 行为保持不变；针对多行脚本、前置赋值、inner exec 的场景，回归后未发现回退。
+- 直接原因：
+  1. 当前日志链路此前只记录子进程 stdout/stderr，不记录 DevHaven 实际交给 `zsh -lc` 的最终命令，因此当用户怀疑“变量没有注入”时，日志无法给出第一现场证据。
+  2. 这会让脚本问题与参数注入问题难以区分：明明最终命令可能已经被正确解析，但日志层看不到，只能靠猜。
+- 设计层诱因：
+  1. Run Console 之前把自己定位成“纯子进程输出镜像”，没有给执行器自身的元信息预留首屏诊断位。
+  2. 这属于可观测性缺口，而不是新的执行协议缺陷；执行层与日志层之间少了一层“启动上下文”桥接。
+- 当前修复方案：
+  1. 为 `WorkspaceRunManagerTests` 新增 `testStartLogsResolvedCommandAndWorkingDirectoryBeforeProcessOutput`，约束在真实输出前先记录执行目录/命令。
+  2. `WorkspaceRunManager.start(...)` 在创建 log file 后、启动进程前，先向 Run Console / log file 注入命令头：
+     - `[DevHaven] 执行目录：...`
+     - `[DevHaven] 执行命令：...`
+  3. 同步修复 `WorkspaceRunManagerTests` 中因多次 fulfill 导致的测试脆弱性，避免新的命令头输出让旧测试出现 over-fulfill 崩溃。
+- 风险说明：
+  1. 当前日志会记录“最终执行命令原文”，因此如果脚本参数里包含密码、token、secret 值，这些值也会进入 Run Console 与 `~/.devhaven/run-logs/*.log`。
+  2. 这是为了继续排查你当前的参数注入问题而做的诊断增强；如果后续确认要长期保留，建议再补一轮 secret masking 方案，而不是直接把明文日志作为最终形态。
+- 长期改进建议：
+  1. 下一步可在 `WorkspaceRunConfiguration` / `ProjectScript.paramSchema` 上增加按字段类型的脱敏日志策略，只对 `secret` 字段输出 `***`，同时保留其它字段原值便于排障。
+  2. 如果后续还会继续扩展执行器，建议把“命令头 / 环境摘要 / cwd / 退出码”统一抽成 executor metadata block，而不是散在各处追加字符串。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter WorkspaceRunManagerTests`（新增测试后、实现前）→ `testStartLogsResolvedCommandAndWorkingDirectoryBeforeProcessOutput` 失败，明确说明日志中还没有 `[DevHaven] 执行命令：...`
+  - 绿灯验证：`swift test --package-path macos --filter WorkspaceRunManagerTests` → 4 tests，0 failures
+  - 回归验证：`swift test --package-path macos` → 322 tests，5 skipped，0 failures
+
+## 2026-03-24 shared script 架构对照 IntelliJ 模板机制分析
+
+- [x] 阅读 IntelliJ run configuration / template / editor 相关源码，确认“很多模板”背后的真实实现机制
+- [x] 对照当前 DevHaven shared script / ProjectScript / WorkspaceRunManager 链路，定位当前架构错位点
+- [x] 输出结构化分析：直接原因、设计层诱因、IDEA 的处理方式、推荐终态架构与迁移建议
+- [x] 在 Review 中记录本轮结论与证据来源
+
+## Review（2026-03-24 shared script 架构对照 IntelliJ 模板机制分析）
+
+- 结果：
+  1. 你判断得对：当前 DevHaven 虽然已经把通用脚本从 Run 菜单移回“配置阶段模板”，但底层仍然是“文本命令模板 + 变量替换 + shell 解释执行”模型；这在架构上仍然偏脆弱。
+  2. IntelliJ/IDEA 的“很多模板”并不是靠一个自由拼接的 shell 模板池完成，而是靠 `ConfigurationType -> ConfigurationFactory -> template configuration -> type-specific editor/executor` 这一整套结构化运行配置体系提供。
+- 直接原因：
+  1. 当前 DevHaven 的 `ProjectScript` 真相源仍然是 `name + start + paramSchema + templateParams`，其中 `start` 本质是整段 shell 文本（`macos/Sources/DevHavenCore/Models/AppModels.swift`）。
+  2. `ScriptTemplateSupport.resolveCommand(...)` 会把参数统一折叠成 shell 赋值前缀，再和模板文本拼成最终命令（`macos/Sources/DevHavenCore/Run/ScriptTemplateSupport.swift`）；执行器最终仍只看到“一整段命令字符串”，不知道“这是远程日志查看”“那是 Jenkins 部署”。
+  3. 内置通用脚本 preset 也是 `commandTemplate + params + fileContent` 结构，例如 `remote-log-viewer` 直接把一整段多行 shell 当模板（`macos/Sources/DevHavenCore/Storage/LegacyCompatStore.swift`）。
+- 设计层诱因：
+  1. 当前模型把“运行配置类型”降格成了“命令模板文本”，导致 UI、校验、执行、日志、脱敏都只能围绕字符串做二次猜测。
+  2. 一旦某个预设需要更强语义（布尔开关、secret 脱敏、路径选择、可组合 before-launch、执行器差异、平台约束），系统就会被迫继续往 shell 模板里塞约定，复杂度会沿字符串协议外溢。
+  3. 未发现这次问题背后还有更深的线程/存储崩坏；当前主要是运行配置抽象层级偏低，导致 shared script 只能被建模成“可插入的 shell 片段”。
+- IDEA 的处理方式：
+  1. `ConfigurationFactory.createTemplateConfiguration(project)` 明确定义“某一类运行配置”的模板对象，而不是返回一段命令文本（`platform/execution/src/com/intellij/execution/configurations/ConfigurationFactory.java`）。
+  2. `RunManagerImpl.getConfigurationTemplate(factory)` 会按 factory 维度缓存模板；首次没有就 `createTemplateSettings(factory)` 创建并注册（`platform/execution-impl/src/com/intellij/execution/impl/RunManagerImpl.kt`）。
+  3. “Edit Configurations” 右侧模板编辑面板也是按 factory 打开的：`TemplateConfigurable(runManager.getConfigurationTemplate(factory))`（`platform/execution-impl/src/com/intellij/execution/impl/RunConfigurable.kt`）。
+  4. 以 Shell 为例，`ShConfigurationType.createTemplateConfiguration(...)` 先生成结构化 `ShRunConfiguration`，填默认 shell / working dir；`ShRunConfiguration` 自己持有 `scriptPath`、`scriptOptions`、`interpreterPath`、`workingDirectory`、`env` 等字段，并有自己的 editor / 校验 / profile state（`plugins/sh/core/src/com/intellij/sh/run/*.java`）。
+- 推荐终态架构：
+  1. DevHaven 里“远程日志查看”这类预设，不应再被建模成一段 shared shell template，而应是一个结构化的 `WorkspaceRunPresetKind` / `WorkspaceRunPresetDefinition`。
+  2. 项目里保存的也不该只是 `start` 文本；更合理的是保存：`kind`、`displayName`、`fieldValues`、`workingDirectoryPolicy`、必要时的 `executorHints`。
+  3. 执行阶段再由 kind-specific executor/rendering 生成命令或参数数组；这样 UI 校验、secret masking、日志显示、默认值、迁移都能基于结构化字段完成，而不是继续靠 shell 文本约定。
+  4. shared scripts 最多只保留两类职责：
+     - 作为“脚本文件资产”存在；
+     - 或作为某种 preset 的底层 helper 文件。
+     但它不该继续承担运行配置 DSL 的角色。
+- 长期改进建议：
+  1. 下一轮可以把现有模型拆成两层：
+     - `WorkspaceRunDefinition`：结构化配置类型定义（远程日志、Jenkins、自定义 shell 等）；
+     - `WorkspaceRunInstance`：项目内具体实例与字段值。
+  2. 为兼容已有数据，可把当前纯文本 `ProjectScript.start` 收口成一种 `customShell` 类型，而不是要求所有类型都继续走这条路。
+  3. 这样既能保住“自由脚本”能力，又能给常用预设真正的 IDEA 风格结构化配置体验。
+- 验证证据：
+  - IntelliJ 源码核对：
+    - `platform/execution/src/com/intellij/execution/configurations/ConfigurationFactory.java`
+    - `platform/execution-impl/src/com/intellij/execution/impl/RunManagerImpl.kt`
+    - `platform/execution-impl/src/com/intellij/execution/impl/RunConfigurable.kt`
+    - `plugins/sh/core/src/com/intellij/sh/run/ShConfigurationType.java`
+    - `plugins/sh/core/src/com/intellij/sh/run/ShRunConfiguration.java`
+  - DevHaven 当前实现核对：
+    - `macos/Sources/DevHavenCore/Models/AppModels.swift`
+    - `macos/Sources/DevHavenCore/Run/ScriptTemplateSupport.swift`
+    - `macos/Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift`
+    - `macos/Sources/DevHavenCore/Storage/LegacyCompatStore.swift`
+
+## 2026-03-24 破坏式升级到 typed run configurations
+
+- [x] Task 1：重构 Core 运行配置模型，支持 `customShell` / `remoteLogViewer`，并兼容旧 `ProjectScript` flatten 迁移
+- [x] Task 2：升级 WorkspaceRunManager 为 typed executable，去掉 shared helper script 执行路径
+- [x] Task 3：重写 workspace 运行配置编辑器，移除 Settings 中的脚本/模板入口
+- [x] Task 4：删除 shared scripts store/model/UI 与相关遗留测试，并同步 AGENTS.md
+- [x] Task 5：运行定向测试 + `swift test --package-path macos` 全量回归，补 Review 证据
+
+## Review（2026-03-24 破坏式升级到 typed run configurations）
+
+- 结果：
+  1. Workspace 运行配置主链已从 shared scripts / shell 模板拼接切到 typed run configurations；当前项目内只暴露 `customShell` 与 `remoteLogViewer` 两类配置。
+  2. `WorkspaceRunManager` 已支持 typed executable：`customShell` 继续走 `/bin/zsh -lc`，`remoteLogViewer` 直接走 `/usr/bin/ssh` 结构化参数，不再依赖 shared helper script。
+  3. Settings 已移除脚本模板管理入口，`WorkspaceHostView` 配置按钮已改为只打开 typed 运行配置面板；`SharedScriptsManagerView.swift` 已删除。
+  4. 旧 `ProjectScript.start + paramSchema + templateParams` 读取时会一次性 flatten 成 `customShell`，因此旧项目数据不会阻塞新模型落地。
+- 直接原因：
+  1. 旧实现把运行配置主语义压扁成 shell 文本和变量替换协议，导致 `remote_log_viewer.sh` 这类预设在 UI、校验、执行、日志层都失去结构化语义。
+  2. 结果就是运行层只能看到“一整段命令字符串”，像 `follow`、`port`、`allowPasswordPrompt` 这种字段都只能继续依赖字符串约定和 shell 解释。
+- 设计层诱因：
+  1. 旧 shared scripts 同时承担“预设类型定义”和“可执行模板文本”两种职责，模型层级过低。
+  2. Settings 里维护全局模板目录，也让运行配置语义和项目上下文分裂。当前已修掉主链，但底层 `LegacyCompatStore` / `SharedScriptModels` 仍残留未引用的 shared-scripts 代码，属于后续可继续删除的遗留清理项。
+- 当前修复方案：
+  1. Core：引入 `ProjectRunConfiguration` / `ProjectRunConfigurationKind`、`WorkspaceRunExecutable`、`displayCommand`，并让 ViewModel 直接生成 `remoteLogViewer -> ssh args`。
+  2. App：重写 `WorkspaceRunConfigurationSheet`，支持 typed 配置新增/编辑/保存；Settings 删掉 scripts 分类与模板管理入口。
+  3. 兼容：保留 `Project.scripts` / `saveWorkspaceScripts(...)` 作为过渡别名，方便当前分支其余代码逐步切到 `runConfigurations`。
+- 长期改进建议：
+  1. 下一轮可以继续删除 `LegacyCompatStore` 中未再引用的 shared-scripts manifest / preset API，以及 `SharedScriptModels.swift`，把“通用脚本系统”从仓库里彻底移除。
+  2. 等其余调用点都切到 `runConfigurations` 后，再删除 `Project.scripts` / `saveWorkspaceScripts(...)` 这些兼容入口，避免长期双语义。
+- 验证证据：
+  - 定向验证：`swift test --package-path macos --filter 'AppSettingsUpdatePreferencesTests|NativeAppViewModelWorkspaceRunTests|WorkspaceRunManagerTests|WorkspaceHostViewRunConsoleTests|WorkspaceScriptConfigurationSheetTests|SettingsViewTests'` → 21 tests，0 failures。
+  - 全量回归：`swift test --package-path macos` → 323 tests，5 skipped，0 failures。
+
+## 2026-03-24 第二阶段：彻底清仓 shared scripts + 贴近 IDEA 交互
+
+- [x] 清理 public API 中的 shared-scripts / legacy scripts 别名，只保留旧数据解码迁移能力
+- [x] 删除 `SharedScriptModels.swift` 与 `LegacyCompatStore` 中未再使用的 shared-scripts backend 代码
+- [x] 清理测试/fixture/文案中的 `sharedScriptsRoot` / 通用脚本残留引用
+- [x] 优化运行配置面板交互：创建即定类型、自动建议名称、分组表单、命令预览，更贴近 IDEA 使用习惯
+- [x] 重新跑定向验证与全量回归，并补第二阶段 Review
+
+## Review（2026-03-24 第二阶段：彻底清仓 shared scripts + 贴近 IDEA 交互）
+
+- 结果：
+  1. shared scripts / 默认模板体系已经从当前运行配置主链里彻底退出：`SharedScriptModels.swift` 已删除，`LegacyCompatStore` 不再提供 manifest / preset / file-editing API，Settings 也不再保留脚本模板入口。
+  2. 当前运行配置交互已经更接近 IDEA：创建时确定类型，编辑页不再用类型 picker 来回切换；支持自动建议名称、复制当前配置、remote log 的分组表单，以及只读“命令预览”。
+  3. 旧项目数据仍可兼容读取：仅保留 `Project.scripts` 的解码迁移能力，把旧脚本一次性 flatten 成 `customShell`，但新的 public API / UI / store 主链都只认 `runConfigurations`。
+- 直接原因：
+  1. 第一阶段虽然已经把执行主链切到 typed run configurations，但仓库里仍残留 shared-script model/store/test fixture/current doc 痕迹，导致架构认知仍然分裂。
+  2. `WorkspaceRunConfigurationSheet` 也还不够像 IDEA：如果继续保留“编辑页切类型 + 模板入口 + 缺少命令预览”，用户仍需要理解 DevHaven 自己的一套历史概念，使用成本偏高。
+- 设计层诱因：
+  1. 旧模型长期把“运行配置类型”“模板资产”“兼容解码”“执行命令字符串”混在一起，导致主链已经升级后，仓库边角仍会持续泄漏旧概念。
+  2. 未发现新的系统性设计缺陷；当前主要是破坏式升级没有一次性清到仓库边缘，外加配置编辑器仍带有过渡期交互痕迹。
+- 当前修复方案：
+  1. 模型层：删除 `SharedScriptModels.swift`，把 `GitDailyRefreshResult` 迁到 `GitStatisticsModels.swift`，避免误删 shared-script 文件时把无关公共模型一起带走；`ProjectRunConfiguration.fromLegacyProjectScript(...)` 改为仅供本文件解码迁移使用。
+  2. 存储层：`LegacyCompatStore` 删除 shared-scripts backend API，只保留普通 app/projects/document/git metadata 持久化。
+  3. UI 层：重建 `WorkspaceRunConfigurationSheet`，保留 `customShell` / `remoteLogViewer` 两类 typed 配置；新增“复制当前配置”“命令预览”“连接设置 / 日志设置 / 安全设置”“suggestedName”，并确保保存路径统一走 `viewModel.saveWorkspaceRunConfigurations(...)`。
+  4. 文档/测试：`AGENTS.md` 删除 `~/.devhaven/scripts/*` 当前目录描述；非兼容场景测试 fixture 统一改为 `runConfigurations`，只在专门的 legacy decode 测试里保留旧 `scripts` JSON。
+- 长期改进建议：
+  1. 如果后续继续向 IDEA 靠拢，下一层最值得补的是 environment variables、before launch、working directory policy，而不是再恢复任何“全局模板目录”。
+  2. `customShell` 建议继续作为唯一自由逃生口；常用能力再逐个长成结构化 configuration type，避免重新退回字符串 DSL。
+- 验证证据：
+  - 定向验证：`swift test --package-path macos --filter 'ScriptTemplateSupportTests|AppSettingsUpdatePreferencesTests|NativeAppViewModelWorkspaceRunTests|WorkspaceRunManagerTests|WorkspaceHostViewRunConsoleTests|WorkspaceScriptConfigurationSheetTests|SettingsViewTests|LegacyCompatStoreTests'` → 24 tests，0 failures。
+  - 全量回归：`swift test --package-path macos` → 324 tests，5 skipped，0 failures。
+
+
+## 2026-03-24 底部 Run Console 面板拖拽高度
+
+- [x] 把底部 Run Console 拖拽高度任务登记到 tasks/todo.md，并明确本轮边界
+- [x] 先补失败测试，约束 run console state/host view 持有可调高度与拖拽入口
+- [x] 以最小改动实现底部面板拖拽改高，并将高度保存在 workspace runtime state
+- [x] 运行定向测试与构建验证，并在 Review 记录直接原因、设计诱因、修复方案与证据
+
+## Review（2026-03-24 底部 Run Console 面板拖拽高度）
+
+- 结果：
+  1. workspace 底部 Run Console 现在支持通过顶部拖拽条实时调整高度。
+  2. 调整后的高度保存在 `WorkspaceRunConsoleState` 运行时内存里；同一 workspace 内收起再展开会保留刚才的高度，但不会写入持久化配置。
+  3. 双击拖拽条会把底部面板重置回默认高度。
+- 直接原因：
+  1. `WorkspaceRunConsolePanel.swift` 之前把高度写死为 `220`，没有暴露可调高度输入。
+  2. `WorkspaceHostView.swift` 之前只负责“有无显示底部面板”，没有分隔条、拖拽手势，也没有把高度写回任何 runtime state。
+- 设计层诱因：
+  1. 底部 Run Console 已经有独立的 workspace runtime state，但此前只覆盖 session / selection / visible，没有把“面板尺寸”也纳入同一真相源，导致 UI 只能写死高度。
+  2. 未发现明显系统设计缺陷；主要是布局状态漏建模，而不是状态源分裂。
+- 当前修复方案：
+  1. 在 `WorkspaceRunConsoleState` 中新增 `panelHeight` 与默认高度常量，作为底部面板高度的 runtime 真相源。
+  2. 在 `NativeAppViewModel` 中新增 `updateWorkspaceRunConsolePanelHeight(...)`，由宿主视图把拖拽后的高度写回当前 workspace run state。
+  3. 在 `WorkspaceHostView` 中新增底部拖拽条与 `WorkspaceRunConsoleLayoutPolicy`，负责拖拽手势、默认值与高度 clamp。
+  4. `WorkspaceRunConsolePanel` 不再自己写死高度，改为消费宿主传入的 `height`。
+- 长期改进建议：
+  1. 如果后续用户希望“重启 App 后也记住高度”，再单独评估是否把该值提升到设置层；本轮先保持 runtime-only，避免把纯 UI 偏好扩散进持久化协议。
+  2. 若后续还会新增更多可调 panel，可考虑抽出统一的 panel resize handle/布局策略，避免各处重复实现。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceRunTests|WorkspaceHostViewRunConsoleTests'`（实现前）→ 编译失败，明确提示 `WorkspaceRunConsoleState` 缺少 `panelHeight/defaultPanelHeight`，且 `NativeAppViewModel` 缺少 `updateWorkspaceRunConsolePanelHeight`
+  - 绿灯验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceRunTests|WorkspaceHostViewRunConsoleTests'` → 10 tests，0 failures
+  - 构建验证：`swift build --package-path macos` → `Build complete!`，exit 0
+
 ## 2026-03-24 合并 focus 与 feature/38 worktree
 
 - [x] 审计 current main、focus、feature/38 的提交关系、ahead/behind 与未提交状态
 - [x] 确认本次只合并两个 worktree 的已提交内容，并记录可能冲突文件（`AGENTS.md`、`SettingsView.swift`、`AppModels.swift`、`tasks/todo.md`）
 - [x] 先将 focus 合并到当前 main，处理必要冲突
-- [ ] 再将 feature/38 合并到当前 main，处理必要冲突
-- [ ] 运行针对性测试 / 构建验证合并结果
-- [ ] 复核 git 状态并在本文件追加 Review（含直接原因、设计层诱因、修复方案、长期建议、验证证据）
+- [x] 再将 feature/38 合并到当前 main，处理必要冲突
+- [x] 运行针对性测试 / 构建验证合并结果
+- [x] 复核 git 状态并在本文件追加 Review（含直接原因、设计层诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-24 合并 focus 与 feature/38 worktree）
+
+- 结果：
+  1. 已将 `focus` 与 `feature/38` 两个 worktree 的**已提交内容**合并到当前 `main`。
+  2. `focus` 里的 workspace 打开项目快捷键 / 终端菜单快捷键路由，与 `feature/38` 里的 typed run configurations / Run Console / Settings 清理现在已经同时存在于当前树上。
+  3. 冲突已收口：`AppModels.swift` 同时保留了 `workspaceOpenProjectShortcut` 与 `SettingsNavigationSection` / `runConfigurations` 相关模型；`SettingsViewTests.swift` 同时保留了“打开项目快捷键”与“移除 shared scripts 入口”两类断言；`tasks/todo.md` 也保留了两边历史记录。
+- 直接原因：
+  1. `focus` 基于当前 `main` 只前进 1 个提交，而 `feature/38` 相对 `main` 处于 `ahead 3, behind 1`，因此第二次合并时会重新触碰已经被 `focus` 改过的设置 / 模型 / 任务记录文件。
+  2. 两个 worktree 都改到了 `SettingsView` / `AppModels` 这一组横切面：一个新增 workspace 打开项目快捷键，另一个删除 shared scripts 并引入 typed run configurations，所以冲突不是偶发文本碰撞，而是同一配置面与模型面的真实语义叠加。
+- 设计层诱因：
+  1. `AppSettings` / `AppModels` 与 `tasks/todo.md` 都是高扇入文件，不同 worktree 同期推进时天然容易冲突。
+  2. 未发现新的系统设计缺陷；本轮冲突主要来自两个分支同时修改同一设置与任务记录收口层，而不是主链模型出现真相源分裂。
+- 当前修复方案：
+  1. 先在当前 `main` 真合并 `focus`，只把已提交内容带回来；`tasks/todo.md` 的 autostash 冲突通过手工保留 focus Review + 本轮 merge checklist 解决。
+  2. 再真合并 `feature/38`，把 typed run configurations / Run Console / settings cleanup 合并进来，并在冲突文件里显式保留两边语义。
+  3. 用一次 fresh `swift test --package-path macos` 全量回归确认组合结果没有把任何一侧功能合坏。
+- 长期改进建议：
+  1. 后续若还会并行推进多个 worktree，尽量提前避开 `AppModels.swift` / `SettingsView.swift` / `tasks/todo.md` 这类公共汇聚文件，或拆出更细的子模块，减少合并时的人肉语义拼接成本。
+  2. `tasks/todo.md` 作为单文件流水账非常容易形成冲突热点；若后续并行 worktree 更多，可考虑按日期或主题拆分 Review 记录。
+- 验证证据：
+  - worktree 审计：`git -C /Users/zhaotianzeng/.devhaven/worktrees/DevHaven/focus status --short --branch` → `focus...origin/main [ahead 1]`；`git -C /Users/zhaotianzeng/.devhaven/worktrees/DevHaven/feature/38 status --short --branch` → `feature/38...origin/main [ahead 3, behind 1]`。
+  - 合并动作：`git merge --autostash --no-ff focus` → 成功生成 merge commit，随后手工解决 `tasks/todo.md` 的 autostash 冲突；`git merge --no-ff feature/38` → 进入冲突解析，最终保留两边语义后继续完成合并。
+  - 全量回归：`swift test --package-path macos` → 344 tests，5 skipped，0 failures。
+  - 差异校验：`git diff --check` → 无输出。

@@ -920,7 +920,7 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
             name: name,
             path: path,
             tags: [],
-            scripts: [],
+            runConfigurations: [],
             worktrees: worktrees,
             mtime: 1,
             size: 0,

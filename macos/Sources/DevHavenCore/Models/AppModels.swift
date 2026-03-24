@@ -162,6 +162,14 @@ public struct AppMenuShortcut: Codable, Equatable, Sendable {
     }
 }
 
+public enum SettingsNavigationSection: String, Codable, Sendable, CaseIterable, Identifiable {
+    case general
+    case terminal
+    case workflow
+
+    public var id: String { rawValue }
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
     public var editorOpenTool: OpenToolSettings
     public var terminalOpenTool: OpenToolSettings
@@ -174,7 +182,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var gitIdentities: [GitIdentity]
     public var projectListViewMode: ProjectListViewMode
     public var workspaceSidebarWidth: Double
-    public var sharedScriptsRoot: String
     public var workspaceInAppNotificationsEnabled: Bool
     public var workspaceNotificationSoundEnabled: Bool
     public var workspaceSystemNotificationsEnabled: Bool
@@ -196,7 +203,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         gitIdentities: [GitIdentity] = [],
         projectListViewMode: ProjectListViewMode = .card,
         workspaceSidebarWidth: Double = 280,
-        sharedScriptsRoot: String = "~/.devhaven/scripts",
         workspaceInAppNotificationsEnabled: Bool = true,
         workspaceNotificationSoundEnabled: Bool = true,
         workspaceSystemNotificationsEnabled: Bool = false,
@@ -217,7 +223,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.gitIdentities = gitIdentities
         self.projectListViewMode = projectListViewMode
         self.workspaceSidebarWidth = workspaceSidebarWidth
-        self.sharedScriptsRoot = sharedScriptsRoot
         self.workspaceInAppNotificationsEnabled = workspaceInAppNotificationsEnabled
         self.workspaceNotificationSoundEnabled = workspaceNotificationSoundEnabled
         self.workspaceSystemNotificationsEnabled = workspaceSystemNotificationsEnabled
@@ -240,7 +245,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case gitIdentities
         case projectListViewMode
         case workspaceSidebarWidth
-        case sharedScriptsRoot
         case workspaceInAppNotificationsEnabled
         case workspaceNotificationSoundEnabled
         case workspaceSystemNotificationsEnabled
@@ -264,7 +268,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.gitIdentities = try container.decodeIfPresent([GitIdentity].self, forKey: .gitIdentities) ?? []
         self.projectListViewMode = try container.decodeIfPresent(ProjectListViewMode.self, forKey: .projectListViewMode) ?? .card
         self.workspaceSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .workspaceSidebarWidth) ?? 280
-        self.sharedScriptsRoot = try container.decodeIfPresent(String.self, forKey: .sharedScriptsRoot) ?? "~/.devhaven/scripts"
         self.workspaceInAppNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceInAppNotificationsEnabled) ?? true
         self.workspaceNotificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceNotificationSoundEnabled) ?? true
         self.workspaceSystemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceSystemNotificationsEnabled) ?? false
@@ -350,20 +353,12 @@ public struct ScriptParamField: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-public struct ProjectScript: Codable, Equatable, Sendable, Identifiable {
-    public var id: String
-    public var name: String
-    public var start: String
-    public var paramSchema: [ScriptParamField]
-    public var templateParams: [String: String]
-
-    public init(id: String, name: String, start: String, paramSchema: [ScriptParamField] = [], templateParams: [String: String] = [:]) {
-        self.id = id
-        self.name = name
-        self.start = start
-        self.paramSchema = paramSchema
-        self.templateParams = templateParams
-    }
+private struct LegacyProjectScript: Codable, Equatable, Sendable, Identifiable {
+    var id: String
+    var name: String
+    var start: String
+    var paramSchema: [ScriptParamField]
+    var templateParams: [String: String]
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -373,13 +368,105 @@ public struct ProjectScript: Codable, Equatable, Sendable, Identifiable {
         case templateParams
     }
 
-    public init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decode(String.self, forKey: .id)
         self.name = try container.decode(String.self, forKey: .name)
         self.start = try container.decode(String.self, forKey: .start)
         self.paramSchema = try container.decodeIfPresent([ScriptParamField].self, forKey: .paramSchema) ?? []
         self.templateParams = try container.decodeIfPresent([String: String].self, forKey: .templateParams) ?? [:]
+    }
+}
+
+public enum ProjectRunConfigurationKind: String, Codable, Equatable, Sendable {
+    case customShell
+    case remoteLogViewer
+}
+
+public struct ProjectRunCustomShellConfiguration: Codable, Equatable, Sendable {
+    public var command: String
+
+    public init(command: String) {
+        self.command = command
+    }
+}
+
+public struct ProjectRunRemoteLogViewerConfiguration: Codable, Equatable, Sendable {
+    public var server: String
+    public var logPath: String
+    public var user: String?
+    public var port: Int?
+    public var identityFile: String?
+    public var lines: Int?
+    public var follow: Bool
+    public var strictHostKeyChecking: String?
+    public var allowPasswordPrompt: Bool
+
+    public init(
+        server: String,
+        logPath: String,
+        user: String? = nil,
+        port: Int? = 22,
+        identityFile: String? = nil,
+        lines: Int? = 200,
+        follow: Bool = true,
+        strictHostKeyChecking: String? = "accept-new",
+        allowPasswordPrompt: Bool = false
+    ) {
+        self.server = server
+        self.logPath = logPath
+        self.user = user
+        self.port = port
+        self.identityFile = identityFile
+        self.lines = lines
+        self.follow = follow
+        self.strictHostKeyChecking = strictHostKeyChecking
+        self.allowPasswordPrompt = allowPasswordPrompt
+    }
+}
+
+public struct ProjectRunConfiguration: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var name: String
+    public var kind: ProjectRunConfigurationKind
+    public var customShell: ProjectRunCustomShellConfiguration?
+    public var remoteLogViewer: ProjectRunRemoteLogViewerConfiguration?
+
+    public init(
+        id: String,
+        name: String,
+        kind: ProjectRunConfigurationKind,
+        customShell: ProjectRunCustomShellConfiguration? = nil,
+        remoteLogViewer: ProjectRunRemoteLogViewerConfiguration? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+        self.customShell = customShell
+        self.remoteLogViewer = remoteLogViewer
+    }
+
+    public init(id: String, name: String, command: String) {
+        self.init(
+            id: id,
+            name: name,
+            kind: .customShell,
+            customShell: ProjectRunCustomShellConfiguration(command: command)
+        )
+    }
+
+    fileprivate static func fromLegacyProjectScript(_ script: LegacyProjectScript) -> ProjectRunConfiguration {
+        let resolution = ScriptTemplateSupport.resolveCommand(
+            template: script.start,
+            paramSchema: script.paramSchema,
+            explicitValues: script.templateParams
+        )
+        return ProjectRunConfiguration(
+            id: script.id,
+            name: script.name,
+            kind: .customShell,
+            customShell: ProjectRunCustomShellConfiguration(command: resolution.command)
+        )
     }
 }
 
@@ -434,7 +521,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
     public var name: String
     public var path: String
     public var tags: [String]
-    public var scripts: [ProjectScript]
+    public var runConfigurations: [ProjectRunConfiguration]
     public var worktrees: [ProjectWorktree]
     public var mtime: SwiftDate
     public var size: Int64
@@ -452,7 +539,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         name: String,
         path: String,
         tags: [String],
-        scripts: [ProjectScript],
+        runConfigurations: [ProjectRunConfiguration],
         worktrees: [ProjectWorktree],
         mtime: SwiftDate,
         size: Int64,
@@ -469,7 +556,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         self.name = name
         self.path = path
         self.tags = tags
-        self.scripts = scripts
+        self.runConfigurations = runConfigurations
         self.worktrees = worktrees
         self.mtime = mtime
         self.size = size
@@ -488,7 +575,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         case name
         case path
         case tags
-        case scripts
+        case runConfigurations
         case worktrees
         case mtime
         case size
@@ -502,13 +589,23 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         case checked
     }
 
+    enum LegacyCodingKeys: String, CodingKey {
+        case scripts
+    }
+
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
         self.id = try container.decode(String.self, forKey: .id)
         self.name = try container.decode(String.self, forKey: .name)
         self.path = try container.decode(String.self, forKey: .path)
         self.tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
-        self.scripts = try container.decodeIfPresent([ProjectScript].self, forKey: .scripts) ?? []
+        if let decodedRunConfigurations = try? container.decode([ProjectRunConfiguration].self, forKey: .runConfigurations) {
+            self.runConfigurations = decodedRunConfigurations
+        } else {
+            let legacyScripts = try legacyContainer.decodeIfPresent([LegacyProjectScript].self, forKey: .scripts) ?? []
+            self.runConfigurations = legacyScripts.map(ProjectRunConfiguration.fromLegacyProjectScript)
+        }
         self.worktrees = try container.decodeIfPresent([ProjectWorktree].self, forKey: .worktrees) ?? []
         self.mtime = try container.decodeIfPresent(SwiftDate.self, forKey: .mtime) ?? .zero
         self.size = try container.decodeIfPresent(Int64.self, forKey: .size) ?? .zero
@@ -554,7 +651,7 @@ extension Project {
             name: "快速终端",
             path: homePath,
             tags: [],
-            scripts: [],
+            runConfigurations: [],
             worktrees: [],
             mtime: 0,
             size: 0,

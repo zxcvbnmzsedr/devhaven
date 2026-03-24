@@ -166,19 +166,19 @@ struct ProjectDetailRootView: View {
                         }
                     }
 
-                    section("快捷命令") {
-                        if project.scripts.isEmpty {
-                            Text("暂无快捷命令")
+                    section("运行配置") {
+                        if project.runConfigurations.isEmpty {
+                            Text("暂无运行配置")
                                 .font(.caption)
                                 .foregroundStyle(NativeTheme.textSecondary)
                         } else {
                             VStack(spacing: 10) {
-                                ForEach(project.scripts) { script in
+                                ForEach(project.runConfigurations) { configuration in
                                     VStack(alignment: .leading, spacing: 6) {
-                                        Text(script.name)
+                                        Text(configuration.name)
                                             .font(.headline)
                                             .foregroundStyle(NativeTheme.textPrimary)
-                                        Text(script.start)
+                                        Text(projectRunConfigurationDetailSummary(configuration))
                                             .font(.caption.monospaced())
                                             .foregroundStyle(NativeTheme.textSecondary)
                                             .textSelection(.enabled)
@@ -267,5 +267,18 @@ private struct WrapHStack<Data: RandomAccessCollection, Content: View>: View whe
                 content(element)
             }
         }
+    }
+
+}
+
+private func projectRunConfigurationDetailSummary(_ configuration: ProjectRunConfiguration) -> String {
+    switch configuration.kind {
+    case .customShell:
+        return configuration.customShell?.command ?? ""
+    case .remoteLogViewer:
+        let remote = configuration.remoteLogViewer
+        let server = remote?.server ?? ""
+        let logPath = remote?.logPath ?? ""
+        return "remoteLogViewer \(server) \(logPath)".trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
