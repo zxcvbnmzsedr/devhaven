@@ -1759,3 +1759,57 @@
   - 定向绿灯：`swift test --package-path macos --filter 'NativeAppViewModelTests/testRefreshProjectCatalogPreservesExistingGitMetadataForGitRepos|NativeAppViewModelTests/testRefreshGitStatisticsAsyncRefreshesGitMetadataForGitRepositoriesWithoutCommitCache|NativeAppViewModelTests/testGitOnlyFilterUsesIsGitRepositoryInsteadOfCommitCount|NativeAppViewModelTests/testRefreshGitStatisticsAsyncMarksRefreshingImmediatelyAndAppliesResults|NativeAppViewModelTests/testRefreshGitStatisticsReadsRealGitLogAndPreservesUnknownProjectFields|MainContentViewTests|ProjectDetailRootViewTests'` → 13 tests，0 failures
   - 目录刷新/并发回归：`swift test --package-path macos --filter 'NativeAppViewModelTests|ProjectCatalogRefreshConcurrencyTests|MainContentViewTests|ProjectDetailRootViewTests'` → 32 tests，0 failures
   - 全量回归：`swift test --package-path macos` → 283 tests，5 skipped，0 failures
+
+## 2026-03-24 版本升级到 v3.1.0
+
+- [x] 确认版本真相源与所有受影响文件
+- [x] 更新版本号到 `3.1.0` 及对应 build number
+- [x] 运行必要验证并在本文件追加 Review
+
+## Review（2026-03-24 版本升级到 v3.1.0）
+
+- 结果：
+  1. 已将原生发布真相源从 `3.0.2 / 3002000` 升级到 `3.1.0 / 3010000`。
+  2. 已同步更新 `README.md` 首页版本徽章，避免仓库展示版本落后于 `AppMetadata.json`。
+- 直接原因：
+  1. 当前仓库版本真相源仍停留在 `macos/Resources/AppMetadata.json` 的 `3.0.2 / 3002000`，与本轮目标版本 `v3.1.0` 不一致。
+- 设计层诱因：
+  1. 未发现明显系统设计缺陷；当前版本号真相源已足够集中，只需同步更新元数据与 README 展示。
+- 当前修复方案：
+  1. 更新 `macos/Resources/AppMetadata.json` 中的 `version=3.1.0`、`buildNumber=3010000`；
+  2. 更新 `README.md` 首页版本徽章到 `3.1.0`。
+- 长期改进建议：
+  1. 后续发版时继续保持 `AppMetadata.json` 作为唯一版本真相源，并同步检查 README / tag / release note 是否一致。
+- 验证证据：
+  - `python3` 解析 `macos/Resources/AppMetadata.json` → `version=3.1.0`，`buildNumber=3010000`
+  - `rg -n 'version-3\\.1\\.0' README.md` → 命中 README 第 7 行版本徽章
+  - `swift build --package-path macos` → `Build complete! (4.16s)`，exit 0
+
+## 2026-03-24 v3.1.0 提交与打 tag
+
+- [x] 暂存本次版本升级相关文件，不混入本地私有未跟踪内容
+- [x] 提交 v3.1.0 版本升级
+- [x] 创建并校验本地 tag `v3.1.0`
+- [x] 在本文件追加 Review 记录当前本地状态
+
+## Review（2026-03-24 v3.1.0 提交与打 tag）
+
+- 结果：
+  1. 已将版本升级改动提交为本地 `main` 最新一条提交（`chore(release): bump version to v3.1.0`）。
+  2. 已创建本地 annotated tag `v3.1.0`，并确认其当前指向版本升级提交。
+  3. 当前**未 push**；远端状态尚未更新。
+- 直接原因：
+  1. 用户明确要求执行“创建 `v3.1.0` tag”，而 tag 应指向已提交的版本升级内容，不能指向未提交工作区。
+- 设计层诱因：
+  1. 未发现明显系统设计缺陷；本轮只是 release 元数据与本地 tag 的标准发布准备动作。
+- 当前处理方案：
+  1. 仅暂存 `README.md`、`macos/Resources/AppMetadata.json`、`tasks/todo.md` 三个与版本升级直接相关的文件；
+  2. 提交版本升级；
+  3. 创建本地 `v3.1.0` annotated tag，并校验 tag/HEAD 一致；
+  4. 保持本地私有未跟踪目录不入提交。
+- 验证证据：
+  - `git diff --cached --stat` → 仅包含 `README.md`、`macos/Resources/AppMetadata.json`、`tasks/todo.md`
+  - `git commit --amend --no-edit`（基于初始版本升级提交补 Review）→ 成功生成当前本地最新提交
+  - `git rev-parse --short=12 HEAD` / `git rev-list -n 1 v3.1.0 | cut -c1-12` → 两者一致，证明 tag 指向当前版本升级提交
+  - `git tag --list 'v3.1.0'` → 命中 `v3.1.0`
+  - `git status --short` → 仅剩 `.claude/skills/`、`.iflow/`、`.opencli/`、`skills-lock.json` 这些本地未跟踪内容
