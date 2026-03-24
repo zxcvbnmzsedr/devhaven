@@ -2002,6 +2002,29 @@
 
 - [x] 核对 issue #36 内容与当前本地改动范围是否匹配
 - [x] 跑提交前完整验证，确认当前工作区可用于发 PR
-- [ ] 创建关联 issue #36 的分支与提交
-- [ ] 推送分支并创建 PR
-- [ ] 在本文件追加 Review（含 branch / commit / PR / 验证证据）
+- [x] 创建关联 issue #36 的分支与提交
+- [x] 推送分支并创建 PR
+- [x] 在本文件追加 Review（含 branch / commit / PR / 验证证据）
+
+## Review（2026-03-24 issue #36 关联 PR 提交）
+
+- 结果：
+  1. 已基于当前修复创建并推送分支 `fix/issue-36-close-semantics`。
+  2. 已提交 commit `9e0e378`（`fix: tighten main-window close behavior`）。
+  3. 已创建 PR `#41`：`https://github.com/zxcvbnmzsedr/devhaven/pull/41`。
+  4. PR 正文已使用 `Closes #36`，合并后会自动关闭 issue #36。
+- 直接原因：
+  1. issue #36 的标题就是 `command+w 导致整个窗口退出`，与当前本地修复范围直接匹配。
+- 设计层诱因：
+  1. 未发现新的系统设计缺陷；本轮主要是把已完成修复按 issue 语义收口为独立分支、提交与 PR。
+- 当前处理方案：
+  1. 从 `main` 切出 `fix/issue-36-close-semantics`；
+  2. 提交核心修复为 `9e0e378 fix: tighten main-window close behavior`；
+  3. 推送分支并创建带 `Closes #36` 的 PR #41。
+- 长期改进建议：
+  1. 后续如果 issue 粒度继续细化，建议在开发开始时就直接从 `main` 切 issue 专属分支，避免像本次这样在 `main` 脏工作区里再收口。
+- 验证证据：
+  - `swift test --package-path macos` → `Executed 300 tests, with 5 tests skipped and 0 failures`
+  - `swift build --package-path macos` → `Build complete! (1.14s)`
+  - `git push -u origin fix/issue-36-close-semantics` → 远端已创建并跟踪该分支
+  - `gh pr create --base main --head fix/issue-36-close-semantics ...` → `https://github.com/zxcvbnmzsedr/devhaven/pull/41`
