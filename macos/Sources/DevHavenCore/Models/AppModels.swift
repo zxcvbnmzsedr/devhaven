@@ -87,6 +87,15 @@ public enum NativeGitFilter: String, Sendable, CaseIterable, Identifiable {
     }
 }
 
+public enum SettingsNavigationSection: String, Codable, Sendable, CaseIterable, Identifiable {
+    case general
+    case terminal
+    case scripts
+    case workflow
+
+    public var id: String { rawValue }
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
     public var editorOpenTool: OpenToolSettings
     public var terminalOpenTool: OpenToolSettings

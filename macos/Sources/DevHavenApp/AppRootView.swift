@@ -88,6 +88,7 @@ struct AppRootView: View {
         .sheet(isPresented: $viewModel.isSettingsPresented) {
             SettingsView(
                 settings: viewModel.snapshot.appState.settings,
+                initialCategory: viewModel.requestedSettingsSection,
                 onCancel: { viewModel.hideSettings() },
                 onSave: { settings in
                     viewModel.saveSettings(settings)

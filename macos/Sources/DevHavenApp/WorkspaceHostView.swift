@@ -8,6 +8,7 @@ struct WorkspaceHostView: View {
     let workspace: GhosttyWorkspaceController
     let terminalSessionStore: WorkspaceTerminalSessionStore
     @State private var windowActivity: WindowActivityState = .inactive
+    @State private var isRunConfigurationSheetPresented = false
 
     var body: some View {
         let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
@@ -17,20 +18,44 @@ struct WorkspaceHostView: View {
                 header
             }
 
-            WorkspaceTabBarView(
-                tabs: workspace.tabs,
-                selectedTabID: workspace.selectedTabId,
-                canSplit: workspace.selectedPane != nil,
-                onSelectTab: { workspace.selectTab($0) },
-                onCloseTab: { workspace.closeTab($0) },
-                onCreateTab: { _ = workspace.createTab() },
-                onSplitHorizontally: {
-                    _ = workspace.splitFocusedPane(direction: .down)
-                },
-                onSplitVertically: {
-                    _ = workspace.splitFocusedPane(direction: .right)
-                }
-            )
+            HStack(alignment: .center, spacing: 12) {
+                WorkspaceTabBarView(
+                    tabs: workspace.tabs,
+                    selectedTabID: workspace.selectedTabId,
+                    canSplit: workspace.selectedPane != nil,
+                    onSelectTab: { workspace.selectTab($0) },
+                    onCloseTab: { workspace.closeTab($0) },
+                    onCreateTab: { _ = workspace.createTab() },
+                    onSplitHorizontally: {
+                        _ = workspace.splitFocusedPane(direction: .down)
+                    },
+                    onSplitVertically: {
+                        _ = workspace.splitFocusedPane(direction: .right)
+                    }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                WorkspaceRunToolbarView(
+                    configurations: viewModel.availableWorkspaceRunConfigurations(in: project.path),
+                    selectedConfigurationID: viewModel.workspaceRunConsoleState(for: project.path)?.selectedConfigurationID
+                        ?? viewModel.selectedWorkspaceRunConfiguration(in: project.path)?.id,
+                    canRun: viewModel.selectedWorkspaceRunConfiguration(in: project.path)?.canRun ?? false,
+                    canStop: viewModel.workspaceRunConsoleState(for: project.path)?.selectedSession?.state.isActive ?? false,
+                    hasSessions: !(viewModel.workspaceRunConsoleState(for: project.path)?.sessions.isEmpty ?? true),
+                    isLogsVisible: viewModel.workspaceRunConsoleState(for: project.path)?.isVisible ?? false,
+                    onSelectConfiguration: { viewModel.selectWorkspaceRunConfiguration($0, in: project.path) },
+                    onRun: {
+                        do {
+                            try viewModel.runSelectedWorkspaceConfiguration(in: project.path)
+                        } catch {
+                            // 错误已由 ViewModel 收口
+                        }
+                    },
+                    onStop: { viewModel.stopSelectedWorkspaceRunSession(in: project.path) },
+                    onToggleLogs: { viewModel.toggleWorkspaceRunConsole(in: project.path) },
+                    onConfigure: { isRunConfigurationSheetPresented = true }
+                )
+            }
             ZStack {
                 ForEach(workspace.tabs) { tab in
                     WorkspaceSplitTreeView(
@@ -88,9 +113,34 @@ struct WorkspaceHostView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if let runConsoleState = viewModel.workspaceRunConsoleState(for: project.path),
+               runConsoleState.isVisible,
+               !runConsoleState.sessions.isEmpty {
+                WorkspaceRunConsolePanel(
+                    consoleState: runConsoleState,
+                    onSelectSession: { viewModel.selectWorkspaceRunSession($0, in: project.path) },
+                    onClear: { viewModel.clearSelectedWorkspaceRunConsoleBuffer(in: project.path) },
+                    onOpenLog: {
+                        do {
+                            try viewModel.openSelectedWorkspaceRunLog(in: project.path)
+                        } catch {
+                            // 错误已由 ViewModel 收口
+                        }
+                    },
+                    onHide: { viewModel.toggleWorkspaceRunConsole(in: project.path) }
+                )
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(NativeTheme.window)
+        .sheet(isPresented: $isRunConfigurationSheetPresented) {
+            WorkspaceScriptConfigurationSheet(
+                viewModel: viewModel,
+                project: project,
+                onManageSharedScripts: openSharedScriptsSettings
+            )
+        }
         .background {
             WindowFocusObserverView { activity in
                 windowActivity = activity
@@ -186,6 +236,10 @@ struct WorkspaceHostView: View {
         .padding(.vertical, 8)
         .background(NativeTheme.surface)
         .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private func openSharedScriptsSettings() {
+        viewModel.revealSharedScriptsSettings()
     }
 
     private var retainedPaneIDs: Set<String> {

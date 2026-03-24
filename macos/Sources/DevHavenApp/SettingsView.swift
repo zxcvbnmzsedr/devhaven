@@ -13,6 +13,10 @@ struct SettingsView: View {
 
         var id: String { rawValue }
 
+        init?(section: SettingsNavigationSection) {
+            self.init(rawValue: section.rawValue)
+        }
+
         var title: String {
             switch self {
             case .general:
@@ -66,6 +70,7 @@ struct SettingsView: View {
 
     init(
         settings: AppSettings,
+        initialCategory: SettingsNavigationSection? = nil,
         onCancel: @escaping () -> Void,
         onSave: @escaping (AppSettings) -> Void,
         updateSupportDescription: String = "当前运行态不支持自动升级。",
@@ -96,6 +101,7 @@ struct SettingsView: View {
         _workspaceNotificationSoundEnabled = State(initialValue: settings.workspaceNotificationSoundEnabled)
         _workspaceSystemNotificationsEnabled = State(initialValue: settings.workspaceSystemNotificationsEnabled)
         _moveNotifiedWorktreeToTop = State(initialValue: settings.moveNotifiedWorktreeToTop)
+        _activeCategory = State(initialValue: initialCategory.flatMap(Category.init(section:)) ?? .general)
     }
 
     var body: some View {

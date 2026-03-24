@@ -21,6 +21,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
     @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
+    @ObservationIgnored private let runManager: any WorkspaceRunManaging
     @ObservationIgnored private let workspaceRestoreCoordinator: WorkspaceRestoreCoordinator
     @ObservationIgnored private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider?
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
@@ -87,6 +88,7 @@ public final class NativeAppViewModel {
     public var activeWorkspaceProjectPath: String?
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
     private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
+    private var workspaceRunConsoleStateByProjectPath: [String: WorkspaceRunConsoleState]
     private var currentBranchByProjectPath: [String: String]
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
@@ -102,6 +104,7 @@ public final class NativeAppViewModel {
     public var errorMessage: String?
     public var isDashboardPresented: Bool
     public var isSettingsPresented: Bool
+    public var requestedSettingsSection: SettingsNavigationSection?
     public var isRecycleBinPresented: Bool
     public var isDetailPanelPresented: Bool
     public var worktreeInteractionState: WorktreeInteractionState?
@@ -122,6 +125,7 @@ public final class NativeAppViewModel {
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
         worktreeService: (any NativeWorktreeServicing)? = nil,
         agentSignalStore: WorkspaceAgentSignalStore? = nil,
+        runManager: (any WorkspaceRunManaging)? = nil,
         workspaceRestoreStore: WorkspaceRestoreStore? = nil,
         workspaceRestoreAutosaveDelayNanoseconds: UInt64 = 400_000_000
     ) {
@@ -137,6 +141,10 @@ public final class NativeAppViewModel {
         self.agentSignalStore = agentSignalStore ?? WorkspaceAgentSignalStore(
             baseDirectoryURL: store.agentStatusSessionsDirectoryURL
         )
+        let resolvedRunManager = runManager ?? WorkspaceRunManager(
+            logStore: WorkspaceRunLogStore(baseDirectoryURL: store.backgroundWorkHomeDirectoryURL)
+        )
+        self.runManager = resolvedRunManager
         self.workspaceRestoreCoordinator = WorkspaceRestoreCoordinator(
             store: workspaceRestoreStore ?? WorkspaceRestoreStore(homeDirectoryURL: store.backgroundWorkHomeDirectoryURL),
             autosaveDelayNanoseconds: workspaceRestoreAutosaveDelayNanoseconds
@@ -148,6 +156,7 @@ public final class NativeAppViewModel {
         self.activeWorkspaceProjectPath = nil
         self.attentionStateByProjectPath = [:]
         self.agentDisplayOverridesByProjectPath = [:]
+        self.workspaceRunConsoleStateByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
         self.searchQuery = ""
         self.selectedDirectory = .all
@@ -163,6 +172,7 @@ public final class NativeAppViewModel {
         self.errorMessage = nil
         self.isDashboardPresented = false
         self.isSettingsPresented = false
+        self.requestedSettingsSection = nil
         self.isRecycleBinPresented = false
         self.isDetailPanelPresented = false
         self.worktreeInteractionState = nil
@@ -171,6 +181,10 @@ public final class NativeAppViewModel {
         self.todoItems = []
         self.readmeFallback = nil
         self.hasLoadedInitialData = false
+
+        resolvedRunManager.onEvent = { [weak self] event in
+            self?.handleWorkspaceRunManagerEvent(event)
+        }
     }
 
     public var projectListViewMode: ProjectListViewMode {
@@ -298,6 +312,233 @@ public final class NativeAppViewModel {
 
     func workspaceAttentionState(for projectPath: String) -> WorkspaceAttentionState? {
         attentionStateByProjectPath[projectPath]
+    }
+
+    public func workspaceRunConsoleState(for projectPath: String) -> WorkspaceRunConsoleState? {
+        workspaceRunConsoleStateByProjectPath[projectPath]
+    }
+
+    public func availableWorkspaceRunConfigurations(in projectPath: String? = nil) -> [WorkspaceRunConfiguration] {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              let session = openWorkspaceSessions.first(where: { $0.projectPath == projectPath }),
+              let project = resolveDisplayProject(for: projectPath)
+        else {
+            return []
+        }
+
+        return project.scripts.map {
+            makeProjectRunConfiguration(
+                script: $0,
+                projectPath: projectPath,
+                rootProjectPath: session.rootProjectPath
+            )
+        }
+    }
+
+    public func selectedWorkspaceRunConfiguration(in projectPath: String? = nil) -> WorkspaceRunConfiguration? {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
+            return nil
+        }
+        let configurations = availableWorkspaceRunConfigurations(in: projectPath)
+        guard !configurations.isEmpty else {
+            return nil
+        }
+        let state = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
+        if let selectedConfigurationID = state.selectedConfigurationID,
+           let selected = configurations.first(where: { $0.id == selectedConfigurationID }) {
+            return selected
+        }
+        return configurations.first
+    }
+
+    public func selectWorkspaceRunConfiguration(_ configurationID: String, in projectPath: String? = nil) {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
+            return
+        }
+        var state = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
+        state.selectedConfigurationID = configurationID
+        workspaceRunConsoleStateByProjectPath[projectPath] = state
+    }
+
+    public func runSelectedWorkspaceConfiguration(in projectPath: String? = nil) throws {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              let session = openWorkspaceSessions.first(where: { $0.projectPath == projectPath }),
+              let configuration = selectedWorkspaceRunConfiguration(in: projectPath)
+        else {
+            let error = WorkspaceTerminalCommandError.noActiveWorkspace
+            errorMessage = error.localizedDescription
+            throw error
+        }
+
+        guard configuration.canRun else {
+            let message = configuration.disabledReason ?? "当前运行配置缺少必要参数，请先完成配置。"
+            let error = NSError(domain: "DevHavenCore.WorkspaceRunConfiguration", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: message
+            ])
+            errorMessage = message
+            throw error
+        }
+
+        var state = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
+        if let existingSession = state.sessions.first(where: { $0.configurationID == configuration.id }),
+           existingSession.state.isActive {
+            runManager.stop(sessionID: existingSession.id)
+        }
+
+        let sessionID = UUID().uuidString
+        let placeholderSession = WorkspaceRunSession(
+            id: sessionID,
+            configurationID: configuration.id,
+            configurationName: configuration.name,
+            configurationSource: configuration.source,
+            projectPath: projectPath,
+            rootProjectPath: session.rootProjectPath,
+            command: configuration.command,
+            workingDirectory: configuration.workingDirectory,
+            state: .starting,
+            startedAt: Date()
+        )
+        if let existingIndex = state.sessions.firstIndex(where: { $0.configurationID == configuration.id }) {
+            state.sessions[existingIndex] = placeholderSession
+        } else {
+            state.sessions.append(placeholderSession)
+        }
+        state.selectedSessionID = sessionID
+        state.selectedConfigurationID = configuration.id
+        state.isVisible = true
+        workspaceRunConsoleStateByProjectPath[projectPath] = state
+
+        do {
+            let runSession = try runManager.start(
+                WorkspaceRunStartRequest(
+                    sessionID: sessionID,
+                    configurationID: configuration.id,
+                    configurationName: configuration.name,
+                    configurationSource: configuration.source,
+                    projectPath: projectPath,
+                    rootProjectPath: session.rootProjectPath,
+                    command: configuration.command,
+                    workingDirectory: configuration.workingDirectory
+                )
+            )
+            var currentState = workspaceRunConsoleStateByProjectPath[projectPath] ?? state
+            if let index = currentState.sessions.firstIndex(where: { $0.id == sessionID }) {
+                var updatedSession = runSession
+                updatedSession.startedAt = currentState.sessions[index].startedAt
+                updatedSession.displayBuffer = currentState.sessions[index].displayBuffer
+                currentState.sessions[index] = updatedSession
+            } else if let index = currentState.sessions.firstIndex(where: { $0.configurationID == configuration.id }) {
+                currentState.sessions[index] = runSession
+            } else {
+                currentState.sessions.append(runSession)
+            }
+            workspaceRunConsoleStateByProjectPath[projectPath] = currentState
+            errorMessage = nil
+        } catch {
+            let failureBuffer = "启动失败：\((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)\n"
+            var currentState = workspaceRunConsoleStateByProjectPath[projectPath] ?? state
+            let failureSession = WorkspaceRunSession(
+                id: sessionID,
+                configurationID: configuration.id,
+                configurationName: configuration.name,
+                configurationSource: configuration.source,
+                projectPath: projectPath,
+                rootProjectPath: session.rootProjectPath,
+                command: configuration.command,
+                workingDirectory: configuration.workingDirectory,
+                state: .failed(exitCode: -1),
+                startedAt: currentState.sessions.first(where: { $0.id == sessionID })?.startedAt ?? Date(),
+                endedAt: Date(),
+                displayBuffer: failureBuffer
+            )
+            if let index = currentState.sessions.firstIndex(where: { $0.id == sessionID || $0.configurationID == configuration.id }) {
+                currentState.sessions[index] = failureSession
+            } else {
+                currentState.sessions.append(failureSession)
+            }
+            workspaceRunConsoleStateByProjectPath[projectPath] = currentState
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            throw error
+        }
+    }
+
+    public func selectWorkspaceRunSession(_ sessionID: String, in projectPath: String? = nil) {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              var state = workspaceRunConsoleStateByProjectPath[projectPath],
+              state.sessions.contains(where: { $0.id == sessionID })
+        else {
+            return
+        }
+        state.selectedSessionID = sessionID
+        state.selectedConfigurationID = state.sessions.first(where: { $0.id == sessionID })?.configurationID
+        state.isVisible = true
+        workspaceRunConsoleStateByProjectPath[projectPath] = state
+    }
+
+    public func stopSelectedWorkspaceRunSession(in projectPath: String? = nil) {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              let state = workspaceRunConsoleStateByProjectPath[projectPath],
+              let sessionID = state.selectedSession?.id
+        else {
+            return
+        }
+        runManager.stop(sessionID: sessionID)
+    }
+
+    public func toggleWorkspaceRunConsole(in projectPath: String? = nil) {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              var state = workspaceRunConsoleStateByProjectPath[projectPath]
+        else {
+            return
+        }
+        state.isVisible.toggle()
+        workspaceRunConsoleStateByProjectPath[projectPath] = state
+    }
+
+    public func clearSelectedWorkspaceRunConsoleBuffer(in projectPath: String? = nil) {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              var state = workspaceRunConsoleStateByProjectPath[projectPath],
+              let selectedSessionID = state.selectedSession?.id,
+              let index = state.sessions.firstIndex(where: { $0.id == selectedSessionID })
+        else {
+            return
+        }
+        state.sessions[index].displayBuffer = ""
+        workspaceRunConsoleStateByProjectPath[projectPath] = state
+    }
+
+    public func openSelectedWorkspaceRunLog(in projectPath: String? = nil) throws {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              let state = workspaceRunConsoleStateByProjectPath[projectPath],
+              let path = state.selectedSession?.logFilePath
+        else {
+            return
+        }
+        do {
+            try terminalCommandRunner("/usr/bin/open", [path])
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            throw error
+        }
+    }
+
+    public func saveWorkspaceScripts(_ scripts: [ProjectScript], in projectPath: String? = nil) throws {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
+              let ownerProjectPath = resolveWorkspaceScriptOwnerProjectPath(for: projectPath),
+              let ownerIndex = snapshot.projects.firstIndex(where: {
+                  normalizePathForCompare($0.path) == normalizePathForCompare(ownerProjectPath)
+              })
+        else {
+            let error = WorkspaceTerminalCommandError.noActiveWorkspace
+            errorMessage = error.localizedDescription
+            throw error
+        }
+
+        var projects = snapshot.projects
+        projects[ownerIndex].scripts = scripts
+        try persistProjects(projects)
+        errorMessage = nil
     }
 
     public func recordWorkspaceNotification(
@@ -801,7 +1042,9 @@ public final class NativeAppViewModel {
             removedPaths = Set([path])
             openWorkspaceSessions.remove(at: index)
         }
+        removedPaths.forEach { runManager.stopAll(projectPath: $0) }
         attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
+        workspaceRunConsoleStateByProjectPath = workspaceRunConsoleStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
         pruneWorkspaceAgentDisplayOverrides()
 
         if openWorkspaceSessions.isEmpty {
@@ -1499,8 +1742,13 @@ public final class NativeAppViewModel {
         }
     }
 
-    public func revealSettings() {
+    public func revealSettings(section: SettingsNavigationSection = .general) {
+        requestedSettingsSection = section
         isSettingsPresented = true
+    }
+
+    public func revealSharedScriptsSettings() {
+        revealSettings(section: .scripts)
     }
 
     public func revealDashboard() {
@@ -1517,6 +1765,7 @@ public final class NativeAppViewModel {
 
     public func hideSettings() {
         isSettingsPresented = false
+        requestedSettingsSection = nil
     }
 
     public func hideRecycleBin() {
@@ -1832,6 +2081,92 @@ public final class NativeAppViewModel {
             return nil
         }
         return openWorkspaceSessions.first(where: { $0.projectPath == targetProjectPath })?.controller
+    }
+
+    private func makeProjectRunConfiguration(
+        script: ProjectScript,
+        projectPath: String,
+        rootProjectPath: String
+    ) -> WorkspaceRunConfiguration {
+        let resolution = ScriptTemplateSupport.resolveCommand(
+            template: script.start,
+            paramSchema: script.paramSchema,
+            explicitValues: script.templateParams
+        )
+        let emptyCommand = script.start.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let missingReason = resolution.missingRequiredKeys.isEmpty
+            ? nil
+            : "缺少必填参数：\(resolution.missingRequiredKeys.joined(separator: "、"))"
+        return WorkspaceRunConfiguration(
+            id: workspaceProjectRunConfigurationID(projectPath: projectPath, scriptID: script.id),
+            projectPath: projectPath,
+            rootProjectPath: rootProjectPath,
+            source: .projectScript,
+            sourceID: script.id,
+            name: script.name,
+            command: resolution.command,
+            workingDirectory: projectPath,
+            isShared: false,
+            canRun: !emptyCommand && missingReason == nil,
+            disabledReason: emptyCommand ? "命令为空，请先完善项目脚本。" : missingReason
+        )
+    }
+
+    private func workspaceProjectRunConfigurationID(projectPath: String, scriptID: String) -> String {
+        "project::\(projectPath)::\(scriptID)"
+    }
+
+    private func resolveWorkspaceRunProjectPath(_ projectPath: String?) -> String? {
+        let candidate = projectPath ?? activeWorkspaceProjectPath
+        guard let candidate else {
+            return nil
+        }
+        guard openWorkspaceProjectPaths.contains(candidate) else {
+            return nil
+        }
+        return candidate
+    }
+
+    private func resolveWorkspaceScriptOwnerProjectPath(for projectPath: String) -> String? {
+        if snapshot.projects.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(projectPath) }) {
+            return projectPath
+        }
+        return snapshot.projects.first(where: { project in
+            project.worktrees.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(projectPath) })
+        })?.path
+    }
+
+    private func handleWorkspaceRunManagerEvent(_ event: WorkspaceRunManagerEvent) {
+        switch event {
+        case let .output(projectPath, sessionID, chunk):
+            updateWorkspaceRunConsoleState(for: projectPath) { state in
+                guard let index = state.sessions.firstIndex(where: { $0.id == sessionID }) else {
+                    return
+                }
+                state.sessions[index].displayBuffer += chunk
+            }
+        case let .stateChanged(projectPath, sessionID, runState):
+            updateWorkspaceRunConsoleState(for: projectPath) { state in
+                guard let index = state.sessions.firstIndex(where: { $0.id == sessionID }) else {
+                    return
+                }
+                state.sessions[index].state = runState
+                if !runState.isActive {
+                    state.sessions[index].endedAt = Date()
+                }
+            }
+        }
+    }
+
+    private func updateWorkspaceRunConsoleState(
+        for projectPath: String,
+        mutate: (inout WorkspaceRunConsoleState) -> Void
+    ) {
+        guard var state = workspaceRunConsoleStateByProjectPath[projectPath] else {
+            return
+        }
+        mutate(&state)
+        workspaceRunConsoleStateByProjectPath[projectPath] = state
     }
 
     private func refreshCurrentBranch(for projectPath: String) {

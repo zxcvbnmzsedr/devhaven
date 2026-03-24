@@ -1908,3 +1908,109 @@
   - 推送结果：`git push -u origin fix/issue-42-ghostty-open-url` → 远端分支创建成功并建立 tracking
   - PR：`gh pr create --base main --head fix/issue-42-ghostty-open-url ...` → 返回 `https://github.com/zxcvbnmzsedr/devhaven/pull/43`
 
+
+## 2026-03-24 Workspace Run Console 实现
+
+- [x] 搭建 Core 层运行模型与日志存储
+- [x] 实现 WorkspaceRunManager 的启动 / 输出 / 停止链路
+- [x] 把运行状态接入 NativeAppViewModel
+- [x] 接入 Workspace 顶部控制区与底部 Run Console UI
+- [x] 更新 AGENTS.md、补齐验证与 Review
+
+## Review（2026-03-24 Workspace Run Console 实现）
+
+- 结果：已为 workspace 接入基于 `Project.scripts` 的轻量 Run Console，支持同一 workspace 多命令并行运行、底部 session tabs 切换日志、顶部 Run / Stop / Logs 控制、日志落盘到 `~/.devhaven/run-logs/*.log`。
+- 直接原因：用户需要的是“像 IDEA 右上角 Run/Stop + 下方看日志”的交互结果，但底层只是运行命令，不需要完整 execution framework。
+- 设计层诱因：当前 workspace 架构天然偏向 terminal pane，如果直接把运行管理强塞进 Ghostty pane，会把“停止进程 / 关闭视图 / 查看日志”三种语义混在一起；因此本轮把命令执行抽到 `WorkspaceRunManager`，SwiftUI 只做控制和展示。未发现明显系统设计缺陷，但 run session 与 pane/session attention 原本是两条链路，本轮新增后要持续保持边界清晰。
+- 当前修复方案：
+  - Core：新增 `WorkspaceRunModels.swift`、`WorkspaceRunLogStore.swift`、`WorkspaceRunManager.swift`
+  - ViewModel：`NativeAppViewModel` 新增 workspace run state、script 选择、启动/停止/切换/展开日志 API，并在关闭 workspace 项目时停止该项目全部 run sessions
+  - App：新增 `WorkspaceRunToolbarView.swift` 与 `WorkspaceRunConsolePanel.swift`，并在 `WorkspaceHostView` 顶部右侧/底部接入
+  - 文档：`AGENTS.md` 新增 run console 模块与 `run-logs/*.log` 本地目录说明
+- 长期改进建议：
+  - 为 run session 增加历史清理策略与“关闭单个 session tab”动作
+  - 如果后续需要参数化执行，可在 `ProjectScript.paramSchema` 之上加参数输入层，而不是把 shell 逻辑继续堆在 UI 上
+  - 若未来要支持 Debug/Test，再考虑把当前轻量 run session 抽象成更完整的 executor 层
+- 验证证据：
+  - `swift test --package-path macos --filter WorkspaceRunLogStoreTests`
+  - `swift test --package-path macos --filter WorkspaceRunManagerTests`
+  - `swift test --package-path macos --filter NativeAppViewModelWorkspaceRunTests`
+  - `swift test --package-path macos --filter WorkspaceRunToolbarViewTests`
+  - `swift test --package-path macos --filter WorkspaceHostViewRunConsoleTests`
+  - `swift test --package-path macos` -> 315 tests, 5 skipped, 0 failures
+  - `swift build --package-path macos` -> Build complete
+- 验收步骤：
+  1. 打开任一带 `scripts` 的项目并进入 workspace。
+  2. 在顶部右侧脚本菜单选择一个脚本，点击 `Run`。
+  3. 观察底部 `Run Console` 自动展开，并出现对应 session tab 与实时日志。
+  4. 再选择另一个脚本点击 `Run`，确认底部新增第二个 session tab，两个命令可并行存在。
+  5. 点击不同 session tab，确认日志内容随之切换。
+  6. 点击顶部 `Stop`，确认只停止当前选中 session；未选中的其他 session 继续运行。
+  7. 点击顶部 `Logs`，确认仅收起/展开底部日志面板，不会停止进程。
+  8. 在底部点击“打开日志”，确认会用系统默认方式打开 `~/.devhaven/run-logs/` 下对应 `.log` 文件。
+
+## 2026-03-24 Workspace Run Console 收敛（配置复用 / 通用配置）
+
+- [x] 先补测试，约束“按配置复用 tab”而不是“每次 Run 新建 session tab”
+- [x] 把运行项从单纯 `Project.scripts` 收敛成运行配置（项目脚本 + 通用脚本）
+- [x] 接入配置入口，让 workspace 菜单里可直接跳到“配置运行项”
+- [x] 更新 AGENTS.md 与 Review，补 fresh 验证证据
+
+## Review（2026-03-24 Workspace Run Console 收敛）
+
+- 结果：Run Console 已从“execution history 视角”收敛为“运行配置视角”。顶部菜单现在统一展示项目脚本 + 通用脚本，底部 tab 按配置复用；同一配置再次 `Run` 时会 stop 旧进程并在原 tab 内 restart-in-place，不再每次追加新 tab。
+- 直接原因：上一版把 tab 真相源建在 `sessionID` 上，导致每次运行同一脚本都会生成新的会话标签，这更像终端历史而不是 IDEA 的 run configuration / reused content 心智。
+- 设计层诱因：之前缺少“运行配置”这一中间层，UI 直接拿 `Project.scripts` 驱动执行，再把每次执行结果 append 到 `sessions`。这样会让“配置选择”“执行实例”“底部 tab 复用策略”三件事耦在一起。当前已把这三者拆开：配置列表独立推导、执行仍是 session、tab 复用按 `configurationID` 收口。未发现明显新的系统设计缺陷。
+- 当前修复方案：
+  - Core：`WorkspaceRunModels.swift` 新增 `WorkspaceRunConfiguration` 与 `configurationID` 语义；`NativeAppViewModel` 负责把 `Project.scripts` + `sharedScriptsRoot` 下的通用脚本解析成可运行配置，并为同一配置复用同一个 console 槽位
+  - Shared Scripts：复用现有 `Settings -> 脚本` 管理器作为“公用配置”入口；workspace 直接消费其 manifest / 脚本文件，不再额外造第三套配置存储
+  - App：`WorkspaceRunToolbarView` 改为配置菜单 + `配置` 按钮；`WorkspaceHostView` 直接桥到 `viewModel.revealSettings(section: .scripts)`；`SettingsView` 支持按入口落到脚本分类
+  - Console：底部仍显示 session 运行态，但 tab 只保留每个配置的当前槽位；同配置重跑只替换该槽位的 session
+- 长期改进建议：
+  - 当前通用脚本参数仍主要依赖默认值；如果后续需要更像 IDEA 的临时参数编辑 / Before Launch / 环境变量面板，可在 `WorkspaceRunConfiguration` 之上再补参数表单层
+  - 若未来要支持“允许并行运行同一配置的多个实例”，应显式引入 `allowParallelRuns` 策略，而不是重新退回 append-only tab
+  - 若后续需要展示上次运行摘要 / 历史日志，可单独做 history 面板，不要把底部主 tab 再变回历史列表
+- 验证证据：
+  - `swift test --package-path macos --filter NativeAppViewModelWorkspaceRunTests`
+  - `swift test --package-path macos --filter 'WorkspaceRun(LogStoreTests|ManagerTests|ToolbarViewTests|HostViewRunConsoleTests)'`
+  - `swift test --package-path macos --filter WorkspaceHostViewRunConsoleTests`
+  - `swift test --package-path macos` -> 317 tests, 5 skipped, 0 failures
+  - `swift build --package-path macos` -> Build complete
+- 验收步骤：
+  1. 打开任一 workspace，确认顶部右侧运行菜单里同时能看到“项目脚本”和“通用脚本”两类配置（如果已在设置页配置过通用脚本）。
+  2. 先运行一个项目脚本，确认底部出现对应 tab，并持续输出日志。
+  3. 在同一个配置上再次点击 `Run`，确认不会新增第二个同名 tab，而是复用原 tab；旧进程被停止，新进程在原 tab 内继续输出。
+  4. 再运行另一个不同配置，确认底部新增第二个 tab，说明“不同配置可并行、同一配置复用”。
+  5. 点击顶部 `配置`，确认会直接打开设置页并落在“脚本”分类，可继续管理通用脚本。
+  6. 若某个通用脚本缺少必填默认参数，确认该配置不会误跑；补好默认值后重新打开 workspace 菜单即可运行。
+
+## 2026-03-24 workspace 通用脚本配置语义修正
+
+- [x] 对比当前 workspace run / script 配置实现与 archive/2.8.3，确认直接原因与设计层诱因
+- [x] 先补失败测试，约束“通用脚本只在配置脚本时参与选择，不直接出现在运行入口”
+- [x] 以最小改动修复当前实现，并同步必要文档/注释
+- [x] 运行定向验证并在 Review 记录证据、直接原因、设计层诱因、修复方案与长期建议
+
+## Review（2026-03-24 workspace 通用脚本配置语义修正）
+
+- 结果：
+  1. workspace 顶部 Run 菜单现在只展示当前项目的 `Project.scripts`，不再把 `sharedScriptsRoot` 下的通用脚本误当成可直接运行配置。
+  2. 顶部 `配置` 现在会打开新的 `WorkspaceScriptConfigurationSheet`；面板内提供 `archive/2.8.3` 同语义的“插入通用脚本（可选）”，用于把通用脚本模板展开成项目脚本命令与参数默认值，再保存回 `Project.scripts`。
+  3. `NativeAppViewModel.saveWorkspaceScripts(...)` 会把配置结果写回真实项目；若当前 workspace 是 worktree，则会落回其 root project 的 `scripts`，保持原有“worktree 继承脚本配置”的数据语义。
+- 直接原因：
+  1. 上一轮收敛把“通用脚本”错误理解成“运行配置来源”，于是 `availableWorkspaceRunConfigurations(...)` 直接把 `store.listSharedScripts(...)` 的结果拼进运行菜单。
+  2. `WorkspaceHostView` 的 `配置` 按钮也因此被错误地直接桥到设置页“脚本”分类，只能管理通用脚本，不能配置当前项目真正会运行的 `Project.scripts`。
+- 设计层诱因：
+  1. 之前把“运行配置”和“脚本模板来源”混成同一层概念：前者属于 workspace runtime，后者属于项目脚本编辑期；边界一旦混掉，就会自然把模板放进运行菜单。
+  2. 同时缺少原生版项目脚本配置面板，导致实现时为了给 `配置` 按钮找落点，错误复用了通用脚本管理页。未发现更深的系统性存储缺陷，问题主要是能力边界判断失真。
+- 当前修复方案：
+  1. Core：新增 `ScriptTemplateSupport`，把 shared-script template 应用、参数 schema 推导、默认参数构建、required 校验统一收口；`NativeAppViewModel` 运行配置重新只从 `Project.scripts` 推导，并新增 `saveWorkspaceScripts(...)` / `revealSharedScriptsSettings()`。
+  2. App：新增 `WorkspaceScriptConfigurationSheet`，提供项目脚本列表、命令编辑、参数值填写与“插入通用脚本（可选）”；`WorkspaceHostView` 的 `配置` 改为打开该面板，面板内如需管理通用脚本再跳设置页。
+  3. 文档：更新 `AGENTS.md`，明确 shared scripts 只属于脚本配置阶段，不属于 run menu 运行项。
+- 长期改进建议：
+  1. 当前脚本配置面板仍是轻量版；如果后续需要更像 IDEA 的 Before Launch、环境变量、临时参数覆盖，可在 `ProjectScript` 之上继续加编辑层，但不要再把通用脚本回退成 runtime config。
+  2. 若未来需要在主页/详情页也编辑项目脚本，建议复用同一份 `WorkspaceScriptConfigurationSheet` 内核，而不是再造第二套 shared-script 插入逻辑。
+- 验证证据：
+  - 红灯验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceRunTests|WorkspaceRunToolbarViewTests|WorkspaceHostViewRunConsoleTests|WorkspaceScriptConfigurationSheetTests|ScriptTemplateSupportTests'`（实现前）→ 编译失败，明确报错 `cannot find 'ScriptTemplateSupport' in scope`，说明新的模板工具 / 配置面板语义尚未落地。
+  - 绿灯验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceRunTests|WorkspaceRunToolbarViewTests|WorkspaceHostViewRunConsoleTests|WorkspaceScriptConfigurationSheetTests|ScriptTemplateSupportTests'` → 11 tests，0 failures。
+  - 回归验证：`swift test --package-path macos` → 320 tests，5 skipped，0 failures。
