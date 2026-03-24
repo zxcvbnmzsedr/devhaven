@@ -1813,3 +1813,31 @@
   - `git rev-parse --short=12 HEAD` / `git rev-list -n 1 v3.1.0 | cut -c1-12` → 两者一致，证明 tag 指向当前版本升级提交
   - `git tag --list 'v3.1.0'` → 命中 `v3.1.0`
   - `git status --short` → 仅剩 `.claude/skills/`、`.iflow/`、`.opencli/`、`skills-lock.json` 这些本地未跟踪内容
+
+## 2026-03-24 推送 main 与 v3.1.0
+
+- [x] 推送本地 `main` 到 `origin/main`
+- [x] 推送本地 tag `v3.1.0` 到 `origin`
+- [x] 校验远端分支与 tag 指向并在本文件追加 Review
+
+## Review（2026-03-24 推送 main 与 v3.1.0）
+
+- 结果：
+  1. 已将本地 `main` 推送到 `origin/main`，远端主分支现已推进到 `c3707f2b68ad`。
+  2. 已将本地 annotated tag `v3.1.0` 推送到 `origin`。
+  3. 已校验远端 `main` 与远端 `v3.1.0` 最终都指向版本升级提交 `c3707f2b68ad`。
+- 直接原因：
+  1. 用户明确要求执行“push main 和 v3.1.0 到远端”，因此需要分别完成分支推送、tag 推送与远端指向校验。
+- 设计层诱因：
+  1. 未发现明显系统设计缺陷；本轮是标准 release 推送动作。
+- 当前处理方案：
+  1. 保持 tag 指向版本升级提交；
+  2. 推送 `HEAD -> origin/main`；
+  3. 推送本地 `v3.1.0`；
+  4. 用 `git ls-remote` 校验远端分支 / tag peeled commit 与本地 HEAD 一致。
+- 验证证据：
+  - `git push origin HEAD:main` → `38ab435..c3707f2  HEAD -> main`
+  - `git push origin v3.1.0` → `* [new tag]         v3.1.0 -> v3.1.0`
+  - `git ls-remote --refs --tags --heads origin main v3.1.0` → 远端 `refs/heads/main` 为 `c3707f2...`，远端 `refs/tags/v3.1.0` 已存在
+  - `git ls-remote origin refs/tags/v3.1.0^{} | cut -f1 | cut -c1-12` → `c3707f2b68ad`
+  - `git rev-parse --short=12 HEAD` → `c3707f2b68ad`

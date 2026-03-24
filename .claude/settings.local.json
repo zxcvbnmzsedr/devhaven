@@ -56,7 +56,9 @@
       "Bash(npx eslint:*)",
       "mcp__serena__find_file",
       "mcp__open-websearch__search",
-      "mcp__serena__read_memory"
+      "mcp__serena__read_memory",
+      "Bash(sips -s format png /Users/zhaotianzeng/WebstormProjects/DevHaven/macos/Resources/DevHaven.icns --out /Users/zhaotianzeng/WebstormProjects/DevHaven/docs/assets/logo.png)",
+      "Bash(sips:*)"
     ]
   }
 }
