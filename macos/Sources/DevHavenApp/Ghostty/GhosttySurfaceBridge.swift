@@ -290,12 +290,90 @@ final class GhosttySurfaceBridge {
             return false
         }
         let data = Data(bytes: pointer, count: length)
-        guard let string = String(data: data, encoding: .utf8), !string.isEmpty else {
+        guard let string = String(data: data, encoding: .utf8),
+              let url = Self.resolvedOpenURL(from: string, workingDirectory: state.pwd)
+        else {
             return false
         }
 
-        let url = URL(string: string) ?? URL(fileURLWithPath: string)
-        NSWorkspace.shared.open(url)
-        return true
+        return NSWorkspace.shared.open(url)
+    }
+
+    static func resolvedOpenURL(from rawString: String, workingDirectory: String?) -> URL? {
+        let trimmed = rawString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        if let assignmentValue = shellAssignmentValue(in: trimmed) {
+            return resolvedOpenURL(from: assignmentValue, workingDirectory: workingDirectory)
+        }
+
+        if let url = URL(string: trimmed), let scheme = url.scheme, !scheme.isEmpty {
+            return url
+        }
+
+        if let fileURL = resolvedFileURL(from: trimmed, workingDirectory: workingDirectory) {
+            return fileURL
+        }
+
+        return URL(string: trimmed)
+    }
+
+    private static func shellAssignmentValue(in string: String) -> String? {
+        guard let separatorIndex = string.firstIndex(of: "=") else {
+            return nil
+        }
+
+        let key = String(string[..<separatorIndex])
+        guard isShellVariableName(key) else {
+            return nil
+        }
+
+        let valueStart = string.index(after: separatorIndex)
+        let value = String(string[valueStart...])
+        guard isPathLike(value) else {
+            return nil
+        }
+        return value
+    }
+
+    private static func resolvedFileURL(from string: String, workingDirectory: String?) -> URL? {
+        if string == "~" || string.hasPrefix("~/") {
+            return URL(fileURLWithPath: (string as NSString).expandingTildeInPath)
+        }
+
+        if string.hasPrefix("/") {
+            return URL(fileURLWithPath: string)
+        }
+
+        guard let workingDirectory, isRelativePath(string) else {
+            return nil
+        }
+
+        return URL(fileURLWithPath: string, relativeTo: URL(fileURLWithPath: workingDirectory, isDirectory: true))
+            .standardizedFileURL
+    }
+
+    private static func isShellVariableName(_ string: String) -> Bool {
+        guard let first = string.first, first == "_" || first.isLetter else {
+            return false
+        }
+        return string.dropFirst().allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
+    }
+
+    private static func isPathLike(_ string: String) -> Bool {
+        string.hasPrefix("/")
+            || string == "~"
+            || string.hasPrefix("~/")
+            || isRelativePath(string)
+            || string.hasPrefix("file://")
+    }
+
+    private static func isRelativePath(_ string: String) -> Bool {
+        string == "."
+            || string == ".."
+            || string.hasPrefix("./")
+            || string.hasPrefix("../")
     }
 }
