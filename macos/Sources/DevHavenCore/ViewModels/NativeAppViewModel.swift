@@ -20,6 +20,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let projectImportDiagnostics: ProjectImportDiagnostics
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
+    @ObservationIgnored private let gitRepositoryService: NativeGitRepositoryService
     @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
     @ObservationIgnored private let workspaceRestoreCoordinator: WorkspaceRestoreCoordinator
     @ObservationIgnored private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider?
@@ -85,9 +86,11 @@ public final class NativeAppViewModel {
     public var selectedProjectPath: String?
     public var openWorkspaceSessions: [OpenWorkspaceSessionState]
     public var activeWorkspaceProjectPath: String?
+    public var workspacePrimaryMode: WorkspacePrimaryMode
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
     private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     private var currentBranchByProjectPath: [String: String]
+    private var workspaceGitViewModels: [String: WorkspaceGitViewModel]
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
     public var selectedTag: String?
@@ -121,6 +124,7 @@ public final class NativeAppViewModel {
         projectImportDiagnostics: ProjectImportDiagnostics = .shared,
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
         worktreeService: (any NativeWorktreeServicing)? = nil,
+        gitRepositoryService: NativeGitRepositoryService = NativeGitRepositoryService(),
         agentSignalStore: WorkspaceAgentSignalStore? = nil,
         workspaceRestoreStore: WorkspaceRestoreStore? = nil,
         workspaceRestoreAutosaveDelayNanoseconds: UInt64 = 400_000_000
@@ -134,6 +138,7 @@ public final class NativeAppViewModel {
         self.projectImportDiagnostics = projectImportDiagnostics
         self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.worktreeService = worktreeService ?? NativeGitWorktreeService()
+        self.gitRepositoryService = gitRepositoryService
         self.agentSignalStore = agentSignalStore ?? WorkspaceAgentSignalStore(
             baseDirectoryURL: store.agentStatusSessionsDirectoryURL
         )
@@ -146,9 +151,11 @@ public final class NativeAppViewModel {
         self.selectedProjectPath = nil
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
+        self.workspacePrimaryMode = .terminal
         self.attentionStateByProjectPath = [:]
         self.agentDisplayOverridesByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
+        self.workspaceGitViewModels = [:]
         self.searchQuery = ""
         self.selectedDirectory = .all
         self.selectedTag = nil
@@ -459,6 +466,39 @@ public final class NativeAppViewModel {
             return nil
         }
         return openWorkspaceSessions.first(where: { $0.projectPath == activeWorkspaceProjectPath })?.controller
+    }
+
+    public var activeWorkspaceRootProjectPath: String? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return openWorkspaceSessions.first(where: { $0.projectPath == activeWorkspaceProjectPath })?.rootProjectPath
+    }
+
+    public var activeWorkspaceRootProject: Project? {
+        guard let activeWorkspaceRootProjectPath else {
+            return nil
+        }
+        return snapshot.projects.first(where: { $0.path == activeWorkspaceRootProjectPath })
+    }
+
+    public var activeWorkspaceGitRepositoryContext: WorkspaceGitRepositoryContext? {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository
+        else {
+            return nil
+        }
+        return WorkspaceGitRepositoryContext(
+            rootProjectPath: rootProject.path,
+            repositoryPath: rootProject.path
+        )
+    }
+
+    public var activeWorkspaceGitViewModel: WorkspaceGitViewModel? {
+        guard let rootProjectPath = activeWorkspaceRootProjectPath else {
+            return nil
+        }
+        return workspaceGitViewModels[rootProjectPath]
     }
 
     public var activeWorkspaceState: WorkspaceSessionState? {
@@ -851,6 +891,34 @@ public final class NativeAppViewModel {
         isDetailPanelPresented = false
         scheduleSelectedProjectDocumentRefresh()
         scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func prepareActiveWorkspaceGitViewModel() {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository,
+              let repositoryContext = activeWorkspaceGitRepositoryContext
+        else {
+            return
+        }
+
+        let executionWorktrees = workspaceGitExecutionContexts(for: rootProject)
+        let preferredExecutionPath = preferredWorkspaceGitExecutionPath(for: rootProject.path)
+
+        if let existing = workspaceGitViewModels[rootProject.path] {
+            existing.updateRepositoryContext(
+                repositoryContext,
+                executionWorktrees: executionWorktrees,
+                preferredExecutionWorktreePath: preferredExecutionPath
+            )
+            return
+        }
+
+        workspaceGitViewModels[rootProject.path] = WorkspaceGitViewModel(
+            repositoryContext: repositoryContext,
+            executionWorktrees: executionWorktrees,
+            preferredExecutionWorktreePath: preferredExecutionPath,
+            client: .live(service: gitRepositoryService)
+        )
     }
 
     public func createWorkspaceTab(in projectPath: String? = nil) {
@@ -1832,6 +1900,35 @@ public final class NativeAppViewModel {
             return nil
         }
         return openWorkspaceSessions.first(where: { $0.projectPath == targetProjectPath })?.controller
+    }
+
+    private func preferredWorkspaceGitExecutionPath(for rootProjectPath: String) -> String {
+        if let activeWorkspaceProjectPath,
+           openWorkspaceSessions.contains(where: {
+               $0.projectPath == activeWorkspaceProjectPath && $0.rootProjectPath == rootProjectPath
+           })
+        {
+            return activeWorkspaceProjectPath
+        }
+        return rootProjectPath
+    }
+
+    private func workspaceGitExecutionContexts(for rootProject: Project) -> [WorkspaceGitWorktreeContext] {
+        let rootContext = WorkspaceGitWorktreeContext(
+            path: rootProject.path,
+            displayName: rootProject.name,
+            branchName: currentBranchByProjectPath[rootProject.path],
+            isRootProject: true
+        )
+        let worktreeContexts = rootProject.worktrees.map { worktree in
+            WorkspaceGitWorktreeContext(
+                path: worktree.path,
+                displayName: worktree.name,
+                branchName: worktree.branch,
+                isRootProject: false
+            )
+        }
+        return [rootContext] + worktreeContexts
     }
 
     private func refreshCurrentBranch(for projectPath: String) {

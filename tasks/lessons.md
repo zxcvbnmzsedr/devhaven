@@ -1,4 +1,9 @@
 # Lessons
+- 对齐 IDEA graph 时，真正决定“线和线是不是直接接上”的关键不是 row 边界 overdraw，而是 **print element 记录的是 current row position 与 adjacent row position**。如果模型只有 top/middle/bottom anchor，renderer 天然会退化成边界拼接。
+- 对 IDE log graph 这类图谱，**几何正确 ≠ 看起来正确**。如果 color 语义没有进入结构化 print element，App 层只能整张图统一 accent，最后就会出现“lane 拓扑已经对了，但还是没有 IDEA 味道”的情况。
+- 对这种“视觉上像断线”的 Canvas/表格问题，根因未必在 graph core，也可能在 **row 边界裁切 + 半像素未对齐**。如果每一行都是独立画布，就必须显式处理 overdraw 和 pixel alignment，否则模型再对，成像也会很丑。
+- 当用户指出“问题已经不是 renderer，而是图谱底层形态不对”时，不能继续在活动 lane 或单行拼线层面打补丁；要及时提升到 **permanent layout index + row-local visible elements** 这一层，否则 merge 迁入/迁出、长边穿行这类形态永远只会看起来像“偶然画对了”。
+- 只把 commit graph 从 `Text(graphPrefix)` 换成 `Canvas` 还不够；如果 graph 仍只画在比 table row 更小的内容盒高度里，纵向 lane 视觉上依然会断。对这类“跨行连续”的 IDE 图谱，除了 renderer 本身，还要把 **统一 rowHeight 真相源 + table row 高度约束** 一起纳入设计和测试。
 - 当一个 optional 状态同时承担“弹窗是否展示”和“弹窗完成后要执行的动作”两种职责时，UI 框架很容易在 dismiss 时先把它清空，导致回调阶段业务语义丢失。弹窗展示态和业务动作态必须拆分成两个独立状态源。
 - 对“用户感知为无反应”的跨层交互链路，修行为之前要先补足可观测性：至少记录入口回调、权限获取、核心校验、持久化结果和 UI 收尾动作。否则即使修了一半，下一轮反馈仍很难判断究竟卡在哪一层。
 - 文件选择器返回的目录 URL 如果带有 security-scoped access，就不能只在“提取 path 字符串”时短暂访问；真正的目录校验、扫描和导入逻辑必须在访问权限仍然有效的窗口内完成，否则很容易出现“用户刚选完目录，后续读取却静默失败”的假无响应。
@@ -128,3 +133,21 @@
 - 对嵌入式终端这类“一个 pane 对应一个长生命周期宿主 view”的场景，`leaf -> split.left/right` 这种树结构变化不能直接映射成宿主 view 层级变化；否则 SwiftUI 在 split 事务里可能短时间同时创建旧 leaf host 和新 child host，最终两个 host 去抢同一个 terminal surface。
 - 更稳的做法是：让 `WorkspacePaneTree` 只负责产出 **leaf frame + split handle**，真正的 pane host 永远以 `pane.id` 为稳定键在同一平面里渲染；split 后旧 pane 只改 frame，不改宿主层级。
 - 如果现场日志里出现“同一个 pane 在一次 split 中连续多次 `representable-make` / `acquire reused=true`”，优先怀疑的不是 focus，而是 **同一个 pane 被重复宿主化**。
+
+## 2026-03-25 对齐 IDEA 提交图时，不要把 edge span 生命周期误当成 row-local visible element 生命周期
+
+- IntelliJ `EdgesInRowGenerator` 的语义不是“edge 覆盖了哪几行”，而是“在这一行里，哪些 edge 现在应作为可见 graph element 参与排序和连线”。
+- 对普通 commit edge，attachment row 只应该由 node 自己负责出入边连接；carried edge lane 只应出现在 `childRow + 1 ..< parentRow` 的中间行。
+- 如果把 edge 直接铺到 `childRow..<parentRow`，attachment row 就会冒出 phantom edge lane，连带污染列排序、推荐宽度和 line-to-line 连接参考点。
+
+## 2026-03-25 对齐 IDEA 提交图时，`positionInCurrentRow / positionInOtherRow` 还不够，row 内还必须保留 `UP/DOWN` 双向 segment
+
+- 只把 edge 改成 current/other row position，并不自动等于 IDEA；`PrintElementGeneratorImpl` 的关键还包括：**同一 row 会同时输出向上和向下的 print elements**。
+- 如果 builder 只生成 `.down`，本质上仍是在用“上一行负责画到我、我只负责画到下一行”的半模型；来自上一行的线不会在当前 row 内直接接到节点/edge center。
+- 对 commit graph 这类 row-local painter，真正要对齐的是“这一 row 完整持有哪些 print elements”，然后 renderer 只是忠实画出来；不要把缺失的 print element 责任甩给 Canvas 几何补偿。
+
+## 2026-03-25 对齐 IDEA 提交图时，双向 print element 一旦补齐，renderer 也必须改成 row-local clipped painter
+
+- IDEA 不是“每个 row 把 center-to-center 线段整段画完”，而是每个 row 只画自己视口内那一段；相邻 row 的 `.up/.down` print elements 共同拼成完整边。
+- 如果 renderer 继续跨两整行完整绘制，那么在引入 `.up/.down` 双向 print elements 后，同一逻辑边会被相邻 row 重复整段画出，视觉上就会和 IDEA 越来越不像。
+- commit graph 要想真正 1:1，core 的 `print elements` 语义和 app 的 `painter viewport` 语义必须一起迁移，缺一不可。

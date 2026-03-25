@@ -119,6 +119,7 @@ struct WorkspaceShellView: View {
             viewModel.startWorkspaceAgentSignalObservation()
             syncTerminalStores()
             warmActiveWorkspace()
+            syncActiveWorkspaceGitMode()
             refreshCodexDisplayStates()
             WorkspaceLaunchDiagnostics.shared.recordShellMounted(
                 activeProjectPath: viewModel.activeWorkspaceProjectPath,
@@ -133,11 +134,16 @@ struct WorkspaceShellView: View {
             syncTerminalStores()
             viewModel.refreshWorkspaceAgentSignals()
             warmActiveWorkspace()
+            syncActiveWorkspaceGitMode()
             refreshCodexDisplayStates()
         }
         .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
             warmActiveWorkspace()
+            syncActiveWorkspaceGitMode()
             refreshCodexDisplayStates()
+        }
+        .onChange(of: viewModel.workspacePrimaryMode) { _, _ in
+            syncActiveWorkspaceGitMode()
         }
         .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
             warmActiveWorkspace()
@@ -232,30 +238,83 @@ struct WorkspaceShellView: View {
             )
             .foregroundStyle(NativeTheme.textSecondary)
         } else {
-            ZStack {
-                ForEach(viewModel.openWorkspaceSessions) { session in
-                    let project: Project? = session.isQuickTerminal
-                        ? .quickTerminal(at: session.projectPath)
-                        : viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath })
-                    if let project {
-                        WorkspaceHostView(
-                            viewModel: viewModel,
-                            project: project,
-                            workspace: session.controller,
-                            terminalSessionStore: terminalStoreRegistry.store(for: session.projectPath)
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(session.projectPath == viewModel.activeWorkspaceProjectPath ? 1 : 0)
-                        .allowsHitTesting(session.projectPath == viewModel.activeWorkspaceProjectPath)
-                        .accessibilityHidden(session.projectPath != viewModel.activeWorkspaceProjectPath)
+            VStack(spacing: 0) {
+                WorkspaceModeSwitcherView(selection: $viewModel.workspacePrimaryMode)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 14)
+                    .background(NativeTheme.surface)
+                    .overlay(alignment: .bottom) {
+                        Rectangle()
+                            .fill(NativeTheme.border)
+                            .frame(height: 1)
                     }
+
+                switch viewModel.workspacePrimaryMode {
+                case .terminal:
+                    terminalModeContent
+                case .git:
+                    gitModeContent
                 }
             }
         }
     }
 
+    private var terminalModeContent: some View {
+        ZStack {
+            ForEach(viewModel.openWorkspaceSessions) { session in
+                let project: Project? = session.isQuickTerminal
+                    ? .quickTerminal(at: session.projectPath)
+                    : viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath })
+                if let project {
+                    WorkspaceHostView(
+                        viewModel: viewModel,
+                        project: project,
+                        workspace: session.controller,
+                        terminalSessionStore: terminalStoreRegistry.store(for: session.projectPath)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(session.projectPath == viewModel.activeWorkspaceProjectPath ? 1 : 0)
+                    .allowsHitTesting(session.projectPath == viewModel.activeWorkspaceProjectPath)
+                    .accessibilityHidden(session.projectPath != viewModel.activeWorkspaceProjectPath)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var gitModeContent: some View {
+        if isActiveQuickTerminalSession {
+            gitModeEmptyState(
+                title: "快速终端暂不支持 Git 模式",
+                systemImage: "bolt.horizontal.circle",
+                description: "请先打开一个 Git 项目或 worktree，再使用 Git 管理面板。"
+            )
+        } else if viewModel.activeWorkspaceGitRepositoryContext == nil {
+            gitModeEmptyState(
+                title: "当前项目不是 Git 仓库",
+                systemImage: "point.3.connected.trianglepath.dotted",
+                description: "Git 面板只会对当前 active project 所属的 root repository 生效。"
+            )
+        } else if let gitViewModel = viewModel.activeWorkspaceGitViewModel {
+            WorkspaceGitRootView(viewModel: gitViewModel)
+        } else {
+            gitModeEmptyState(
+                title: "Git 面板尚未就绪",
+                systemImage: "tray",
+                description: "请重新选择当前项目，或稍后再试。"
+            )
+        }
+    }
+
     private func syncTerminalStores() {
         terminalStoreRegistry.syncRetainedProjectPaths(Set(viewModel.openWorkspaceProjectPaths))
+    }
+
+    private var isActiveQuickTerminalSession: Bool {
+        guard let activePath = viewModel.activeWorkspaceProjectPath else {
+            return false
+        }
+        return viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activePath })?.isQuickTerminal ?? false
     }
 
     private func warmActiveWorkspace() {
@@ -275,6 +334,13 @@ struct WorkspaceShellView: View {
     private func persistSidebarWidth(_ width: CGFloat) {
         let persistedWidth = Double(width.rounded())
         viewModel.updateWorkspaceSidebarWidth(persistedWidth)
+    }
+
+    private func syncActiveWorkspaceGitMode() {
+        guard viewModel.workspacePrimaryMode == .git else {
+            return
+        }
+        viewModel.prepareActiveWorkspaceGitViewModel()
     }
 
     private func refreshCodexDisplayStates() {
@@ -318,6 +384,9 @@ struct WorkspaceShellView: View {
     private func terminalSearchAction(
         _ perform: @escaping (GhosttySurfaceHostModel) -> Void
     ) -> (() -> Void)? {
+        guard viewModel.workspacePrimaryMode == .terminal else {
+            return nil
+        }
         guard viewModel.activeWorkspaceController?.selectedPane != nil else {
             return nil
         }
@@ -337,6 +406,15 @@ struct WorkspaceShellView: View {
             return nil
         }
         return terminalStoreRegistry.store(for: activeProjectPath).model(for: selectedPane)
+    }
+
+    private func gitModeEmptyState(title: String, systemImage: String, description: String) -> some View {
+        ContentUnavailableView(
+            title,
+            systemImage: systemImage,
+            description: Text(description)
+        )
+        .foregroundStyle(NativeTheme.textSecondary)
     }
 }
 
