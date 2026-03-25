@@ -3160,7 +3160,184 @@
 - [x] 探索当前 DevHaven Git log 布局、相关测试、既有任务记录与最近提交
 - [x] 向用户确认这轮要优先对齐的范围与成功标准（已确认为 `.log` section 的左侧 branches panel 与右侧 details/changes/diff 联动区）
 - [x] 向用户确认左侧 branches panel 需按 IDEA 方式支持可展开 / 可收起（已确认为 A 方案）
-- [ ] 提出 2-3 个可行方案并给出推荐
-- [ ] 输出分段设计并等待用户确认
-- [ ] 设计确认后写入 docs/plans/2026-03-25-idea-git-side-panels-design.md
-- [ ] 设计确认后再进入实现计划
+- [x] 提出 2-3 个可行方案并给出推荐（已推荐“外壳先对齐 IDEA MainFrame”方案）
+- [x] 输出分段设计并等待用户确认（用户授权直接推进，无需逐段确认）
+- [x] 设计确认后写入 docs/plans/2026-03-25-idea-git-side-panels-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 IDEA Git 左右侧区域 1:1 复刻实现
+
+- [x] Task 1：补红灯测试，锁定 `.log` 左侧 branches panel 与右侧 detail panes 契约
+- [x] Task 2：实现左侧可展开 / 可收起 branches panel，并收口 toolbar 职责
+- [x] Task 3：收紧右侧 changes / details / diff 面板结构与展示
+- [x] Task 4：更新 AGENTS.md / docs / tasks，并完成验证与 Review
+
+
+## Review（2026-03-25 IDEA Git 左右侧区域 1:1 复刻实现）
+
+- 结果：
+  1. `.log` 左侧已新增独立 `WorkspaceGitIdeaLogBranchesPanelView`，支持 **可展开 / 可收起**、搜索、本地 / 远端 / 标签分组与 revision filter 选择。
+  2. `WorkspaceGitIdeaLogView` 已改成 `左侧 control strip + 可选 branches panel + 右侧 main content` 结构，中间 commit table / graph 主链保持不变。
+  3. `WorkspaceGitIdeaLogToolbarView` 已移除旧的 branch filter menu，只保留 search / author / date / path / details / diff preview / refresh，branch filter 主入口已收口到左侧 panel。
+  4. `WorkspaceGitIdeaLogChangesView`、`WorkspaceGitIdeaLogDetailsView`、`WorkspaceGitIdeaLogDiffPreviewView` 已收紧为更接近 IDEA 的 pane header + 紧凑内容分区结构；右侧仍沿用现有 commit -> file -> diff 联动主链。
+  5. 已同步更新 `AGENTS.md`、设计文档与实现计划，补齐 `.log` 左右侧职责边界。
+- 直接原因：
+  1. 之前 `.log` 重点放在中间 log table / graph 1:1，对左侧 branches dashboard panel 只做了“顶部 branch menu”降级替代，导致视觉和交互都与 IDEA 偏差很大。
+  2. 右侧 details / changes / diff 虽然数据已通，但仍保留较重的自定义面板样式，缺少 IDEA 那种 pane header + metadata sections 的密度与层级。
+- 设计层诱因：
+  1. 前几轮标准 IDEA Log 实现优先解决了 graph、table、bottom pane 数据主链，左右两侧被保留为 MVP 形态，职责分布因此失衡。
+  2. branch filter 入口之前被放在 toolbar，导致“左侧结构缺失”被一个菜单临时顶替；这不是数据能力缺失，而是 App 层容器职责没有完全对齐 IDEA MainFrame。
+  3. 当前未发现新的明显系统设计缺陷；本轮主要是把 `.log` 左右侧容器和职责重新收口到更合理的位置。
+- 当前方案：
+  1. App：新增 `WorkspaceGitIdeaLogBranchesPanelView.swift`，专职承接 `.log` 左侧分支树搜索、分组与 revision filter 选择。
+  2. App：`WorkspaceGitIdeaLogView.swift` 引入 branches control strip 与可选左侧 panel，`.log` 外壳不再只有 toolbar + table/bottom pane。
+  3. App：`WorkspaceGitIdeaLogToolbarView.swift` 删除 branch filter menu，把顶部职责收敛到 text/author/date/path 过滤与 preview controls。
+  4. App：`WorkspaceGitIdeaLogChangesView.swift`、`WorkspaceGitIdeaLogDetailsView.swift`、`WorkspaceGitIdeaLogDiffPreviewView.swift` 改为更紧凑的 pane header / metadata / preview container 结构。
+  5. 文档：`AGENTS.md`、`docs/plans/2026-03-25-idea-git-side-panels-design.md`、`docs/plans/2026-03-25-idea-git-side-panels.md` 已同步更新。
+- 长期建议：
+  1. 如果继续向 IntelliJ 的 branch dashboard 靠拢，下一轮可补“按选择过滤 / 导航模式切换”“更多 branch actions”“收藏/分组”等行为，而不是继续堆样式细节。
+  2. 右侧 details pane 当前已对齐到更紧凑的信息架构，但 refs 仍来自 decorations 字符串拆分；若后续要进一步 1:1，可考虑在 Core 层提供结构化 refs 展示模型。
+  3. branches panel 的展开态和宽度目前是 `.log` 视图局部状态；若用户后续明确要求跨会话记忆，再单独评估是否值得持久化，不要提前把运行时 UI 状态塞进 restore snapshot。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，明确提示缺少 `WorkspaceGitIdeaLogBranchesPanelView.swift`、`branchesControlStrip`、旧 `branchFilterMenu` 未移除，以及右侧 pane 仍缺少新的 header / section 结构。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 14 tests，0 failures。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests'` → 21 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Git 左右侧区域视觉抛光（二轮）设计
+
+- [x] 复盘上一轮 `.log` 左右侧实现、当前源码与 IDEA 参考实现
+- [x] 在不再打断用户的前提下收敛本轮抛光范围（左侧 filter 标题/分组信息、右侧 refs/changes 信息密度）
+- [x] 产出本轮设计并落盘到 docs/plans/2026-03-25-idea-git-side-panels-polish-design.md
+- [x] 产出实现计划并落盘到 docs/plans/2026-03-25-idea-git-side-panels-polish.md
+
+## 2026-03-25 IDEA Git 左右侧区域视觉抛光（二轮）实现
+
+- [x] Task 1：补红灯测试，锁定 branches header、changes 路径层级与 refs badge 契约
+- [x] Task 2：抛光左侧 branches panel 的标题与分组信息密度
+- [x] Task 3：抛光 changes/details 的路径与 refs 展示语义
+- [x] Task 4：更新文档、验证并回填 Review
+
+
+## Review（2026-03-25 IDEA Git 左右侧区域视觉抛光：二轮）
+
+- 结果：
+  1. `WorkspaceGitIdeaLogBranchesPanelView` 的 header 已从原始 `refs/...` 字符串切换为友好 `selectedRevisionTitle`，本地 / 远端 / 标签分组也补齐了计数信息。
+  2. `WorkspaceGitIdeaLogChangesView` 已改为更接近 IDE 的“文件名主标题 + 路径/rename 次信息”结构，不再把完整路径整条塞进主文本。
+  3. `WorkspaceGitIdeaLogDetailsView` 已把 decorations 拆成 branch/HEAD 与 tag 两类 badge，并使用不同样式，Refs 语义比上一轮更接近 IDEA `ReferencesPanel`。
+  4. 已同步更新 AGENTS.md、二轮设计与实现计划，并把验证证据回填到 `tasks/todo.md`。
+- 直接原因：
+  1. 上一轮已经把左右两侧结构搭对了，但细节仍停留在“能用”的 MVP 级别：左侧 header 直接透出 raw ref path，右侧 changes/details 仍缺少 IDE 常见的信息分层。
+  2. 这些差距不会阻断功能，却会显著影响观感与扫描效率，因此适合用纯 App 层抛光解决。
+- 设计层诱因：
+  1. 前一轮的重点是先把 `.log` 左右两侧容器位置与职责纠正回来，而不是一次性把所有信息密度细节做到位。
+  2. 当前 refs 在 Core 层仍是 decorations 文本，App 层只能做轻量解析；因此本轮选择“语义抛光，不扩底层协议”，避免过早改动读取模型。
+  3. 未发现新的明显系统设计缺陷；本轮仍属于 App 层表现语义收敛。
+- 当前方案：
+  1. 左侧：新增 `selectedRevisionTitle` 与 `groupHeader(title:count:)`，统一 revision 标题与分组计数展示。
+  2. Changes：新增 `primaryFileName(for:)` 与 `secondaryPathSubtitle(for:)`，把文件名与父路径/rename 来源拆层显示。
+  3. Details：新增 `branchReferenceItems`、`tagReferenceItems`、`ReferenceBadgeStyle` 与 `referenceBadge(...)`，区分 branch/HEAD 与 tag 的 badge 语义。
+  4. 文档：已同步更新 `AGENTS.md`、`docs/plans/2026-03-25-idea-git-side-panels-polish-design.md`、`docs/plans/2026-03-25-idea-git-side-panels-polish.md`。
+- 长期建议：
+  1. 如果继续往 IntelliJ `Branches Dashboard` 靠拢，下一轮优先考虑的是 branch actions / selection mode，而不是继续堆 header 文案细节。
+  2. 如果要把 refs badge 做到更高保真，建议后续在 Core 层提供结构化 refs 模型，而不是长期依赖 decorations 字符串解析。
+  3. Changes browser 目前仍是线性列表；若后续追求更像 IDEA，可再评估目录树分组、批量展开/折叠与 richer status 图标体系。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，明确指向缺少 `selectedRevisionTitle`、`groupHeader`、`primaryFileName`、`secondaryPathSubtitle`、`branchReferenceItems`、`tagReferenceItems` 与 `referenceBadge` 等新契约。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 17 tests，0 failures。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests'` → 24 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace Tool Window 高度拖拽修复
+
+- [x] 排查 tool window 高度无法拖拽的现状、现有状态模型与相关测试
+- [x] 补红灯测试，锁定 bottom tool window 必须通过可拖拽 split 接入 `updateWorkspaceToolWindowHeight(...)`
+- [x] 以最小改动修复 `WorkspaceShellView` 的高度拖拽主链
+- [x] 更新任务记录并完成验证 / Review
+
+
+## Review（2026-03-25 Workspace Tool Window 高度拖拽修复）
+
+- 结果：
+  1. `WorkspaceShellView` 已不再用固定 `.frame(height: workspaceToolWindowState.height)` 直接挂底部 tool window，而是改为 `WorkspaceSplitView(direction: .vertical, ...)` 承接 terminal 主区与 bottom tool window。
+  2. bottom tool window 的拖拽会实时调用 `NativeAppViewModel.updateWorkspaceToolWindowHeight(...)`，高度真相源重新被真正消费。
+  3. 双击分隔线时会把高度重置到 `WorkspaceToolWindowState.defaultHeight`，与现有 split 组件的 equalize 语义保持一致。
+  4. 已同步更新 `WorkspaceShellViewGitModeTests`、`AGENTS.md` 与本任务记录。
+- 直接原因：
+  1. `NativeAppViewModel` 和 `WorkspaceToolWindowState` 早已有 `height / lastExpandedHeight / updateWorkspaceToolWindowHeight(...)` 运行时模型，但 `WorkspaceShellView` 只是把底部 tool window 包在固定 `.frame(height: ...)` 里展示。
+  2. 也就是说，**高度状态存在，但没有任何拖拽 UI 或 split 组件把用户操作接回这个状态**，所以表现上就是“不能拖动改高度”。
+- 设计层诱因：
+  1. 之前实现 bottom tool window 时，先完成了“terminal 主区 + 底部面板”的结构切换，但把“高度可拖拽”留成了后续事项，导致状态模型和 UI 宿主职责断开。
+  2. 仓库里已经有可复用的 `WorkspaceSplitView` 与 `updateWorkspaceToolWindowHeight(...)`，问题不是缺少能力，而是 `WorkspaceShellView` 没把两者接起来。
+  3. 当前未发现新的明显系统设计缺陷；本轮属于把既有状态模型与现有 split 组件重新接线。
+- 当前修复方案：
+  1. 在 `WorkspaceShellView` 中，当 bottom tool window 可见时改为走 `WorkspaceSplitView(direction: .vertical, ...)`。
+  2. 通过 `toolWindowSplitRatio(totalHeight:)` 把 runtime height 真相源换算成 split ratio。
+  3. 通过 `toolWindowHeight(for:totalHeight:)` 把拖拽 ratio 反算成高度，并写回 `updateWorkspaceToolWindowHeight(...)`。
+  4. 保留 tool window 空态路由、focused area 行为与 stripe 入口逻辑不变，只修高度拖拽主链。
+- 长期建议：
+  1. 当前 `WorkspaceToolWindowState.height` 的最小值在 ViewModel 层是 160，但极小窗口下 UI 仍会按可用高度自适应压缩；若后续继续细抠体验，可考虑把“最小 terminal 高度 / 最小 tool window 高度”收口成显式 layout policy。
+  2. 如果未来增加第二个 bottom tool window，继续复用当前这套 `height <-> split ratio` 换算，不要再回到某个具体 tool window 自己维护局部拖拽状态。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceShellViewGitModeTests` → 初次失败，明确指出缺少 `WorkspaceSplitView(direction: .vertical)`、`updateWorkspaceToolWindowHeight(...)`、`toolWindowSplitRatio(...)`，且仍存在固定 `.frame(height: CGFloat(viewModel.workspaceToolWindowState.height))`。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceShellViewGitModeTests` → 6 tests，0 failures。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 13 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Log 右侧信息栏回归与错误底部面板删除
+
+- [x] 对照用户截图、现有 `.log` 布局与相关测试，确认偏差属于主信息架构错误而非单一控件样式问题
+- [x] 补红灯测试，锁定 `.log` 应为 `左侧 branches | 中间 log table | 右侧信息栏`，并删除底部 changes/details/diff preview 结构
+- [x] 以最小改动重构 `.log` 主容器与 toolbar，接回右侧信息栏
+- [x] 同步更新 AGENTS.md / docs / tasks，并完成验证与 Review
+
+
+## Review（2026-03-25 IDEA Log 右侧信息栏回归与错误底部面板删除）
+
+- 结果：
+  1. `.log` 主结构已从错误的“底部 changes/details/diff preview”改为更接近 IDEA 截图的 `左侧 branches | 中间 log table | 最右侧信息栏`。
+  2. 已新增 `WorkspaceGitIdeaLogRightSidebarView.swift`，在右侧用纵向 split 承接 `WorkspaceGitIdeaLogChangesView` 与 `WorkspaceGitIdeaLogDetailsView`。
+  3. `WorkspaceGitIdeaLogToolbarView` 已移除旧的 details / diff preview toggle；toolbar 现在只负责过滤与刷新。
+  4. `WorkspaceGitIdeaLogBottomPaneView.swift` 与 `WorkspaceGitIdeaLogDiffPreviewView.swift` 已从源码中删除，避免错误布局继续作为遗留实现存在。
+  5. 已同步更新 `AGENTS.md`、设计 / 实现计划与任务记录。
+- 直接原因：
+  1. 之前 `.log` 的右侧信息架构判断错了，把 `changes / details / diff preview` 误建模成“表格下方的底部 pane”，而用户截图明确表明这些信息应当收口在最右侧信息栏。
+  2. 这不是单个组件样式问题，而是主布局层级理解错误，导致即使 changes/details 内容能显示，整体仍然和 IDEA 偏差很大。
+- 设计层诱因：
+  1. 早期实现沿用了“bottom pane + diff preview”这套假设，并逐步在这个错误壳子上打磨细节，因此越做越偏。
+  2. 当前右侧缺失并不是数据没打通，而是 `WorkspaceGitIdeaLogView` 容器职责错误；`changes` 和 `details` 组件本身可以复用，但必须挂到正确的右侧 sidebar 上。
+  3. 当前未发现新的明显系统设计缺陷；本轮核心是纠正 `.log` 主布局真相源。
+- 当前方案：
+  1. 新增 `WorkspaceGitIdeaLogRightSidebarView.swift`，负责右侧信息栏的纵向 split。
+  2. 重构 `WorkspaceGitIdeaLogView.swift`，将 `.log` 主链改成 `table + right sidebar`，移除旧 bottom pane / diff preview 路由。
+  3. 更新 `WorkspaceGitIdeaLogToolbarView.swift`，删除 details / diff preview 开关，只保留 author/date/path/search/filter 与刷新。
+  4. 删除 `WorkspaceGitIdeaLogBottomPaneView.swift` 与 `WorkspaceGitIdeaLogDiffPreviewView.swift` 两个错误的遗留壳层文件。
+- 长期建议：
+  1. 右侧 sidebar 目前已经回到正确位置，后续若继续对齐 IDEA，可进一步抠 changes tree 的目录层级与 commit details 的信息密度，而不是再回到底部 pane 思路。
+  2. `WorkspaceGitLogViewModel` 当前仍保留旧的 `displayOptions` 与 file diff 加载链路；若后续确认右侧不再需要独立 diff preview，可以评估清理这些已经失去 UI 宿主的状态与读取逻辑。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，明确指出缺少 `WorkspaceGitIdeaLogRightSidebarView`、toolbar 仍保留 `toggleDetails/toggleDiffPreview`，且 `.log` 主链仍引用 `WorkspaceGitIdeaLogBottomPaneView` / `WorkspaceGitIdeaLogDiffPreviewView`。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 17 tests，0 failures。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests'` → 24 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 汇总 IDEA Git Log 对齐改动并提交
+
+- [x] 汇总当前工作区改动范围与验证证据
+- [x] 选择提交说明并执行 git add / git commit
+- [x] 在本文件追加提交 Review 与提交哈希
+
+
+## Review（2026-03-25 汇总 IDEA Git Log 对齐改动并提交）
+
+- 提交说明：`feat(git): align idea log layout and tool window resize`
+- 提交哈希：当前 HEAD（本次提交经 amend 后以 `git rev-parse --short HEAD` 为准）
+- 提交范围：
+  1. 标准 IDEA Log 左侧 branches panel、右侧信息栏与相关抛光；
+  2. 删除错误的底部 changes/details/diff preview 主链；
+  3. 修复 workspace bottom tool window 高度可拖拽；
+  4. 同步更新 AGENTS.md、设计文档与任务记录。
+- 提交前验证证据：
+  - `swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 37 tests，0 failures。
+  - `git diff --check` → exit 0。
+- 结果：提交成功，当前本地提交已更新为当前 HEAD。

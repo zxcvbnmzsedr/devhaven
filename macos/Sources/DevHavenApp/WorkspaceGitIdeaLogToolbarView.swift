@@ -8,22 +8,11 @@ struct WorkspaceGitIdeaLogToolbarView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 searchField
-                branchFilterMenu
                 authorFilterMenu
                 dateFilterMenu
                 pathFilterField
 
                 Spacer(minLength: 8)
-
-                Button(viewModel.displayOptions.showsDetails ? "隐藏详情" : "显示详情") {
-                    viewModel.toggleDetails(!viewModel.displayOptions.showsDetails)
-                }
-                .buttonStyle(.bordered)
-
-                Button(viewModel.displayOptions.showsDiffPreview ? "隐藏预览" : "显示预览") {
-                    viewModel.toggleDiffPreview(!viewModel.displayOptions.showsDiffPreview)
-                }
-                .buttonStyle(.bordered)
 
                 Button("刷新") {
                     viewModel.refresh()
@@ -59,44 +48,6 @@ struct WorkspaceGitIdeaLogToolbarView: View {
         .frame(maxWidth: 260)
         .background(NativeTheme.elevated)
         .clipShape(.rect(cornerRadius: 10))
-    }
-
-    private var branchFilterMenu: some View {
-        Menu {
-            Button("全部分支") {
-                viewModel.selectRevisionFilter(nil)
-            }
-            Divider()
-            if !viewModel.logSnapshot.refs.localBranches.isEmpty {
-                Section("本地") {
-                    ForEach(viewModel.logSnapshot.refs.localBranches) { branch in
-                        Button(branch.name) {
-                            viewModel.selectRevisionFilter(branch.fullName)
-                        }
-                    }
-                }
-            }
-            if !viewModel.logSnapshot.refs.remoteBranches.isEmpty {
-                Section("远端") {
-                    ForEach(viewModel.logSnapshot.refs.remoteBranches) { branch in
-                        Button(branch.name) {
-                            viewModel.selectRevisionFilter(branch.fullName)
-                        }
-                    }
-                }
-            }
-            if !viewModel.logSnapshot.refs.tags.isEmpty {
-                Section("标签") {
-                    ForEach(viewModel.logSnapshot.refs.tags) { tag in
-                        Button(tag.name) {
-                            viewModel.selectRevisionFilter("refs/tags/\(tag.name)")
-                        }
-                    }
-                }
-            }
-        } label: {
-            filterChip(title: "分支", value: revisionTitle)
-        }
     }
 
     private var authorFilterMenu: some View {
@@ -160,16 +111,5 @@ struct WorkspaceGitIdeaLogToolbarView: View {
         .padding(.vertical, 7)
         .background(NativeTheme.elevated)
         .clipShape(.capsule)
-    }
-
-    private var revisionTitle: String {
-        guard let revision = viewModel.selectedRevisionFilter else {
-            return "全部分支"
-        }
-        let prefixes = ["refs/heads/", "refs/remotes/", "refs/tags/"]
-        for prefix in prefixes where revision.hasPrefix(prefix) {
-            return String(revision.dropFirst(prefix.count))
-        }
-        return revision
     }
 }

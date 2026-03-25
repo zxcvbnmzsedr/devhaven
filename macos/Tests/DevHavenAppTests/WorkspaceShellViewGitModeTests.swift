@@ -47,6 +47,19 @@ final class WorkspaceShellViewGitModeTests: XCTestCase {
         )
     }
 
+    func testWorkspaceShellViewUsesResizableVerticalSplitForBottomToolWindowHeight() throws {
+        let source = try String(contentsOf: workspaceShellSourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("WorkspaceSplitView("), "bottom tool window 应通过可拖拽 split 接入，而不是固定 frame 高度")
+        XCTAssertTrue(source.contains("direction: .vertical"), "bottom tool window 与 terminal 主区应使用纵向 split")
+        XCTAssertTrue(source.contains("updateWorkspaceToolWindowHeight"), "拖拽 bottom tool window 时应写回 tool window 高度真相源")
+        XCTAssertTrue(source.contains("toolWindowSplitRatio"), "WorkspaceShellView 应显式根据高度真相源换算 split ratio")
+        XCTAssertFalse(
+            source.contains(".frame(height: CGFloat(viewModel.workspaceToolWindowState.height))"),
+            "bottom tool window 不应继续只靠固定 frame(height:) 展示，否则无法拖拽改高度"
+        )
+    }
+
     private func workspaceShellSourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

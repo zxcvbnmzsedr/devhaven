@@ -65,11 +65,8 @@ struct WorkspaceShellView: View {
             )
             .foregroundStyle(NativeTheme.textSecondary)
         } else {
-            VStack(spacing: 0) {
-                terminalModeContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                bottomToolWindowHost
+            GeometryReader { geometry in
+                bottomToolWindowHost(totalHeight: geometry.size.height)
             }
         }
     }
@@ -126,14 +123,23 @@ struct WorkspaceShellView: View {
     }
 
     @ViewBuilder
-    private var bottomToolWindowHost: some View {
+    private func bottomToolWindowHost(totalHeight: CGFloat) -> some View {
         if viewModel.workspaceToolWindowState.placement == .bottom,
            viewModel.workspaceToolWindowState.isVisible {
-            VStack(spacing: 0) {
-                Rectangle()
-                    .fill(NativeTheme.border)
-                    .frame(height: 1)
-
+            WorkspaceSplitView(
+                direction: .vertical,
+                ratio: toolWindowSplitRatio(totalHeight: totalHeight),
+                onRatioChange: { ratio in
+                    let nextHeight = toolWindowHeight(for: ratio, totalHeight: totalHeight)
+                    viewModel.updateWorkspaceToolWindowHeight(nextHeight)
+                },
+                onEqualize: {
+                    viewModel.updateWorkspaceToolWindowHeight(WorkspaceToolWindowState.defaultHeight)
+                }
+            ) {
+                terminalModeContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } trailing: {
                 Group {
                     if viewModel.workspaceToolWindowState.activeKind == .git {
                         gitToolWindowContent
@@ -148,9 +154,39 @@ struct WorkspaceShellView: View {
                         viewModel.setWorkspaceFocusedArea(.toolWindow(kind))
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(height: CGFloat(viewModel.workspaceToolWindowState.height))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            terminalModeContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func toolWindowSplitRatio(totalHeight: CGFloat) -> Double {
+        guard totalHeight > 0 else {
+            return 1
+        }
+        let toolWindowHeight = clampedToolWindowHeight(
+            CGFloat(viewModel.workspaceToolWindowState.height),
+            totalHeight: totalHeight
+        )
+        return Double((totalHeight - toolWindowHeight) / totalHeight)
+    }
+
+    private func toolWindowHeight(for ratio: Double, totalHeight: CGFloat) -> Double {
+        guard totalHeight > 0 else {
+            return viewModel.workspaceToolWindowState.height
+        }
+        let leadingHeight = CGFloat(ratio) * totalHeight
+        let desiredHeight = totalHeight - leadingHeight
+        let clampedHeight = clampedToolWindowHeight(desiredHeight, totalHeight: totalHeight)
+        return Double(clampedHeight.rounded())
+    }
+
+    private func clampedToolWindowHeight(_ proposedHeight: CGFloat, totalHeight: CGFloat) -> CGFloat {
+        let upperBound = max(10, totalHeight - 10)
+        return min(max(10, proposedHeight), upperBound)
     }
 
     private func syncTerminalStores() {

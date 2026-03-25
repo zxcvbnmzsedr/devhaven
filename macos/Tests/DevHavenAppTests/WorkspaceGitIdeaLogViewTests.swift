@@ -1,25 +1,52 @@
 import XCTest
 
 final class WorkspaceGitIdeaLogViewTests: XCTestCase {
-    func testIdeaLogContainerBuildsToolbarTableBottomPaneAndDiffPreview() throws {
+    func testIdeaLogContainerBuildsToolbarTableAndRightSidebar() throws {
         let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogView.swift"), encoding: .utf8)
 
         XCTAssertTrue(source.contains("WorkspaceGitIdeaLogToolbarView("), "标准 IDEA Log 顶部应使用独立 toolbar 视图")
+        XCTAssertTrue(source.contains("WorkspaceGitIdeaLogBranchesPanelView("), "标准 IDEA Log 左侧应挂载独立 branches panel")
+        XCTAssertTrue(source.contains("branchesControlStrip"), "标准 IDEA Log 左侧应保留可展开 / 可收起的 control strip")
+        XCTAssertTrue(source.contains("isBranchesPanelVisible"), "标准 IDEA Log 应维护 branches panel 的展开态")
         XCTAssertTrue(source.contains("WorkspaceGitIdeaLogTableView("), "标准 IDEA Log 中间应使用独立 table 视图")
-        XCTAssertTrue(source.contains("WorkspaceGitIdeaLogBottomPaneView("), "标准 IDEA Log 下半区应使用独立 bottom pane 视图")
-        XCTAssertTrue(source.contains("WorkspaceGitIdeaLogDiffPreviewView("), "标准 IDEA Log 应包含独立 diff preview pane")
-        XCTAssertGreaterThanOrEqual(source.components(separatedBy: "WorkspaceSplitView(").count - 1, 2, "标准 IDEA Log 应至少包含主区/底部区与 diff preview 两层 split")
+        XCTAssertTrue(source.contains("WorkspaceGitIdeaLogRightSidebarView("), "标准 IDEA Log 最右侧应挂载独立信息栏")
+        XCTAssertFalse(source.contains("WorkspaceGitIdeaLogBottomPaneView("), "标准 IDEA Log 主链不应再保留错误的底部 changes/details pane")
+        XCTAssertFalse(source.contains("WorkspaceGitIdeaLogDiffPreviewView("), "标准 IDEA Log 主链不应继续保留错误的 diff preview")
+        XCTAssertTrue(source.contains("direction: .horizontal"), "标准 IDEA Log 中间 table 与右侧信息栏应使用横向 split")
     }
 
-    func testIdeaLogToolbarProvidesStandardFiltersAndPreviewToggles() throws {
+    func testIdeaLogToolbarProvidesFiltersWithoutLegacyDetailPreviewToggles() throws {
         let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogToolbarView.swift"), encoding: .utf8)
 
-        XCTAssertTrue(source.contains("selectRevisionFilter"), "标准 IDEA Log toolbar 应提供 branch/revision filter")
+        XCTAssertFalse(source.contains("branchFilterMenu"), "标准 IDEA Log toolbar 不应继续承担 branch filter 主入口；该职责应迁移到左侧 branches panel")
+        XCTAssertFalse(source.contains("revisionTitle"), "标准 IDEA Log toolbar 不应继续维护旧的 revision title helper")
         XCTAssertTrue(source.contains("selectAuthorFilter"), "标准 IDEA Log toolbar 应提供 author filter")
         XCTAssertTrue(source.contains("selectDateFilter"), "标准 IDEA Log toolbar 应提供 date filter")
         XCTAssertTrue(source.contains("updatePathFilterQuery"), "标准 IDEA Log toolbar 应提供 path filter")
-        XCTAssertTrue(source.contains("toggleDetails"), "标准 IDEA Log toolbar 应提供详情区显隐开关")
-        XCTAssertTrue(source.contains("toggleDiffPreview"), "标准 IDEA Log toolbar 应提供 diff preview 显隐开关")
+        XCTAssertFalse(source.contains("toggleDetails"), "标准 IDEA Log toolbar 不应继续保留旧的详情区显隐开关")
+        XCTAssertFalse(source.contains("toggleDiffPreview"), "标准 IDEA Log toolbar 不应继续保留旧的 diff preview 显隐开关")
+    }
+
+    func testIdeaLogBranchesPanelProvidesSearchAndRefsTreeSections() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogBranchesPanelView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("TextField("), "左侧 branches panel 应提供分支搜索框")
+        XCTAssertTrue(source.contains("title: \"本地\""), "左侧 branches panel 应包含本地分支分组")
+        XCTAssertTrue(source.contains("title: \"远端\""), "左侧 branches panel 应包含远端分支分组")
+        XCTAssertTrue(source.contains("title: \"标签\""), "左侧 branches panel 应包含标签分组")
+        XCTAssertTrue(source.contains("selectRevisionFilter"), "左侧 branches panel 应直接驱动 revision filter")
+        XCTAssertTrue(source.contains("clearRevisionFilter"), "左侧 branches panel 应提供清空 revision filter 的显式入口")
+    }
+
+    func testIdeaLogBranchesPanelUsesDisplayTitleAndGroupCountHelpers() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogBranchesPanelView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("selectedRevisionTitle"), "左侧 branches panel 应把当前 revision filter 显示标题收口到专用 helper，而不是直接展示原始 refs 路径")
+        XCTAssertFalse(source.contains("Text(viewModel.selectedRevisionFilter ?? \"全部提交\")"), "左侧 branches panel header 不应继续直接展示原始 selectedRevisionFilter")
+        XCTAssertTrue(source.contains("groupHeader("), "左侧 branches panel 应通过 group header helper 统一显示分组标题与数量")
+        XCTAssertTrue(source.contains("count: localBranches.count"), "本地分支分组应显示数量")
+        XCTAssertTrue(source.contains("count: remoteBranches.count"), "远端分支分组应显示数量")
+        XCTAssertTrue(source.contains("count: tags.count"), "标签分组应显示数量")
     }
 
     func testIdeaLogTableUsesTableColumnsInsteadOfScrollList() throws {
@@ -105,12 +132,41 @@ final class WorkspaceGitIdeaLogViewTests: XCTestCase {
         )
     }
 
-    func testIdeaLogBottomPaneSeparatesChangesAndDetails() throws {
-        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogBottomPaneView.swift"), encoding: .utf8)
+    func testIdeaLogRightSidebarSeparatesChangesAndDetails() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogRightSidebarView.swift"), encoding: .utf8)
 
         XCTAssertTrue(source.contains("WorkspaceGitIdeaLogChangesView("), "标准 IDEA Log 左下区域应为 changes browser")
         XCTAssertTrue(source.contains("WorkspaceGitIdeaLogDetailsView("), "标准 IDEA Log 右下区域应为 commit details")
-        XCTAssertTrue(source.contains("direction: .horizontal"), "标准 IDEA Log 的 changes/details 区应使用横向 split")
+        XCTAssertTrue(source.contains("direction: .vertical"), "标准 IDEA Log 右侧信息栏内部应使用纵向 split 承接 changes 与 details")
+    }
+
+    func testIdeaLogDetailPanesUseCompactPaneHeadersAndMetadataSections() throws {
+        let changesSource = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogChangesView.swift"), encoding: .utf8)
+        let detailsSource = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogDetailsView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(changesSource.contains("paneHeader("), "changes browser 应收口为统一 pane header，而不是继续散落标题样式")
+        XCTAssertTrue(changesSource.contains("fileSubtitle"), "changes browser 应提供 rename/copy 等补充信息，而不是只显示单行路径")
+        XCTAssertTrue(detailsSource.contains("detailHeader"), "commit details 应包含紧凑 header，而不是直接从正文开始")
+        XCTAssertTrue(detailsSource.contains("detailSection("), "commit details 应拆成稳定的 metadata / refs / parents section")
+        XCTAssertTrue(detailsSource.contains("referencesSection"), "commit details 应单独呈现 refs 区域")
+        XCTAssertTrue(detailsSource.contains("parentsSection"), "commit details 应单独呈现 parents 区域")
+    }
+
+    func testIdeaLogChangesViewUsesFilenameAndPathHierarchyHelpers() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogChangesView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("primaryFileName"), "changes browser 应显式拆出主文件名 helper，而不是直接把完整路径当主标题")
+        XCTAssertTrue(source.contains("secondaryPathSubtitle"), "changes browser 应显式拆出次级路径 helper，承接父目录与 rename/copy 信息")
+        XCTAssertFalse(source.contains("Text(file.path)"), "changes browser 不应继续直接把 file.path 作为唯一主文本")
+    }
+
+    func testIdeaLogDetailsViewClassifiesBranchAndTagBadges() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogDetailsView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("branchReferenceItems"), "commit details 应把 refs 拆成 branch/HEAD 类引用")
+        XCTAssertTrue(source.contains("tagReferenceItems"), "commit details 应把 refs 拆成 tag 类引用")
+        XCTAssertTrue(source.contains("ReferenceBadgeStyle"), "commit details 应为不同 refs badge 提供显式样式枚举")
+        XCTAssertTrue(source.contains("referenceBadge("), "commit details 应通过统一 helper 渲染 refs badge")
     }
 
     private func sourceFileURL(named name: String) -> URL {
