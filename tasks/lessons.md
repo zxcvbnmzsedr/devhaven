@@ -1,4 +1,7 @@
 # Lessons
+- 对齐 IDEA 的 tool window stripe 时，不能简单理解成“整个窗口最左外缘放一列按钮”。如果产品本身还有独立的**项目导航栏**，更准确的层级往往是：`[项目导航] | [workspace stripe | 主内容区]`，也就是 stripe 属于**主工作区壳**，不是全窗口最外层导航。
+- 当用户要“像 IDEA 的 bottom tool window”时，不能把“**工具窗内容停靠在底部**”误等同于“**工具窗入口按钮也放在底部**”。IDEA 的常见心智是：**内容面板在底部，入口按钮在窗口边缘的 tool window stripe**；这两层职责必须分开建模。
+- 当用户明确要求“像 IDEA 的 bottom tool window”且进一步指出应直接采用通用 Tool Window 框架时，不要停留在“先做 Git 专用底部面板”的最小补丁思路；应优先评估并接受 **通用底部工具窗口能力** 作为本轮正确抽象，再让 Git 作为首个接入者。
 - 对齐 IDEA graph 时，真正决定“线和线是不是直接接上”的关键不是 row 边界 overdraw，而是 **print element 记录的是 current row position 与 adjacent row position**。如果模型只有 top/middle/bottom anchor，renderer 天然会退化成边界拼接。
 - 对 IDE log graph 这类图谱，**几何正确 ≠ 看起来正确**。如果 color 语义没有进入结构化 print element，App 层只能整张图统一 accent，最后就会出现“lane 拓扑已经对了，但还是没有 IDEA 味道”的情况。
 - 对这种“视觉上像断线”的 Canvas/表格问题，根因未必在 graph core，也可能在 **row 边界裁切 + 半像素未对齐**。如果每一行都是独立画布，就必须显式处理 overdraw 和 pixel alignment，否则模型再对，成像也会很丑。

@@ -86,7 +86,8 @@ public final class NativeAppViewModel {
     public var selectedProjectPath: String?
     public var openWorkspaceSessions: [OpenWorkspaceSessionState]
     public var activeWorkspaceProjectPath: String?
-    public var workspacePrimaryMode: WorkspacePrimaryMode
+    public var workspaceToolWindowState: WorkspaceToolWindowState
+    public var workspaceFocusedArea: WorkspaceFocusedArea
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
     private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     private var currentBranchByProjectPath: [String: String]
@@ -151,7 +152,8 @@ public final class NativeAppViewModel {
         self.selectedProjectPath = nil
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
-        self.workspacePrimaryMode = .terminal
+        self.workspaceToolWindowState = WorkspaceToolWindowState()
+        self.workspaceFocusedArea = .terminal
         self.attentionStateByProjectPath = [:]
         self.agentDisplayOverridesByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
@@ -919,6 +921,50 @@ public final class NativeAppViewModel {
             preferredExecutionWorktreePath: preferredExecutionPath,
             client: .live(service: gitRepositoryService)
         )
+    }
+
+    public func toggleWorkspaceToolWindow(_ kind: WorkspaceToolWindowKind) {
+        if workspaceToolWindowState.activeKind == kind, workspaceToolWindowState.isVisible {
+            hideWorkspaceToolWindow()
+            return
+        }
+        showWorkspaceToolWindow(kind)
+    }
+
+    public func showWorkspaceToolWindow(_ kind: WorkspaceToolWindowKind) {
+        workspaceToolWindowState.activeKind = kind
+        workspaceToolWindowState.isVisible = true
+        workspaceToolWindowState.height = workspaceToolWindowState.lastExpandedHeight
+        syncActiveWorkspaceToolWindowContext()
+        workspaceFocusedArea = .toolWindow(kind)
+    }
+
+    public func hideWorkspaceToolWindow() {
+        if workspaceToolWindowState.isVisible {
+            workspaceToolWindowState.lastExpandedHeight = workspaceToolWindowState.height
+        }
+        workspaceToolWindowState.isVisible = false
+        workspaceFocusedArea = .terminal
+    }
+
+    public func updateWorkspaceToolWindowHeight(_ height: Double) {
+        let clamped = max(160, height)
+        workspaceToolWindowState.height = clamped
+        workspaceToolWindowState.lastExpandedHeight = clamped
+    }
+
+    public func setWorkspaceFocusedArea(_ area: WorkspaceFocusedArea) {
+        workspaceFocusedArea = area
+    }
+
+    public func syncActiveWorkspaceToolWindowContext() {
+        guard let kind = workspaceToolWindowState.activeKind else {
+            return
+        }
+        switch kind {
+        case .git:
+            prepareActiveWorkspaceGitViewModel()
+        }
     }
 
     public func createWorkspaceTab(in projectPath: String? = nil) {

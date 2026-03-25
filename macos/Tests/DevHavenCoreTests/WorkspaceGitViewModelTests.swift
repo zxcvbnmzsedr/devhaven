@@ -3,6 +3,23 @@ import XCTest
 
 @MainActor
 final class WorkspaceGitViewModelTests: XCTestCase {
+    func testNativeAppViewModelReplacesPrimaryModeWithToolWindowRuntimeStateSourceContract() throws {
+        let source = try String(contentsOf: nativeAppViewModelSourceFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("public var workspacePrimaryMode"), "NativeAppViewModel 不应继续暴露 workspacePrimaryMode 成员")
+        XCTAssertFalse(source.contains("self.workspacePrimaryMode ="), "NativeAppViewModel 初始化时不应继续写入旧的 primary mode 真相源")
+        XCTAssertTrue(source.contains("workspaceToolWindowState"), "NativeAppViewModel 应提供 tool window runtime state")
+        XCTAssertTrue(source.contains("WorkspaceFocusedArea"), "NativeAppViewModel 应提供 focused area 真相源")
+    }
+
+    func testNativeAppViewModelProvidesToolWindowToggleEntryPointsSourceContract() throws {
+        let source = try String(contentsOf: nativeAppViewModelSourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("toggleWorkspaceToolWindow("))
+        XCTAssertTrue(source.contains("showWorkspaceToolWindow("))
+        XCTAssertTrue(source.contains("hideWorkspaceToolWindow()"))
+    }
+
     func testSearchQueryDebounce300MillisecondsOnlyAppliesLatestQuery() async throws {
         let recorder = WorkspaceGitClientRecorder()
         let viewModel = makeWorkspaceGitViewModel(recorder: recorder)
@@ -535,6 +552,14 @@ final class WorkspaceGitViewModelTests: XCTestCase {
         var lines = ["diff --git a/README.md b/README.md", "@@ -1,1 +1,\(lineCount) @@"]
         lines.append(contentsOf: (0..<lineCount).map { "+line-\($0)" })
         return lines.joined(separator: "\n")
+    }
+
+    private func nativeAppViewModelSourceFileURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift")
     }
 }
 

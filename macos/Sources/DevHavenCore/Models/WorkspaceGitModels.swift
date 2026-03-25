@@ -1,18 +1,57 @@
 import Foundation
 
-public enum WorkspacePrimaryMode: String, CaseIterable, Identifiable, Sendable {
-    case terminal
+public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendable {
     case git
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
-        case .terminal:
-            return "终端"
         case .git:
             return "Git"
         }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .git:
+            return "point.3.connected.trianglepath.dotted"
+        }
+    }
+}
+
+public enum WorkspaceToolWindowPlacement: String, Identifiable, Sendable {
+    case bottom
+
+    public var id: String { rawValue }
+}
+
+public enum WorkspaceFocusedArea: Equatable, Sendable {
+    case terminal
+    case toolWindow(WorkspaceToolWindowKind)
+}
+
+public struct WorkspaceToolWindowState: Equatable, Sendable {
+    public static let defaultHeight: Double = 320
+
+    public var activeKind: WorkspaceToolWindowKind?
+    public var isVisible: Bool
+    public var placement: WorkspaceToolWindowPlacement
+    public var height: Double
+    public var lastExpandedHeight: Double
+
+    public init(
+        activeKind: WorkspaceToolWindowKind? = nil,
+        isVisible: Bool = false,
+        placement: WorkspaceToolWindowPlacement = .bottom,
+        height: Double = WorkspaceToolWindowState.defaultHeight,
+        lastExpandedHeight: Double = WorkspaceToolWindowState.defaultHeight
+    ) {
+        self.activeKind = activeKind
+        self.isVisible = isVisible
+        self.placement = placement
+        self.height = max(160, height)
+        self.lastExpandedHeight = max(160, lastExpandedHeight)
     }
 }
 

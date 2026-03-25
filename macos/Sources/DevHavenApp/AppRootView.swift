@@ -154,7 +154,7 @@ struct AppRootView: View {
                 .allowsHitTesting(contentVisibilityPolicy.mainContentAllowsHitTesting)
                 .accessibilityHidden(contentVisibilityPolicy.mainContentOpacity == 0)
 
-            WorkspaceShellView(viewModel: viewModel)
+            WorkspaceRootView(viewModel: viewModel)
                 .opacity(contentVisibilityPolicy.workspaceContentOpacity)
                 .allowsHitTesting(contentVisibilityPolicy.workspaceContentAllowsHitTesting)
                 .accessibilityHidden(contentVisibilityPolicy.workspaceContentOpacity == 0)

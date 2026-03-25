@@ -1,5 +1,122 @@
 # Todo
 
+## 2026-03-25 Workspace Git / Terminal 一体化设计
+
+- [x] 探索当前 Workspace Git / Terminal 布局、相关测试与最近变更
+- [x] 向用户确认“像 IDEA 一样在一个界面”的具体目标布局与优先级（已确认为 bottom tool window，并移除 Terminal/Git 一级模式切换）
+- [x] 提出 2-3 个可行方案并给出推荐（用户纠偏后转为推荐通用 Tool Window 框架）
+- [x] 输出分段设计并等待用户确认
+- [x] 设计确认后写入 docs/plans/2026-03-25-workspace-git-terminal-unified-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 Workspace Git / Terminal 一体化实现
+
+- [x] Task 1：补红灯测试，锁定通用 Tool Window 模型与旧主模式退场
+- [x] Task 2：引入通用 Tool Window 模型与 NativeAppViewModel 接线
+- [x] Task 3：改造 Workspace 布局为 terminal 主区 + bottom tool window host
+- [x] Task 4：接入 Git tool window 内容、空态与 focused area 守门
+- [x] Task 5：更新 AGENTS.md、跑完整验证并回填 Review
+
+## Review（2026-03-25 Workspace Git / Terminal 一体化实现）
+
+- 结果：
+  1. 已把 Workspace 从 `Terminal / Git` 一级主模式切换改成 **terminal 主区 + bottom tool window 宿主**，Git 作为首个底部工具窗接入。
+  2. `NativeAppViewModel` 已删除 `workspacePrimaryMode`，改为维护 `workspaceToolWindowState` 与 `workspaceFocusedArea`，并提供 `toggle/show/hide/update height/set focused area/sync context` 接口。
+  3. `WorkspaceShellView` 已改为 terminal 主区 + `bottomToolWindowHost` + `bottomToolWindowBar` 结构；Git 通过 `activeKind == .git` 路由到底部，Quick Terminal / 非 Git 项目仍有明确空态。
+  4. `WorkspaceChromeContainerView` 已移除 left rail / mode switcher，只保留中央 chrome 包裹职责。
+  5. `WorkspaceModeSwitcherView.swift` 已删除，避免把旧 primary mode 语义以遗留文件形式继续留在代码库里。
+- 直接原因：
+  1. `WorkspaceGitModels.swift` 已经移除了 `WorkspacePrimaryMode`，但 `NativeAppViewModel`、`WorkspaceShellView`、`WorkspaceModeSwitcherView` 等仍沿用旧模型，先造成编译失败，再造成 Workspace 主链语义断裂。
+  2. 更本质地说，Git 被错误建模为“一级主模式”，而不是“terminal 内的底部工具窗”。
+- 设计层诱因：
+  1. 旧方案把“主内容互斥切换”和“辅助工具窗显隐”混成了一套状态模型，导致 `workspacePrimaryMode` 同时承担布局、命令路由与 Git 上下文准备语义。
+  2. 在第一轮实现里，`show/toggleWorkspaceToolWindow` 只改 visible state，Git 上下文准备又散落在 `WorkspaceShellView`，属于 API 职责未完全收口。
+  3. 已在第二轮修正中把 tool window 上下文准备统一收口到 `NativeAppViewModel.syncActiveWorkspaceToolWindowContext()`；未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. Core：引入并落地 `WorkspaceToolWindowKind / Placement / State / FocusedArea` 运行时模型。
+  2. ViewModel：删除 `workspacePrimaryMode`，新增 `workspaceToolWindowState`、`workspaceFocusedArea` 与 `toggle/show/hide/updateWorkspaceToolWindowHeight/setWorkspaceFocusedArea/syncActiveWorkspaceToolWindowContext`。
+  3. App：`WorkspaceShellView` 重构为 terminal 主区 + bottom tool window host/bar；terminal 搜索菜单改为按 `workspaceFocusedArea == .terminal` 守门。
+  4. App：`WorkspaceChromeContainerView` 去除 left rail；删除 `WorkspaceModeSwitcherView.swift` 遗留实现。
+  5. 文档：同步更新 `AGENTS.md`，把 Workspace 边界改写为 bottom tool window 架构。
+- 长期建议：
+  1. 目前 `bottomToolWindowBar` 仍是首期的单个 Git 按钮，后续若继续扩展第二个工具窗，建议改为基于 `WorkspaceToolWindowKind.allCases` 渲染，而不是继续硬编码 `.git`。
+  2. `workspaceFocusedArea` 当前主要通过点击手势推进，后续如继续扩展工具窗能力，建议补更稳定的焦点桥接，而不是长期停留在轻量手势驱动。
+  3. `updateWorkspaceToolWindowHeight(_:)` 已有 API，但当前还没有真正的拖拽 resize UI 接线；下一轮若继续对齐 IDEA，可优先补齐高度拖拽能力。
+- 验证证据：
+  - 红灯阶段（Task 1）：`swift test --package-path macos --filter 'WorkspaceGitViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceChromeContainerViewTests'` → 初次按断言红灯，后因工作区处于半迁移状态演变为编译失败，进一步证明旧主模式链路已不自洽。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceGitViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceTerminalCommandsTests|WorkspaceRootViewTests'` → 37 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceChromeContainerViewTests|WorkspaceRootViewTests|WorkspaceShellViewTests|WorkspaceTerminalCommandsTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests'` → 44 tests，0 failures。
+  - 旧模式残留检查：`rg -n "WorkspaceModeSwitcherView|workspacePrimaryMode|WorkspacePrimaryMode" macos/Sources macos/Tests` → `macos/Sources` 无命中；命中仅存在于测试断言文本中。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace Tool Window 入口位置对齐 IDEA 设计
+
+- [x] 结合用户截图确认当前偏差不是 bottom tool window 逻辑，而是入口按钮放置位置不对
+- [x] 与用户确认要对齐的是“窗口边缘 tool window stripe 按钮”，而不是继续保留底部按钮栏
+- [x] 提出 2-3 个入口布局方案并给出推荐（用户进一步纠偏：正确层级是 `[项目导航] | [左侧 stripe | 主内容区]`）
+- [x] 输出修正版设计并等待用户确认
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 Workspace Tool Window 入口位置对齐 IDEA 实现
+
+- [x] Task 1：补红灯测试，锁定 stripe 必须位于 `WorkspaceChromeContainerView` 内而非底部 bar
+- [x] Task 2：把 Git icon-only 入口迁移到 chrome 内左侧 stripe，并删除 shell 底部按钮栏
+- [x] Task 3：更新 AGENTS.md、跑完整验证并回填 Review
+
+## Review（2026-03-25 Workspace Tool Window 入口位置对齐 IDEA 实现）
+
+- 结果：
+  1. 已把 Git 工具窗入口从 `WorkspaceShellView` 的底部按钮栏迁移到 `WorkspaceChromeContainerView` 内部左侧 stripe，结构现在对齐为 `[项目导航] | [左侧 stripe | 主内容区]`。
+  2. `WorkspaceShellView` 已删除 `bottomToolWindowBar`，现在只负责 terminal 主区与 bottom tool window 内容，不再承担入口按钮职责。
+  3. `WorkspaceChromeContainerView` 现在负责 `stripe | 主内容区` 双列布局；stripe 首期只放一个 Git icon-only 按钮。
+  4. stripe button helper 已收口为真正使用 `kind` 参数的泛化实现，不再是假泛化、真硬编码 `.git`。
+- 直接原因：
+  1. 上一轮只把“工具窗内容停靠到底部”做对了，但误把“工具窗入口按钮”也做成了底部 bar，和用户展示的 IDEA 心智不符。
+  2. 更具体地说，入口位置的层级理解错了：正确结构不是“整个 Workspace 最外缘 stripe”，也不是“底部按钮栏”，而是 `[项目导航] | [左侧 stripe | 主内容区]`。
+- 设计层诱因：
+  1. 在上一轮实现里，我把“bottom tool window”的语义过度简化成了“底部有一个工具窗按钮栏”，混淆了**内容停靠位置**与**入口按钮位置**。
+  2. 第一版 stripe 实现里，`toolWindowStripeButton(kind:)` 还存在假泛化硬编码 `.git` 的代码味道；已在 code quality review 后收口修正。
+  3. 当前未发现新的明显系统设计缺陷；这一轮主要是把入口层级纠正到正确位置。
+- 当前修复方案：
+  1. 在 `WorkspaceChromeContainerView` 内新增 `workspaceToolWindowStripe`，与主内容形成 `HStack(spacing: 0)` 双列布局。
+  2. stripe 内仅放 `toolWindowStripeButton(kind: .git)`，并以 `Image(systemName: kind.systemImage)` 呈现 icon-only 入口。
+  3. `WorkspaceShellView` 删除 `bottomToolWindowBar`，只保留 `terminalModeContent + bottomToolWindowHost`。
+  4. 更新 `WorkspaceChromeContainerViewTests`、`WorkspaceShellViewGitModeTests`、`WorkspaceRootViewTests`，锁定 stripe 层级与 shell 职责边界。
+  5. 同步更新 `AGENTS.md`，明确 stripe 属于 chrome 容器，而不是项目导航或 root 最外层。
+- 长期建议：
+  1. 当前 stripe 的视觉 metrics（宽度、按钮尺寸、圆角、间距）仍是直接写在 view 里的常量；下一轮如果继续做视觉保真，建议收成显式 `StripeMetrics`。
+  2. 目前 stripe 只有一个 Git 图标按钮；后续若继续扩展第二个工具窗，可考虑基于 `WorkspaceToolWindowKind.allCases` 渲染，但要先确认视觉摆放规则。
+  3. 当前 stripe 按钮上下居中，是否要改成更接近 IDEA 的靠边分组，还需要结合下一轮 UI 验收再定。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests'` → 初次失败，提示 chrome 内还缺 stripe 结构，shell 仍保留 `bottomToolWindowBar`。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceShellViewTests|WorkspaceTerminalCommandsTests'` → 16 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace Tool Window Stripe 垂直位置微调
+
+- [x] Task 1：补红灯测试，锁定 stripe Git 图标需贴底而非垂直居中
+- [x] Task 2：以最小改动把 Git icon-only 按钮移到 stripe 最底部并验证
+
+## Review（2026-03-25 Workspace Tool Window Stripe 垂直位置微调）
+
+- 结果：
+  1. 已把 `WorkspaceChromeContainerView` 中 stripe 的 Git icon-only 按钮从“上下 `Spacer` 对称居中”改成“只有上方 `Spacer` 挤压、按钮贴底放置”。
+  2. 这次微调只改了 stripe 内部的垂直分布，不影响按钮行为、bottom tool window 内容逻辑、空态或 focused area 守门。
+- 直接原因：
+  1. 之前 stripe 用的是 `VStack { Spacer; button; Spacer }`，因此 Git 图标在竖向上被居中，和用户要求的“挪到最下面”不一致。
+- 设计层诱因：
+  1. 上一轮只修正了 stripe 的横向层级与入口位置，没有继续细化 stripe 内部的垂直对齐规则。
+  2. 这是视觉规则未被显式锁定导致的偏差，未发现新的系统设计缺陷。
+- 当前修复方案：
+  1. 在 `WorkspaceChromeContainerView.workspaceToolWindowStripe` 中删除按钮下方的那一份 `Spacer(minLength: 0)`。
+  2. 在 `WorkspaceChromeContainerViewTests` 中新增 source contract，约束 `Spacer(minLength: 0)` 只能出现在按钮上方、按钮下方不再允许有 `Spacer`。
+- 长期建议：
+  1. 如果后续继续微调 IDEA 风格，建议把 stripe 的垂直对齐策略、宽度、按钮尺寸等视觉参数统一收成显式 metrics，而不是继续靠局部布局语句隐式表达。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceChromeContainerViewTests` → 初次失败，命中“Git 图标下方不应再有 Spacer”断言。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceShellViewTests|WorkspaceTerminalCommandsTests'` → 17 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
 ## 2026-03-25 Git Log 行高与线条连贯度调整设计
 
 - [x] 探索当前 commit graph 行高 / 画线 metrics 与最近相关变更
@@ -2908,3 +3025,142 @@
 - [ ] 先补 App 红灯测试，锁定 subject cell inset 补偿契约
 - [ ] 实施最小修复并验证
 - [ ] 跑定向验证、质量检查，并在本文件追加 Review
+
+## 2026-03-25 Workspace 外围 Chrome 布局重构
+
+- [x] 写 App 红灯测试，锁定“项目列表外置 + Workspace 外围 chrome + 左右边框按钮区”结构契约
+- [x] 以最小改动拆分 Workspace 根布局，新增外层项目导航容器与 Workspace chrome 容器
+- [x] 调整模式切换与外围按钮分布，保持 Terminal/Git 主链与弹窗/信号接线不回归
+- [x] 同步更新 AGENTS.md，说明新的 Workspace 根布局与模块职责
+- [x] 跑定向验证、完整测试与质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Workspace 外围 Chrome 布局重构）
+
+- 结果：
+  1. 已把 Workspace 拆成“左侧项目导航 + 右侧独立 chrome 工作区”两层，项目列表不再直接挂在 `WorkspaceShellView` 里。
+  2. 新增 `WorkspaceRootView` 负责 split 与导航宽度持久化，`WorkspaceProjectSidebarHostView` 负责 project picker / worktree 对话框，`WorkspaceChromeContainerView` 负责顶部轻量栏与左右 rail。
+  3. `WorkspaceShellView` 已收敛为中央内容区，只保留 Terminal/Git 切换后的内容编排、focused search action、pane 快照与 agent signal 接线。
+  4. `WorkspaceModeSwitcherView` 现在支持横向/纵向两种布局，左侧 chrome rail 使用纵向模式切换；顶部没有引入新的 Git toolbar，右侧则放了系统终端 / 仪表盘 / 设置等辅助入口。
+- 关键实现说明：
+  1. 这次不是修表层 padding，而是把“项目导航属于哪一层”和“Workspace chrome 的真相源在哪里”重新收口。
+  2. 为避免一次性把 Git/terminal 业务按钮全部迁到外围壳，第一版只迁移模式切换，并保留 Git 内部 toolbar 在各自内容区闭环。
+  3. `AppRootView` 继续负责主页/Workspace 可见性切换，但 Workspace 主体已改为挂载 `WorkspaceRootView`。
+- 长期建议：
+  1. 如果后续继续向 IDEA 靠拢，可再逐步把更多 workspace 级通用动作沉到 chrome rail，而不是继续堆回中央内容区。
+  2. 若后续要加入可折叠项目导航，应继续以 `WorkspaceRootView` 作为唯一布局真相源，不要把折叠状态重新分散到 `WorkspaceShellView` 或 sidebar 子视图。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 初次失败，提示缺少 `WorkspaceRootView.swift` / `WorkspaceChromeContainerView.swift`，且 `WorkspaceShellView` 仍然持有 split 与 mode switcher。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 14 tests，0 failures。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceRootViewTests|WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceSidebarLayoutPolicyTests|WorkspaceTerminalCommandsTests|AppRootContentVisibilityPolicyTests|ProjectDetailPanelCloseActionTests|WorkspaceProjectListViewTests'` → 28 tests，0 failures。
+  - 完整：`swift test --package-path macos` → 394 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace Chrome 顶部与右侧内容收缩
+
+- [x] 先补 App 红灯测试，锁定 Workspace chrome 不再渲染 topBar / rightRail，只保留左侧 rail
+- [x] 以最小改动收缩 `WorkspaceChromeContainerView`，删除顶部与右侧内容并清理无用 helper
+- [x] 同步更新 AGENTS.md，说明 chrome 容器的新职责边界
+- [x] 跑定向验证、质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Workspace Chrome 顶部与右侧内容收缩）
+
+- 结果：
+  1. `WorkspaceChromeContainerView` 已从“三边 chrome”收缩为“左侧 rail + 中央内容区”的极简结构。
+  2. 顶部 `topBar` 和右侧 `rightRail` 已删除，相关 project identity / 设置 / 仪表盘 / 系统终端入口也一并从 chrome 容器里移除。
+  3. 外围壳、圆角边框、左侧模式切换 rail 与中央内容区包裹关系保持不变。
+- 直接原因：
+  1. 用户确认当前顶部和最右侧内容都是噪音，不希望在这一版 chrome 中继续占位。
+  2. 之前的 chrome 容器承载了过多“先占位再说”的内容，导致结构虽然出来了，但视觉上不够收敛。
+- 设计层诱因：
+  1. 第一版为了快速建立外围壳，把顶部和右侧都塞入了占位性内容，但这部分没有成为稳定交互主链。
+  2. 未发现新的系统设计缺陷；问题主要是 chrome 容器职责比当前产品需求更宽。
+- 当前方案：
+  1. 仅保留 `leftRail` 与中央 `content()`，删除 `topBar` / `rightRail`。
+  2. 同步删掉不再需要的 project identity / status chip / rail button helper。
+  3. 更新 `AGENTS.md`，将 `WorkspaceChromeContainerView` 职责改为“左侧模式 rail + 中央内容包裹”。
+- 长期建议：
+  1. 后续若要再补功能按钮，优先先确认是否真的属于稳定 chrome 主链，再决定是否回到顶部或右侧，而不要重新引入“临时占位按钮”。
+  2. 如果下一轮还要继续做视觉收敛，可以再评估左侧 rail 宽度、边框留白和内容区 padding，而不是先加回功能块。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceChromeContainerViewTests` → 初次失败，提示仍然存在 `topBar` / `rightRail`，且还保留 `activeWorkspaceProject`、`revealSettings`、`revealDashboard`、`openWorkspaceInTerminal`。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceChromeContainerViewTests` → 3 tests，0 failures。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceRootViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'` → 14 tests，0 failures。
+  - 完整：`swift test --package-path macos` → 394 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace 无外边距与细 rail 收敛
+
+- [x] 先补 App 红灯测试，锁定 Workspace chrome 去掉外边距、left rail 收窄到 IDEA 风格、纵向模式切换改为纯图标
+- [x] 以最小改动收敛 `WorkspaceChromeContainerView` 和 `WorkspaceModeSwitcherView` 的布局尺寸与样式
+- [x] 跑定向验证、完整测试与质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Workspace 无外边距与细 rail 收敛）
+
+- 结果：
+  1. `WorkspaceChromeContainerView` 已移除最外层 `.padding(10)`，工作区壳不再有外围留白。
+  2. 左侧 rail 已从 84pt 收窄到 48pt，并收紧了 rail 内部 padding / spacing，视觉上更接近 IDEA 的细工具栏。
+  3. `WorkspaceModeSwitcherView` 的纵向样式已改为纯图标：不再显示“终端 / Git”文字，按钮尺寸收敛到 32x32。
+- 直接原因：
+  1. 用户明确要求“不要有边距”，且当前 left rail 过宽、纵向按钮过大，不像 IDEA。
+  2. 上一版纵向模式切换仍沿用了带文字的大卡片按钮，导致左 rail 占宽和视觉重量都偏大。
+- 设计层诱因：
+  1. 上一轮虽然先做出了外围壳，但 rail 的视觉规格没有独立收口，仍直接复用了较重的按钮样式。
+  2. 未发现新的系统设计缺陷；问题集中在 App 层 chrome metrics 仍偏占位式，没有收敛到最终 UI 密度。
+- 当前方案：
+  1. `WorkspaceChromeContainerView` 删除外层 padding，left rail 改为 48pt 宽、较轻背景。
+  2. `WorkspaceModeSwitcherView` 在 `axis == .vertical` 时切换到 icon-only 样式，按钮尺寸 32x32，保留选中态。
+  3. `AGENTS.md` 已补充“不再给 Workspace chrome 外围额外 padding”“不要把 rail 回退成带大标签的大卡片工具栏”的约束。
+- 长期建议：
+  1. 如果继续抠细节，下一步应把 rail 图标的 selected/hover/pressed 态与 IDEA 再对齐，而不是重新加回文字标签。
+  2. 若后续再调 chrome，应把 rail 宽度、图标尺寸、内容区边框留白收口为一组显式 metrics，避免未来被局部 view 各自拉宽。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests'` → 初次失败，提示仍存在 `.padding(10)`、left rail 仍是旧宽度，纵向模式切换仍保留 `multilineTextAlignment` 与 `caption2` 文字样式。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests'` → 11 tests，0 failures。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceShellViewTests'` → 16 tests，0 failures。
+  - 完整：`swift test --package-path macos` → 396 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 分析现有改动并执行 git commit
+
+- [x] 检查工作区状态、确认受影响文件与现有任务记录
+- [x] 梳理本轮改动主题并确定提交范围
+- [x] 运行新鲜验证并记录证据
+- [x] 完成 git add / git commit，并追加 Review
+
+## Review（2026-03-25 分析现有改动并执行 git commit）
+
+- 结果：
+  1. 已确认本轮工作区改动主线是 **Workspace 架构重组**：把项目导航外提到 `WorkspaceRootView / WorkspaceProjectSidebarHostView`，把右侧工作区收口为 `WorkspaceChromeContainerView + WorkspaceShellView`。
+  2. 已确认 Git 不再走 `Terminal / Git` 一级主模式，而是通过 `workspaceToolWindowState + workspaceFocusedArea` 作为 bottom tool window 运行时真相源。
+  3. 已确认 `WorkspaceModeSwitcherView.swift` 已删除，Git 入口改为 `WorkspaceChromeContainerView` 内的左侧 stripe，`WorkspaceShellView` 只保留 terminal 主区与 bottom tool window content host。
+  4. 已将当前改动以 `refactor(workspace): separate chrome shell and git tool window` 完成提交。
+- 直接原因：
+  1. 现有改动集中在修正 Workspace 的层级与状态建模：旧实现把项目导航、Workspace chrome、Terminal/Git 一级模式切换都堆在 `WorkspaceShellView`，职责过重且语义已过时。
+  2. Git 面板虽然已经朝 IDEA 风格演进，但“内容停靠底部”和“入口位于 stripe”此前被混成一处，导致入口层级不稳定。
+- 设计层诱因：
+  1. 旧的 `workspacePrimaryMode` 同时承担布局切换、焦点守门与 Git 上下文准备，属于状态职责混叠。
+  2. 项目导航与工作区 chrome 边界不清，使得 `WorkspaceShellView` 长期承担了不该放在中央内容区的外层 UI 责任。
+  3. 本轮提交已针对这些诱因完成重构；未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. App 层新增 `WorkspaceRootView`、`WorkspaceProjectSidebarHostView`、`WorkspaceChromeContainerView`，把“项目导航 | 右侧 chrome 工作区”层级显式拆开。
+  2. Core 层以 `WorkspaceToolWindowKind / WorkspaceToolWindowState / WorkspaceFocusedArea` 替代旧的 `WorkspacePrimaryMode`。
+  3. `WorkspaceShellView` 改为 terminal 主区 + bottom tool window host，Git 入口迁到 chrome stripe；相关测试、设计文档、`AGENTS.md` 与 lessons/todo 已同步更新。
+- 长期建议：
+  1. 当前 stripe 仍只接入 `.git`，后续若继续扩展 tool window，建议改成基于 `WorkspaceToolWindowKind.allCases` 的统一渲染，而不是继续点状硬编码。
+  2. `workspaceToolWindowState.height` 已存在，但当前提交尚未引入完整拖拽高度调节 UI；下一轮若继续贴近 IDEA，可优先补齐可视化 resize 交互。
+  3. `tasks/todo.md` 已出现下一轮“IDEA Git 左右侧区域 1:1 复刻设计”占位任务，建议在新任务中独立推进，避免继续把设计探索与当前重构提交混在一起。
+- 验证证据：
+  - `swift test --package-path macos` → 397 tests，5 skipped，0 failures。
+  - `git diff --cached --check` → exit 0。
+  - `git commit -m "refactor(workspace): separate chrome shell and git tool window"` → 提交成功。
+
+
+## 2026-03-25 IDEA Git 左右侧区域 1:1 复刻设计
+
+- [x] 探索当前 DevHaven Git log 布局、相关测试、既有任务记录与最近提交
+- [x] 向用户确认这轮要优先对齐的范围与成功标准（已确认为 `.log` section 的左侧 branches panel 与右侧 details/changes/diff 联动区）
+- [x] 向用户确认左侧 branches panel 需按 IDEA 方式支持可展开 / 可收起（已确认为 A 方案）
+- [ ] 提出 2-3 个可行方案并给出推荐
+- [ ] 输出分段设计并等待用户确认
+- [ ] 设计确认后写入 docs/plans/2026-03-25-idea-git-side-panels-design.md
+- [ ] 设计确认后再进入实现计划

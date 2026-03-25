@@ -1,0 +1,59 @@
+import XCTest
+
+final class WorkspaceChromeContainerViewTests: XCTestCase {
+    func testWorkspaceChromeContainerHostsToolWindowStripeInsideChromeInsteadOfShellBottomBar() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("private var topBar"), "Workspace chrome 不应回退到旧顶部栏结构")
+        XCTAssertFalse(source.contains("private var leftRail"), "迁移为 bottom tool window 后不应继续保留 leftRail")
+        XCTAssertFalse(source.contains("private var rightRail"), "Workspace chrome 不应回退到旧右侧辅助栏结构")
+        XCTAssertFalse(source.contains("WorkspaceModeSwitcherView("), "Chrome 容器不应继续承载模式切换器")
+        XCTAssertTrue(source.contains("HStack(spacing: 0)"), "Chrome 容器应改为 `stripe | 主内容区` 双列结构")
+        XCTAssertTrue(source.contains("workspaceToolWindowStripe"), "Chrome 容器应在内部提供 tool window stripe")
+        XCTAssertTrue(source.contains("toolWindowStripeButton(kind: .git)"), "Stripe 首期只放 Git 图标入口")
+        XCTAssertTrue(source.contains("toggleWorkspaceToolWindow(kind)"), "Stripe 按钮 action 应使用传入 kind，避免假泛化硬编码")
+        XCTAssertTrue(source.contains("Image(systemName: kind.systemImage)"), "Stripe 按钮应为 icon-only")
+    }
+
+    func testWorkspaceChromeContainerPinsGitStripeButtonToBottom() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("Spacer(minLength: 0)\n            toolWindowStripeButton(kind: .git)"),
+            "Git 图标应由上方 Spacer 挤压到 stripe 底部，而不是继续垂直居中"
+        )
+        XCTAssertFalse(
+            source.contains("toolWindowStripeButton(kind: .git)\n            Spacer(minLength: 0)"),
+            "Git 图标下方不应再有 Spacer，否则会回到上下对称居中"
+        )
+    }
+
+    func testWorkspaceChromeContainerKeepsNoOuterPaddingAfterRemovingLegacyRail() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains(".padding(10)"), "用户要求工作区 chrome 不要再有外边距")
+    }
+
+    func testWorkspaceChromeContainerNoLongerBindsPrimaryMode() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("workspacePrimaryMode"), "Chrome 容器不应再绑定旧的 primary mode 真相源")
+    }
+
+    func testWorkspaceChromeContainerRemovesTopBarProjectIdentityAndRightRailActions() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("viewModel.activeWorkspaceProject"), "删除顶部内容后，不应再在 chrome 容器里展示 active project 标题/路径")
+        XCTAssertFalse(source.contains("revealSettings"), "删除右侧内容后，不应再在 chrome 容器里保留设置入口按钮")
+        XCTAssertFalse(source.contains("revealDashboard"), "删除右侧内容后，不应再在 chrome 容器里保留仪表盘入口按钮")
+        XCTAssertFalse(source.contains("openWorkspaceInTerminal"), "删除右侧内容后，不应再在 chrome 容器里保留系统终端按钮")
+    }
+
+    private func sourceFileURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevHavenApp/WorkspaceChromeContainerView.swift")
+    }
+}
