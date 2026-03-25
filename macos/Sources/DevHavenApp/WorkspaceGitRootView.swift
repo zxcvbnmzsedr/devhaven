@@ -29,7 +29,7 @@ struct WorkspaceGitRootView: View {
     init(viewModel: WorkspaceGitViewModel) {
         self.viewModel = viewModel
         let initialTopLevelTab: WorkspaceGitTopLevelTab = viewModel.section == .log ? .log : .git
-        let initialGitSection: WorkspaceGitSection = viewModel.section == .log ? .changes : viewModel.section
+        let initialGitSection: WorkspaceGitSection = viewModel.section == .log ? .branches : viewModel.section
         _selectedTopLevelTab = State(initialValue: initialTopLevelTab)
         _lastGitSection = State(initialValue: initialGitSection)
     }
@@ -148,8 +148,6 @@ struct WorkspaceGitRootView: View {
                     switch viewModel.section {
                     case .log:
                         EmptyView()
-                    case .changes:
-                        WorkspaceGitChangesView(viewModel: viewModel)
                     case .branches:
                         WorkspaceGitBranchesView(viewModel: viewModel)
                     case .operations:

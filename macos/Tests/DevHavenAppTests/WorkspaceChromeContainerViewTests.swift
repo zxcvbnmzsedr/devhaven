@@ -10,21 +10,18 @@ final class WorkspaceChromeContainerViewTests: XCTestCase {
         XCTAssertFalse(source.contains("WorkspaceModeSwitcherView("), "Chrome 容器不应继续承载模式切换器")
         XCTAssertTrue(source.contains("HStack(spacing: 0)"), "Chrome 容器应改为 `stripe | 主内容区` 双列结构")
         XCTAssertTrue(source.contains("workspaceToolWindowStripe"), "Chrome 容器应在内部提供 tool window stripe")
-        XCTAssertTrue(source.contains("toolWindowStripeButton(kind: .git)"), "Stripe 首期只放 Git 图标入口")
+        XCTAssertTrue(source.contains("toolWindowStripeButton(kind: .commit)"), "Stripe 应提供独立 Commit 工具窗入口")
+        XCTAssertTrue(source.contains("toolWindowStripeButton(kind: .git)"), "Stripe 应保留 Git 工具窗入口")
         XCTAssertTrue(source.contains("toggleWorkspaceToolWindow(kind)"), "Stripe 按钮 action 应使用传入 kind，避免假泛化硬编码")
         XCTAssertTrue(source.contains("Image(systemName: kind.systemImage)"), "Stripe 按钮应为 icon-only")
     }
 
-    func testWorkspaceChromeContainerPinsGitStripeButtonToBottom() throws {
+    func testWorkspaceChromeContainerPinsCommitAndGitStripeButtonsToBottom() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
         XCTAssertTrue(
-            source.contains("Spacer(minLength: 0)\n            toolWindowStripeButton(kind: .git)"),
-            "Git 图标应由上方 Spacer 挤压到 stripe 底部，而不是继续垂直居中"
-        )
-        XCTAssertFalse(
-            source.contains("toolWindowStripeButton(kind: .git)\n            Spacer(minLength: 0)"),
-            "Git 图标下方不应再有 Spacer，否则会回到上下对称居中"
+            source.contains("Spacer(minLength: 0)\n            toolWindowStripeButton(kind: .commit)\n            toolWindowStripeButton(kind: .git)"),
+            "Commit/Git 图标应由上方 Spacer 挤压到 stripe 底部，且保持 Commit 与 Git 并列"
         )
     }
 

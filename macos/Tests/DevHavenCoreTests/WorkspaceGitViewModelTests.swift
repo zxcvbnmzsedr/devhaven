@@ -3,6 +3,13 @@ import XCTest
 
 @MainActor
 final class WorkspaceGitViewModelTests: XCTestCase {
+    func testWorkspaceGitModelsSourceContractIncludesCommitToolWindowAndRemovesChangesSection() throws {
+        let source = try String(contentsOf: workspaceGitModelsSourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("case commit"), "WorkspaceToolWindowKind 应新增 commit")
+        XCTAssertFalse(source.contains("case changes"), "WorkspaceGitSection 不应继续包含 changes")
+    }
+
     func testNativeAppViewModelReplacesPrimaryModeWithToolWindowRuntimeStateSourceContract() throws {
         let source = try String(contentsOf: nativeAppViewModelSourceFileURL(), encoding: .utf8)
 
@@ -42,13 +49,12 @@ final class WorkspaceGitViewModelTests: XCTestCase {
 
         viewModel.refreshForCurrentSection()
         try await Task.sleep(for: .milliseconds(60))
-        viewModel.setSection(.changes)
+        viewModel.setSection(.branches)
 
         try await Task.sleep(for: .milliseconds(760))
 
-        XCTAssertEqual(recorder.readSections, [.log, .changes])
+        XCTAssertEqual(recorder.readSections, [.log, .branches])
         XCTAssertTrue(viewModel.logSnapshot.commits.isEmpty, "过期 log 结果不应覆盖当前 section 的状态")
-        XCTAssertEqual(viewModel.workingTreeSnapshot?.branchName, "main")
     }
 
     func testNativeAppViewModelCachesWorkspaceGitViewModelByRootProjectPath() throws {
@@ -250,9 +256,12 @@ final class WorkspaceGitViewModelTests: XCTestCase {
         XCTAssertLessThanOrEqual(viewModel.selectedCommitDetail?.diff.split(separator: "\n", omittingEmptySubsequences: false).count ?? 0, 2_000)
     }
 
-    func testUpdateRepositoryContextRefreshesExecutionScopedSectionWhenExecutionPathChanges() async throws {
+    func testUpdateRepositoryContextRefreshesOperationSectionWhenExecutionPathChanges() async throws {
         let recorder = WorkspaceGitClientRecorder()
-        recorder.changesDelayMilliseconds = 120
+        recorder.aheadBehindSnapshotsByPath = [
+            "/tmp/root": WorkspaceGitAheadBehindSnapshot(upstream: "origin/main", ahead: 0, behind: 1),
+            "/tmp/root-worktree": WorkspaceGitAheadBehindSnapshot(upstream: "origin/main", ahead: 2, behind: 3),
+        ]
         let viewModel = makeWorkspaceGitViewModel(
             recorder: recorder,
             executionWorktrees: [
@@ -271,7 +280,7 @@ final class WorkspaceGitViewModelTests: XCTestCase {
             ]
         )
 
-        viewModel.setSection(.changes)
+        viewModel.setSection(.operations)
         try await Task.sleep(for: .milliseconds(140))
 
         viewModel.updateRepositoryContext(
@@ -295,12 +304,23 @@ final class WorkspaceGitViewModelTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(180))
 
         XCTAssertEqual(viewModel.selectedExecutionWorktree?.path, "/tmp/root-worktree")
-        XCTAssertEqual(recorder.changesReadPaths.suffix(2), ["/tmp/root", "/tmp/root-worktree"])
+        XCTAssertEqual(viewModel.aheadBehindSnapshot.behind, 3)
+        XCTAssertGreaterThanOrEqual(recorder.aheadBehindReadCount, 2)
     }
 
-    func testSwitchingExecutionWorktreeClearsPreviousExecutionScopedSnapshotBeforeRefreshCompletes() async throws {
+    func testSwitchingExecutionWorktreeRefreshesOperationSnapshot() async throws {
         let recorder = WorkspaceGitClientRecorder()
-        recorder.changesDelayMilliseconds = 220
+        recorder.remoteSnapshots = [
+            WorkspaceGitRemoteSnapshot(
+                name: "origin",
+                fetchURL: "git@example.com:demo.git",
+                pushURL: "git@example.com:demo.git"
+            ),
+        ]
+        recorder.aheadBehindSnapshotsByPath = [
+            "/tmp/root": WorkspaceGitAheadBehindSnapshot(upstream: "origin/main", ahead: 0, behind: 0),
+            "/tmp/root-worktree": WorkspaceGitAheadBehindSnapshot(upstream: "origin/main", ahead: 0, behind: 5),
+        ]
         let viewModel = makeWorkspaceGitViewModel(
             recorder: recorder,
             executionWorktrees: [
@@ -319,16 +339,14 @@ final class WorkspaceGitViewModelTests: XCTestCase {
             ]
         )
 
-        viewModel.setSection(.changes)
-        try await Task.sleep(for: .milliseconds(260))
-        XCTAssertEqual(viewModel.workingTreeSnapshot?.branchName, "main")
+        viewModel.setSection(.operations)
+        try await Task.sleep(for: .milliseconds(160))
+        XCTAssertEqual(viewModel.aheadBehindSnapshot.behind, 0)
 
         viewModel.selectExecutionWorktree("/tmp/root-worktree")
-
-        XCTAssertNil(viewModel.workingTreeSnapshot, "execution-scoped 路径切换后，应先失效旧 snapshot，再等待新 worktree 数据返回")
-        try await Task.sleep(for: .milliseconds(260))
+        try await Task.sleep(for: .milliseconds(180))
         XCTAssertEqual(viewModel.selectedExecutionWorktree?.path, "/tmp/root-worktree")
-        XCTAssertEqual(viewModel.workingTreeSnapshot?.branchName, "feature/demo")
+        XCTAssertEqual(viewModel.aheadBehindSnapshot.behind, 5)
     }
 
     func testCreateBranchMutationUsesSelectedExecutionWorktreeAndRefreshesChangesRefsAndLog() async throws {
@@ -561,6 +579,14 @@ final class WorkspaceGitViewModelTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/DevHavenCore/ViewModels/NativeAppViewModel.swift")
     }
+
+    private func workspaceGitModelsSourceFileURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevHavenCore/Models/WorkspaceGitModels.swift")
+    }
 }
 
 private final class WorkspaceGitClientRecorder: @unchecked Sendable {
@@ -661,8 +687,11 @@ private final class WorkspaceGitClientRecorder: @unchecked Sendable {
 
     var client: WorkspaceGitViewModel.Client {
         WorkspaceGitViewModel.Client(
-            loadRefs: { _ in
-                WorkspaceGitRefsSnapshot(localBranches: [], remoteBranches: [], tags: [])
+            loadRefs: { [weak self] _ in
+                self?.lock.withLock {
+                    self?.rawReadSections.append(.branches)
+                }
+                return WorkspaceGitRefsSnapshot(localBranches: [], remoteBranches: [], tags: [])
             },
             loadLogSnapshot: { [weak self] _, query in
                 guard let self else {
@@ -740,7 +769,6 @@ private final class WorkspaceGitClientRecorder: @unchecked Sendable {
             loadChanges: { [weak self] path in
                 if let self {
                     self.lock.withLock {
-                        self.rawReadSections.append(.changes)
                         self.rawChangesReadPaths.append(path)
                         self.rawChangesReadCount += 1
                     }

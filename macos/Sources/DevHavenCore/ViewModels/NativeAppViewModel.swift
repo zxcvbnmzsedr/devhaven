@@ -962,6 +962,8 @@ public final class NativeAppViewModel {
             return
         }
         switch kind {
+        case .commit:
+            return
         case .git:
             prepareActiveWorkspaceGitViewModel()
         }

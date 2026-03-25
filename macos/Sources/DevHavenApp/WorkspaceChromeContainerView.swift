@@ -36,6 +36,7 @@ struct WorkspaceChromeContainerView<Content: View>: View {
     private var workspaceToolWindowStripe: some View {
         VStack(spacing: 8) {
             Spacer(minLength: 0)
+            toolWindowStripeButton(kind: .commit)
             toolWindowStripeButton(kind: .git)
         }
         .frame(width: 44)

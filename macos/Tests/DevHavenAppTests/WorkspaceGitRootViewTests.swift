@@ -18,7 +18,8 @@ final class WorkspaceGitRootViewTests: XCTestCase {
     func testWorkspaceGitRootViewStillRoutesOtherSectionsToDedicatedViews() throws {
         let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitRootView.swift"), encoding: .utf8)
 
-        XCTAssertTrue(source.contains("WorkspaceGitChangesView("), "Changes section 仍应保留独立视图")
+        XCTAssertFalse(source.contains("WorkspaceGitChangesView("), "Git tool window 不应继续承载 Changes 视图")
+        XCTAssertFalse(source.contains("case .changes"), "Git Root 容器 section switch 不应继续处理 `.changes`")
         XCTAssertTrue(source.contains("WorkspaceGitBranchesView("), "Branches section 仍应保留独立视图")
         XCTAssertTrue(source.contains("WorkspaceGitOperationsView("), "Operations section 仍应保留独立视图")
     }

@@ -123,7 +123,6 @@ public final class WorkspaceGitViewModel {
 
     private enum ReadResult: Sendable {
         case log(WorkspaceGitLogSnapshot)
-        case changes(WorkspaceGitWorkingTreeSnapshot)
         case branches(WorkspaceGitRefsSnapshot)
         case operations(remotes: [WorkspaceGitRemoteSnapshot], aheadBehind: WorkspaceGitAheadBehindSnapshot, state: WorkspaceGitOperationState)
     }
@@ -248,7 +247,7 @@ public final class WorkspaceGitViewModel {
             mutationRevision += 1
         }
         if previousExecutionWorktreePath != selectedExecutionWorktreePath,
-           section == .changes || section == .operations {
+           section == .operations {
             clearExecutionScopedState()
             refreshForCurrentSection()
         }
@@ -307,7 +306,7 @@ public final class WorkspaceGitViewModel {
         }
         mutationRevision += 1
         selectedExecutionWorktreePath = path
-        if section == .changes || section == .operations {
+        if section == .operations {
             clearExecutionScopedState()
             refreshForCurrentSection()
         }
@@ -533,8 +532,6 @@ public final class WorkspaceGitViewModel {
             if !snapshot.commits.contains(where: { $0.hash == selectedCommitHash }) {
                 selectCommit(snapshot.commits.first?.hash)
             }
-        case let .changes(snapshot):
-            workingTreeSnapshot = snapshot
         case let .branches(refs):
             logSnapshot = WorkspaceGitLogSnapshot(refs: refs, commits: logSnapshot.commits)
         case let .operations(remotes, aheadBehind, state):
@@ -619,8 +616,6 @@ public final class WorkspaceGitViewModel {
                     )
                 )
             )
-        case .changes:
-            return .changes(try client.loadChanges(executionPath))
         case .branches:
             return .branches(try client.loadRefs(repositoryPath))
         case .operations:

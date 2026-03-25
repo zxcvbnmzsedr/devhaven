@@ -1,12 +1,15 @@
 import Foundation
 
 public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendable {
+    case commit
     case git
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
+        case .commit:
+            return "Commit"
         case .git:
             return "Git"
         }
@@ -14,6 +17,8 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
 
     public var systemImage: String {
         switch self {
+        case .commit:
+            return "checkmark.circle"
         case .git:
             return "point.3.connected.trianglepath.dotted"
         }
@@ -57,7 +62,6 @@ public struct WorkspaceToolWindowState: Equatable, Sendable {
 
 public enum WorkspaceGitSection: String, CaseIterable, Identifiable, Sendable {
     case log
-    case changes
     case branches
     case operations
 
@@ -67,8 +71,6 @@ public enum WorkspaceGitSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .log:
             return "日志"
-        case .changes:
-            return "变更"
         case .branches:
             return "分支"
         case .operations:

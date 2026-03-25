@@ -4,7 +4,7 @@ import DevHavenCore
 struct WorkspaceGitToolbarView: View {
     @Bindable var viewModel: WorkspaceGitViewModel
 
-    private let gitSections: [WorkspaceGitSection] = [.changes, .branches, .operations]
+    private let gitSections: [WorkspaceGitSection] = [.branches, .operations]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
