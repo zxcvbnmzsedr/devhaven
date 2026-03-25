@@ -16,11 +16,42 @@ final class WorkspaceCommitRootViewTests: XCTestCase {
         XCTAssertTrue(source.contains("refreshChangesSnapshot()"), "Commit 根容器应在进入时刷新 changes snapshot")
     }
 
+    func testWorkspaceCommitChangesBrowserBindsInclusionToggleAndChangeSelection() throws {
+        let source = try String(contentsOf: changesBrowserSourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("viewModel.toggleInclusion(for: change.path)"), "changes browser 应把 inclusion toggle 绑定到 ViewModel，而不是只显示静态图标")
+        XCTAssertTrue(source.contains("viewModel.selectChange(change.path)"), "changes browser 点击变更后应驱动选中与 diff preview 联动")
+    }
+
+    func testWorkspaceCommitDiffPreviewDefinesStableEmptyErrorAndContentStates() throws {
+        let source = try String(contentsOf: diffPreviewSourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("viewModel.diffPreview.errorMessage"), "diff preview 应显式处理错误态")
+        XCTAssertTrue(source.contains("选择变更以查看 Diff"), "diff preview 应保留空态文案")
+        XCTAssertTrue(source.contains("viewModel.diffPreview.content"), "diff preview 在正常态应展示 diff 文本内容")
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/DevHavenApp/WorkspaceCommitRootView.swift")
+    }
+
+    private func changesBrowserSourceFileURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevHavenApp/WorkspaceCommitChangesBrowserView.swift")
+    }
+
+    private func diffPreviewSourceFileURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevHavenApp/WorkspaceCommitDiffPreviewView.swift")
     }
 }

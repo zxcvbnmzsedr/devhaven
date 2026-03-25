@@ -80,6 +80,8 @@ public final class WorkspaceCommitViewModel {
                !snapshot.changes.contains(where: { $0.path == selectedChangePath }) {
                 self.selectedChangePath = nil
                 diffPreview = .idle
+            } else if let selectedChangePath {
+                selectChange(selectedChangePath)
             }
             errorMessage = nil
         } catch {

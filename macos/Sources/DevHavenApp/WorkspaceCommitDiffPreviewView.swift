@@ -9,19 +9,35 @@ struct WorkspaceCommitDiffPreviewView: View {
             header
 
             Group {
-                if let path = viewModel.diffPreview.path {
-                    ScrollView {
-                        Text(viewModel.diffPreview.content.isEmpty ? "Diff 暂无内容\n\n文件：\(path)" : viewModel.diffPreview.content)
-                            .font(.system(.footnote, design: .monospaced))
-                            .foregroundStyle(NativeTheme.textPrimary)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                            .padding(12)
+                if let errorMessage = viewModel.diffPreview.errorMessage {
+                    ContentUnavailableView(
+                        "Diff 加载失败",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text(errorMessage)
+                    )
+                    .foregroundStyle(NativeTheme.warning)
+                } else if let path = viewModel.diffPreview.path {
+                    if viewModel.diffPreview.content.isEmpty {
+                        ContentUnavailableView(
+                            "Diff 暂无内容",
+                            systemImage: "doc.text",
+                            description: Text("文件：\(path)")
+                        )
+                        .foregroundStyle(NativeTheme.textSecondary)
+                    } else {
+                        ScrollView {
+                            Text(viewModel.diffPreview.content)
+                                .font(.system(.footnote, design: .monospaced))
+                                .foregroundStyle(NativeTheme.textPrimary)
+                                .frame(maxWidth: .infinity, alignment: .topLeading)
+                                .padding(12)
+                        }
                     }
                 } else {
                     ContentUnavailableView(
                         "选择变更以查看 Diff",
                         systemImage: "doc.text.magnifyingglass",
-                        description: Text("本轮先完成 Commit 工具窗结构接线，后续任务补齐 preview 交互。")
+                        description: Text("选择左侧 changes browser 的文件后，这里会展示对应 patch。")
                     )
                     .foregroundStyle(NativeTheme.textSecondary)
                 }

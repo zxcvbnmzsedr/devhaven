@@ -16,9 +16,25 @@
 - [x] Task 2：建立 Commit 域 Core 模型与 ViewModel 外壳
 - [x] Task 3：抽离独立 Commit workflow service 与 inclusion 执行链路
 - [x] Task 4：新增 Commit Tool Window App 根视图并接入 Workspace host
-- [ ] Task 5：落地 Changes Browser + Inclusion + Diff Preview 主链
+- [x] Task 5：落地 Changes Browser + Inclusion + Diff Preview 主链
 - [ ] Task 6：落地 Commit Panel、Commit Options 与执行反馈
 - [ ] Task 7：更新 Git 工具窗、AGENTS.md、验证与 Review
+
+## Review（2026-03-25 Task 5：Changes Browser + Inclusion + Diff Preview 主链）
+
+- 结果：
+  1. `WorkspaceCommitChangesBrowserView` 不再是静态占位行：已接入 inclusion toggle 与 change selection，点击文件会调用 `viewModel.selectChange(...)`，点击圆圈会调用 `viewModel.toggleInclusion(...)`。
+  2. `WorkspaceCommitDiffPreviewView` 已收紧为稳定三态：空态（未选择文件）/ 正常态（展示 diff 文本）/ 错误态（展示 error message），并保留 loading 指示。
+  3. `WorkspaceCommitViewModel.refreshChangesSnapshot()` 在选中项仍存在时会重载该项 preview，避免 snapshot 更新后 preview 残留旧内容。
+  4. 测试侧新增并锁定了 App 源码契约（changes browser 绑定 toggle/select、diff preview 三态）与 ViewModel 行为契约（toggle inclusion、diff 错误态）。
+- 关键理由：
+  1. Task 4 code review 已指出 `changeRow` 只显示图标但未绑定 toggle，这是必须修复项。
+  2. Task 3 review 已指出 preview 状态面应明确表达错误与空态，本轮优先补齐稳定状态表达，避免 Task 6 之前 UI 语义漂移。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（3 failures：缺少 toggle/select 绑定与 diff 错误态分支）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（10 tests, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceShellViewGitModeTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（26 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
 
 ## Review（2026-03-25 Task 4：Commit Tool Window App 根视图与 Host 接线）
 

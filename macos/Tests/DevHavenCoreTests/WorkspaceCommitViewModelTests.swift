@@ -57,6 +57,57 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.diffPreview.content.contains("diff --git"))
     }
 
+    func testToggleInclusionUpdatesIncludedPathsSet() {
+        let recorder = WorkspaceCommitClientRecorder()
+        recorder.snapshot = WorkspaceCommitChangesSnapshot(
+            branchName: "main",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "README.md",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .unstaged,
+                    isIncludedByDefault: false
+                ),
+            ]
+        )
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.refreshChangesSnapshot()
+
+        viewModel.toggleInclusion(for: "README.md")
+        XCTAssertEqual(viewModel.includedPaths, Set(["README.md"]))
+
+        viewModel.toggleInclusion(for: "README.md")
+        XCTAssertTrue(viewModel.includedPaths.isEmpty)
+    }
+
+    func testSelectChangeSurfacesDiffPreviewErrorState() {
+        let recorder = WorkspaceCommitClientRecorder()
+        recorder.snapshot = WorkspaceCommitChangesSnapshot(
+            branchName: "main",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "Sources/App/Main.swift",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .unstaged,
+                    isIncludedByDefault: false
+                ),
+            ]
+        )
+        recorder.diffErrorByPath["Sources/App/Main.swift"] = WorkspaceCommitViewModelTestError.fixture
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.refreshChangesSnapshot()
+
+        viewModel.selectChange("Sources/App/Main.swift")
+
+        XCTAssertEqual(viewModel.selectedChangePath, "Sources/App/Main.swift")
+        XCTAssertEqual(viewModel.diffPreview.path, "Sources/App/Main.swift")
+        XCTAssertEqual(viewModel.diffPreview.content, "")
+        XCTAssertFalse(viewModel.diffPreview.isLoading)
+        XCTAssertEqual(viewModel.diffPreview.errorMessage, WorkspaceCommitViewModelTestError.fixture.errorDescription)
+    }
+
     func testDraftOptionsAndExecutionStateAreMaintainedIndependently() {
         let recorder = WorkspaceCommitClientRecorder()
         recorder.snapshot = WorkspaceCommitChangesSnapshot(
@@ -186,6 +237,7 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
 private final class WorkspaceCommitClientRecorder: @unchecked Sendable {
     var snapshot = WorkspaceCommitChangesSnapshot(branchName: nil, changes: [])
     var diffByPath: [String: String] = [:]
+    var diffErrorByPath: [String: Error] = [:]
     private(set) var requests: [WorkspaceCommitExecutionRequest] = []
 
     var client: WorkspaceCommitViewModel.Client {
@@ -194,11 +246,25 @@ private final class WorkspaceCommitClientRecorder: @unchecked Sendable {
                 self?.snapshot ?? WorkspaceCommitChangesSnapshot(branchName: nil, changes: [])
             },
             loadDiffPreview: { [weak self] _, path in
-                self?.diffByPath[path] ?? ""
+                if let error = self?.diffErrorByPath[path] {
+                    throw error
+                }
+                return self?.diffByPath[path] ?? ""
             },
             executeCommit: { [weak self] _, request in
                 self?.requests.append(request)
             }
         )
+    }
+}
+
+private enum WorkspaceCommitViewModelTestError: LocalizedError {
+    case fixture
+
+    var errorDescription: String? {
+        switch self {
+        case .fixture:
+            return "fixture diff error"
+        }
     }
 }

@@ -54,20 +54,32 @@ struct WorkspaceCommitChangesBrowserView: View {
 
     private func changeRow(_ change: WorkspaceCommitChange) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: viewModel.includedPaths.contains(change.path) ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(viewModel.includedPaths.contains(change.path) ? NativeTheme.accent : NativeTheme.textSecondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(change.path)
-                    .font(.callout.monospaced())
-                    .foregroundStyle(NativeTheme.textPrimary)
-                Text(change.group.rawValue.uppercased())
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(NativeTheme.textSecondary)
+            Button {
+                viewModel.toggleInclusion(for: change.path)
+            } label: {
+                Image(systemName: viewModel.includedPaths.contains(change.path) ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(viewModel.includedPaths.contains(change.path) ? NativeTheme.accent : NativeTheme.textSecondary)
             }
+            .buttonStyle(.plain)
+
+            Button {
+                viewModel.selectChange(change.path)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(change.path)
+                        .font(.callout.monospaced())
+                        .foregroundStyle(NativeTheme.textPrimary)
+                    Text(change.group.rawValue.uppercased())
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(NativeTheme.textSecondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
             Spacer(minLength: 8)
         }
         .padding(10)
-        .background(NativeTheme.elevated)
+        .background(viewModel.selectedChangePath == change.path ? NativeTheme.accent.opacity(0.15) : NativeTheme.elevated)
         .clipShape(.rect(cornerRadius: 8))
     }
 }
