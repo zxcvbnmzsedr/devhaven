@@ -351,6 +351,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
     private var lastPreferredFocus = false
     private var lastSurfaceIsVisible = false
     private var lastSurfaceIsFocused = false
+    private var pendingWindowResponderRestoreTask: Task<Void, Never>?
 
     var currentSurfaceView: GhosttyTerminalSurfaceView? {
         ownedSurfaceView
@@ -547,6 +548,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
     func syncSurfaceActivity(isVisible: Bool, isFocused: Bool) {
         lastSurfaceIsVisible = isVisible
         lastSurfaceIsFocused = isFocused
+        if !isFocused {
+            cancelPendingWindowResponderRestore()
+        }
         guard let ownedSurfaceView else {
             return
         }
@@ -554,47 +558,21 @@ final class GhosttySurfaceHostModel: ObservableObject {
     }
 
     func restoreWindowResponderIfNeeded() {
-        guard lastSurfaceIsFocused, let ownedSurfaceView else {
-            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
-                request: request,
-                hasWindow: currentSurfaceView?.hasAttachedWindow ?? false,
-                firstResponderOwned: currentSurfaceView?.ownsWindowFirstResponder ?? false,
-                performed: false,
-                reason: "surface-not-focused"
-            )
+        guard shouldScheduleWindowResponderRestore() else {
             return
         }
-        guard let window = ownedSurfaceView.window else {
-            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
-                request: request,
-                hasWindow: false,
-                firstResponderOwned: false,
-                performed: false,
-                reason: "window-missing"
-            )
-            return
+        pendingWindowResponderRestoreTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else {
+                return
+            }
+            self.pendingWindowResponderRestoreTask = nil
+            self.performWindowResponderRestoreIfNeeded()
         }
-        guard window.firstResponder !== ownedSurfaceView else {
-            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
-                request: request,
-                hasWindow: true,
-                firstResponderOwned: true,
-                performed: false,
-                reason: "already-owned"
-            )
-            return
-        }
-        window.makeFirstResponder(ownedSurfaceView)
-        GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
-            request: request,
-            hasWindow: true,
-            firstResponderOwned: ownedSurfaceView.ownsWindowFirstResponder,
-            performed: true,
-            reason: "restored"
-        )
     }
 
     func releaseSurface() {
+        cancelPendingWindowResponderRestore()
         ownedSurfaceView?.tearDown()
         ownedSurfaceView = nil
         hasPreparedSurfaceView = false
@@ -608,6 +586,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
             return
         }
 
+        cancelPendingWindowResponderRestore()
         ownedSurfaceView?.tearDown()
         ownedSurfaceView = nil
         hasPreparedSurfaceView = false
@@ -649,6 +628,96 @@ final class GhosttySurfaceHostModel: ObservableObject {
     private func applyCachedSurfaceActivity(to view: GhosttyTerminalSurfaceView) {
         view.setOcclusion(lastSurfaceIsVisible)
         view.focusDidChange(lastSurfaceIsFocused)
+    }
+
+    private func cancelPendingWindowResponderRestore() {
+        pendingWindowResponderRestoreTask?.cancel()
+        pendingWindowResponderRestoreTask = nil
+    }
+
+    private func shouldScheduleWindowResponderRestore() -> Bool {
+        guard lastSurfaceIsFocused, let ownedSurfaceView else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: currentSurfaceView?.hasAttachedWindow ?? false,
+                firstResponderOwned: currentSurfaceView?.ownsWindowFirstResponder ?? false,
+                performed: false,
+                reason: "surface-not-focused"
+            )
+            return false
+        }
+        guard let window = ownedSurfaceView.window else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: false,
+                firstResponderOwned: false,
+                performed: false,
+                reason: "window-missing"
+            )
+            return false
+        }
+        guard window.firstResponder !== ownedSurfaceView else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: true,
+                firstResponderOwned: true,
+                performed: false,
+                reason: "already-owned"
+            )
+            return false
+        }
+        guard pendingWindowResponderRestoreTask == nil else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: true,
+                firstResponderOwned: false,
+                performed: false,
+                reason: "restore-pending"
+            )
+            return false
+        }
+        return true
+    }
+
+    private func performWindowResponderRestoreIfNeeded() {
+        guard lastSurfaceIsFocused, let ownedSurfaceView else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: currentSurfaceView?.hasAttachedWindow ?? false,
+                firstResponderOwned: currentSurfaceView?.ownsWindowFirstResponder ?? false,
+                performed: false,
+                reason: "surface-not-focused"
+            )
+            return
+        }
+        guard let window = ownedSurfaceView.window else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: false,
+                firstResponderOwned: false,
+                performed: false,
+                reason: "window-missing"
+            )
+            return
+        }
+        guard window.firstResponder !== ownedSurfaceView else {
+            GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+                request: request,
+                hasWindow: true,
+                firstResponderOwned: true,
+                performed: false,
+                reason: "already-owned"
+            )
+            return
+        }
+        window.makeFirstResponder(ownedSurfaceView)
+        GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
+            request: request,
+            hasWindow: true,
+            firstResponderOwned: ownedSurfaceView.ownsWindowFirstResponder,
+            performed: true,
+            reason: "restored"
+        )
     }
 
     private func mapTaskStatus(_ status: GhosttySurfaceTaskStatus) -> WorkspaceTaskStatus {

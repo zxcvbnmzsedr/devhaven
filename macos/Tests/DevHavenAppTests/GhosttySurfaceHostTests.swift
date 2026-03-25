@@ -242,7 +242,7 @@ final class GhosttySurfaceHostTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === view)
     }
 
-    func testRestoreWindowResponderCanReclaimFocusedPaneFromNonTerminalResponderAfterMissedInitialFocus() {
+    func testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass() {
         let model = makeManagedHostModel()
         let view = model.acquireSurfaceView()
         let window = FocusRetryWindow()
@@ -270,8 +270,17 @@ final class GhosttySurfaceHostTests: XCTestCase {
         model.restoreWindowResponderIfNeeded()
 
         XCTAssertTrue(
+            window.firstResponder === button,
+            "恢复 responder 不应在当前 SwiftUI/AppKit 更新栈内同步抢焦点，否则会把文本输入结束链路重新嵌套回视图更新"
+        )
+
+        waitUntil(timeout: 1.0) {
+            window.surfaceFocusAttemptCount >= 2 && window.firstResponder === view
+        }
+
+        XCTAssertTrue(
             window.firstResponder === view,
-            "当前 pane 已经是逻辑焦点时，即使首次焦点请求被按钮吃掉，后续也应把 responder 还给 terminal surface"
+            "当前 pane 已经是逻辑焦点时，即使首次焦点请求被按钮吃掉，后续也应在下一轮主线程安全地把 responder 还给 terminal surface"
         )
     }
 

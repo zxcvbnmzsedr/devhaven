@@ -1,4 +1,6 @@
 # Lessons
+- 不要在 SwiftUI `body` / view builder 链路里同步调用 `window.makeFirstResponder(...)` 这类会触发 AppKit 文本输入结束、输入法 deactive、`NSTextField textDidEndEditing` 的操作；它们很容易把 AttributeGraph / transaction update 重新嵌套到当前更新栈里，最终以 `AG::precondition_failure` 或其它 SwiftUI 断言崩掉。
+- 如果确实要为“逻辑聚焦的 pane”补回 AppKit responder，优先采用**延后一拍且可取消**的主线程调度：进入下一轮主线程前先 coalesce，同步校验 pane 仍聚焦、window/surface 仍有效；pane 失焦、surface 释放或进程退出时要取消挂起任务，避免晚到 restore 操作旧窗口状态。
 - 当一个 optional 状态同时承担“弹窗是否展示”和“弹窗完成后要执行的动作”两种职责时，UI 框架很容易在 dismiss 时先把它清空，导致回调阶段业务语义丢失。弹窗展示态和业务动作态必须拆分成两个独立状态源。
 - 对“用户感知为无反应”的跨层交互链路，修行为之前要先补足可观测性：至少记录入口回调、权限获取、核心校验、持久化结果和 UI 收尾动作。否则即使修了一半，下一轮反馈仍很难判断究竟卡在哪一层。
 - 文件选择器返回的目录 URL 如果带有 security-scoped access，就不能只在“提取 path 字符串”时短暂访问；真正的目录校验、扫描和导入逻辑必须在访问权限仍然有效的窗口内完成，否则很容易出现“用户刚选完目录，后续读取却静默失败”的假无响应。

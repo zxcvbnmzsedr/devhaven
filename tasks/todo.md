@@ -1,6 +1,42 @@
 # Todo
 
 
+## 2026-03-25 Workspace 焦点恢复触发 SwiftUI 崩溃排查
+
+- [x] 基于崩溃栈与相关源码定位直接原因，确认是否存在设计层诱因
+- [x] 先补失败测试，覆盖“恢复 terminal responder 不应在当前 SwiftUI 更新栈内同步抢焦点”
+- [x] 实施最小修复，并保持 focused pane 仍能在下一轮主线程安全取回 responder
+- [x] 运行定向验证并在本文件追加 Review（直接原因、设计层诱因、修复方案、长期建议、证据）
+
+## Review（2026-03-25 Workspace 焦点恢复触发 SwiftUI 崩溃排查）
+
+- 结果：
+  1. 已定位并修复这次 3.1.0 的意外退出：`WorkspaceHostView.surfaceModel(for:)` 在 SwiftUI `body` 更新栈里同步调用 `GhosttySurfaceHostModel.restoreWindowResponderIfNeeded()`，进而立刻 `window.makeFirstResponder(ownedSurfaceView)`。
+  2. 当此时 AppKit 正在结束一个 `NSTextField` / 输入法会话（你的崩溃栈里是搜狗输入法 deactive 链路）时，这个同步抢 responder 会把 `NSTextInputContext deactivate -> textDidEndEditing -> SwiftUI transaction update` 重新嵌套回当前 AttributeGraph 更新，最终触发 `AG::precondition_failure` 并 `SIGABRT`。
+  3. 现在 responder 恢复改为 **延后一拍的主线程任务**：只在确实需要时调度一次，离开当前 SwiftUI/AppKit 更新栈后再执行真正的 `makeFirstResponder`；若 pane 已失焦、surface 释放或恢复已在路上，会自动取消/跳过。
+- 直接原因：
+  1. 崩溃栈主线程清楚显示：`WorkspaceHostView.surfaceModel(for:) -> GhosttySurfaceHostModel.restoreWindowResponderIfNeeded() -> NSWindow._realMakeFirstResponder -> NSTextView resignFirstResponder -> NSTextField textDidEndEditing -> SwiftUI/AttributeGraph abort`。
+  2. 也就是说，触发崩溃的不是 Ghostty renderer 本身，而是 **在 SwiftUI 视图计算期间同步修改 AppKit firstResponder**。
+- 设计层诱因：
+  1. `surfaceModel(for:)` 名义上是“拿 pane 对应 model”的纯查询入口，但实际上夹带了 responder 修复这种命令式副作用；这让 View builder 期间混入了窗口焦点变更。
+  2. `restoreWindowResponderIfNeeded()` 之前默认同步执行 `makeFirstResponder`，没有区分“当前正在 SwiftUI/AppKit 更新栈内”与“安全的下一轮主线程时机”。
+  3. 这是典型的 **pure model lookup 与 imperative UI side effect 职责混杂**。未发现更大的系统设计缺陷，但这一处职责边界此前不够清晰。
+- 当前修复方案：
+  1. 给 `GhosttySurfaceHostModel` 增加 `pendingWindowResponderRestoreTask`，把 responder 恢复改为延后一拍执行，避免在当前 SwiftUI transaction / AppKit 文本输入结束栈内同步抢焦点。
+  2. 恢复前先同步判断：pane 仍是逻辑焦点、window 仍存在、surface 仍未拥有 responder、且当前没有同类恢复任务在途；不满足则记录 diagnostics 并跳过。
+  3. 当 pane 失焦、surface 释放或进程退出时，主动取消挂起的 responder restore，避免旧 pane 的晚到任务再去操作新窗口状态。
+  4. 回归测试 `GhosttySurfaceHostTests.testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` 先红后绿，约束“不能同步抢焦点，但必须随后安全夺回 terminal responder”。
+- 长期改进建议：
+  1. 后续应继续把 `WorkspaceHostView.surfaceModel(for:)` 收敛为**纯数据/依赖解析**入口，任何窗口焦点、第一响应者、弹窗展示之类命令式动作都尽量迁到显式 lifecycle hook（如 attach/onChange/task）或专用 coordinator。
+  2. 对 AppKit `firstResponder` 这类会牵动输入法、文本编辑与 SwiftUI transaction 的动作，默认都应假设“同步调用是高风险操作”；若来源于 View 计算链路，优先延后到下一轮主线程。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter GhosttySurfaceHostTests/testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` → 失败，断言“恢复 responder 不应在当前 SwiftUI/AppKit 更新栈内同步抢焦点”未成立。
+  - 绿灯：`swift test --package-path macos --filter GhosttySurfaceHostTests/testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` → 1 test，0 failures。
+  - 相关回归：`swift test --package-path macos --filter 'GhosttySurfaceHostTests|GhosttySurfaceLifecycleLoggingIntegrationTests|GhosttySurfaceRepresentableUpdatePolicyTests|WorkspaceSurfaceActivityPolicyTests'` → 22 tests，5 skipped，0 failures。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+
+
 ## 2026-03-24 workspace 打开项目快捷键在终端焦点下无效排查
 
 - [x] 读取 Ghostty 键盘事件/菜单分发代码，确认快捷键在终端焦点下的实际路由
