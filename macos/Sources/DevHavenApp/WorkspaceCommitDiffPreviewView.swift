@@ -9,7 +9,14 @@ struct WorkspaceCommitDiffPreviewView: View {
             header
 
             Group {
-                if let errorMessage = viewModel.diffPreview.errorMessage {
+                if viewModel.diffPreview.isLoading, let path = viewModel.diffPreview.path {
+                    ContentUnavailableView(
+                        "正在加载 Diff",
+                        systemImage: "hourglass",
+                        description: Text("文件：\(path)")
+                    )
+                    .foregroundStyle(NativeTheme.textSecondary)
+                } else if let errorMessage = viewModel.diffPreview.errorMessage {
                     ContentUnavailableView(
                         "Diff 加载失败",
                         systemImage: "exclamationmark.triangle",

@@ -32,7 +32,7 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.includedPaths, Set(["Sources/App/Main.swift"]))
     }
 
-    func testSelectChangeLoadsDiffPreviewAndTracksSelection() {
+    func testSelectChangeLoadsDiffPreviewAndTracksSelection() async throws {
         let recorder = WorkspaceCommitClientRecorder()
         recorder.snapshot = WorkspaceCommitChangesSnapshot(
             branchName: "main",
@@ -51,9 +51,11 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         viewModel.refreshChangesSnapshot()
 
         viewModel.selectChange("Sources/App/Main.swift")
+        try await Task.sleep(for: .milliseconds(50))
 
         XCTAssertEqual(viewModel.selectedChangePath, "Sources/App/Main.swift")
         XCTAssertEqual(viewModel.diffPreview.path, "Sources/App/Main.swift")
+        XCTAssertFalse(viewModel.diffPreview.isLoading)
         XCTAssertTrue(viewModel.diffPreview.content.contains("diff --git"))
     }
 
@@ -81,7 +83,7 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.includedPaths.isEmpty)
     }
 
-    func testSelectChangeSurfacesDiffPreviewErrorState() {
+    func testSelectChangeSurfacesDiffPreviewErrorState() async throws {
         let recorder = WorkspaceCommitClientRecorder()
         recorder.snapshot = WorkspaceCommitChangesSnapshot(
             branchName: "main",
@@ -100,6 +102,7 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         viewModel.refreshChangesSnapshot()
 
         viewModel.selectChange("Sources/App/Main.swift")
+        try await Task.sleep(for: .milliseconds(50))
 
         XCTAssertEqual(viewModel.selectedChangePath, "Sources/App/Main.swift")
         XCTAssertEqual(viewModel.diffPreview.path, "Sources/App/Main.swift")

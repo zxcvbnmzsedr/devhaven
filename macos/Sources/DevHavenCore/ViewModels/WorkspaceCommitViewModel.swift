@@ -36,6 +36,8 @@ public final class WorkspaceCommitViewModel {
     }
 
     @ObservationIgnored private let client: Client
+    @ObservationIgnored private var diffPreviewTask: Task<Void, Never>?
+    @ObservationIgnored private var diffPreviewRevision = 0
 
     public var repositoryContext: WorkspaceCommitRepositoryContext
     public var changesSnapshot: WorkspaceCommitChangesSnapshot?
@@ -61,6 +63,10 @@ public final class WorkspaceCommitViewModel {
         self.options = WorkspaceCommitOptionsState()
         self.executionState = .idle
         self.errorMessage = nil
+    }
+
+    deinit {
+        diffPreviewTask?.cancel()
     }
 
     public func updateRepositoryContext(_ repositoryContext: WorkspaceCommitRepositoryContext) {
@@ -106,6 +112,9 @@ public final class WorkspaceCommitViewModel {
     }
 
     public func selectChange(_ path: String?) {
+        diffPreviewTask?.cancel()
+        diffPreviewRevision += 1
+
         guard let path else {
             selectedChangePath = nil
             diffPreview = .idle
@@ -117,16 +126,49 @@ public final class WorkspaceCommitViewModel {
 
         selectedChangePath = path
         diffPreview = WorkspaceCommitDiffPreviewState(path: path, content: "", isLoading: true, errorMessage: nil)
-        do {
-            let content = try client.loadDiffPreview(repositoryContext.executionPath, path)
-            diffPreview = WorkspaceCommitDiffPreviewState(path: path, content: content, isLoading: false, errorMessage: nil)
-        } catch {
-            diffPreview = WorkspaceCommitDiffPreviewState(
-                path: path,
-                content: "",
-                isLoading: false,
-                errorMessage: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            )
+
+        let currentRevision = diffPreviewRevision
+        let executionPath = repositoryContext.executionPath
+        diffPreviewTask = Task { [client] in
+            do {
+                let content = try await Task.detached(priority: .userInitiated) {
+                    try client.loadDiffPreview(executionPath, path)
+                }.value
+                guard !Task.isCancelled else {
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.diffPreviewRevision == currentRevision,
+                          self.selectedChangePath == path
+                    else {
+                        return
+                    }
+                    self.diffPreview = WorkspaceCommitDiffPreviewState(
+                        path: path,
+                        content: content,
+                        isLoading: false,
+                        errorMessage: nil
+                    )
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.diffPreviewRevision == currentRevision,
+                          self.selectedChangePath == path
+                    else {
+                        return
+                    }
+                    self.diffPreview = WorkspaceCommitDiffPreviewState(
+                        path: path,
+                        content: "",
+                        isLoading: false,
+                        errorMessage: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    )
+                }
+            }
         }
     }
 
