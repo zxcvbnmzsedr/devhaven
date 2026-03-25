@@ -18,7 +18,20 @@
 - [x] Task 4：新增 Commit Tool Window App 根视图并接入 Workspace host
 - [x] Task 5：落地 Changes Browser + Inclusion + Diff Preview 主链
 - [x] Task 6：落地 Commit Panel、Commit Options 与执行反馈
-- [ ] Task 7：更新 Git 工具窗、AGENTS.md、验证与 Review
+- [x] Task 7：更新 Git tool window、AGENTS.md、验证与 Review
+
+## Review（2026-03-25 Task 7：Git/Commit 架构文档同步、验证与收尾）
+
+- 结果：
+  1. 已把 `AGENTS.md` 中与 Commit tool window 相关的条目从“占位/后续”更新为当前真实职责：changes browser 负责变更列表与 inclusion toggle，diff preview 负责 loading/empty/error/content 四态，commit panel 负责 message/options/action/execution state。
+  2. 已确认 `Git` tool window 仍只承载 `Log / Console / Branches / Operations` 主链，`WorkspaceGitChangesView` 不再作为 Git 工具窗入口；Commit 主链由 `WorkspaceCommitRootView` 及其子视图独立承接。
+  3. 已把本轮设计文档与实施计划文档纳入版本库：`docs/plans/2026-03-25-idea-commit-tool-window-design.md`、`docs/plans/2026-03-25-idea-commit-tool-window.md`。
+- 关键理由：
+  1. `AGENTS.md` 明确要求任何架构级变更都要同步更新作用域内文档；当前 Commit/Git 已经分拆成两条独立 tool window 主链，继续保留“占位视图”描述会形成文档技术债。
+  2. 设计与实施计划已落地并驱动了整个实现过程，应在任务结束时一并入库，保证后续追溯与复盘一致。
+- 验证证据：
+  - 综合回归：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceGitRootViewTests|NativeGitCommitWorkflowServiceTests|WorkspaceGitViewModelTests'`（62 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
 
 ## 2026-03-25 Task 6：Commit Panel、Commit Options 与执行反馈（TDD）
 
