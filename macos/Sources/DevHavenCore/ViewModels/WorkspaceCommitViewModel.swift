@@ -48,6 +48,10 @@ public final class WorkspaceCommitViewModel {
     public var options: WorkspaceCommitOptionsState
     public var executionState: WorkspaceCommitExecutionState
     public var errorMessage: String?
+    public var commitStatusLegend: String {
+        let branch = normalizedBranchName(changesSnapshot?.branchName) ?? "detached"
+        return "分支 \(branch) · Included \(includedPaths.count) · \(executionState.summaryText)"
+    }
 
     public init(
         repositoryContext: WorkspaceCommitRepositoryContext,
@@ -174,18 +178,59 @@ public final class WorkspaceCommitViewModel {
 
     public func updateCommitMessage(_ message: String) {
         commitMessage = message
+        clearExecutionFeedbackIfNeeded()
     }
 
     public func updateOptions(_ options: WorkspaceCommitOptionsState) {
-        self.options = options
+        self.options = normalizeOptions(options)
+        clearExecutionFeedbackIfNeeded()
+    }
+
+    public func updateOptionAmend(_ enabled: Bool) {
+        options.isAmend = enabled
+        clearExecutionFeedbackIfNeeded()
+    }
+
+    public func updateOptionSignOff(_ enabled: Bool) {
+        options.isSignOff = enabled
+        clearExecutionFeedbackIfNeeded()
+    }
+
+    public func updateOptionAuthor(_ author: String) {
+        options.author = normalizeAuthor(author)
+        clearExecutionFeedbackIfNeeded()
+    }
+
+    public func canExecuteCommit(action: WorkspaceCommitAction) -> Bool {
+        guard !executionState.isRunning else {
+            return false
+        }
+        guard !includedPaths.isEmpty else {
+            return false
+        }
+
+        if normalizedCommitMessage.isEmpty {
+            return options.isAmend && action == .commit
+        }
+        return true
     }
 
     public func executeCommit(action: WorkspaceCommitAction) {
+        guard canExecuteCommit(action: action) else {
+            if executionState.isRunning {
+                return
+            }
+            let message = "请先填写提交信息并至少纳入一个变更"
+            executionState = .failed(message)
+            errorMessage = message
+            return
+        }
+
         let request = WorkspaceCommitExecutionRequest(
             action: action,
-            message: commitMessage,
+            message: normalizedCommitMessage,
             includedPaths: includedPaths.sorted(),
-            options: options
+            options: normalizeOptions(options)
         )
         executionState = .running(action)
         do {
@@ -197,5 +242,41 @@ public final class WorkspaceCommitViewModel {
             executionState = .failed(message)
             errorMessage = message
         }
+    }
+
+    private var normalizedCommitMessage: String {
+        commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func normalizeOptions(_ options: WorkspaceCommitOptionsState) -> WorkspaceCommitOptionsState {
+        WorkspaceCommitOptionsState(
+            isAmend: options.isAmend,
+            isSignOff: options.isSignOff,
+            author: normalizeAuthor(options.author)
+        )
+    }
+
+    private func normalizeAuthor(_ author: String?) -> String? {
+        guard let author else {
+            return nil
+        }
+        let trimmed = author.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func clearExecutionFeedbackIfNeeded() {
+        guard !executionState.isRunning else {
+            return
+        }
+        executionState = .idle
+        errorMessage = nil
+    }
+
+    private func normalizedBranchName(_ branchName: String?) -> String? {
+        guard let branchName else {
+            return nil
+        }
+        let trimmed = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

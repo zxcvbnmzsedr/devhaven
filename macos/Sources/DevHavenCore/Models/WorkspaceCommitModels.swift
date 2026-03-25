@@ -182,3 +182,25 @@ public enum WorkspaceCommitExecutionState: Equatable, Sendable {
     case succeeded(WorkspaceCommitAction)
     case failed(String)
 }
+
+public extension WorkspaceCommitExecutionState {
+    var isRunning: Bool {
+        if case .running = self {
+            return true
+        }
+        return false
+    }
+
+    var summaryText: String {
+        switch self {
+        case .idle:
+            return "就绪"
+        case .running:
+            return "执行中"
+        case .succeeded:
+            return "已完成"
+        case .failed:
+            return "执行失败"
+        }
+    }
+}

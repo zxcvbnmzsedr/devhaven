@@ -147,6 +147,113 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         XCTAssertEqual(recorder.requests.first?.action, .commitAndPush)
     }
 
+    func testCommitPanelLegendSummarizesBranchIncludedAndExecutionState() {
+        let recorder = WorkspaceCommitClientRecorder()
+        recorder.snapshot = WorkspaceCommitChangesSnapshot(
+            branchName: "feature/task6",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "README.md",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .staged,
+                    isIncludedByDefault: true
+                ),
+            ]
+        )
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.refreshChangesSnapshot()
+
+        XCTAssertEqual(viewModel.commitStatusLegend, "分支 feature/task6 · Included 1 · 就绪")
+
+        viewModel.executionState = .running(.commit)
+        XCTAssertEqual(viewModel.commitStatusLegend, "分支 feature/task6 · Included 1 · 执行中")
+    }
+
+    func testCanExecuteCommitRequiresIncludedPathsMessageAndNonRunningState() {
+        let recorder = WorkspaceCommitClientRecorder()
+        recorder.snapshot = WorkspaceCommitChangesSnapshot(
+            branchName: "main",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "README.md",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .unstaged,
+                    isIncludedByDefault: false
+                ),
+            ]
+        )
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.refreshChangesSnapshot()
+
+        XCTAssertFalse(viewModel.canExecuteCommit(action: .commit))
+
+        viewModel.toggleInclusion(for: "README.md")
+        XCTAssertFalse(viewModel.canExecuteCommit(action: .commit))
+
+        viewModel.updateCommitMessage("feat: add commit panel")
+        XCTAssertTrue(viewModel.canExecuteCommit(action: .commit))
+
+        viewModel.executionState = .running(.commit)
+        XCTAssertFalse(viewModel.canExecuteCommit(action: .commit))
+    }
+
+    func testDraftUpdatesNormalizeOptionsAndResetStaleExecutionFeedback() {
+        let recorder = WorkspaceCommitClientRecorder()
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.executionState = .failed("commit failed")
+        viewModel.errorMessage = "commit failed"
+
+        viewModel.updateCommitMessage("feat: add commit panel")
+        XCTAssertEqual(viewModel.executionState, .idle)
+        XCTAssertNil(viewModel.errorMessage)
+
+        viewModel.executionState = .succeeded(.commit)
+        viewModel.updateOptionAmend(true)
+        XCTAssertTrue(viewModel.options.isAmend)
+        XCTAssertEqual(viewModel.executionState, .idle)
+
+        viewModel.executionState = .failed("failed again")
+        viewModel.errorMessage = "failed again"
+        viewModel.updateOptionSignOff(true)
+        XCTAssertTrue(viewModel.options.isSignOff)
+        XCTAssertEqual(viewModel.executionState, .idle)
+        XCTAssertNil(viewModel.errorMessage)
+
+        viewModel.updateOptionAuthor("  DevHaven Bot  ")
+        XCTAssertEqual(viewModel.options.author, "DevHaven Bot")
+
+        viewModel.updateOptionAuthor("   ")
+        XCTAssertNil(viewModel.options.author)
+    }
+
+    func testExecuteCommitFailureSurfacesFailedState() {
+        let recorder = WorkspaceCommitClientRecorder()
+        recorder.snapshot = WorkspaceCommitChangesSnapshot(
+            branchName: "main",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "README.md",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .unstaged,
+                    isIncludedByDefault: false
+                ),
+            ]
+        )
+        recorder.executeError = WorkspaceCommitViewModelTestError.fixture
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.refreshChangesSnapshot()
+        viewModel.toggleInclusion(for: "README.md")
+        viewModel.updateCommitMessage("feat: failing commit")
+
+        viewModel.executeCommit(action: .commit)
+
+        XCTAssertEqual(viewModel.executionState, .failed(WorkspaceCommitViewModelTestError.fixture.errorDescription ?? ""))
+        XCTAssertEqual(viewModel.errorMessage, WorkspaceCommitViewModelTestError.fixture.errorDescription)
+    }
+
     func testNativeAppViewModelPreparesDedicatedCommitViewModelCacheByRootProjectPath() throws {
         let viewModel = makeNativeAppViewModel()
         let rootPath = "/tmp/root"
@@ -241,6 +348,7 @@ private final class WorkspaceCommitClientRecorder: @unchecked Sendable {
     var snapshot = WorkspaceCommitChangesSnapshot(branchName: nil, changes: [])
     var diffByPath: [String: String] = [:]
     var diffErrorByPath: [String: Error] = [:]
+    var executeError: Error?
     private(set) var requests: [WorkspaceCommitExecutionRequest] = []
 
     var client: WorkspaceCommitViewModel.Client {
@@ -255,6 +363,9 @@ private final class WorkspaceCommitClientRecorder: @unchecked Sendable {
                 return self?.diffByPath[path] ?? ""
             },
             executeCommit: { [weak self] _, request in
+                if let error = self?.executeError {
+                    throw error
+                }
                 self?.requests.append(request)
             }
         )

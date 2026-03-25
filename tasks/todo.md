@@ -17,8 +17,37 @@
 - [x] Task 3：抽离独立 Commit workflow service 与 inclusion 执行链路
 - [x] Task 4：新增 Commit Tool Window App 根视图并接入 Workspace host
 - [x] Task 5：落地 Changes Browser + Inclusion + Diff Preview 主链
-- [ ] Task 6：落地 Commit Panel、Commit Options 与执行反馈
+- [x] Task 6：落地 Commit Panel、Commit Options 与执行反馈
 - [ ] Task 7：更新 Git 工具窗、AGENTS.md、验证与 Review
+
+## 2026-03-25 Task 6：Commit Panel、Commit Options 与执行反馈（TDD）
+
+- [x] 补红灯测试：锁定 Commit Panel 必须包含 message editor / status legend / options / 执行动作 / execution state UI
+- [x] 补红灯测试：锁定 WorkspaceCommitViewModel 对 message/options 更新与执行态表达的契约
+- [x] 运行定向测试并记录红灯失败信息
+- [x] 以最小改动实现 Commit Panel 与 ViewModel/模型调整，驱动上述测试转绿
+- [x] 运行定向绿灯测试并记录结果
+- [x] （若通过）提交改动并回填本文件 Review（含命令证据与风险）
+
+## Review（2026-03-25 Task 6：Commit Panel、Commit Options 与执行反馈）
+
+- 结果：
+  1. `WorkspaceCommitPanelView` 已从占位升级为可交互面板：包含 message editor、状态 legend、`Amend/Sign-off/Author` options、`Commit/Commit & Push` 动作入口、以及 execution state（idle/running/succeeded/failed）反馈行。
+  2. `WorkspaceCommitViewModel` 已补齐 Commit Panel 直连接口：`updateOptionAmend`、`updateOptionSignOff`、`updateOptionAuthor`、`canExecuteCommit(action:)`、`commitStatusLegend`。
+  3. ViewModel 现已在草稿编辑（message/options）时清理陈旧执行反馈，并统一对 author/message 做 trim 归一化，避免 UI 与执行请求状态漂移。
+  4. `WorkspaceCommitExecutionState` 已新增 `isRunning` 与 `summaryText`，作为 panel 状态显示与按钮禁用的共享语义。
+- 关键理由：
+  1. Task 5 完成后 Commit Panel 仍是“占位块 + 单行输入”，无法承接 Commit workflow 的主操作路径。
+  2. 仅在视图层拼 UI 无法稳定表达执行状态，必须补 ViewModel 的状态接口和最小模型语义，保证交互链路单一且可测。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（编译失败，核心报错：`WorkspaceCommitViewModel` 缺少 `commitStatusLegend` / `canExecuteCommit(action:)` / `updateOptionAmend` / `updateOptionSignOff` / `updateOptionAuthor`）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（15 tests，0 failures）。
+- 提交信息：
+  - commit：`feat(commit): add commit panel and execution flow`
+  - hash：见当前 `HEAD`（避免在 todo 自引用固定哈希导致 amend 后漂移）
+- 风险与后续：
+  1. 当前执行链路仍未在 `NativeGitCommitWorkflowService` 落实 `sign-off` / `author` 到真实 Git 参数，本轮仅保证 panel→request→状态反馈链路稳定；若下一轮要求“真实 CLI 生效”，需在 service 层补参数编排与回归测试。
+  2. `Commit & Push` 入口已可用，但仍依赖已有 `push` 调用语义，未扩展更复杂的 pre-push checks（属于 Task 7+ 范围）。
 
 ## Review（2026-03-25 Task 5：Changes Browser + Inclusion + Diff Preview 主链）
 
