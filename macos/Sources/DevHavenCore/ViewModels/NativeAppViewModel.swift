@@ -91,6 +91,7 @@ public final class NativeAppViewModel {
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
     private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     private var currentBranchByProjectPath: [String: String]
+    private var workspaceCommitViewModels: [String: WorkspaceCommitViewModel]
     private var workspaceGitViewModels: [String: WorkspaceGitViewModel]
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
@@ -157,6 +158,7 @@ public final class NativeAppViewModel {
         self.attentionStateByProjectPath = [:]
         self.agentDisplayOverridesByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
+        self.workspaceCommitViewModels = [:]
         self.workspaceGitViewModels = [:]
         self.searchQuery = ""
         self.selectedDirectory = .all
@@ -494,6 +496,26 @@ public final class NativeAppViewModel {
             rootProjectPath: rootProject.path,
             repositoryPath: rootProject.path
         )
+    }
+
+    public var activeWorkspaceCommitRepositoryContext: WorkspaceCommitRepositoryContext? {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository
+        else {
+            return nil
+        }
+        return WorkspaceCommitRepositoryContext(
+            rootProjectPath: rootProject.path,
+            repositoryPath: rootProject.path,
+            executionPath: preferredWorkspaceGitExecutionPath(for: rootProject.path)
+        )
+    }
+
+    public var activeWorkspaceCommitViewModel: WorkspaceCommitViewModel? {
+        guard let rootProjectPath = activeWorkspaceRootProjectPath else {
+            return nil
+        }
+        return workspaceCommitViewModels[rootProjectPath]
     }
 
     public var activeWorkspaceGitViewModel: WorkspaceGitViewModel? {
@@ -923,6 +945,25 @@ public final class NativeAppViewModel {
         )
     }
 
+    public func prepareActiveWorkspaceCommitViewModel() {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository,
+              let repositoryContext = activeWorkspaceCommitRepositoryContext
+        else {
+            return
+        }
+
+        if let existing = workspaceCommitViewModels[rootProject.path] {
+            existing.updateRepositoryContext(repositoryContext)
+            return
+        }
+
+        workspaceCommitViewModels[rootProject.path] = WorkspaceCommitViewModel(
+            repositoryContext: repositoryContext,
+            client: .live(service: gitRepositoryService)
+        )
+    }
+
     public func toggleWorkspaceToolWindow(_ kind: WorkspaceToolWindowKind) {
         if workspaceToolWindowState.activeKind == kind, workspaceToolWindowState.isVisible {
             hideWorkspaceToolWindow()
@@ -963,7 +1004,7 @@ public final class NativeAppViewModel {
         }
         switch kind {
         case .commit:
-            return
+            prepareActiveWorkspaceCommitViewModel()
         case .git:
             prepareActiveWorkspaceGitViewModel()
         }
