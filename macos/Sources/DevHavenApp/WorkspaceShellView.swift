@@ -123,6 +123,35 @@ struct WorkspaceShellView: View {
     }
 
     @ViewBuilder
+    private var commitToolWindowContent: some View {
+        if isActiveQuickTerminalSession {
+            gitModeEmptyState(
+                title: "快速终端暂不支持 Commit 模式",
+                systemImage: "checkmark.circle",
+                description: "请先打开一个 Git 项目或 worktree，再使用 Commit 工具窗。"
+            )
+        } else if viewModel.activeWorkspaceCommitRepositoryContext == nil {
+            gitModeEmptyState(
+                title: "当前项目不是 Git 仓库",
+                systemImage: "checkmark.circle",
+                description: "Commit 工具窗只会对当前 active project 所属的 root repository 生效。"
+            )
+        } else if let commitViewModel = viewModel.activeWorkspaceCommitViewModel {
+            WorkspaceCommitRootView(viewModel: commitViewModel)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    viewModel.setWorkspaceFocusedArea(.toolWindow(.commit))
+                }
+        } else {
+            gitModeEmptyState(
+                title: "Commit 工具窗尚未就绪",
+                systemImage: "tray",
+                description: "请重新选择当前项目，或稍后再试。"
+            )
+        }
+    }
+
+    @ViewBuilder
     private func bottomToolWindowHost(totalHeight: CGFloat) -> some View {
         if viewModel.workspaceToolWindowState.placement == .bottom,
            viewModel.workspaceToolWindowState.isVisible {
@@ -141,7 +170,9 @@ struct WorkspaceShellView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } trailing: {
                 Group {
-                    if viewModel.workspaceToolWindowState.activeKind == .git {
+                    if viewModel.workspaceToolWindowState.activeKind == .commit {
+                        commitToolWindowContent
+                    } else if viewModel.workspaceToolWindowState.activeKind == .git {
                         gitToolWindowContent
                     } else {
                         EmptyView()

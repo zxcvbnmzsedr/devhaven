@@ -15,10 +15,26 @@
 - [x] Task 1：锁定 Workspace 工具窗拓扑与 Git/Commit 边界（先红后绿）
 - [x] Task 2：建立 Commit 域 Core 模型与 ViewModel 外壳
 - [x] Task 3：抽离独立 Commit workflow service 与 inclusion 执行链路
-- [ ] Task 4：新增 Commit Tool Window App 根视图并接入 Workspace host
+- [x] Task 4：新增 Commit Tool Window App 根视图并接入 Workspace host
 - [ ] Task 5：落地 Changes Browser + Inclusion + Diff Preview 主链
 - [ ] Task 6：落地 Commit Panel、Commit Options 与执行反馈
 - [ ] Task 7：更新 Git 工具窗、AGENTS.md、验证与 Review
+
+## Review（2026-03-25 Task 4：Commit Tool Window App 根视图与 Host 接线）
+
+- 结果：
+  1. 新增 `WorkspaceCommitRootView`，并在根容器内固定承载 `WorkspaceCommitChangesBrowserView + WorkspaceCommitDiffPreviewView + WorkspaceCommitPanelView` 三分区结构。
+  2. `WorkspaceShellView.bottomToolWindowHost(...)` 已支持 `activeKind == .commit` 路由到 `WorkspaceCommitRootView`，不再只支持 `.git`。
+  3. commit tool window 内容区点击时会显式调用 `setWorkspaceFocusedArea(.toolWindow(.commit))`，保证焦点语义可观测。
+  4. 新增 `WorkspaceCommitRootViewTests`，并扩展 `WorkspaceShellViewTests` 锁定 commit 路由与焦点契约；同时修正旧测试里“禁止任意 `WorkspaceSplitView`”的错误断言，改为只禁止 project-sidebar 的横向 split。
+- 关键理由：
+  1. Task 1-3 已完成 tool window kind 与 Core 链路，但 App 层仍缺 commit 内容挂载点，导致 stripe 入口虽可点却无 commit 主内容。
+  2. 本轮按最小改动原则只落结构壳与 host 接线，不提前实现 Task 5/6 的完整交互，避免职责扩散。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceShellViewTests'`（`WorkspaceCommitRootView.swift` 不存在、`WorkspaceShellView` 缺少 commit 路由/焦点断言失败）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests'`（12 tests, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceShellViewGitModeTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests'`（18 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
 
 ## Review（2026-03-25 Task 3：Commit workflow service 与 inclusion 执行链路）
 
