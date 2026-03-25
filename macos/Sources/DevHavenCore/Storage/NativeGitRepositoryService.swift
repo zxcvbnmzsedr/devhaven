@@ -165,6 +165,66 @@ public struct NativeGitRepositoryService: Sendable {
         return result.stdout
     }
 
+    public func loadWorkingTreeDiff(at repositoryPath: String, filePath: String) throws -> String {
+        let normalizedPath = filePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedPath.isEmpty else {
+            return ""
+        }
+
+        let unstagedResult = try runner.runAllowingFailure(
+            arguments: ["diff", "--patch", "--no-color", "--", normalizedPath],
+            at: repositoryPath,
+            timeout: 30
+        )
+        guard unstagedResult.isSuccess else {
+            throw WorkspaceGitCommandError.commandFailed(command: unstagedResult.command.joined(separator: " "), message: unstagedResult.errorMessage)
+        }
+        if !unstagedResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return unstagedResult.stdout
+        }
+
+        let stagedResult = try runner.runAllowingFailure(
+            arguments: ["diff", "--patch", "--no-color", "--cached", "--", normalizedPath],
+            at: repositoryPath,
+            timeout: 30
+        )
+        guard stagedResult.isSuccess else {
+            throw WorkspaceGitCommandError.commandFailed(command: stagedResult.command.joined(separator: " "), message: stagedResult.errorMessage)
+        }
+        if !stagedResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return stagedResult.stdout
+        }
+
+        let trackedCheck = try runner.runAllowingFailure(
+            arguments: ["ls-files", "--error-unmatch", "--", normalizedPath],
+            at: repositoryPath
+        )
+        guard !trackedCheck.isSuccess else {
+            return ""
+        }
+
+        let absolutePath = URL(fileURLWithPath: repositoryPath, isDirectory: true)
+            .appending(path: normalizedPath)
+            .standardizedFileURL
+            .path
+        guard FileManager.default.fileExists(atPath: absolutePath) else {
+            return ""
+        }
+
+        let untrackedResult = try runner.runAllowingFailure(
+            arguments: ["diff", "--patch", "--no-color", "--no-index", "/dev/null", absolutePath],
+            at: repositoryPath,
+            timeout: 30
+        )
+        if !untrackedResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return untrackedResult.stdout
+        }
+        guard untrackedResult.isSuccess || untrackedResult.exitCode == 1 else {
+            throw WorkspaceGitCommandError.commandFailed(command: untrackedResult.command.joined(separator: " "), message: untrackedResult.errorMessage)
+        }
+        return untrackedResult.stdout
+    }
+
     public func loadChanges(at repositoryPath: String) throws -> WorkspaceGitWorkingTreeSnapshot {
         let result = try runner.runAllowingFailure(
             arguments: ["status", "--porcelain=v2", "--branch"],

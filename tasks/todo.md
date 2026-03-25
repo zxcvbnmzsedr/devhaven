@@ -1,5 +1,41 @@
 # Todo
 
+## 2026-03-25 复刻 IDEA Commit 面板产品方案
+
+- [x] 探索 DevHaven 当前 Git Changes/Commit 面板实现、相关测试与最近变更
+- [x] 探索 IntelliJ Community 中 Commit Tool Window / Changes View / Commit Workflow 主链文件与布局职责
+- [x] 向用户确认本轮范围是全量 1:1 复刻还是优先可上线 MVP（已确认为 A：全量 1:1 复刻 IDEA Commit Tool Window）
+- [x] 基于确认范围提出 2-3 个产品方案并给出推荐
+- [x] 输出产品方案（目标用户、信息架构、交互流、阶段拆分、风险与验证方式）
+
+## 2026-03-25 IDEA Commit Tool Window 一次性实施
+
+- [x] 写入设计文档 `docs/plans/2026-03-25-idea-commit-tool-window-design.md`
+- [x] 写入实施计划 `docs/plans/2026-03-25-idea-commit-tool-window.md`
+- [x] Task 1：锁定 Workspace 工具窗拓扑与 Git/Commit 边界（先红后绿）
+- [x] Task 2：建立 Commit 域 Core 模型与 ViewModel 外壳
+- [x] Task 3：抽离独立 Commit workflow service 与 inclusion 执行链路
+- [ ] Task 4：新增 Commit Tool Window App 根视图并接入 Workspace host
+- [ ] Task 5：落地 Changes Browser + Inclusion + Diff Preview 主链
+- [ ] Task 6：落地 Commit Panel、Commit Options 与执行反馈
+- [ ] Task 7：更新 Git 工具窗、AGENTS.md、验证与 Review
+
+## Review（2026-03-25 Task 3：Commit workflow service 与 inclusion 执行链路）
+
+- 结果：
+  1. 新增 `NativeGitCommitWorkflowService`，把 Commit 工具窗主链收口为 `loadChangesSnapshot / loadDiffPreview / executeCommit`。
+  2. `WorkspaceCommitViewModel.Client.live` 已切换为通过 `NativeGitCommitWorkflowService` 读取 diff preview 与执行 commit，修复了之前 `loadDiffPreview` 恒为空字符串的缺口。
+  3. `NativeGitRepositoryService` 新增 `loadWorkingTreeDiff(...)`，支持 unstaged/staged/untracked 场景下的工作区文件 patch 读取。
+  4. inclusion 路径不再被忽略：执行前会校验 included paths 命中当前变更，并通过 `stage/unstage` 组合确保提交仅消费 selection。
+- 关键理由：
+  1. Task 2 只有状态壳，执行链路仍直接走 `commit/amend/push`，无法体现 inclusion 选择，也无法给 UI 提供真实 working tree diff。
+  2. 把编排逻辑放到独立 service 后，后续 Task 4/5 的 App UI 可以直接对接，避免把 Git 细节散落在 ViewModel / View。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'NativeGitCommitWorkflowServiceTests'`（初次失败，`NativeGitCommitWorkflowService` 不存在）。
+  - 绿灯：`swift test --package-path macos --filter 'NativeGitCommitWorkflowServiceTests'`（5 tests, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests|NativeGitCommitWorkflowServiceTests|WorkspaceGitViewModelTests'`（31 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
 ## 2026-03-25 Workspace Git / Terminal 一体化设计
 
 - [x] 探索当前 Workspace Git / Terminal 布局、相关测试与最近变更

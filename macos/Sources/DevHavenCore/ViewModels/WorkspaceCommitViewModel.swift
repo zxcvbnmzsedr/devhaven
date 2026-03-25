@@ -20,24 +20,16 @@ public final class WorkspaceCommitViewModel {
         }
 
         public static func live(service: NativeGitRepositoryService) -> Client {
-            Client(
+            let workflowService = NativeGitCommitWorkflowService(repositoryService: service)
+            return Client(
                 loadChangesSnapshot: { executionPath in
-                    let snapshot = try service.loadChanges(at: executionPath)
-                    return WorkspaceCommitChangesSnapshot.fromGitWorkingTree(snapshot)
+                    try workflowService.loadChangesSnapshot(at: executionPath)
                 },
-                loadDiffPreview: { _, _ in
-                    ""
+                loadDiffPreview: { executionPath, filePath in
+                    try workflowService.loadDiffPreview(at: executionPath, filePath: filePath)
                 },
                 executeCommit: { executionPath, request in
-                    if request.options.isAmend {
-                        let trimmed = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
-                        try service.amend(message: trimmed.isEmpty ? nil : trimmed, at: executionPath)
-                    } else {
-                        try service.commit(message: request.message, at: executionPath)
-                    }
-                    if request.action == .commitAndPush {
-                        try service.push(at: executionPath)
-                    }
+                    try workflowService.executeCommit(at: executionPath, request: request)
                 }
             )
         }
