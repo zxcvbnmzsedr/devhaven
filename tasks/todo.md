@@ -3341,3 +3341,169 @@
   - `swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 37 tests，0 failures。
   - `git diff --check` → exit 0。
 - 结果：提交成功，当前本地提交已更新为当前 HEAD。
+
+## 2026-03-25 IDEA Git 布局 1:1 复刻设计（新一轮）
+
+- [x] 探索当前 DevHaven Git Log 布局、既有设计文档、最近提交与 IntelliJ 参考源码
+- [x] 向用户确认“1:1 复刻”的优先级边界（已确认为结构和交互最重要，视觉细节可后续补抠）
+- [x] 提出 2-3 个可行方案并给出推荐（已基于 IntelliJ MainFrame / BranchesInGitLog 结构给出推荐方案）
+- [x] 输出分段设计并等待用户确认
+- [x] 设计确认后写入 docs/plans/2026-03-25-idea-git-layout-1to1-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 IDEA Git 布局 1:1 复刻实现
+
+- [x] Task 1：先补红灯测试，锁定 Git / Log / Console 顶层结构与 IDEA Log MainFrame 归属
+- [x] Task 2：实现 Git 工具窗顶层 tab strip 与 Console 占位路由
+- [x] Task 3：重排 IDEA Log 外壳为 branches stripe + panel + MainFrame
+- [x] Task 4：更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 IDEA Git 布局 1:1 复刻实现）
+
+- 结果：
+  1. 已在 `WorkspaceGitRootView` 顶部补齐 IntelliJ 风格的 `Git / Log / Console` 顶层 tab strip。
+  2. `Log` 顶层 tab 现在继续挂载标准 IDEA Log，但结构已改为 `branches stripe + branches panel + MainFrame`，其中 toolbar 收口到 MainFrame 左列，而不是整页最顶层通栏。
+  3. `Git` 顶层 tab 继续复用现有 `changes / branches / operations` 主链，但二级 toolbar 已去掉 `.log` 入口与旧 log filter，只保留 section 切换与刷新。
+  4. 新增 `WorkspaceGitConsoleView` 作为 Console 顶层占位视图，先对齐 IDEA 根级结构，不引入新的 Git Console 后端。
+  5. 已同步更新 `AGENTS.md`、设计文档与实现计划文档。
+- 直接原因：
+  1. 当前 DevHaven 之前只复刻到了 `.log` 内部的左右侧结构，但根级 Git 工具窗仍缺少 IDEA 截图里最显眼的 `Git / Log / Console` 顶层层级。
+  2. 同时 `.log` 的 toolbar 仍挂在整页最上方，而 IntelliJ `MainFrame` 的真实结构是“toolbar 只属于左侧 table 列”。
+- 设计层诱因：
+  1. 之前把“Git 根级工具窗结构”和“`.log` 内部结构”分开推进，导致 `.log` 内部越来越像 IDEA，但根级仍保留旧 section-driven 心智。
+  2. toolbar 的归属也被过度简化成“整个 `.log` 页面的 header”，而不是 MainFrame 左列的一部分。
+  3. 当前未发现新的明显系统设计缺陷；本轮主要是把根层级与 MainFrame 归属重新拉回正确位置。
+- 当前修复方案：
+  1. `WorkspaceGitRootView` 新增 App-only 顶层 tab 状态，负责 `Git / Log / Console` 根级切换。
+  2. `WorkspaceGitToolbarView` 改为只服务 `Git` 顶层 tab 下的 `changes / branches / operations`。
+  3. `WorkspaceGitIdeaLogView` 重排为 `branchesControlStrip + branchesPanel + mainFrameContent`，并新增 `mainFramePrimaryColumn` 收口 toolbar + error banner + table。
+  4. 新增 `WorkspaceGitConsoleView` 占位视图，并更新 `AGENTS.md` 记录新的目录职责。
+- 长期建议：
+  1. 当前 `Console` 仍是结构占位；后续若继续对齐 IDEA，可再评估真实 Git command console 数据链路。
+  2. 顶层 tab strip 当前优先锁结构和交互，视觉上仍可继续抠 padding、hover、选中下划线和字体节奏。
+  3. branches stripe 当前仍是轻量 chevron/icon 版本；后续若继续做 1:1，可再参考 IntelliJ 的 `ExpandStripeButton` 做更接近的折叠态视觉。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 初次失败，命中“缺少顶层 Git / Log / Console tab strip”和“toolbar 仍在页面顶层”断言。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 22 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 39 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Git 布局验收纠偏（二轮）
+
+- [x] 复查用户指出的两处偏差（左上 Git 不应可点；Changes 应为树形结构）并对照 IntelliJ 参考实现定位根因
+- [x] 向用户确认“Changes 区域需要对齐的具体小操作”范围（已确认为结构优先：树形容器 + 顶部小操作布局/入口先对齐）
+- [x] 提出 2-3 个修正方案并给出推荐（推荐先做标题不可点 + tree changes browser + toolbar 布局到位）
+- [x] 输出修正版设计并等待用户确认
+- [x] 设计确认后写入 docs/plans/2026-03-25-idea-git-layout-acceptance-polish-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 IDEA Git 布局验收纠偏（二轮）实现
+
+- [x] Task 1：先补红灯测试，锁定 Git 标题不可点与 Changes tree browser 结构
+- [x] Task 2：把 Git 顶部从按钮改成标题，并保留 Log / Console 次级入口
+- [x] Task 3：把 Changes 改成 tree changes browser，并补齐顶部 toolbar 布局
+- [x] Task 4：跑验证、必要时更新 AGENTS.md，并回填 Review
+
+## Review（2026-03-25 IDEA Git 布局验收纠偏（二轮）实现）
+
+- 结果：
+  1. 已把 `WorkspaceGitRootView` 顶部从“`Git / Log / Console` 三个等权按钮”收敛为“`Git` 不可点击标题 + `Log / Console` 次级入口”。
+  2. 为避免进入 `Log / Console` 后无法回到 Git 主内容，当前实现允许再次点击已选中的 `Log` 或 `Console` 返回 Git 主内容；这是本轮在“Git 标题不可点击”约束下的最小回跳方案。
+  3. `WorkspaceGitIdeaLogChangesView` 已从扁平 `List(detail.files)` 改为带目录节点的 tree changes browser，文件节点继续复用现有主文件名 / 次路径 / status 展示 helper。
+  4. `Changes` 顶部已补齐一排结构优先的 toolbar 小操作入口，当前先对齐布局和入口位置，具体动作后续再逐项补齐。
+  5. 已同步更新 `AGENTS.md`、设计/实现文档与任务记录，并把本轮经验写入 `tasks/lessons.md`。
+- 直接原因：
+  1. 上一轮把根级 `Git` 错建成了可点击等权 tab，偏离了 IDEA 的“工具窗标题 + 次级内容入口”心智。
+  2. 同时 `Changes` 仍停留在扁平文件列表，没有体现 IDEA changes browser 的树形容器与 toolbar 结构。
+- 设计层诱因：
+  1. 之前的实现过度优先了“能切内容”，把 Git 根部标题误建成导航入口，而没有先锁定 IDEA 工具窗标题与内容 tab 的层级差异。
+  2. 右侧 `Changes` 也被简化成“文件列表视图”，缺少 changes browser 作为独立子系统的容器心智。
+  3. 当前未发现新的明显系统设计缺陷；这轮主要是在已有 Log 主链之上把根层级与 changes browser 容器重新拉回正确方向。
+- 当前修复方案：
+  1. `WorkspaceGitRootView` 引入 `gitToolWindowTitle`，移除 `topTabButton(.git)`，只保留 `Log / Console` 次级入口。
+  2. `WorkspaceGitIdeaLogChangesView` 新增 `changesBrowserToolbar` 与 `toolbarButton(...)` helper。
+  3. `WorkspaceGitIdeaLogChangesView` 新增 `ChangeTreeNode / ChangeTreeBuilder`，把提交文件按目录层级构造成树。
+  4. 文件节点仍保留 `primaryFileName / secondaryPathSubtitle / icon / color` 等已有 helper，避免在结构修正时顺带重写文件文案逻辑。
+- 长期建议：
+  1. 当前 `Log / Console` 的“再次点击返回 Git”是为满足不可点击标题约束而做的最小回跳策略；后续若继续做 1:1，可再结合 IDEA 实际 tab 行为决定是否改成更接近原生 content tabs 的模型。
+  2. 当前 changes toolbar 仅对齐布局和入口；后续可按用户下一轮验收逐个接通真实动作。
+  3. 当前 tree changes browser 以目录层级为第一阶段结构；若后续要继续贴近 IDEA merge commit 体验，可再引入 parent / group 节点语义。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 初次失败，命中“Git 仍是按钮”和“Changes 仍是扁平列表/缺少 toolbar”断言。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 23 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 40 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Git Changes tree 展开/折叠控制设计
+
+- [x] 复查当前 Changes tree 结构与用户新增反馈，定位缺少全局展开/折叠入口
+- [x] 向用户确认展开/折叠控制的目标形态（已确认为 Changes 顶部 toolbar 的全局展开 / 全局折叠）
+- [x] 提出可行方案并给出推荐（推荐先做 toolbar 级全局展开 / 全局折叠，不在目录节点旁新增局部按钮）
+- [x] 输出修正版设计并等待用户确认
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 IDEA Git Changes tree 展开/折叠控制实现
+
+- [x] Task 1：先补红灯测试，锁定 toolbar 级展开全部 / 折叠全部控制
+- [x] Task 2：为 Changes tree 引入统一展开状态与全局控制 helper
+- [x] Task 3：跑验证并回填 Review
+
+## Review（2026-03-25 IDEA Git Changes tree 展开/折叠控制实现）
+
+- 结果：
+  1. 已为 `WorkspaceGitIdeaLogChangesView` 增加 `expandedDirectoryIDs`，作为当前 changes browser 的统一目录展开状态真相源。
+  2. `Changes` 顶部 toolbar 现已新增“展开全部 / 折叠全部”入口，并能真正控制当前目录树的整体展开与收起。
+  3. 主体树渲染已从无法程序化控制的 `OutlineGroup` 切换到显式递归 `DisclosureGroup`。
+  4. 当新的 commit detail 加载完成时，当前目录树会默认展开，避免用户首次进入树浏览器还要逐层手动点开。
+- 直接原因：
+  1. 上一轮虽然把 `Changes` 区域改成了 tree browser，但仍缺少 browser 级的全局展开/折叠控制，用户仍然会觉得它不像完整的 changes browser。
+  2. 根因在于当时使用了 `OutlineGroup` 快速搭树，它适合静态树展示，但不适合这轮需要的程序化 expand/collapse 控制。
+- 设计层诱因：
+  1. 在第一阶段只优先把“树结构”做出来时，遗漏了树浏览器的另一半心智：**树控制入口**。
+  2. 这说明对 browser 类 UI，不能只补内容层级，还要同步检查是否缺失常见的全局控制能力。
+  3. 当前未发现新的明显系统设计缺陷；本轮主要是把 changes browser 从“有树”补到“可控的树”。
+- 当前修复方案：
+  1. 新增 `expandedDirectoryIDs` 与 `lastExpandedTreeSignature`。
+  2. 新增 `expandAllDirectories` / `collapseAllDirectories` / `allDirectoryIDs` / `syncExpandedDirectoriesIfNeeded` helper。
+  3. 把目录节点渲染改为 `DisclosureGroup(isExpanded: expansionBinding(...))`。
+  4. 在 toolbar 中补入“展开全部 / 折叠全部”按钮，同时保留其它结构优先的小操作入口。
+- 长期建议：
+  1. 当前全局展开/折叠满足 browser 级控制需求；后续若继续对齐 IDEA，可再评估是否要补“记住单个目录展开态”的更细粒度体验。
+  2. 当前其它 toolbar 图标仍主要是结构占位，后续可按验收继续逐项接通真实行为。
+  3. 若后续继续增强 merge commit changes browser，可在现有 `expandedDirectoryIDs` 基础上扩展 parent/group 级节点控制，而不必重写整棵树。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，命中“缺少 expandedDirectoryIDs / expandAllDirectories / collapseAllDirectories / DisclosureGroup”断言。
+  - 定向绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 20 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 41 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Git Changes tree 展开/折叠图标纠偏
+
+- [x] Task 1：先补红灯测试，锁定“展开全部 / 折叠全部”与具体 icon 的正确映射
+- [x] Task 2：修正 Changes toolbar 中展开/折叠按钮的 symbol 映射
+- [x] Task 3：跑定向验证、质量检查，并回填 Review / lessons
+
+## Review（2026-03-25 IDEA Git Changes tree 展开/折叠图标纠偏）
+
+- 结果：
+  1. 已把 `WorkspaceGitIdeaLogChangesView` 中“展开全部 / 折叠全部”两个 toolbar icon 的映射纠正回来。
+  2. 已新增 `WorkspaceGitIdeaLogViewTests.testIdeaLogChangesViewMapsExpandCollapseIconsToCorrectSemanticDirection()`，锁定“展开全部 = 向外发散 icon；折叠全部 = 向中心收拢 icon”的源码映射。
+  3. 当前 Changes tree 的全局展开 / 折叠行为本身未变，只修正了按钮语义与视觉提示的一致性。
+- 直接原因：
+  1. 上一轮实现时把 `arrow.down.forward.and.arrow.up.backward` 和 `arrow.up.left.and.arrow.down.right` 的视觉语义看反了。
+  2. 实际渲染后，前者是**向中心收拢**，后者才是**从中心向外发散**，因此“展开全部 / 折叠全部”标题与图标发生了反绑。
+- 设计层诱因：
+  1. 这次 toolbar 使用的是 icon-only 入口，如果没有额外校验，很容易仅凭 symbol 名称脑补方向语义。
+  2. 同时之前的测试只锁定“有展开/折叠入口”，没有继续锁定“入口标题与 icon 语义一致”，所以这个错误能通过前一轮验证。
+  3. 未发现明显系统设计缺陷；本轮主要是补齐 icon-only 交互里缺失的语义校验。
+- 当前修复方案：
+  1. 交换 `WorkspaceGitIdeaLogChangesView` 中“展开全部 / 折叠全部”两个 `systemImage` 的映射。
+  2. 新增 source-based 测试，明确约束正确的 title -> symbol 对应关系。
+- 长期建议：
+  1. 对 icon-only toolbar，后续每次补新入口时都应同时锁定“标题 / 行为 / symbol”三者映射，而不只测“按钮存在”。
+  2. 遇到 SF Symbols 这类名字容易误导方向语义的符号，优先做一次实际渲染确认，不要只凭名称判断。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，命中“展开全部 / 折叠全部”icon 映射断言。
+  - 定向绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 21 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 42 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。

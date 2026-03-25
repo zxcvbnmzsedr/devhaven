@@ -154,3 +154,7 @@
 - IDEA 不是“每个 row 把 center-to-center 线段整段画完”，而是每个 row 只画自己视口内那一段；相邻 row 的 `.up/.down` print elements 共同拼成完整边。
 - 如果 renderer 继续跨两整行完整绘制，那么在引入 `.up/.down` 双向 print elements 后，同一逻辑边会被相邻 row 重复整段画出，视觉上就会和 IDEA 越来越不像。
 - commit graph 要想真正 1:1，core 的 `print elements` 语义和 app 的 `painter viewport` 语义必须一起迁移，缺一不可。
+- 对齐 IDEA Git tool window 时，左上角的 `Git` 往往是**工具窗标题**而不是可点击 tab；真正可切换的是后面的 `Log` / `Console`。如果把三者都做成等权 tab，会在第一眼层级上就偏离 IDEA 心智。
+- 对齐 IDEA VCS Log 右侧 `Changes` 区域时，不能把它简化成普通扁平文件列表；IntelliJ 实际使用的是带 toolbar 与树节点层级的 changes browser，至少要先保持“树形容器 + 变更分组/父级节点”的结构心智。
+- 对齐 IDEA 的 changes browser 时，除了把内容做成树形，还要显式补上“全部展开 / 全部折叠”这类树控制入口；否则即使有目录节点，交互心智仍然不像真正的 browser。
+- 对 icon-only toolbar 做 1:1 复刻时，不要只凭 SF Symbols 名称猜语义；像 `arrow.down.forward.and.arrow.up.backward` / `arrow.up.left.and.arrow.down.right` 这类方向词很容易看反，最好先做一次实际渲染或至少补一条“标题 -> icon”断言，避免“展开 / 折叠”这类高频操作出现语义反绑。

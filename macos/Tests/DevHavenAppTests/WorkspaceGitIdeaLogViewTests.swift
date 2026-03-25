@@ -15,6 +15,16 @@ final class WorkspaceGitIdeaLogViewTests: XCTestCase {
         XCTAssertTrue(source.contains("direction: .horizontal"), "标准 IDEA Log 中间 table 与右侧信息栏应使用横向 split")
     }
 
+
+    func testIdeaLogMainFrameOwnsToolbarInsteadOfPageLevelHeader() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("mainFramePrimaryColumn"), "标准 IDEA Log 应把 toolbar + table 收口到 MainFrame 左列，而不是继续挂在页面级头部")
+        XCTAssertTrue(source.contains("mainFrameContent"), "标准 IDEA Log 应保留独立 MainFrame 容器")
+        XCTAssertTrue(source.contains("var body: some View {\n        HStack(spacing: 0)"), "标准 IDEA Log 顶层应先进入 branches stripe + MainFrame 的横向布局")
+        XCTAssertFalse(source.contains("var body: some View {\n        VStack(spacing: 0) {\n            WorkspaceGitIdeaLogToolbarView(viewModel: viewModel)"), "标准 IDEA Log 不应继续把 toolbar 直接放在整页 body 最顶层")
+    }
+
     func testIdeaLogToolbarProvidesFiltersWithoutLegacyDetailPreviewToggles() throws {
         let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogToolbarView.swift"), encoding: .utf8)
 
@@ -150,6 +160,52 @@ final class WorkspaceGitIdeaLogViewTests: XCTestCase {
         XCTAssertTrue(detailsSource.contains("detailSection("), "commit details 应拆成稳定的 metadata / refs / parents section")
         XCTAssertTrue(detailsSource.contains("referencesSection"), "commit details 应单独呈现 refs 区域")
         XCTAssertTrue(detailsSource.contains("parentsSection"), "commit details 应单独呈现 parents 区域")
+    }
+
+
+    func testIdeaLogChangesViewUsesTreeBrowserAndToolbarLayout() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogChangesView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("changesBrowserToolbar"), "Changes 区域应包含独立 toolbar，而不是只剩标题加扁平列表")
+        XCTAssertTrue(source.contains("toolbarButton("), "Changes toolbar 应通过统一 helper 渲染 icon-only 小操作入口")
+        XCTAssertTrue(source.contains("DisclosureGroup"), "Changes 区域应切换到可控展开状态的树形浏览器容器")
+        XCTAssertTrue(source.contains("changeTreeRoots"), "Changes 区域应先构建树节点，再驱动渲染")
+        XCTAssertFalse(source.contains("List(detail.files)"), "Changes 区域不应继续直接使用扁平文件列表")
+    }
+
+
+    func testIdeaLogChangesViewProvidesGlobalExpandCollapseControls() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogChangesView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("expandedDirectoryIDs"), "Changes tree 应存在统一目录展开状态真相源")
+        XCTAssertTrue(source.contains("expandAllDirectories"), "Changes toolbar 应提供展开全部 helper")
+        XCTAssertTrue(source.contains("collapseAllDirectories"), "Changes toolbar 应提供折叠全部 helper")
+        XCTAssertTrue(source.contains("allDirectoryIDs"), "Changes tree 应能计算所有目录节点 id 供全局展开使用")
+        XCTAssertTrue(source.contains("title: \"展开全部\""), "Changes toolbar 应提供展开全部入口")
+        XCTAssertTrue(source.contains("title: \"折叠全部\""), "Changes toolbar 应提供折叠全部入口")
+        XCTAssertTrue(source.contains("DisclosureGroup"), "可控展开状态下，目录节点应改用 DisclosureGroup 渲染")
+        XCTAssertFalse(source.contains("OutlineGroup"), "Changes tree 不应继续停留在无法程序化展开/折叠的 OutlineGroup")
+    }
+
+    func testIdeaLogChangesViewMapsExpandCollapseIconsToCorrectSemanticDirection() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogChangesView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains("toolbarButton(systemImage: \"arrow.up.left.and.arrow.down.right\", title: \"展开全部\")"),
+            "展开全部应使用从中心向外发散的 icon，而不是向中心收拢的 icon"
+        )
+        XCTAssertTrue(
+            source.contains("toolbarButton(systemImage: \"arrow.down.forward.and.arrow.up.backward\", title: \"折叠全部\")"),
+            "折叠全部应使用向中心收拢的 icon，而不是向外发散的 icon"
+        )
+        XCTAssertFalse(
+            source.contains("toolbarButton(systemImage: \"arrow.down.forward.and.arrow.up.backward\", title: \"展开全部\")"),
+            "展开全部不应继续绑定收拢语义 icon"
+        )
+        XCTAssertFalse(
+            source.contains("toolbarButton(systemImage: \"arrow.up.left.and.arrow.down.right\", title: \"折叠全部\")"),
+            "折叠全部不应继续绑定发散语义 icon"
+        )
     }
 
     func testIdeaLogChangesViewUsesFilenameAndPathHierarchyHelpers() throws {

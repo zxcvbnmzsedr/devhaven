@@ -8,49 +8,27 @@ struct WorkspaceGitIdeaLogView: View {
     @State private var rightSidebarRatio = 0.76
 
     var body: some View {
-        VStack(spacing: 0) {
-            WorkspaceGitIdeaLogToolbarView(viewModel: viewModel)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-                .background(NativeTheme.surface)
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(NativeTheme.border)
-                        .frame(height: 1)
-                }
+        HStack(spacing: 0) {
+            branchesControlStrip
 
-            if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage)
-                    .font(.callout)
-                    .foregroundStyle(NativeTheme.warning)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(NativeTheme.warning.opacity(0.12))
-            }
-
-            HStack(spacing: 0) {
-                branchesControlStrip
-
-                if isBranchesPanelVisible {
-                    WorkspaceSplitView(
-                        direction: .horizontal,
-                        ratio: branchesPanelRatio,
-                        onRatioChange: { branchesPanelRatio = $0 },
-                        leading: {
-                            WorkspaceGitIdeaLogBranchesPanelView(
-                                viewModel: viewModel,
-                                isVisible: $isBranchesPanelVisible
-                            )
-                            .background(NativeTheme.sidebar)
-                        },
-                        trailing: {
-                            mainFrameContent
-                        }
-                    )
-                } else {
-                    mainFrameContent
-                }
+            if isBranchesPanelVisible {
+                WorkspaceSplitView(
+                    direction: .horizontal,
+                    ratio: branchesPanelRatio,
+                    onRatioChange: { branchesPanelRatio = $0 },
+                    leading: {
+                        WorkspaceGitIdeaLogBranchesPanelView(
+                            viewModel: viewModel,
+                            isVisible: $isBranchesPanelVisible
+                        )
+                        .background(NativeTheme.sidebar)
+                    },
+                    trailing: {
+                        mainFrameContent
+                    }
+                )
+            } else {
+                mainFrameContent
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -96,11 +74,38 @@ struct WorkspaceGitIdeaLogView: View {
             ratio: rightSidebarRatio,
             onRatioChange: { rightSidebarRatio = $0 },
             leading: {
-                WorkspaceGitIdeaLogTableView(viewModel: viewModel)
+                mainFramePrimaryColumn
             },
             trailing: {
                 WorkspaceGitIdeaLogRightSidebarView(viewModel: viewModel)
             }
         )
+    }
+
+    @ViewBuilder
+    private var mainFramePrimaryColumn: some View {
+        VStack(spacing: 0) {
+            WorkspaceGitIdeaLogToolbarView(viewModel: viewModel)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+                .background(NativeTheme.surface)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(NativeTheme.border)
+                        .frame(height: 1)
+                }
+
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .font(.callout)
+                    .foregroundStyle(NativeTheme.warning)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(NativeTheme.warning.opacity(0.12))
+            }
+
+            WorkspaceGitIdeaLogTableView(viewModel: viewModel)
+        }
     }
 }
