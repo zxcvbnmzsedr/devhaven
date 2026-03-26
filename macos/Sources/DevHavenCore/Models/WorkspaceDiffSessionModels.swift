@@ -95,6 +95,12 @@ public struct WorkspaceDiffNavigatorState: Equatable, Sendable {
     }
 }
 
+public enum WorkspaceDiffDifferenceAnchor: Equatable, Sendable {
+    case compareBlock(String)
+    case mergeConflict(String)
+    case patchHunk(Int)
+}
+
 public struct WorkspaceDiffSessionState: Equatable, Sendable {
     public var requestChain: WorkspaceDiffRequestChain
     public var navigatorState: WorkspaceDiffNavigatorState
