@@ -13,7 +13,7 @@
 - [ ] 按 TDD 实现双击/回车查看 diff 主链
   - [x] Task 1：锁定 runtime diff tab 与 close planner 契约（先红后绿）
   - [x] Task 2：把 Workspace 顶部 tab bar 升级为 terminal + diff 共用展示层
-  - [ ] Task 3：建立 diff 文档模型、完整 diff 加载链路与 patch parser
+  - [x] Task 3：建立 diff 文档模型、完整 diff 加载链路与 patch parser
   - [ ] Task 4：落地独立 Diff 标签页 viewer（side-by-side / unified）
   - [ ] Task 5：统一接入 Git Log / Commit 的双击打开逻辑
   - [ ] Task 6：更新架构文档、完整验证并回填 Review
