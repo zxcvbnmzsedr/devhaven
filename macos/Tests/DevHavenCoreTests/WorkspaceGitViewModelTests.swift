@@ -3,28 +3,40 @@ import XCTest
 
 @MainActor
 final class WorkspaceGitViewModelTests: XCTestCase {
-    func testWorkspaceGitModelsSourceContractIncludesCommitToolWindowAndRemovesChangesSection() throws {
+    func testWorkspaceGitModelsSourceContractSeparatesCommitSideAndGitBottomPlacements() throws {
         let source = try String(contentsOf: workspaceGitModelsSourceFileURL(), encoding: .utf8)
 
         XCTAssertTrue(source.contains("case commit"), "WorkspaceToolWindowKind 应新增 commit")
+        XCTAssertTrue(source.contains("case side"), "WorkspaceToolWindowPlacement 应显式支持侧边工具窗停靠")
+        XCTAssertTrue(source.contains("case bottom"), "WorkspaceToolWindowPlacement 应继续支持底部工具窗停靠")
+        XCTAssertTrue(source.contains("case .commit:\n            return .side"), "Commit 工具窗的默认停靠位置应为侧边")
+        XCTAssertTrue(source.contains("case .git:\n            return .bottom"), "Git 工具窗的默认停靠位置应为底部")
         XCTAssertFalse(source.contains("case changes"), "WorkspaceGitSection 不应继续包含 changes")
     }
 
-    func testNativeAppViewModelReplacesPrimaryModeWithToolWindowRuntimeStateSourceContract() throws {
+    func testNativeAppViewModelReplacesPrimaryModeWithSideAndBottomToolWindowRuntimeStateSourceContract() throws {
         let source = try String(contentsOf: nativeAppViewModelSourceFileURL(), encoding: .utf8)
+        let modelsSource = try String(contentsOf: workspaceGitModelsSourceFileURL(), encoding: .utf8)
 
         XCTAssertFalse(source.contains("public var workspacePrimaryMode"), "NativeAppViewModel 不应继续暴露 workspacePrimaryMode 成员")
         XCTAssertFalse(source.contains("self.workspacePrimaryMode ="), "NativeAppViewModel 初始化时不应继续写入旧的 primary mode 真相源")
-        XCTAssertTrue(source.contains("workspaceToolWindowState"), "NativeAppViewModel 应提供 tool window runtime state")
+        XCTAssertTrue(source.contains("workspaceSideToolWindowState"), "NativeAppViewModel 应提供侧边 tool window runtime state")
+        XCTAssertTrue(source.contains("workspaceBottomToolWindowState"), "NativeAppViewModel 应提供底部 tool window runtime state")
         XCTAssertTrue(source.contains("WorkspaceFocusedArea"), "NativeAppViewModel 应提供 focused area 真相源")
+        XCTAssertTrue(modelsSource.contains("case sideToolWindow("), "WorkspaceFocusedArea 应显式表示侧边工具窗焦点")
+        XCTAssertTrue(modelsSource.contains("case bottomToolWindow("), "WorkspaceFocusedArea 应显式表示底部工具窗焦点")
     }
 
-    func testNativeAppViewModelProvidesToolWindowToggleEntryPointsSourceContract() throws {
+    func testNativeAppViewModelProvidesSideAndBottomToolWindowEntryPointsSourceContract() throws {
         let source = try String(contentsOf: nativeAppViewModelSourceFileURL(), encoding: .utf8)
 
         XCTAssertTrue(source.contains("toggleWorkspaceToolWindow("))
-        XCTAssertTrue(source.contains("showWorkspaceToolWindow("))
-        XCTAssertTrue(source.contains("hideWorkspaceToolWindow()"))
+        XCTAssertTrue(source.contains("showWorkspaceSideToolWindow("))
+        XCTAssertTrue(source.contains("hideWorkspaceSideToolWindow()"))
+        XCTAssertTrue(source.contains("updateWorkspaceSideToolWindowWidth("))
+        XCTAssertTrue(source.contains("showWorkspaceBottomToolWindow("))
+        XCTAssertTrue(source.contains("hideWorkspaceBottomToolWindow()"))
+        XCTAssertTrue(source.contains("updateWorkspaceBottomToolWindowHeight("))
     }
 
     func testSearchQueryDebounce300MillisecondsOnlyAppliesLatestQuery() async throws {

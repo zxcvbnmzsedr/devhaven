@@ -158,3 +158,10 @@
 - 对齐 IDEA VCS Log 右侧 `Changes` 区域时，不能把它简化成普通扁平文件列表；IntelliJ 实际使用的是带 toolbar 与树节点层级的 changes browser，至少要先保持“树形容器 + 变更分组/父级节点”的结构心智。
 - 对齐 IDEA 的 changes browser 时，除了把内容做成树形，还要显式补上“全部展开 / 全部折叠”这类树控制入口；否则即使有目录节点，交互心智仍然不像真正的 browser。
 - 对 icon-only toolbar 做 1:1 复刻时，不要只凭 SF Symbols 名称猜语义；像 `arrow.down.forward.and.arrow.up.backward` / `arrow.up.left.and.arrow.down.right` 这类方向词很容易看反，最好先做一次实际渲染或至少补一条“标题 -> icon”断言，避免“展开 / 折叠”这类高频操作出现语义反绑。
+- 当用户指出“某个工具窗在 IDEA 里其实是侧边而不是底部”时，不能只做入口按钮位置微调；要先去源码或真实产品语义确认它到底是**独立 tool window** 还是**另一个工具窗里的 tab**。像 Commit 这种场景，真正要对齐的是 `Commit@left / Version Control@bottom` 的停靠语义，而不是单纯把按钮挪到左边。
+- 当界面同时存在“顶部主工作区”和“底部 tools panel”时，某个“侧边工具窗”如果在视觉上应位于底部 panel 上方，就不能简单挂在整个外层容器的左边。要先问清它相对的是**整个 Shell**，还是**Shell 的顶部主区**；像 Commit side panel 这种场景，正确层级是“顶部区域左侧”，而不是“整个 Shell 左侧”。
+- 对齐 IDEA 的 Commit 内容区时，不能停留在“功能都在就行”的表单思路；要继续对齐 **内容层级**：Changes 区应该是 browser（toolbar + group header + 扁平文件行），Commit 区应该是工作台（Amend + Message + Actions + gear），而不是把已有选项继续平铺成设置表单。
+- 对齐 IDEA 的 Changes browser 时，不能只把 untracked 文件混进总 `Changes` 分组；`Unversioned Files` 本身就是用户心智的一部分。即使底层 snapshot 已经区分 `.untracked`，UI 层如果不继续保留这一分组语义，用户仍会感知为“没展示出来”。
+- 对齐 IDEA 这类 tree browser 时，很多“看起来不对齐”的问题不在 section，而在 **row renderer 级别**。如果 IDEA 源码是 `appendFileName + appendParentPath` 单行连续渲染，就不要在 SwiftUI 里偷懒做成 `VStack` 两行；哪怕信息都展示出来了，视觉也会立刻露馅。
+- 对齐 IDEA 的文件列表时，要先分清 **文件图标** 和 **状态语义** 是两条独立通道。IDEA 用 `setIcon(filePath, isDirectory)` 渲染文件类型图标，再用文件名颜色表达 VCS 状态；如果把状态问号/字母 badge 塞到图标列，用户会立刻感知为“图标全错了”。
+- 当用户已经明确给出更高层的视觉规则（例如“Changes 蓝色、Unversioned 红色”）时，不要继续停留在按底层 status 细粒度分色的实现习惯。颜色语义应该绑定到**当前界面真正暴露给用户的分组心智层**，否则技术上更细、视觉上却更不对。

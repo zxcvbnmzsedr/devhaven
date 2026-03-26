@@ -83,6 +83,39 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.includedPaths.isEmpty)
     }
 
+    func testToggleAllInclusionSelectsAndClearsAllVisibleChanges() {
+        let recorder = WorkspaceCommitClientRecorder()
+        recorder.snapshot = WorkspaceCommitChangesSnapshot(
+            branchName: "main",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "README.md",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .staged,
+                    isIncludedByDefault: true
+                ),
+                WorkspaceCommitChange(
+                    path: "Sources/App/Main.swift",
+                    oldPath: nil,
+                    status: .added,
+                    group: .unstaged,
+                    isIncludedByDefault: false
+                ),
+            ]
+        )
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.refreshChangesSnapshot()
+
+        XCTAssertEqual(viewModel.includedPaths, Set(["README.md"]))
+
+        viewModel.toggleAllInclusion()
+        XCTAssertEqual(viewModel.includedPaths, Set(["README.md", "Sources/App/Main.swift"]))
+
+        viewModel.toggleAllInclusion()
+        XCTAssertTrue(viewModel.includedPaths.isEmpty)
+    }
+
     func testSelectChangeSurfacesDiffPreviewErrorState() async throws {
         let recorder = WorkspaceCommitClientRecorder()
         recorder.snapshot = WorkspaceCommitChangesSnapshot(
@@ -289,7 +322,7 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         ]
 
         viewModel.activeWorkspaceProjectPath = worktreePath
-        viewModel.workspaceToolWindowState.activeKind = .commit
+        viewModel.showWorkspaceSideToolWindow(.commit)
         viewModel.syncActiveWorkspaceToolWindowContext()
         let worktreeCommitViewModel = try XCTUnwrap(viewModel.activeWorkspaceCommitViewModel)
 

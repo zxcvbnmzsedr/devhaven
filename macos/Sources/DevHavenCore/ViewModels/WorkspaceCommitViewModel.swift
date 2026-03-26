@@ -48,6 +48,22 @@ public final class WorkspaceCommitViewModel {
     public var options: WorkspaceCommitOptionsState
     public var executionState: WorkspaceCommitExecutionState
     public var errorMessage: String?
+    public var totalChangeCount: Int {
+        changesSnapshot?.changes.count ?? 0
+    }
+    public var includedChangeCount: Int {
+        changesSnapshot?.changes.reduce(into: 0) { partialResult, change in
+            if includedPaths.contains(change.path) {
+                partialResult += 1
+            }
+        } ?? 0
+    }
+    public var areAllChangesIncluded: Bool {
+        guard let changes = changesSnapshot?.changes, !changes.isEmpty else {
+            return false
+        }
+        return changes.allSatisfy { includedPaths.contains($0.path) }
+    }
     public var commitStatusLegend: String {
         let branch = normalizedBranchName(changesSnapshot?.branchName) ?? "detached"
         return "分支 \(branch) · Included \(includedPaths.count) · \(executionState.summaryText)"
@@ -113,6 +129,22 @@ public final class WorkspaceCommitViewModel {
 
     public func toggleInclusion(for path: String) {
         setInclusion(for: path, included: !includedPaths.contains(path))
+    }
+
+    public func toggleAllInclusion() {
+        guard let changes = changesSnapshot?.changes, !changes.isEmpty else {
+            return
+        }
+
+        if areAllChangesIncluded {
+            for change in changes {
+                includedPaths.remove(change.path)
+            }
+        } else {
+            for change in changes {
+                includedPaths.insert(change.path)
+            }
+        }
     }
 
     public func selectChange(_ path: String?) {

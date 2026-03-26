@@ -86,7 +86,8 @@ public final class NativeAppViewModel {
     public var selectedProjectPath: String?
     public var openWorkspaceSessions: [OpenWorkspaceSessionState]
     public var activeWorkspaceProjectPath: String?
-    public var workspaceToolWindowState: WorkspaceToolWindowState
+    public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
+    public var workspaceBottomToolWindowState: WorkspaceBottomToolWindowState
     public var workspaceFocusedArea: WorkspaceFocusedArea
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
     private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
@@ -153,7 +154,8 @@ public final class NativeAppViewModel {
         self.selectedProjectPath = nil
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
-        self.workspaceToolWindowState = WorkspaceToolWindowState()
+        self.workspaceSideToolWindowState = WorkspaceSideToolWindowState()
+        self.workspaceBottomToolWindowState = WorkspaceBottomToolWindowState()
         self.workspaceFocusedArea = .terminal
         self.attentionStateByProjectPath = [:]
         self.agentDisplayOverridesByProjectPath = [:]
@@ -965,33 +967,74 @@ public final class NativeAppViewModel {
     }
 
     public func toggleWorkspaceToolWindow(_ kind: WorkspaceToolWindowKind) {
-        if workspaceToolWindowState.activeKind == kind, workspaceToolWindowState.isVisible {
-            hideWorkspaceToolWindow()
+        switch kind.placement {
+        case .side:
+            if workspaceSideToolWindowState.activeKind == kind, workspaceSideToolWindowState.isVisible {
+                hideWorkspaceSideToolWindow()
+                return
+            }
+            showWorkspaceSideToolWindow(kind)
+        case .bottom:
+            if workspaceBottomToolWindowState.activeKind == kind, workspaceBottomToolWindowState.isVisible {
+                hideWorkspaceBottomToolWindow()
+                return
+            }
+            showWorkspaceBottomToolWindow(kind)
+        }
+    }
+
+    public func showWorkspaceSideToolWindow(_ kind: WorkspaceToolWindowKind) {
+        guard kind.placement == .side else {
             return
         }
-        showWorkspaceToolWindow(kind)
-    }
-
-    public func showWorkspaceToolWindow(_ kind: WorkspaceToolWindowKind) {
-        workspaceToolWindowState.activeKind = kind
-        workspaceToolWindowState.isVisible = true
-        workspaceToolWindowState.height = workspaceToolWindowState.lastExpandedHeight
+        workspaceSideToolWindowState.activeKind = kind
+        workspaceSideToolWindowState.isVisible = true
+        workspaceSideToolWindowState.width = workspaceSideToolWindowState.lastExpandedWidth
         syncActiveWorkspaceToolWindowContext()
-        workspaceFocusedArea = .toolWindow(kind)
+        workspaceFocusedArea = .sideToolWindow(kind)
     }
 
-    public func hideWorkspaceToolWindow() {
-        if workspaceToolWindowState.isVisible {
-            workspaceToolWindowState.lastExpandedHeight = workspaceToolWindowState.height
+    public func hideWorkspaceSideToolWindow() {
+        if workspaceSideToolWindowState.isVisible {
+            workspaceSideToolWindowState.lastExpandedWidth = workspaceSideToolWindowState.width
         }
-        workspaceToolWindowState.isVisible = false
-        workspaceFocusedArea = .terminal
+        workspaceSideToolWindowState.isVisible = false
+        if case .sideToolWindow = workspaceFocusedArea {
+            workspaceFocusedArea = .terminal
+        }
     }
 
-    public func updateWorkspaceToolWindowHeight(_ height: Double) {
+    public func updateWorkspaceSideToolWindowWidth(_ width: Double) {
+        let clamped = max(220, width)
+        workspaceSideToolWindowState.width = clamped
+        workspaceSideToolWindowState.lastExpandedWidth = clamped
+    }
+
+    public func showWorkspaceBottomToolWindow(_ kind: WorkspaceToolWindowKind) {
+        guard kind.placement == .bottom else {
+            return
+        }
+        workspaceBottomToolWindowState.activeKind = kind
+        workspaceBottomToolWindowState.isVisible = true
+        workspaceBottomToolWindowState.height = workspaceBottomToolWindowState.lastExpandedHeight
+        syncActiveWorkspaceToolWindowContext()
+        workspaceFocusedArea = .bottomToolWindow(kind)
+    }
+
+    public func hideWorkspaceBottomToolWindow() {
+        if workspaceBottomToolWindowState.isVisible {
+            workspaceBottomToolWindowState.lastExpandedHeight = workspaceBottomToolWindowState.height
+        }
+        workspaceBottomToolWindowState.isVisible = false
+        if case .bottomToolWindow = workspaceFocusedArea {
+            workspaceFocusedArea = .terminal
+        }
+    }
+
+    public func updateWorkspaceBottomToolWindowHeight(_ height: Double) {
         let clamped = max(160, height)
-        workspaceToolWindowState.height = clamped
-        workspaceToolWindowState.lastExpandedHeight = clamped
+        workspaceBottomToolWindowState.height = clamped
+        workspaceBottomToolWindowState.lastExpandedHeight = clamped
     }
 
     public func setWorkspaceFocusedArea(_ area: WorkspaceFocusedArea) {
@@ -999,14 +1042,24 @@ public final class NativeAppViewModel {
     }
 
     public func syncActiveWorkspaceToolWindowContext() {
-        guard let kind = workspaceToolWindowState.activeKind else {
-            return
+        if workspaceSideToolWindowState.isVisible,
+           let kind = workspaceSideToolWindowState.activeKind {
+            switch kind {
+            case .commit:
+                prepareActiveWorkspaceCommitViewModel()
+            case .git:
+                prepareActiveWorkspaceGitViewModel()
+            }
         }
-        switch kind {
-        case .commit:
-            prepareActiveWorkspaceCommitViewModel()
-        case .git:
-            prepareActiveWorkspaceGitViewModel()
+
+        if workspaceBottomToolWindowState.isVisible,
+           let kind = workspaceBottomToolWindowState.activeKind {
+            switch kind {
+            case .commit:
+                prepareActiveWorkspaceCommitViewModel()
+            case .git:
+                prepareActiveWorkspaceGitViewModel()
+            }
         }
     }
 

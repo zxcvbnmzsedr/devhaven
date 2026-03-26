@@ -6,6 +6,15 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
 
     public var id: String { rawValue }
 
+    public var placement: WorkspaceToolWindowPlacement {
+        switch self {
+        case .commit:
+            return .side
+        case .git:
+            return .bottom
+        }
+    }
+
     public var title: String {
         switch self {
         case .commit:
@@ -26,6 +35,7 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
 }
 
 public enum WorkspaceToolWindowPlacement: String, Identifiable, Sendable {
+    case side
     case bottom
 
     public var id: String { rawValue }
@@ -33,28 +43,47 @@ public enum WorkspaceToolWindowPlacement: String, Identifiable, Sendable {
 
 public enum WorkspaceFocusedArea: Equatable, Sendable {
     case terminal
-    case toolWindow(WorkspaceToolWindowKind)
+    case sideToolWindow(WorkspaceToolWindowKind)
+    case bottomToolWindow(WorkspaceToolWindowKind)
 }
 
-public struct WorkspaceToolWindowState: Equatable, Sendable {
+public struct WorkspaceSideToolWindowState: Equatable, Sendable {
+    public static let defaultWidth: Double = 360
+
+    public var activeKind: WorkspaceToolWindowKind?
+    public var isVisible: Bool
+    public var width: Double
+    public var lastExpandedWidth: Double
+
+    public init(
+        activeKind: WorkspaceToolWindowKind? = nil,
+        isVisible: Bool = false,
+        width: Double = WorkspaceSideToolWindowState.defaultWidth,
+        lastExpandedWidth: Double = WorkspaceSideToolWindowState.defaultWidth
+    ) {
+        self.activeKind = activeKind
+        self.isVisible = isVisible
+        self.width = max(220, width)
+        self.lastExpandedWidth = max(220, lastExpandedWidth)
+    }
+}
+
+public struct WorkspaceBottomToolWindowState: Equatable, Sendable {
     public static let defaultHeight: Double = 320
 
     public var activeKind: WorkspaceToolWindowKind?
     public var isVisible: Bool
-    public var placement: WorkspaceToolWindowPlacement
     public var height: Double
     public var lastExpandedHeight: Double
 
     public init(
         activeKind: WorkspaceToolWindowKind? = nil,
         isVisible: Bool = false,
-        placement: WorkspaceToolWindowPlacement = .bottom,
-        height: Double = WorkspaceToolWindowState.defaultHeight,
-        lastExpandedHeight: Double = WorkspaceToolWindowState.defaultHeight
+        height: Double = WorkspaceBottomToolWindowState.defaultHeight,
+        lastExpandedHeight: Double = WorkspaceBottomToolWindowState.defaultHeight
     ) {
         self.activeKind = activeKind
         self.isVisible = isVisible
-        self.placement = placement
         self.height = max(160, height)
         self.lastExpandedHeight = max(160, lastExpandedHeight)
     }

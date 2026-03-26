@@ -3617,3 +3617,227 @@
   - 定向绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 21 tests，0 failures。
   - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 42 tests，0 failures。
   - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Commit 工具窗入口位置细化设计
+
+- [x] 探索当前 Commit 按钮、左侧 stripe 与 Commit 面板实现、相关测试及最近变更
+- [x] 向用户确认 Commit 应按 IDEA 语义改为左侧独立 tool window（已确认为 A：真正对齐 IDEA）
+- [x] 提出 2-3 个入口/停靠布局方案并给出推荐（已确认采用 A：Commit 左侧独立 tool window）
+- [x] 输出细化设计并等待用户确认
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 Commit 左侧独立 Tool Window 实现（按 IDEA 语义）
+
+- [x] Task 1：补红灯测试，锁定 Commit 为左侧独立 tool window、Git 仍为底部 tool window 的状态与布局契约
+- [x] Task 2：拆分 workspace tool window 运行时状态为 side/bottom 两套模型与焦点语义
+- [x] Task 3：改造 WorkspaceChromeContainerView，引入 Commit side host 与可拖拽宽度
+- [x] Task 4：收窄 WorkspaceShellView 为 terminal + bottom Git，迁移 Commit 挂载
+- [x] Task 5：更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 Commit 左侧独立 Tool Window 实现）
+
+- 结果：
+  1. `Commit` 已从 `WorkspaceShellView` 的底部工具窗路由中拆出，改为 `WorkspaceCommitSideToolWindowHostView -> WorkspaceCommitRootView` 的左侧独立 tool window 主链，对齐 IDEA 的 `Commit@left / Git@bottom` 语义。
+  2. `WorkspaceChromeContainerView` 已从 `stripe | 主内容区` 升级为 `stripe | Commit 侧边工具窗（可选） | 主内容区`，并通过横向 `WorkspaceSplitView` 支持侧边宽度拖拽。
+  3. `WorkspaceShellView` 已收窄为 terminal 主区 + Git 专属 bottom tool window host，不再承载 Commit 底部路由；底部点击焦点也改为 `.bottomToolWindow(.git)`。
+  4. `WorkspaceGitModels` / `NativeAppViewModel` 已把单一 `workspaceToolWindowState` 拆分为 `workspaceSideToolWindowState` 与 `workspaceBottomToolWindowState`，并把 `workspaceFocusedArea` 升级为 `terminal / sideToolWindow / bottomToolWindow` 三态。
+  5. `AGENTS.md` 已同步更新：补充 `WorkspaceCommitSideToolWindowHostView.swift` 条目，并把 Workspace chrome / Shell / ViewModel 的职责改写为“Commit 左侧独立、Git 底部保留”的新架构。
+- 关键理由：
+  1. IntelliJ Community 源码已明确把 `Commit` 注册为 `anchor="left"`，而 `Version Control` 注册为 `anchor="bottom"`；继续把 Commit 塞在底部只是“按钮像 IDEA”，语义仍然不对。
+  2. 现有 `workspaceToolWindowState` 只能表达“一个底部工具窗”，无法同时稳定表达“左侧 Commit + 底部 Git”并存场景，因此必须先拆状态模型，再迁挂载位置。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitViewModelTests'`（41 tests, 28 failures；核心失败包括缺少 `WorkspaceCommitSideToolWindowHostView.swift`、Chrome 未挂 side host、Shell 仍保留 commit bottom route、Core 仍只有单一 tool window state）。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitViewModelTests|WorkspaceCommitViewModelTests'`（51 tests, 0 failures）。
+  - 扩大回归：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceTerminalCommandsTests|WorkspaceGitViewModelTests|WorkspaceCommitViewModelTests'`（60 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Commit 工具窗移除 Diff Preview
+
+- [x] Task 1：补红灯测试，锁定 Commit 根容器不再挂载 Diff Preview 分区
+- [x] Task 2：以最小改动移除 Commit 左侧工具窗中的 Diff Preview 布局接线
+- [x] Task 3：同步更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 Commit 工具窗移除 Diff Preview）
+
+- 结果：
+  1. `WorkspaceCommitRootView` 已从 `changes browser | diff preview | commit panel` 三分区改为 `changes browser | commit panel` 双分区，Commit 左侧独立工具窗中不再展示 Diff Preview。
+  2. 本轮采取最少修改原则：仅移除 Commit 根容器里的 Diff Preview 布局接线，保留 `WorkspaceCommitDiffPreviewView` 及相关 diff 状态模型/服务文件，避免扩散到 Core 执行链路。
+  3. `AGENTS.md` 已同步更新，明确 Commit 根容器当前是双分区布局，`WorkspaceCommitDiffPreviewView` 文件保留但默认不再挂载。
+- 关键理由：
+  1. 用户明确要求“先删除 Diff Preview”，当前最稳妥的实现是先删掉可见布局，而不是立刻连同 diff 数据读取链路一起大范围移除。
+  2. 这样既能立即收敛 UI，又保留后续按需恢复 preview 的余地，符合最少修改原则。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（5 tests, 1 failure；失败点为 `WorkspaceCommitRootView` 仍包含 `WorkspaceCommitDiffPreviewView(`）。
+  - 定向绿灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（5 tests, 0 failures）。
+  - 相关回归：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（28 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Commit 侧边工具窗层级纠偏（应位于底部 tools 面板上方）
+
+- [x] Task 1：补红灯测试，锁定 Commit 侧边工具窗只能出现在 terminal 上半区，不得与底部 Git tools 面板并列贯穿全高
+- [x] Task 2：以最小改动重排 Workspace 布局，让 Commit side host 挂到 bottom tool window 上方区域
+- [x] Task 3：同步更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 Commit 侧边工具窗层级纠偏）
+
+- 结果：
+  1. `WorkspaceChromeContainerView` 已移除 Commit side host 的直接挂载，恢复为只负责 `左侧 stripe | 主内容区` 的 chrome 壳层。
+  2. `WorkspaceShellView` 已把 Commit 侧边工具窗下沉到顶部区域：当前结构是 `顶部（Commit side panel 可选 | terminal） + 底部 Git tools panel`，因此 Commit 侧边面板现在位于底部 tools 面板上方，而不是整块落在左边。
+  3. Commit 侧边宽度拖拽责任也已从 Chrome 容器迁移到 Shell 顶部区域，避免再把“壳层布局”和“工作区内部业务布局”混在一起。
+  4. `AGENTS.md` 已同步更新为新的真实层级：Chrome 只负责 stripe，Shell 承担“顶部 Commit side panel + terminal / 底部 Git tools panel”布局。
+- 关键理由：
+  1. 直接原因是 Commit side host 放在 `WorkspaceChromeContainerView`，导致它天然位于整个 Shell 左边，于是视觉上就会落到底部 Git tools 面板左侧。
+  2. 设计层诱因是把“Workspace 外围 chrome 壳层”与“Workspace 内部内容层级”混在了一层；Commit side panel 虽然是左侧工具窗，但它相对的是 terminal 主区，不是整个包含底部 tools 的 Shell 全高。
+  3. 本轮修正后，未发现新的明显系统设计缺陷。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（19 tests, 6 failures；核心失败为 Chrome 仍挂 side host、Shell 顶部区域未承接 Commit）。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（19 tests, 0 failures）。
+  - 相关回归：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（36 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Commit 内容区对齐 IDEA（内容 / 分组 / 样式 / 按钮）
+
+- [x] Task 1：对照截图与 intellij-community 源码，锁定 Commit 内容区的结构差异与真实挂载组件
+- [x] Task 2：补红灯测试，锁定 Changes 分组、toolbar 按钮、message 区与 actions 的源码契约
+- [x] Task 3：按最小改动重构 Commit 内容区，尽量复刻 IDEA 的内容结构与控件层级
+- [x] Task 4：同步更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 Commit 内容区对齐 IDEA：内容 / 分组 / 样式 / 按钮）
+
+- 结果：
+  1. `WorkspaceCommitChangesBrowserView` 已从圆角卡片流改成更接近 IDEA 的 browser 结构：顶部 icon toolbar、`Changes N files` 分组头、总 inclusion 开关、扁平文件行、`文件名主标题 + 路径次信息 + 紧凑状态 badge`。
+  2. `WorkspaceCommitPanelView` 已从“message + options 表单堆叠”改成更接近 IDEA 的提交区：顶部 `Commit` 标题、`Amend` 开关、大的 `Commit Message` 输入框、`Commit / Commit and Push...` 动作，以及齿轮弹层承接 `Sign-off / Author` 选项。
+  3. `WorkspaceCommitViewModel` 已补齐 `toggleAllInclusion()`、`includedChangeCount`、`areAllChangesIncluded` 等聚合语义，使 Changes 分组头可以像 IDEA 一样驱动“全部纳入 / 全部清空”。
+  4. 本轮未新增新的架构边界或文件职责变化，`AGENTS.md` 现有关于 Commit root / changes browser / panel 的职责描述仍然成立，因此未额外改写文档条目。
+- 关键理由：
+  1. 直接原因是当前 Commit 内容区沿用了 DevHaven 早期的“卡片列表 + options 表单”心智，和 IntelliJ `ChangesViewCommitPanel / NonModalCommitPanel / CommitActionsPanel` 的内容组织明显不一致。
+  2. 设计层诱因是之前先打通了 Commit 工作流与独立 tool window 语义，但没有继续把 **内容层级** 对齐到 IDEA：changes browser 仍像业务卡片区，commit panel 仍像设置表单，而不是提交工作台。
+  3. 本轮修正后，未发现新的明显系统设计缺陷。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（编译失败；核心报错为 `WorkspaceCommitViewModel` 缺少 `toggleAllInclusion()`，证明新契约尚未落地）。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（16 tests, 0 failures）。
+  - 相关回归：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（30 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 Commit browser 缺少 Unversioned Files 分组
+
+- [x] Task 1：排查 untracked/unversioned 在 Git 快照、Commit snapshot 与 Commit browser 中的实际流向
+- [x] Task 2：补红灯测试，锁定 Commit browser 必须单独展示 `Unversioned Files` 分组
+- [x] Task 3：按最小改动修复 Changes/Unversioned 分组渲染，并保持现有 IDEA 风格结构
+- [x] Task 4：跑定向与相关回归测试，回填 Review
+
+## Review（2026-03-26 Commit browser 补齐 Unversioned Files 分组）
+
+- 结果：
+  1. 已确认数据链路本身没有丢：`NativeGitParsers.parseStatusPorcelainV2` 会把 `? ` 记录解析到 `snapshot.untracked`，`WorkspaceCommitChangesSnapshot.fromGitWorkingTree(...)` 也会继续把它映射成 `.untracked` 组。
+  2. 真正缺口在 `WorkspaceCommitChangesBrowserView`：我上轮把所有变更统一平铺进单一 `Changes` 分组，导致 IDEA 里的 `Unversioned Files` 分组语义在 UI 层丢失。
+  3. 现在 Commit browser 已改为双分组渲染：`Changes` 承接 versioned changes，`Unversioned Files` 承接 `.untracked` changes，并且两个分组都保留各自的 header、计数与 section inclusion 开关。
+- 直接原因：
+  1. UI 层把 `snapshot.changes` 直接作为一个扁平数组渲染，没有继续按 `group == .untracked` 拆出独立分组。
+- 设计层诱因：
+  1. 上一轮把 Commit 内容区对齐到 IDEA 时，重点放在 toolbar / badge / message / actions 的视觉结构，没有继续对齐 **Changes browser 的分组语义**，于是把“数据已区分、UI 未分组”这一层漏掉了。
+  2. 目前未发现新的明显系统设计缺陷；这是浏览器分组语义未完全收敛的问题，不是底层 Git 快照设计错误。
+- 当前修复方案：
+  1. `WorkspaceCommitChangesBrowserView` 现在先按 `.untracked` / 非 `.untracked` 拆成 `unversionedChanges` 与 `versionedChanges`。
+  2. 通过通用 `section(title:changes:)` + `groupHeader(title:changes:)` 渲染多分组头，分别展示 `Changes` 和 `Unversioned Files`。
+  3. 每个 section 的勾选状态与“全选/清空”按钮都按该分组内文件独立计算，而不是错误复用全局 header。
+- 长期建议：
+  1. 如果后续继续逼近 IDEA，可把 conflicted / staged / unstaged 的显示策略也收口成显式 browser section policy，而不是继续在 View 内用轻量 filter 规则散着写。
+  2. 现在 section header 文案仍是简单的 `N files`，后续若要更像 IDEA，可把单复数、空分组折叠态与展开控制一起补齐。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（6 tests, 3 failures；核心失败为 source 中缺少 `unversionedChanges`、`"Unversioned Files"` 与独立分组头）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（31 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 Commit browser 行内对齐收敛到 IDEA 单行 renderer
+
+- [x] Task 1：对照 IntelliJ `ChangesBrowserFileNode / ChangesBrowserFilePathNode / appendParentPath`，确认当前两行布局与 IDEA 单行 renderer 的差异
+- [x] Task 2：补红灯测试，锁定 Commit browser 行必须改为“文件名 + 父路径同一行”对齐渲染
+- [x] Task 3：按最小改动把 Commit browser 行从 `VStack` 改为 inline 单行结构
+- [x] Task 4：跑定向与相关回归测试，回填 Review
+
+## Review（2026-03-26 Commit browser 行内对齐收敛到 IDEA 单行 renderer）
+
+- 结果：
+  1. 已对照 IntelliJ `ChangesBrowserFileNode` / `ChangesBrowserFilePathNode` / `ChangesBrowserNode.appendParentPath(...)` 确认：IDEA 的 changes browser 行是**单行 renderer**，文件名与父路径在同一个 cell 中连续 append，而不是上下两行堆叠。
+  2. `WorkspaceCommitChangesBrowserView` 现已把每行标题从 `VStack` 双行结构改成 `inlineTitleRow(...)` 单行结构：文件名在前、父路径灰字紧跟其后，并按同一 baseline 对齐。
+  3. 行高与纵向 padding 也一起收窄，避免路径另起一行后造成每个 row 高低不一致、视觉上“对不齐”。
+- 直接原因：
+  1. 上一版 Commit browser 使用了 `VStack(alignment: .leading, spacing: 2)`，把文件名和路径拆成两行，因此和 IDEA 的单行 renderer 视觉差异非常明显。
+- 设计层诱因：
+  1. 之前对齐 IDEA 时只收敛了 section / toolbar / actions，没有继续收敛到 **cell renderer 级别**；而这类浏览器 UI 的“像不像”往往正取决于单个 row 的文本拼接方式。
+  2. 目前未发现新的明显系统设计缺陷；这是 row renderer 结构未收口的问题。
+- 当前修复方案：
+  1. 新增 `inlineTitleRow(_:)`，使用 `HStack(alignment: .firstTextBaseline, spacing: 0)` 以单行方式渲染 `文件名 + 父路径`。
+  2. 父路径改成灰字 inline 追加，直接模拟 IDEA `appendParentPath(...)` 的展示语义。
+  3. 保留现有 Commit browser 的 section / inclusion / badge 逻辑，只收敛 row title 结构，避免扩散。
+- 长期建议：
+  1. 如果后续继续往 IDEA 靠，可以把 row 里的状态 badge 再继续收敛成更接近 IDEA 的 icon/text renderer，而不是长期停留在 SwiftUI badge 盒子。
+  2. 当前路径和文件名都用 monospaced 字体，如果后续要进一步做视觉保真，可以再对照 IDEA 统一调整到更接近 tree renderer 的字体策略。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（7 tests, 4 failures；核心失败为缺少 `inlineTitleRow(change)`、缺少 `HStack(alignment: .firstTextBaseline, spacing: 0)`，且源码仍包含 `VStack(alignment: .leading, spacing: 2)`）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（32 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 Commit browser 文件图标对齐 IDEA 文件类型渲染
+
+- [x] Task 1：对照 IntelliJ `ChangesBrowserNodeRenderer.setIcon(...)`，确认当前问号并非文件图标而是错误的状态 badge 入口
+- [x] Task 2：补红灯测试，锁定 Commit browser 必须显示真实文件图标而不是问号 badge
+- [x] Task 3：按最小改动接入 macOS 文件类型图标，并把状态语义迁移到文件名字色
+- [x] Task 4：跑定向与相关回归测试，回填 Review
+
+## Review（2026-03-26 Commit browser 文件图标对齐 IDEA 文件类型渲染）
+
+- 结果：
+  1. 已对照 IntelliJ `ChangesBrowserNodeRenderer.setIcon(...)` / `ChangesBrowserFileNode.render(...)` 确认：IDEA 文件列表左侧渲染的是真实文件图标，来源是 `FilePathIconProvider` 或 `VcsUtil.getIcon(project, filePath)`，不是状态问号。
+  2. 当前 DevHaven 的问号根因已经移除：`WorkspaceCommitChangesBrowserView` 不再用 `statusBadgeText(for:)` 充当“图标列”，而是改成 `Image(nsImage: fileIcon(for: change))`。
+  3. 文件图标现在通过 macOS `NSWorkspace.shared.icon(forFile:)` 按文件路径/类型获取，因此会根据 `.swift`、`.md` 等文件类型渲染真实文件图标。
+  4. 状态语义没有丢，而是迁移到了 `fileNameColor(for: change)`，更接近 IDEA “文件图标 + 状态色文件名”的表达方式。
+- 直接原因：
+  1. 上一版 Commit browser 把状态 badge 摆在文件图标列的位置，且 `.unknown` 会直接显示 `?`，于是用户看到的整列就像“文件图标全是问号”。
+- 设计层诱因：
+  1. 之前把“状态表达”和“文件图标表达”混成了一列，这在浏览器 UI 里是职责错位：IDEA 的 renderer 明确区分 `icon` 与 `file status color`，而不是用状态文本去冒充图标。
+  2. 当前未发现新的明显系统设计缺陷；这是 renderer 职责收口不清的问题。
+- 当前修复方案：
+  1. `WorkspaceCommitChangesBrowserView` 接入 `AppKit`，新增 `fileIcon(for:)`，通过 `NSWorkspace.shared.icon(forFile:)` 获取文件图标。
+  2. 每行图标列改为 `Image(nsImage: fileIcon(for: change))`，固定 16x16。
+  3. 删除旧的 `statusBadgeText/statusBadgeForegroundColor/statusBadgeBackgroundColor` 路径，避免再次退回问号 badge。
+  4. 新增 `fileNameColor(for:)`，把 added / modified / deleted / renamed / unmerged 等状态语义迁移到文件名颜色。
+- 长期建议：
+  1. 目前图标来源直接走 `NSWorkspace`；如果后续还要继续逼近 IDEA，可考虑加轻量缓存，减少长列表反复向系统取图标的开销。
+  2. 当前 deleted / nonexistent 文件也走同一套路径图标解析；如果后续发现删除文件的图标退化，再专门补“按扩展名 fallback”的小分支即可，不要现在过度工程。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（8 tests, 4 failures；核心失败为缺少 `Image(nsImage: fileIcon(for: change))`、缺少 `NSWorkspace.shared.icon(forFile:)`，且源码仍包含 `Text(statusBadgeText(for: change))`）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（33 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 Commit browser 颜色语义改为 Changes 蓝色 / Unversioned Files 红色
+
+- [x] Task 1：确认当前 `fileNameColor(for:)` 仍按 status 分色，和用户要求的按 group 分色不一致
+- [x] Task 2：补红灯测试，锁定 versioned=蓝色、untracked=红色、selected=高亮 的颜色契约
+- [x] Task 3：按最小改动把文件名字色从 status 映射切换为 group 映射
+- [x] Task 4：跑定向与相关回归测试，回填 Review
+
+## Review（2026-03-26 Commit browser 颜色语义改为 Changes 蓝色 / Unversioned Files 红色）
+
+- 结果：
+  1. `WorkspaceCommitChangesBrowserView.fileNameColor(for:)` 已从“按 status 分色”切换为“按 group 分色”。
+  2. 当前规则已经收敛为：
+     - `Changes`（所有非 `.untracked`）→ `NativeTheme.accent`，也就是蓝色
+     - `Unversioned Files`（`.untracked`）→ `NativeTheme.danger`，也就是红色
+     - 当前选中项仍优先走 `NativeTheme.textPrimary`，避免选中态被组色覆盖
+- 直接原因：
+  1. 上一版 `fileNameColor(for:)` 仍按 `change.status` 做 success / accent / danger / warning 的细粒度映射，和你明确要求的“按分组着色”不一致。
+- 设计层诱因：
+  1. 之前把颜色语义继续绑定在文件状态层，而不是当前 Commit browser 已经成型的 section/group 心智层，导致用户想要“Changes 一眼全蓝、Unversioned 一眼全红”时，现有实现天然不满足。
+  2. 当前未发现新的明显系统设计缺陷；这是颜色语义层级不对的问题，不是数据模型错误。
+- 当前修复方案：
+  1. 保留现有图标、分组、inline 行结构不动。
+  2. 仅把 `fileNameColor(for:)` 的 switch 从 `change.status` 改为 `change.group`。
+  3. 通过 `case .untracked -> danger / default -> accent` 实现最小收敛。
+- 长期建议：
+  1. 如果后续继续往 IDEA 靠，可以再把 section header 的标题色、count 色以及选中行背景一起做成按 group 联动的完整视觉语义，而不是只改文件名。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（9 tests, 2 failures；核心失败为源码仍按 `switch change.status` 着色，缺少 `switch change.group` 与 `.untracked` 分支）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（34 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。

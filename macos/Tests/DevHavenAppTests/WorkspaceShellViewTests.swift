@@ -5,8 +5,8 @@ final class WorkspaceShellViewTests: XCTestCase {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
         XCTAssertFalse(
-            source.contains("WorkspaceSplitView(\n                direction: .horizontal"),
-            "项目导航已经外置到 Workspace 根布局，WorkspaceShellView 不应再直接持有横向 split 容器"
+            source.contains("WorkspaceProjectSidebarHostView("),
+            "项目导航已经外置到 Workspace 根布局，WorkspaceShellView 不应重新直接承载项目导航宿主"
         )
         XCTAssertFalse(
             source.contains("WorkspaceProjectListView("),
@@ -31,18 +31,25 @@ final class WorkspaceShellViewTests: XCTestCase {
         )
     }
 
-    func testWorkspaceShellRoutesCommitToolWindowKindToDedicatedCommitRootView() throws {
+    func testWorkspaceShellNoLongerRoutesCommitToolWindowThroughBottomHost() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
-        XCTAssertTrue(source.contains("commitToolWindowContent"), "WorkspaceShellView 应提供独立 commit tool window 内容路由")
-        XCTAssertTrue(source.contains("WorkspaceCommitRootView("), "activeKind == .commit 时应挂载 WorkspaceCommitRootView")
-        XCTAssertTrue(source.contains("activeWorkspaceCommitViewModel"), "commit 路由应消费 NativeAppViewModel 的 commit view model 真相源")
+        XCTAssertFalse(source.contains("commitToolWindowContent"), "Commit 改为左侧独立工具窗后，WorkspaceShellView 不应继续提供 commit 底部路由")
+        XCTAssertFalse(source.contains("WorkspaceCommitRootView("), "Commit 改为左侧独立工具窗后，WorkspaceShellView 不应继续直接挂载 Commit 根容器")
     }
 
-    func testWorkspaceShellCommitToolWindowTapSetsFocusedAreaToCommitKind() throws {
+    func testWorkspaceShellBottomToolWindowTapSetsFocusedAreaToBottomGitKind() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
-        XCTAssertTrue(source.contains("setWorkspaceFocusedArea(.toolWindow(.commit))"), "点击 commit tool window 内容时应显式把 focused area 切到 commit")
+        XCTAssertTrue(source.contains("setWorkspaceFocusedArea(.bottomToolWindow(.git))"), "点击底部 Git tool window 内容时应显式把 focused area 切到底部 Git")
+    }
+
+    func testWorkspaceShellHostsCommitSidePanelInTopAreaAboveBottomToolWindow() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)"), "Commit 侧边工具窗宿主应下沉到 WorkspaceShellView 的主内容层")
+        XCTAssertTrue(source.contains("workspaceSideToolWindowState.isVisible"), "Shell 应基于 side tool window state 决定是否展示 Commit 侧边工具窗")
+        XCTAssertTrue(source.contains("updateWorkspaceSideToolWindowWidth"), "Commit 侧边工具窗宽度拖拽应由 Shell 承接")
     }
 
     private func sourceFileURL() -> URL {

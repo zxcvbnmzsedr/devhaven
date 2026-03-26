@@ -45,8 +45,7 @@ struct WorkspaceChromeContainerView<Content: View>: View {
     }
 
     private func toolWindowStripeButton(kind: WorkspaceToolWindowKind) -> some View {
-        let isActive = viewModel.workspaceToolWindowState.activeKind == kind
-            && viewModel.workspaceToolWindowState.isVisible
+        let isActive = isStripeButtonActive(kind)
         return Button {
             viewModel.toggleWorkspaceToolWindow(kind)
         } label: {
@@ -59,5 +58,16 @@ struct WorkspaceChromeContainerView<Content: View>: View {
                 .accessibilityLabel(kind.title)
         }
         .buttonStyle(.plain)
+    }
+
+    private func isStripeButtonActive(_ kind: WorkspaceToolWindowKind) -> Bool {
+        switch kind.placement {
+        case .side:
+            return viewModel.workspaceSideToolWindowState.activeKind == kind
+                && viewModel.workspaceSideToolWindowState.isVisible
+        case .bottom:
+            return viewModel.workspaceBottomToolWindowState.activeKind == kind
+                && viewModel.workspaceBottomToolWindowState.isVisible
+        }
     }
 }

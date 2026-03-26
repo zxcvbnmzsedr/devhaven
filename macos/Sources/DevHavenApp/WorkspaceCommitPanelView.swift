@@ -3,12 +3,13 @@ import DevHavenCore
 
 struct WorkspaceCommitPanelView: View {
     @Bindable var viewModel: WorkspaceCommitViewModel
+    @State private var isShowingMoreOptions = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             panelHeader
+            amendToggle
             messageEditor
-            optionsSection
             executionFeedbackRow
             actionRow
         }
@@ -19,6 +20,9 @@ struct WorkspaceCommitPanelView: View {
                 .fill(NativeTheme.border)
                 .frame(height: 1)
         }
+        .popover(isPresented: $isShowingMoreOptions, arrowEdge: .top) {
+            moreOptionsPopover
+        }
     }
 
     private var panelHeader: some View {
@@ -27,20 +31,20 @@ struct WorkspaceCommitPanelView: View {
                 .font(.callout.weight(.semibold))
                 .foregroundStyle(NativeTheme.textPrimary)
             Spacer(minLength: 8)
-            Text(viewModel.commitStatusLegend)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(NativeTheme.textSecondary)
         }
     }
 
+    private var amendToggle: some View {
+        Toggle("Amend", isOn: amendBinding)
+            .toggleStyle(.checkbox)
+            .foregroundStyle(NativeTheme.textPrimary)
+    }
+
     private var messageEditor: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("提交信息")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(NativeTheme.textSecondary)
+        ZStack(alignment: .topLeading) {
             TextEditor(text: messageBinding)
                 .font(.system(.body, design: .monospaced))
-                .frame(minHeight: 70)
+                .frame(minHeight: 110)
                 .scrollContentBackground(.hidden)
                 .padding(8)
                 .background(NativeTheme.window)
@@ -48,49 +52,116 @@ struct WorkspaceCommitPanelView: View {
                     RoundedRectangle(cornerRadius: 6)
                         .stroke(NativeTheme.border, lineWidth: 1)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            if viewModel.commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Commit Message")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(NativeTheme.textSecondary)
+                    .padding(.leading, 14)
+                    .padding(.top, 16)
+                    .allowsHitTesting(false)
+            }
         }
     }
 
-    private var optionsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Commit Options")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(NativeTheme.textSecondary)
-            Toggle("Amend", isOn: amendBinding)
-            Toggle("Sign-off", isOn: signOffBinding)
-            TextField("Author（可选）", text: authorBinding)
-                .textFieldStyle(.roundedBorder)
-        }
-        .toggleStyle(.checkbox)
-    }
-
+    @ViewBuilder
     private var executionFeedbackRow: some View {
+        switch viewModel.executionState {
+        case .idle:
+            EmptyView()
+        case .running:
+            feedbackRow(
+                text: "正在执行提交…",
+                systemImage: "arrow.triangle.2.circlepath",
+                color: NativeTheme.accent
+            )
+        case .succeeded:
+            feedbackRow(
+                text: "提交成功",
+                systemImage: "checkmark.circle.fill",
+                color: NativeTheme.success
+            )
+        case .failed(let message):
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            feedbackRow(
+                text: trimmed.isEmpty ? "提交失败" : trimmed,
+                systemImage: "xmark.octagon.fill",
+                color: NativeTheme.danger
+            )
+        }
+    }
+
+    private func feedbackRow(text: String, systemImage: String, color: Color) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: executionIndicator.systemImage)
+            Image(systemName: systemImage)
                 .font(.caption.weight(.semibold))
-            Text(executionIndicator.text)
+            Text(text)
                 .font(.caption.weight(.medium))
                 .lineLimit(1)
             Spacer(minLength: 8)
         }
-        .foregroundStyle(executionIndicator.color)
+        .foregroundStyle(color)
     }
 
     private var actionRow: some View {
         HStack(spacing: 8) {
-            Button("Commit") {
+            Button(primaryActionTitle) {
                 viewModel.executeCommit(action: .commit)
             }
             .buttonStyle(.borderedProminent)
             .disabled(!viewModel.canExecuteCommit(action: .commit))
 
-            Button("Commit & Push") {
+            Button("Commit and Push...") {
                 viewModel.executeCommit(action: .commitAndPush)
             }
             .buttonStyle(.bordered)
             .disabled(!viewModel.canExecuteCommit(action: .commitAndPush))
+
+            Spacer(minLength: 8)
+
+            Button {
+                isShowingMoreOptions.toggle()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(NativeTheme.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(NativeTheme.elevated)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(NativeTheme.border, lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+            .help("更多提交选项")
         }
+    }
+
+    private var moreOptionsPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("More Options")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(NativeTheme.textPrimary)
+
+            Toggle("Sign-off", isOn: signOffBinding)
+                .toggleStyle(.checkbox)
+                .foregroundStyle(NativeTheme.textPrimary)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Author")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(NativeTheme.textSecondary)
+                TextField("Author（可选）", text: authorBinding)
+                    .textFieldStyle(.roundedBorder)
+            }
+        }
+        .padding(14)
+        .frame(width: 240)
+        .background(NativeTheme.surface)
+    }
+
+    private var primaryActionTitle: String {
+        viewModel.options.isAmend ? "Amend Commit" : "Commit"
     }
 
     private var messageBinding: Binding<String> {
@@ -119,20 +190,5 @@ struct WorkspaceCommitPanelView: View {
             get: { viewModel.options.author ?? "" },
             set: { viewModel.updateOptionAuthor($0) }
         )
-    }
-
-    private var executionIndicator: (text: String, systemImage: String, color: Color) {
-        switch viewModel.executionState {
-        case .idle:
-            return ("等待提交", "clock", NativeTheme.textSecondary)
-        case .running:
-            return ("执行中…", "arrow.triangle.2.circlepath", .accentColor)
-        case .succeeded:
-            return ("提交成功", "checkmark.circle.fill", .green)
-        case .failed(let message):
-            let fallback = message.trimmingCharacters(in: .whitespacesAndNewlines)
-            let text = fallback.isEmpty ? "提交失败" : fallback
-            return (text, "xmark.octagon.fill", .red)
-        }
     }
 }

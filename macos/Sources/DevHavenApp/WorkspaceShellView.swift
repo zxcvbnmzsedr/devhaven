@@ -46,7 +46,16 @@ struct WorkspaceShellView: View {
                 viewModel.syncActiveWorkspaceToolWindowContext()
                 refreshCodexDisplayStates()
             }
-            .onChange(of: viewModel.workspaceToolWindowState.activeKind) { _, _ in
+            .onChange(of: viewModel.workspaceBottomToolWindowState.activeKind) { _, _ in
+                viewModel.syncActiveWorkspaceToolWindowContext()
+            }
+            .onChange(of: viewModel.workspaceBottomToolWindowState.isVisible) { _, _ in
+                viewModel.syncActiveWorkspaceToolWindowContext()
+            }
+            .onChange(of: viewModel.workspaceSideToolWindowState.activeKind) { _, _ in
+                viewModel.syncActiveWorkspaceToolWindowContext()
+            }
+            .onChange(of: viewModel.workspaceSideToolWindowState.isVisible) { _, _ in
                 viewModel.syncActiveWorkspaceToolWindowContext()
             }
             .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
@@ -66,7 +75,7 @@ struct WorkspaceShellView: View {
             .foregroundStyle(NativeTheme.textSecondary)
         } else {
             GeometryReader { geometry in
-                bottomToolWindowHost(totalHeight: geometry.size.height)
+                bottomToolWindowHost(totalSize: geometry.size)
             }
         }
     }
@@ -123,56 +132,53 @@ struct WorkspaceShellView: View {
     }
 
     @ViewBuilder
-    private var commitToolWindowContent: some View {
-        if isActiveQuickTerminalSession {
-            gitModeEmptyState(
-                title: "快速终端暂不支持 Commit 模式",
-                systemImage: "checkmark.circle",
-                description: "请先打开一个 Git 项目或 worktree，再使用 Commit 工具窗。"
-            )
-        } else if viewModel.activeWorkspaceCommitRepositoryContext == nil {
-            gitModeEmptyState(
-                title: "当前项目不是 Git 仓库",
-                systemImage: "checkmark.circle",
-                description: "Commit 工具窗只会对当前 active project 所属的 root repository 生效。"
-            )
-        } else if let commitViewModel = viewModel.activeWorkspaceCommitViewModel {
-            WorkspaceCommitRootView(viewModel: commitViewModel)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    viewModel.setWorkspaceFocusedArea(.toolWindow(.commit))
+    private func topWorkspaceContent(totalWidth: CGFloat) -> some View {
+        if viewModel.workspaceSideToolWindowState.isVisible,
+           viewModel.workspaceSideToolWindowState.activeKind == .commit {
+            WorkspaceSplitView(
+                direction: .horizontal,
+                ratio: sideToolWindowSplitRatio(totalWidth: totalWidth),
+                onRatioChange: { ratio in
+                    let nextWidth = sideToolWindowWidth(for: ratio, totalWidth: totalWidth)
+                    viewModel.updateWorkspaceSideToolWindowWidth(nextWidth)
+                },
+                onEqualize: {
+                    viewModel.updateWorkspaceSideToolWindowWidth(WorkspaceSideToolWindowState.defaultWidth)
                 }
+            ) {
+                WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } trailing: {
+                terminalModeContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else {
-            gitModeEmptyState(
-                title: "Commit 工具窗尚未就绪",
-                systemImage: "tray",
-                description: "请重新选择当前项目，或稍后再试。"
-            )
+            terminalModeContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     @ViewBuilder
-    private func bottomToolWindowHost(totalHeight: CGFloat) -> some View {
-        if viewModel.workspaceToolWindowState.placement == .bottom,
-           viewModel.workspaceToolWindowState.isVisible {
+    private func bottomToolWindowHost(totalSize: CGSize) -> some View {
+        let totalHeight = totalSize.height
+        let totalWidth = totalSize.width
+        if viewModel.workspaceBottomToolWindowState.isVisible {
             WorkspaceSplitView(
                 direction: .vertical,
                 ratio: toolWindowSplitRatio(totalHeight: totalHeight),
                 onRatioChange: { ratio in
                     let nextHeight = toolWindowHeight(for: ratio, totalHeight: totalHeight)
-                    viewModel.updateWorkspaceToolWindowHeight(nextHeight)
+                    viewModel.updateWorkspaceBottomToolWindowHeight(nextHeight)
                 },
                 onEqualize: {
-                    viewModel.updateWorkspaceToolWindowHeight(WorkspaceToolWindowState.defaultHeight)
+                    viewModel.updateWorkspaceBottomToolWindowHeight(WorkspaceBottomToolWindowState.defaultHeight)
                 }
             ) {
-                terminalModeContent
+                topWorkspaceContent(totalWidth: totalWidth)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } trailing: {
                 Group {
-                    if viewModel.workspaceToolWindowState.activeKind == .commit {
-                        commitToolWindowContent
-                    } else if viewModel.workspaceToolWindowState.activeKind == .git {
+                    if viewModel.workspaceBottomToolWindowState.activeKind == .git {
                         gitToolWindowContent
                     } else {
                         EmptyView()
@@ -181,17 +187,42 @@ struct WorkspaceShellView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if let kind = viewModel.workspaceToolWindowState.activeKind {
-                        viewModel.setWorkspaceFocusedArea(.toolWindow(kind))
+                    if viewModel.workspaceBottomToolWindowState.activeKind == .git {
+                        viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.git))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            terminalModeContent
+            topWorkspaceContent(totalWidth: totalWidth)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func sideToolWindowSplitRatio(totalWidth: CGFloat) -> Double {
+        guard totalWidth > 0 else {
+            return 0.5
+        }
+        let sideWidth = clampedSideToolWindowWidth(
+            CGFloat(viewModel.workspaceSideToolWindowState.width),
+            totalWidth: totalWidth
+        )
+        return Double(sideWidth / totalWidth)
+    }
+
+    private func sideToolWindowWidth(for ratio: Double, totalWidth: CGFloat) -> Double {
+        guard totalWidth > 0 else {
+            return viewModel.workspaceSideToolWindowState.width
+        }
+        let desiredWidth = CGFloat(ratio) * totalWidth
+        let clampedWidth = clampedSideToolWindowWidth(desiredWidth, totalWidth: totalWidth)
+        return Double(clampedWidth.rounded())
+    }
+
+    private func clampedSideToolWindowWidth(_ proposedWidth: CGFloat, totalWidth: CGFloat) -> CGFloat {
+        let upperBound = max(220, totalWidth - 10)
+        return min(max(220, proposedWidth), upperBound)
     }
 
     private func toolWindowSplitRatio(totalHeight: CGFloat) -> Double {
@@ -199,7 +230,7 @@ struct WorkspaceShellView: View {
             return 1
         }
         let toolWindowHeight = clampedToolWindowHeight(
-            CGFloat(viewModel.workspaceToolWindowState.height),
+            CGFloat(viewModel.workspaceBottomToolWindowState.height),
             totalHeight: totalHeight
         )
         return Double((totalHeight - toolWindowHeight) / totalHeight)
@@ -207,7 +238,7 @@ struct WorkspaceShellView: View {
 
     private func toolWindowHeight(for ratio: Double, totalHeight: CGFloat) -> Double {
         guard totalHeight > 0 else {
-            return viewModel.workspaceToolWindowState.height
+            return viewModel.workspaceBottomToolWindowState.height
         }
         let leadingHeight = CGFloat(ratio) * totalHeight
         let desiredHeight = totalHeight - leadingHeight
