@@ -442,6 +442,198 @@ final class WorkspaceDiffTabViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.sessionState.navigatorState.canGoPrevious)
     }
 
+    func testWorkingTreeCompareBuildsPaneMetadataForHeadAndLocal() async throws {
+        let recorder = WorkspaceDiffTabClientRecorder()
+        recorder.workingTreeDocumentByFilePath["README.md"] = .compare(
+            WorkspaceDiffCompareDocument(
+                mode: .unstaged,
+                leftPane: WorkspaceDiffEditorPane(title: "HEAD", path: "README.md", text: "before\n", isEditable: false),
+                rightPane: WorkspaceDiffEditorPane(title: "Local", path: "README.md", text: "after\n", isEditable: true)
+            )
+        )
+        let viewModel = makeViewModel(
+            tab: WorkspaceDiffTabState(
+                id: "metadata-compare-1",
+                identity: "commit-preview|/tmp/root",
+                title: "README.md",
+                source: .workingTreeChange(
+                    repositoryPath: "/tmp/root",
+                    executionPath: "/tmp/root",
+                    filePath: "README.md",
+                    group: .unstaged,
+                    status: .modified,
+                    oldPath: nil
+                ),
+                viewerMode: .sideBySide
+            ),
+            recorder: recorder
+        )
+
+        viewModel.openSession(
+            WorkspaceDiffRequestChain(
+                items: [makeRequestItem(id: "readme", filePath: "README.md")]
+            )
+        )
+        try await Task.sleep(for: .milliseconds(80))
+
+        let descriptor = try XCTUnwrap(viewModel.viewerDescriptor)
+        XCTAssertEqual(descriptor.kind, .twoSide)
+        XCTAssertEqual(descriptor.paneDescriptors.map(\.role), [.left, .right])
+        XCTAssertEqual(descriptor.paneDescriptors.map(\.metadata.title), ["HEAD", "Local"])
+        XCTAssertEqual(descriptor.paneDescriptors.map(\.metadata.path), ["README.md", "README.md"])
+    }
+
+    func testGitLogPatchBuildsRevisionHashAuthorAndRenameMetadata() async throws {
+        let recorder = WorkspaceDiffTabClientRecorder()
+        recorder.gitLogDiff = """
+        diff --git a/Docs/Old.md b/Docs/New.md
+        similarity index 100%
+        rename from Docs/Old.md
+        rename to Docs/New.md
+        --- a/Docs/Old.md
+        +++ b/Docs/New.md
+        @@ -1 +1 @@
+        -before
+        +after
+        """
+        let viewModel = makeViewModel(
+            tab: WorkspaceDiffTabState(
+                id: "metadata-patch-1",
+                identity: "git-log|/tmp/root|abc1234|Docs/New.md",
+                title: "Docs/New.md",
+                source: .gitLogCommitFile(
+                    repositoryPath: "/tmp/root",
+                    commitHash: "abc1234",
+                    filePath: "Docs/New.md"
+                ),
+                viewerMode: .sideBySide
+            ),
+            recorder: recorder
+        )
+
+        viewModel.openSession(
+            WorkspaceDiffRequestChain(
+                items: [
+                    WorkspaceDiffRequestItem(
+                        id: "patch",
+                        title: "Docs/New.md",
+                        source: .gitLogCommitFile(
+                            repositoryPath: "/tmp/root",
+                            commitHash: "abc1234",
+                            filePath: "Docs/New.md"
+                        ),
+                        preferredViewerMode: .sideBySide,
+                        paneMetadataSeeds: [
+                            WorkspaceDiffPaneMetadataSeed(
+                                role: .left,
+                                title: "Before",
+                                path: "Docs/Old.md",
+                                revision: "abc1234^",
+                                hash: "abc1234^",
+                                author: "DevHaven",
+                                timestamp: "2026-03-26 09:00"
+                            ),
+                            WorkspaceDiffPaneMetadataSeed(
+                                role: .right,
+                                title: "After",
+                                path: "Docs/New.md",
+                                oldPath: "Docs/Old.md",
+                                revision: "abc1234",
+                                hash: "abc1234",
+                                author: "DevHaven",
+                                timestamp: "2026-03-26 09:00",
+                                copyPayloads: [
+                                    WorkspaceDiffPaneCopyPayload(
+                                        id: "commit-hash",
+                                        label: "提交哈希",
+                                        value: "abc1234"
+                                    )
+                                ]
+                            ),
+                        ]
+                    )
+                ]
+            )
+        )
+        try await Task.sleep(for: .milliseconds(80))
+
+        let descriptor = try XCTUnwrap(viewModel.viewerDescriptor)
+        XCTAssertEqual(descriptor.kind, .patch)
+        let rightPane = try XCTUnwrap(descriptor.paneDescriptors.last)
+        XCTAssertEqual(rightPane.metadata.title, "After")
+        XCTAssertEqual(rightPane.metadata.path, "Docs/New.md")
+        XCTAssertEqual(rightPane.metadata.oldPath, "Docs/Old.md")
+        XCTAssertEqual(rightPane.metadata.revision, "abc1234")
+        XCTAssertEqual(rightPane.metadata.hash, "abc1234")
+        XCTAssertEqual(rightPane.metadata.author, "DevHaven")
+        XCTAssertEqual(rightPane.metadata.timestamp, "2026-03-26 09:00")
+        XCTAssertEqual(rightPane.metadata.copyPayloads.map(\.value), ["abc1234"])
+    }
+
+    func testSwitchingRequestItemRefreshesPaneMetadataAndViewerDescriptor() async throws {
+        let recorder = WorkspaceDiffTabClientRecorder()
+        recorder.workingTreeDocumentByFilePath["README.md"] = .compare(
+            WorkspaceDiffCompareDocument(
+                mode: .unstaged,
+                leftPane: WorkspaceDiffEditorPane(title: "HEAD", path: "README.md", text: "before\n", isEditable: false),
+                rightPane: WorkspaceDiffEditorPane(title: "Local", path: "README.md", text: "after\n", isEditable: true)
+            )
+        )
+        recorder.workingTreeDocumentByFilePath["Conflict.md"] = .merge(
+            WorkspaceDiffMergeDocument(
+                oursPane: WorkspaceDiffEditorPane(title: "Ours", path: "Conflict.md", text: "main\n", isEditable: false),
+                basePane: WorkspaceDiffEditorPane(title: "Base", path: "Conflict.md", text: "base\n", isEditable: false),
+                theirsPane: WorkspaceDiffEditorPane(title: "Theirs", path: "Conflict.md", text: "feature\n", isEditable: false),
+                resultPane: WorkspaceDiffEditorPane(
+                    title: "Result",
+                    path: "Conflict.md",
+                    text: "<<<<<<< ours\nmain\n=======\nfeature\n>>>>>>> theirs\n",
+                    isEditable: true
+                )
+            )
+        )
+        let viewModel = makeViewModel(
+            tab: WorkspaceDiffTabState(
+                id: "metadata-switch-1",
+                identity: "commit-preview|/tmp/root",
+                title: "README.md",
+                source: .workingTreeChange(
+                    repositoryPath: "/tmp/root",
+                    executionPath: "/tmp/root",
+                    filePath: "README.md",
+                    group: .unstaged,
+                    status: .modified,
+                    oldPath: nil
+                ),
+                viewerMode: .sideBySide
+            ),
+            recorder: recorder
+        )
+
+        viewModel.openSession(
+            WorkspaceDiffRequestChain(
+                items: [
+                    makeRequestItem(id: "readme", filePath: "README.md"),
+                    makeRequestItem(id: "conflict", filePath: "Conflict.md", group: .conflicted),
+                ]
+            )
+        )
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(viewModel.viewerDescriptor?.kind, .twoSide)
+        XCTAssertEqual(viewModel.viewerDescriptor?.paneDescriptors.map(\.metadata.title), ["HEAD", "Local"])
+
+        viewModel.goToNextDifference()
+        try await Task.sleep(for: .milliseconds(80))
+
+        XCTAssertEqual(viewModel.viewerDescriptor?.kind, .merge)
+        XCTAssertEqual(
+            viewModel.viewerDescriptor?.paneDescriptors.map(\.metadata.title),
+            ["Ours", "Base", "Theirs", "Result"]
+        )
+        XCTAssertEqual(viewModel.viewerDescriptor?.selectedDifference, .mergeConflict("merge-conflict-0"))
+    }
+
     func testRefreshBuildsInlineHighlightsForMergeConflictOursAndTheirs() async throws {
         let recorder = WorkspaceDiffTabClientRecorder()
         recorder.workingTreeDocument = .merge(
@@ -887,7 +1079,8 @@ final class WorkspaceDiffTabViewModelTests: XCTestCase {
     private func makeRequestItem(
         id: String,
         filePath: String,
-        group: WorkspaceCommitChangeGroup = .unstaged
+        group: WorkspaceCommitChangeGroup = .unstaged,
+        paneMetadataSeeds: [WorkspaceDiffPaneMetadataSeed] = []
     ) -> WorkspaceDiffRequestItem {
         WorkspaceDiffRequestItem(
             id: id,
@@ -900,7 +1093,8 @@ final class WorkspaceDiffTabViewModelTests: XCTestCase {
                 status: .modified,
                 oldPath: nil
             ),
-            preferredViewerMode: .sideBySide
+            preferredViewerMode: .sideBySide,
+            paneMetadataSeeds: paneMetadataSeeds
         )
     }
 }

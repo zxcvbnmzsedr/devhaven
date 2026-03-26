@@ -66,6 +66,7 @@ public final class WorkspaceDiffTabViewModel {
     public var documentState: WorkspaceDiffDocumentState
     public var sessionState: WorkspaceDiffSessionState
     public var selectedDifferenceAnchor: WorkspaceDiffDifferenceAnchor?
+    public var viewerDescriptor: WorkspaceDiffViewerDescriptor?
 
     public init(
         tab: WorkspaceDiffTabState,
@@ -81,6 +82,7 @@ public final class WorkspaceDiffTabViewModel {
             )
         )
         self.selectedDifferenceAnchor = nil
+        self.viewerDescriptor = nil
         self.documentState = WorkspaceDiffDocumentState(
             title: tab.title,
             viewerMode: tab.viewerMode
@@ -448,6 +450,7 @@ public final class WorkspaceDiffTabViewModel {
             currentDifferenceIndex: currentDifferenceIndex,
             totalDifferences: anchors.count
         )
+        rebuildViewerDescriptor()
     }
 
     private func differenceAnchors(for document: WorkspaceDiffLoadedDocument) -> [WorkspaceDiffDifferenceAnchor] {
@@ -476,6 +479,141 @@ public final class WorkspaceDiffTabViewModel {
         }
         sessionState.requestChain.items[sessionState.requestChain.activeIndex].preferredViewerMode = mode
         rebuildNavigatorState()
+    }
+
+    private func rebuildViewerDescriptor() {
+        guard case let .loaded(document) = documentState.loadState else {
+            viewerDescriptor = nil
+            return
+        }
+
+        viewerDescriptor = WorkspaceDiffViewerDescriptor(
+            kind: viewerKind(for: document),
+            navigatorState: sessionState.navigatorState,
+            paneDescriptors: buildPaneDescriptors(for: document),
+            selectedDifference: selectedDifferenceAnchor
+        )
+    }
+
+    private func viewerKind(for document: WorkspaceDiffLoadedDocument) -> WorkspaceDiffViewerKind {
+        switch document {
+        case .patch:
+            return .patch
+        case .compare:
+            return .twoSide
+        case .merge:
+            return .merge
+        }
+    }
+
+    private func buildPaneDescriptors(for document: WorkspaceDiffLoadedDocument) -> [WorkspaceDiffPaneDescriptor] {
+        let seeds = sessionState.activeRequestItem?.paneMetadataSeeds ?? []
+        switch document {
+        case let .patch(parsed):
+            return [
+                WorkspaceDiffPaneDescriptor(
+                    role: .left,
+                    metadata: makePaneMetadata(
+                        role: .left,
+                        fallbackTitle: "Before",
+                        fallbackPath: parsed.oldPath ?? parsed.newPath,
+                        fallbackOldPath: parsed.oldPath != parsed.newPath ? parsed.oldPath : nil,
+                        seeds: seeds
+                    )
+                ),
+                WorkspaceDiffPaneDescriptor(
+                    role: .right,
+                    metadata: makePaneMetadata(
+                        role: .right,
+                        fallbackTitle: "After",
+                        fallbackPath: parsed.newPath ?? parsed.oldPath,
+                        fallbackOldPath: parsed.oldPath != parsed.newPath ? parsed.oldPath : nil,
+                        seeds: seeds
+                    )
+                ),
+            ]
+        case let .compare(compare):
+            return [
+                WorkspaceDiffPaneDescriptor(
+                    role: .left,
+                    metadata: makePaneMetadata(
+                        role: .left,
+                        fallbackTitle: compare.leftPane.title,
+                        fallbackPath: compare.leftPane.path,
+                        seeds: seeds
+                    )
+                ),
+                WorkspaceDiffPaneDescriptor(
+                    role: .right,
+                    metadata: makePaneMetadata(
+                        role: .right,
+                        fallbackTitle: compare.rightPane.title,
+                        fallbackPath: compare.rightPane.path,
+                        seeds: seeds
+                    )
+                ),
+            ]
+        case let .merge(merge):
+            return [
+                WorkspaceDiffPaneDescriptor(
+                    role: .ours,
+                    metadata: makePaneMetadata(
+                        role: .ours,
+                        fallbackTitle: merge.oursPane.title,
+                        fallbackPath: merge.oursPane.path,
+                        seeds: seeds
+                    )
+                ),
+                WorkspaceDiffPaneDescriptor(
+                    role: .base,
+                    metadata: makePaneMetadata(
+                        role: .base,
+                        fallbackTitle: merge.basePane.title,
+                        fallbackPath: merge.basePane.path,
+                        seeds: seeds
+                    )
+                ),
+                WorkspaceDiffPaneDescriptor(
+                    role: .theirs,
+                    metadata: makePaneMetadata(
+                        role: .theirs,
+                        fallbackTitle: merge.theirsPane.title,
+                        fallbackPath: merge.theirsPane.path,
+                        seeds: seeds
+                    )
+                ),
+                WorkspaceDiffPaneDescriptor(
+                    role: .result,
+                    metadata: makePaneMetadata(
+                        role: .result,
+                        fallbackTitle: merge.resultPane.title,
+                        fallbackPath: merge.resultPane.path,
+                        seeds: seeds
+                    )
+                ),
+            ]
+        }
+    }
+
+    private func makePaneMetadata(
+        role: WorkspaceDiffPaneHeaderRole,
+        fallbackTitle: String,
+        fallbackPath: String?,
+        fallbackOldPath: String? = nil,
+        seeds: [WorkspaceDiffPaneMetadataSeed]
+    ) -> WorkspaceDiffPaneMetadata {
+        let seed = seeds.first(where: { $0.role == role })
+        return WorkspaceDiffPaneMetadata(
+            title: seed?.title ?? fallbackTitle,
+            path: seed?.path ?? fallbackPath,
+            oldPath: seed?.oldPath ?? fallbackOldPath,
+            revision: seed?.revision,
+            hash: seed?.hash,
+            author: seed?.author,
+            timestamp: seed?.timestamp,
+            tooltip: seed?.tooltip,
+            copyPayloads: seed?.copyPayloads ?? []
+        )
     }
 }
 

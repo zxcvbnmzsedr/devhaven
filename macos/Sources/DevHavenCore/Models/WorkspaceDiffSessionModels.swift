@@ -5,17 +5,20 @@ public struct WorkspaceDiffRequestItem: Identifiable, Equatable, Sendable {
     public var title: String
     public var source: WorkspaceDiffSource
     public var preferredViewerMode: WorkspaceDiffViewerMode
+    public var paneMetadataSeeds: [WorkspaceDiffPaneMetadataSeed]
 
     public init(
         id: String,
         title: String,
         source: WorkspaceDiffSource,
-        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide
+        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide,
+        paneMetadataSeeds: [WorkspaceDiffPaneMetadataSeed] = []
     ) {
         self.id = id
         self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         self.source = source
         self.preferredViewerMode = preferredViewerMode
+        self.paneMetadataSeeds = paneMetadataSeeds
     }
 }
 

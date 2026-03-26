@@ -1,5 +1,14 @@
 import Foundation
 
+public enum WorkspaceDiffPaneHeaderRole: String, Equatable, Sendable {
+    case left
+    case right
+    case ours
+    case base
+    case theirs
+    case result
+}
+
 public struct WorkspaceDiffPaneCopyPayload: Identifiable, Equatable, Sendable {
     public var id: String
     public var label: String
@@ -13,6 +22,43 @@ public struct WorkspaceDiffPaneCopyPayload: Identifiable, Equatable, Sendable {
         self.id = id
         self.label = label.trimmingCharacters(in: .whitespacesAndNewlines)
         self.value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+public struct WorkspaceDiffPaneMetadataSeed: Equatable, Sendable {
+    public var role: WorkspaceDiffPaneHeaderRole
+    public var title: String?
+    public var path: String?
+    public var oldPath: String?
+    public var revision: String?
+    public var hash: String?
+    public var author: String?
+    public var timestamp: String?
+    public var tooltip: String?
+    public var copyPayloads: [WorkspaceDiffPaneCopyPayload]
+
+    public init(
+        role: WorkspaceDiffPaneHeaderRole,
+        title: String? = nil,
+        path: String? = nil,
+        oldPath: String? = nil,
+        revision: String? = nil,
+        hash: String? = nil,
+        author: String? = nil,
+        timestamp: String? = nil,
+        tooltip: String? = nil,
+        copyPayloads: [WorkspaceDiffPaneCopyPayload] = []
+    ) {
+        self.role = role
+        self.title = title
+        self.path = path
+        self.oldPath = oldPath
+        self.revision = revision
+        self.hash = hash
+        self.author = author
+        self.timestamp = timestamp
+        self.tooltip = tooltip
+        self.copyPayloads = copyPayloads
     }
 }
 
@@ -64,5 +110,43 @@ public struct WorkspaceDiffPaneMetadata: Equatable, Sendable {
             return nil
         }
         return trimmed
+    }
+}
+
+public struct WorkspaceDiffPaneDescriptor: Equatable, Sendable {
+    public var role: WorkspaceDiffPaneHeaderRole
+    public var metadata: WorkspaceDiffPaneMetadata
+
+    public init(
+        role: WorkspaceDiffPaneHeaderRole,
+        metadata: WorkspaceDiffPaneMetadata
+    ) {
+        self.role = role
+        self.metadata = metadata
+    }
+}
+
+public enum WorkspaceDiffViewerKind: String, Equatable, Sendable {
+    case patch
+    case twoSide
+    case merge
+}
+
+public struct WorkspaceDiffViewerDescriptor: Equatable, Sendable {
+    public var kind: WorkspaceDiffViewerKind
+    public var navigatorState: WorkspaceDiffNavigatorState
+    public var paneDescriptors: [WorkspaceDiffPaneDescriptor]
+    public var selectedDifference: WorkspaceDiffDifferenceAnchor?
+
+    public init(
+        kind: WorkspaceDiffViewerKind,
+        navigatorState: WorkspaceDiffNavigatorState,
+        paneDescriptors: [WorkspaceDiffPaneDescriptor],
+        selectedDifference: WorkspaceDiffDifferenceAnchor?
+    ) {
+        self.kind = kind
+        self.navigatorState = navigatorState
+        self.paneDescriptors = paneDescriptors
+        self.selectedDifference = selectedDifference
     }
 }
