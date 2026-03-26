@@ -1,5 +1,18 @@
 # Todo
 
+
+## 2026-03-26 复刻 IDEA Git Changes 双击查看 Diff 逻辑
+
+- [x] 探索 DevHaven 当前 Git Changes / Commit Changes 双击与 diff 链路现状
+- [x] 探索 IntelliJ Community 中 VCS Log / Changes Browser 双击查看 diff 的实现主链
+- [x] 与用户确认本轮复刻范围（已确认目标为独立标签页 diff 面板，并统一覆盖 Git Log Changes Browser + Commit Changes Browser）
+- [x] 提出 2-3 个复刻方案并给出推荐
+- [x] 输出设计并等待用户确认
+- [x] 设计确认后写入 `docs/plans/2026-03-26-idea-git-diff-open-design.md`
+- [x] 设计确认后写入实施计划 `docs/plans/2026-03-26-idea-git-diff-open.md`
+- [ ] 按 TDD 实现双击/回车查看 diff 主链
+- [ ] 运行定向测试与必要回归，回填 Review（含根因、修复方案、长期建议、验证证据）
+
 ## 2026-03-25 复刻 IDEA Commit 面板产品方案
 
 - [x] 探索 DevHaven 当前 Git Changes/Commit 面板实现、相关测试与最近变更
