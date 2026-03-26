@@ -1,5 +1,547 @@
 # Todo
 
+## 2026-03-26 复刻 IDEA Diff 逻辑（brainstorming）
+
+- [x] 探查当前 DevHaven diff 架构、既有设计文档、测试边界与近期提交，明确现状
+- [x] 逐项向用户澄清“复刻 IDEA diff 逻辑”的范围、优先级与验收标准
+  - 已确认：范围同时覆盖 working tree / commit diff 与 git log 历史 diff，其中优先级是先做 working tree / commit diff，再补 git log 历史 diff
+  - 已确认：顶部导航条按完整链式版对齐，包含 previous / next difference，并支持当前文件到头后继续跳转到下一个文件
+  - 已确认：左右 pane 顶部信息按重度版对齐，除版本名 / 路径外，还需要统一 metadata provider，承载可复制 revision/hash、作者/时间等详情
+  - 已确认：compare / merge 编辑区按强复刻版推进，尽量补齐编辑器内块级动作、selected changes 语义、冲突间导航与更接近 IDEA 的动作分布
+- [x] 基于 IntelliJ `diff-impl` 主链提出 2-3 套方案，比较取舍并给出推荐
+  - 已完成方案比较；用户明确选择方案 C：按 IntelliJ `diff-impl` 分层重做一套更接近 IDEA 的 Diff Viewer 框架
+- [x] 分段呈现最终设计（架构 / 组件 / 数据流 / 交互 / 测试），获得用户确认
+  - 已完成并获认可：架构与状态边界，确定升级为 `Runtime Diff Tab -> Diff Session -> Viewer Processor -> Viewer Layout`
+  - 已完成并获认可：组件与文件改造方案，确定新增 session / pane metadata 模型与 diff navigation / pane header / viewer 子视图
+  - 已完成并获认可：数据流与交互闭环，确定 commit / git log 统一通过 request chain 驱动 current difference 与跨文件 navigation
+  - 已完成并获认可：错误处理、边界约束与不做项，确定本轮仅重做 diff viewer framework，不重写 workspace / Git service 主链
+- [x] 将确认后的设计写入 `docs/plans/2026-03-26-idea-diff-parity-design.md`
+  - 已写入并提交：`docs/plans/2026-03-26-idea-diff-parity-design.md`
+  - 提交：`7a6cfa2 docs: add idea diff parity design`
+- [x] 切换到 implementation planning，产出实施计划文档并进入执行阶段
+  - 已产出实施计划：`docs/plans/2026-03-26-idea-diff-parity.md`
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第六阶段（gutter 导航 / 编辑器刷新缓存）
+
+- [x] 复查当前 side rail 与 `WorkspaceTextEditorView` 刷新路径，明确本轮 UI 导航增强与性能优化边界
+- [x] 先补红灯测试，锁定 gutter overview rail 与 decoration signature cache 契约
+- [x] 实现 App 层 gutter overview rail、block marker 选中/跳转增强
+- [x] 实现 `WorkspaceTextEditorView` decoration signature cache，避免无关刷新时重复重刷全文高亮
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第六阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第六阶段：gutter 导航 / 编辑器刷新缓存）
+
+- 结果：
+  1. `WorkspaceDiffTabView` 现在在 compare / merge editor 的 side rail 与正文之间新增了更像 IDEA 的 **overview gutter rail**：
+     - `compareOverviewGutter`
+     - `mergeOverviewGutter`
+     - `blockOverviewMarker`
+  2. gutter marker 会按 block 的行号范围在可用高度内做比例布局，并与现有的 `scrollCompareBlockIntoView(...) / scrollMergeBlockIntoView(...)` 复用同一跳转主链，所以点击 gutter marker 也会选中并滚到对应 block。
+  3. `WorkspaceTextEditorView` 现在新增 `WorkspaceTextEditorDecorationSignature` 与 `lastAppliedDecorationSignature`，并通过 `applyDecorationsIfNeeded(...)` 控制何时真正重刷全文高亮。
+  4. 因而在无关状态变化导致 `updateNSView` 被反复调用时，不会再每次都执行：
+     - `setAttributes(fullRange)`
+     - 重铺 line highlight
+     - 重铺 inline highlight
+  5. 之前已经修好的：
+     - render-path getter 纯读取
+     - `updateTab(_:)` 幂等短路
+     - side rail 自动滚动
+     - merge result inline highlight
+     本轮回归后均未被破坏。
+- 直接原因：
+  1. 第五阶段后，导航语义已经具备，但视觉上仍主要是“左侧卡片列表”，距离 IDEA 常见的 gutter overview rail 还差一层全局定位感。
+  2. `WorkspaceTextEditorView.updateNSView` 之前即使文本和高亮都没变，也会无条件重刷全文 decorations，是 diff editor 重绘链中的高频成本点。
+- 设计层诱因：
+  1. 之前 block 导航只有“详细 side rail”，缺少一层按全文比例定位的 overview rail。
+  2. 之前 editor 宿主只知道“收到 update 就重刷”，没有“decoration 是否真的变化”的签名缓存。
+  3. 本轮通过“overview gutter + decoration signature cache”把导航和刷新成本一起收口；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. App / UI：新增 compare / merge overview gutter，并复用已有 block 选中与滚动请求主链。
+  2. App / Editor：新增 decoration signature cache，仅在文本变化或 decorations 真变化时重刷全文高亮。
+- 长期改进建议：
+  1. 当前 gutter rail 已提供全局定位与跳转，但还没做到“根据当前可见区域反向点亮最近 block”；若继续追 1:1 IDEA，可在现有 overview rail 上再补可见区域 -> marker 反向联动。
+  2. decoration cache 目前聚焦“跳过无关高亮重刷”；若后续继续做性能收口，可再补文本布局/attributed string 级别的增量更新，而不是每次文本变化都重设整段 string。
+  3. 若后续要做更扎实的性能回归，可补 profile/script 或 UI instrumentation，量化 `updateNSView` 高频场景下的 decoration 命中率。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - 初次失败：
+      - `WorkspaceDiffTabViewTests.testDiffTabViewProvidesIdeaLikeOverviewGutterForBlocks`
+      - `WorkspaceTextEditorViewTests.testWorkspaceTextEditorViewCachesDecorationSignatureBeforeReapplyingHighlights`
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - `12 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `91 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 修复 Workspace diff getter 引发的 SwiftUI invalidation storm
+
+- [x] 复核用户给出的主线程采样结论，对照 `WorkspaceHostView -> NativeAppViewModel -> WorkspaceDiffTabViewModel` 调用链确认 render-path 写状态根因
+- [x] 先补红灯测试，锁定“纯 getter 不得触发 diff view model 观察失效 / 相同 tab 不得重复 invalidation”契约
+- [x] 实现最小修复：getter 改纯读取、`updateTab(_:)` 增加幂等短路与差异写入
+- [x] 运行定向测试，确认 invalidation storm 回归闸门生效
+- [x] 在本文件追加本次 Review（含直接原因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 修复 Workspace diff getter 引发的 SwiftUI invalidation storm）
+
+- 结果：
+  1. `NativeAppViewModel.workspaceDiffTabViewModel(for:tabID:)` 已改成**纯读取**：命中缓存时直接返回既有 `WorkspaceDiffTabViewModel`，不再在 render path 内调用 `updateTab(_:)`。
+  2. `WorkspaceDiffTabViewModel.updateTab(_:)` 已补幂等保护：`self.tab == tab` 时直接返回；只有标题/查看模式真的变化时才写 `documentState`，只有 `source` 变化时才 reset + refresh。
+  3. 新增两条 Observation 回归测试，直接锁住：
+     - “相同 tab 不得触发新的观察失效”
+     - “纯 getter 不得触发已有 diff view model 观察失效”
+  4. 这让 `WorkspaceHostView.body -> workspaceDiffTabViewModel(for:)` 这条渲染路径不再具备写状态副作用，用户指出的 invalidation storm 闭环被切断。
+- 直接原因：
+  1. `WorkspaceHostView.body` 渲染 diff 标签页时调用了名为 getter、实际会写状态的 `workspaceDiffTabViewModel(for:tabID:)`。
+  2. 该 getter 会对已有 `WorkspaceDiffTabViewModel` 执行 `updateTab(_:)`。
+  3. `updateTab(_:)` 之前即使收到相同 tab，也会无条件写 `tab / documentState.title / documentState.viewerMode`，从而触发 Observation invalidation。
+- 设计层诱因：
+  1. **render-path accessor 与显式事件同步职责混在一起**，导致 `body` 内看似无害的读取变成了写状态入口。
+  2. **状态同步入口缺少幂等短路**，把“值相同的同步”也变成了实际失效。
+  3. 高成本的 diff/editor 刷新链是放大器，但这次根因仍然是读写边界混乱；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. getter 改纯读取，事件流里的显式 `syncWorkspaceDiffTab(...)` 继续负责需要的 view model 同步。
+  2. `updateTab(_:)` 加 `guard self.tab != tab else { return }`，并细化到字段级差异写入。
+- 长期改进建议：
+  1. 把“纯读取 accessor 不得写 `@Observable` 状态”固化成 Workspace runtime 的通用约束。
+  2. 后续可把 diff tab 外部同步进一步收敛成显式 `syncFromState(...)` / `replaceSource(...)` 之类更窄 API，避免再把整个 tab state 暴露给 render path。
+  3. `WorkspaceTextEditorView` 后续仍可继续做文本/高亮签名缓存，降低无关刷新时的成本。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests/testUpdateTabWithIdenticalTabDoesNotInvalidateObservedState|NativeAppViewModelWorkspaceDiffTabTests/testWorkspaceDiffTabViewModelGetterDoesNotInvalidateExistingDiffViewModel'`
+    - 初次失败：
+      - `相同 tab 不应触发新的观察失效`
+      - `纯 getter 不应触发 diff view model 的观察失效`
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests'`
+    - `42 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `89 tests, 0 failures`
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第五阶段（side rail 自动滚动 / merge result inline）
+
+- [x] 复查第四阶段后的剩余差距，确认优先补 side rail 点击自动滚动与 merge result pane 字符级高亮
+- [x] 基于现有 side rail / inline highlight 主链补写第五阶段设计
+- [x] 补写第五阶段实施计划，明确 scroll request 与 result inline highlight 边界
+- [x] 补红灯测试，锁定自动滚动与 merge result inline highlight 契约
+- [x] 实现 Core / App 改动并同步 `AGENTS.md`
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第五阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第五阶段：side rail 自动滚动 / merge result inline）
+
+- 结果：
+  1. merge builder 现在会把冲突块中的 ours/theirs 字符级差异继续映射到 `resultPane.inlineHighlights`，因此 result 区不再只有冲突块级背景，而是能看见冲突正文里的字符级提示。
+  2. `WorkspaceDiffTabView` 已补显式 side rail 滚动请求：
+     - `@State private var editorScrollRequestState`
+     - `scrollCompareBlockIntoView(_:)`
+     - `scrollMergeBlockIntoView(_:)`
+  3. `WorkspaceTextEditorView` 新增 `WorkspaceTextEditorScrollRequestState` 与 `scrollToRequestedLineIfNeeded()`，收到 side rail 请求后会把对应 editor 滚到指定行。
+  4. compare / merge side rail 的点击与块级动作按钮现在都会同步发出滚动请求，因此不是只有“选中态”，而是能真正把文档定位到对应 block。
+  5. 本轮未引入新的架构级目录/边界调整，因此 `AGENTS.md` 无需新增变更说明。
+- 直接原因：
+  1. 第四阶段后 side rail 已有选中态和动作入口，但点击 block 还不会把编辑器滚到对应位置。
+  2. merge editor 的 inline highlight 只覆盖 ours/theirs，result pane 仍缺少冲突正文里的字符级提示。
+- 设计层诱因：
+  1. 之前只有连续滚动同步状态（`WorkspaceTextEditorScrollSyncState`），缺少“离散跳转到某一行”的显式 contract。
+  2. merge inline highlight 之前只在 `ours/theirs` 两个 pane 上落地，没有把 conflict block 中 result 侧的行范围一起建模。
+  3. 本轮通过“scroll request 状态 + result line range inline 映射”补齐差距；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：`WorkspaceDiffMergeConflictBlock` 承载 `resultOursLineRange / resultTheirsLineRange`，`buildMergeInlineHighlights(...)` 把 ours/theirs 的字符差异同时投射到 result pane。
+  2. App：新增 `WorkspaceTextEditorScrollRequestState`，由 `WorkspaceDiffTabView` 的 side rail 把 block 点击转成 per-editor line target，再由 `WorkspaceTextEditorView` 执行实际滚动。
+- 长期改进建议：
+  1. 当前滚动是“按 block 起始行定位”，已满足 side rail 自动跳转；若继续追 1:1 IDEA，可后续再补 block 在 side rail / gutter 的可视位置联动。
+  2. merge `base` pane 当前用最接近的 conflict 起始行做辅助定位；如果后续用户对 base 对齐精度有更高要求，可再补更严格的 base-range 映射。
+  3. 后续若要继续提升可靠性，可补真正的交互测试，验证实际 `NSTextView` programmatic scroll 后的可见区域变化。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceHostViewTests'`
+    - 初次失败：
+      - `WorkspaceDiffTabViewTests.testDiffTabViewIssuesScrollRequestWhenSideRailBlockTapped`
+      - `WorkspaceTextEditorViewTests.testWorkspaceTextEditorViewBridgesHighlightsAndScrollSync`
+      - 新增 Observation 回归测试也曾先红后绿
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests'`
+    - `42 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `89 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第四阶段（merge inline highlight / side rail）
+
+- [x] 复查第三阶段后的剩余差距，确认优先补 merge editor 字符级高亮与更像 IDEA 的 side rail block 导航
+- [x] 基于现有 compare/merge 主链补写第四阶段设计
+- [x] 补写第四阶段实施计划，明确 merge inline highlight 与 side rail UI 边界
+- [x] 补红灯测试，锁定 merge inline highlight 与 side rail 契约
+- [x] 实现 Core / App 改动并同步 `AGENTS.md`
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第四阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第四阶段：merge inline highlight / side rail）
+
+- 结果：
+  1. `WorkspaceDiffTabViewModel` 的 merge builder 现在会基于 conflict blocks 生成 `oursPane.inlineHighlights / theirsPane.inlineHighlights`，所以 merge editor 不再只有行块级高亮。
+  2. merge inline highlight 复用了 compare 已有的字符差异算法，没有重新引入第二套 merge 专用字符 diff 逻辑。
+  3. `WorkspaceDiffTabView` 已把 compare / merge block 操作入口从“顶部横向条带”为主，升级为靠近编辑器左侧的 side rail：
+     - `compareBlocksSidebar`
+     - `mergeConflictSidebar`
+  4. side rail 现在具备：
+     - block summary
+     - 当前选中态
+     - block-level action
+     因而整体交互已经更接近 IDEA 的 diff navigator / gutter-side affordance。
+  5. 第三阶段已完成的：
+     - untracked block stage
+     - compare inline highlight
+     - 同步滚动
+     - Commit 单实例 preview
+     本轮回归后都未被破坏。
+- 直接原因：
+  1. 第三阶段后，compare editor 已能看见字符级差异，但 merge editor 的 ours/theirs 仍只有行块级高亮，冲突块内部细节不够清晰。
+  2. block 操作入口主要位于顶部横条，和 IDEA 更贴近编辑器左侧的操作心智仍有明显差距。
+- 设计层诱因：
+  1. inline highlight 之前只在 compare builder 内生成，没有继续复用到 merge conflict 场景。
+  2. block action UI 之前采用顶部 strip，更像“工具条”，而不是“文档块导航”。
+  3. 本轮通过“merge 复用 inline highlight 模型 + App 侧 side rail 重构”把这层差距补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：merge builder 基于 conflict block 逐行生成 ours/theirs inline highlight。
+  2. App：compare / merge editor 都改为左侧 side rail + 右侧编辑器主体布局，并加入 block 选中态。
+- 长期改进建议：
+  1. 当前 side rail 仍是独立 SwiftUI 导航列，不是和 `NSTextView` 行号完全对齐的真实 gutter；后续若继续追 1:1，可在现有 side rail 语义稳定后再考虑更细的 gutter 对齐，不要现在把状态重新散回 editor 宿主。
+  2. 当前点击 block card 只做选中视觉态，不会自动滚到对应行；若后续继续增强，可在现有 `WorkspaceTextEditorView` 基础上补显式 scroll-to-line 请求。
+  3. merge inline highlight 目前聚焦 ours/theirs；若后续需要更细效果，可继续补 result 区在“已接受块/已编辑块”场景下的字符级提示，但不要把 unresolved marker 文本强行做成误导性字符高亮。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests'`
+    - 初次失败：
+      - `WorkspaceDiffTabViewModelTests.testRefreshBuildsInlineHighlightsForMergeConflictOursAndTheirs`
+      - `WorkspaceDiffTabViewTests` 中关于 `compareBlocksSidebar / mergeConflictSidebar / selected block` 的断言
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests'`
+    - `25 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `83 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 DevHavenApp 未响应采样分析
+
+- [x] 复核用户提供的 `sample`，提取主线程热点与可疑调用链
+- [x] 对照采样涉及的 `WorkspaceHostView` / `NativeAppViewModel` / `WorkspaceDiffTabViewModel` / `WorkspaceTextEditorView` 源码定位直接原因
+- [x] 判断是否存在设计层诱因，并区分“高概率根因”与“次级放大因素”
+- [x] 整理分析结论、修复建议与验证依据
+- [x] 在本文件追加本次分析 Review（含直接原因、设计诱因、当前建议、长期改进、证据）
+
+## Review（2026-03-26 DevHavenApp 未响应采样分析）
+
+- 结果：
+  1. 这次“未响应”不是主线程被锁/被 I/O 阻塞，而是 **SwiftUI 观察与布局自激活（livelock）**：主线程几乎全部采样都落在 `SwiftUICore / AttributeGraph / libswiftObservation`。
+  2. 采样已给出完整闭环：
+     - `WorkspaceHostView.workspacePresentedContent(_:)`（`WorkspaceHostView.swift:159`）
+     - `NativeAppViewModel.workspaceDiffTabViewModel(for:tabID:)`（`NativeAppViewModel.swift:581`）
+     - `WorkspaceDiffTabViewModel.updateTab(_:)`
+     - `ObservationRegistrar.willSet / ObservationCenter.invalidate`
+     - `GraphHost.asyncTransaction / NSHostingView.beginTransaction`
+     - 再回到 `WorkspaceHostView.body`
+     这说明 render path 内发生了状态写入，导致视图不断把自己重新标脏并重复布局。
+  3. 最可疑的直接代码点是：
+     - `NativeAppViewModel.workspaceDiffTabViewModel(for:tabID:)` 在“getter”里对已存在的 `WorkspaceDiffTabViewModel` 无条件执行 `existing.updateTab(tab)`；
+     - `WorkspaceDiffTabViewModel.updateTab(_:)` 又无条件执行 `self.tab = tab`、`documentState.title = tab.title`、`documentState.viewerMode = tab.viewerMode`，即使值完全没变也照样触发 `@Observable` 写入。
+  4. 采样里的 `WorkspaceTextEditorView.updateNSView(_:context:)`、`applyHighlights(...)`、`SystemSegmentedControl.updateNSView(...)`、`WorkspaceTabBarView` 等热点，更像是这场自激活循环中的 **成本放大器**：每轮重渲染都会再次做大文本比较、整段高亮重刷、segmented control 尺寸测量和 tab bar diff。
+  5. Ghostty/renderer/io 线程大多都在 `kevent64` / `poll` 等待，说明后台终端线程不是主因。
+- 直接原因：
+  1. `WorkspaceHostView.body` 渲染 diff 标签页时，会调用带副作用的 `viewModel.workspaceDiffTabViewModel(for:tabID:)`。
+  2. 该函数对已缓存的 diff view model 执行 `updateTab`，而 `updateTab` 即使收到“相同 tab 状态”也会写回 observable 属性。
+  3. 这些写入在 SwiftUI 观察系统里触发新的 invalidation/transaction，形成主线程持续自旋，最终表现为 App “未响应”。
+- 设计层诱因：
+  1. **读写边界混乱**：`workspaceDiffTabViewModel(for:tabID:)` 从命名与调用位置上看像纯 getter，但内部却做了 view model 同步写入；把它放在 `body` 里调用非常危险。
+  2. **状态同步缺少幂等保护**：`WorkspaceDiffTabViewModel.updateTab(_:)` 没有先判断 `self.tab == tab`，也没有对 `title / viewerMode` 做差异短路。
+  3. **高成本 UI 更新缺少缓存**：`WorkspaceTextEditorView.updateNSView` 每轮都可能触发大字符串慢比较、全文属性重置、逐段高亮计算；一旦进入观察风暴，代价会被迅速放大。
+- 当前建议：
+  1. 第一优先级：把 `NativeAppViewModel.workspaceDiffTabViewModel(for:tabID:)` 改成**纯读取**，不要在 getter / `body` 渲染路径里调用 `updateTab`。
+  2. 最小止血：即便暂时保留当前结构，也至少要给 `WorkspaceDiffTabViewModel.updateTab(_:)` 增加幂等短路，例如先 `guard self.tab != tab else { return }`，并只在 `title / viewerMode / source` 真变化时写入。
+  3. 第二优先级：把 diff tab 状态同步移到显式事件流里，例如“打开 diff tab / Commit preview 切换 source / viewer mode 变化”时同步，而不是在 View 取值时偷偷同步。
+  4. 第三优先级：为 `WorkspaceTextEditorView` 增加文本与高亮签名缓存，避免在无关状态变化时反复全文 compare / 全文 setAttributes。
+- 长期改进建议：
+  1. 明确约束：**任何 `View.body` 内调用的 accessor 必须是纯函数**；如果要同步状态，应走 `.onChange` / action / explicit sync API。
+  2. 把 `WorkspaceDiffTabViewModel.tab` 变成更窄的内部同步输入，避免把“整个 tab state”作为高频 observed 状态暴露。
+  3. 给 diff/compare/merge 大文本编辑链补性能哨兵（大文本时跳过无差异高亮重刷、按 revision/identity 缓存 character range）。
+- 验证证据：
+  - 用户提供采样中，主线程 1495/1495 samples 均在 SwiftUI 事务/布局链；
+  - 采样明确落到：
+    - `WorkspaceHostView.swift:159`
+    - `NativeAppViewModel.swift:581`
+    - `WorkspaceDiffTabViewModel.updateTab(_:)`
+    - `ObservationRegistrar.willSet`
+    - `ObservationCenter.invalidate`
+  - 本地源码核对：
+    - `NativeAppViewModel.swift:576-589`
+    - `WorkspaceDiffTabViewModel.swift:87-99`
+    - `WorkspaceHostView.swift:155-169`
+    - `WorkspaceTextEditorView.swift:84-97`、`214+`
+  - 采样同时显示 `WorkspaceTextEditorView.updateNSView(_:context:)` 中的大字符串比较与高亮重刷、`SystemSegmentedControl` 更新和 AttributeGraph diff/compare 热点，符合“主循环自激活 + 重 UI 更新放大”的判断。
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第三阶段（untracked block stage / 字符级高亮）
+
+- [x] 复查第二阶段后的剩余差距，确认优先补 `untracked block stage` 与 `intra-line highlight`
+- [x] 基于现有 compare/merge block 主链补写第三阶段设计
+- [x] 补写第三阶段实施计划，明确 untracked patch 头部与字符级高亮边界
+- [x] 补红灯测试，锁定 untracked block stage 与 inline highlight 契约
+- [x] 实现 Core 模型、ViewModel、Git service 与 App 编辑器增强
+- [x] 同步更新 `AGENTS.md`
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第三阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第三阶段：untracked block stage / 字符级高亮）
+
+- 结果：
+  1. `WorkspaceDiffModels.swift` 现已支持 editor 级字符差异模型：
+     - `WorkspaceDiffInlineRange`
+     - `WorkspaceDiffEditorInlineHighlight`
+     - `WorkspaceDiffEditorPane.inlineHighlights`
+  2. `WorkspaceDiffTabViewModel` 的 compare builder 现在除了行块级高亮，还会对“左右都存在但内容不同”的替换行生成 **intra-line highlight**。
+  3. `WorkspaceTextEditorView` 现在会把 line highlight 与 inline highlight 叠加到 `NSTextStorage`，所以 compare editor 已经不只是“这一行不同”，而能看到“这一行内部哪一段不同”。
+  4. `WorkspaceDiffTabView` 已把 `inlineHighlights` 桥接到文本编辑器，并把 untracked compare 纳入 block 级“暂存此块”入口。
+  5. `WorkspaceDiffTabViewModel.applyCompareBlockAction(.stage, ...)` 不再只接受 `.unstaged`；`.untracked` 也能走 block stage。
+  6. patch builder 已支持新文件头：
+     - `new file mode 100644`
+     - `--- /dev/null`
+     - `+++ b/<file>`
+     因而 untracked compare block 现在可以直接生成可应用到 index 的 patch。
+  7. `NativeGitRepositoryService.stagePatch(...)` 已通过新文件 `/dev/null -> file` patch 的真实测试验证。
+- 直接原因：
+  1. 第二阶段的高亮仍然停留在行块级，用户只能看到“哪几行变了”，看不到“行内哪一段变了”。
+  2. 第二阶段虽然已有 block stage 主链，但 patch builder 仍按 tracked file 的常规头部生成 patch，没有覆盖新文件语义。
+- 设计层诱因：
+  1. 现有 editor 模型之前只有 `lineRange`，没有 `lineIndex + columnRange` 这类字符级表达。
+  2. compare block action 之前把 `.stage` 约束死在 `.unstaged`，导致 untracked compare 明明已经进入统一 diff editor，却仍停在旁路。
+  3. 本轮通过“inline highlight 模型 + compare builder + `/dev/null` patch 头”把这层差距补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core Models：补 `inlineHighlights` 共享模型。
+  2. ViewModel：逐行替换块按最长公共前缀/后缀生成字符级差异片段。
+  3. ViewModel/Patch Builder：为 untracked block stage 生成新文件 patch 头并放开 `.untracked` 的 `.stage` 动作。
+  4. App：文本编辑器宿主叠加渲染 inline highlight，Diff 视图把新字段桥接下去。
+- 长期改进建议：
+  1. 当前 intra-line highlight 使用的是“最长公共前缀/后缀裁剪”策略，适合大多数单行替换，但还不是 JetBrains 那种更完整的字符 diff；若继续对齐，可在现有 inline 模型上替换算法，而不必改 UI 主链。
+  2. untracked 文件当前仍然通常表现为**整文件单块**；这不是主链缺失，而是 `/dev/null -> file` compare 的自然结果。若未来需要更细的新文件 partial stage，需要额外设计“人工切块/部分索引写入”策略，不应硬塞进当前块构建器。
+  3. 现在 merge editor 仍以行块/冲突块为主；若后续继续追 JetBrains 细节，可在冲突块内部继续补 inline highlight。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - 初次失败，核心报错为：
+      - `WorkspaceDiffEditorPane` 缺少 `inlineHighlights`
+      - 说明 `untracked` block stage / inline highlight contract 尚未落地
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - `57 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `83 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第二阶段（块级交互 / 高亮 / 同步滚动）
+
+- [x] 复查当前 compare / merge editor 已具备的能力与仍未对齐 IDEA 的差距
+- [x] 基于现有单实例 preview 与 compare/merge 主链，补写第二阶段设计
+- [x] 补写第二阶段实施计划，明确按 TDD 补齐块级交互、差异高亮与同步滚动
+- [x] 补红灯测试，锁定 compare block / merge conflict block / editor 高亮 / 同步滚动 / hunk action 契约
+- [x] 实现 Core 模型、ViewModel 与 Git service 调整
+- [x] 实现 App 层高亮编辑器、同步滚动与块级操作 UI
+- [x] 同步更新 `AGENTS.md`
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第二阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第二阶段：块级交互 / 高亮 / 同步滚动）
+
+- 结果：
+  1. `WorkspaceDiffModels.swift` 已把 compare / merge editor 升级为真正的块模型：
+     - `WorkspaceDiffLineRange`
+     - `WorkspaceDiffEditorHighlight`
+     - `WorkspaceDiffCompareBlock`
+     - `WorkspaceDiffMergeConflictBlock`
+     - `WorkspaceDiffEditorPane.highlights`
+  2. `WorkspaceDiffTabViewModel` 不再只承接“文本 + 保存”，而是会：
+     - 对 compare 文本构建 diff blocks 与左右高亮；
+     - 对 conflicted result 构建 conflict blocks；
+     - 在编辑 LOCAL / RESULT 后实时重建 blocks/highlights；
+     - 支持 compare block 的 `stage / unstage / revert`；
+     - 支持 merge conflict block 的 `accept ours / theirs / both`。
+  3. `NativeGitRepositoryService` 已新增 tracked compare block 所需的 hunk patch mutation：
+     - `stagePatch(at:patch:)`
+     - `unstagePatch(at:patch:)`
+     内部统一通过 `git apply --cached --unidiff-zero` 执行。
+  4. `WorkspaceDiffTabView` 已新增：
+     - compare blocks strip
+     - merge conflict blocks strip
+     - editor 侧高亮桥接
+     - diff 标签页内部统一 scroll sync state
+  5. `WorkspaceTextEditorView` 已从“纯 NSTextView 宿主”升级为：
+     - 支持 line highlights
+     - 支持 bounds 变化监听
+     - 支持同一 diff 标签页内纵向同步滚动
+  6. 回归后：
+     - Commit 单实例 preview 仍保持不变；
+     - Git Log 历史 patch viewer 主链未回退；
+     - `WorkspaceHostView / NativeAppViewModel` 的 runtime diff tab 主链未被破坏。
+- 直接原因：
+  1. 第一阶段只解决了“真实 compare / merge 文档源”，但 compare / merge 仍停留在多文本框并排，缺少块级交互和视觉锚点。
+  2. `WorkspaceTextEditorView` 之前只管 `NSTextView.string`，没有高亮区间与滚动同步 contract。
+  3. `NativeGitRepositoryService` 之前没有 hunk patch mutation 能力，导致 compare editor 即使知道块，也无法把单个 tracked block stage / unstage 到 index。
+- 设计层诱因：
+  1. 旧模型只把 patch/compare/merge 看成“加载态文档”，没有把 editor block / line highlight 当成一等运行时模型。
+  2. compare / merge editor 的交互语义之前散失在 UI 之外，没有一个 Core 层可复用的 block builder。
+  3. 本轮通过“模型层 blocks/highlights + ViewModel block action + App editor bridge”把这条链补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core Models：扩展 compare/merge editor block/highlight 共享模型。
+  2. Git Service：新增 `stagePatch / unstagePatch`，让 tracked compare block 可以走 index patch mutation。
+  3. ViewModel：统一构建 compare blocks / conflict blocks，并在 edit/save/block action 后重算。
+  4. App：diff tab 增加 block strip；文本编辑器增加高亮渲染与滚动同步。
+- 长期改进建议：
+  1. 当前高亮是**行块级**，还不是 IDEA 的字符级 intra-line diff；如果要继续 1:1 对齐，可在现有 block 模型上继续补，不要回退到 patch 文本方案。
+  2. 当前 hunk patch mutation 覆盖 tracked file 的 stage / unstage；**untracked 新文件的部分暂存**仍未补齐，后续应在现有 patch builder 上单独处理 `/dev/null -> file` 的部分索引写入。
+  3. 当前 block action 以条带形式暴露，后续若要更像 IDEA，可在既有 block/highlight 主链上继续补 gutter action，不要重新分叉第二套 editor 状态机。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - 初次失败，核心报错为：
+      - `WorkspaceDiffCompareDocument` 缺少 `blocks`
+      - `WorkspaceDiffEditorPane` 缺少 `highlights`
+      - `WorkspaceDiffMergeDocument` 缺少 `conflictBlocks`
+      - `WorkspaceDiffTabViewModel` 缺少 `applyCompareBlockAction(...)`
+      - `NativeGitRepositoryService` 缺少 `stagePatch / unstagePatch`
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - `53 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `79 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 Commit Diff 从只读 Preview 升级为可编辑对比
+
+- [x] 复查当前 Workspace diff viewer 能力边界，确认目前只是 patch 文本渲染
+- [x] 对照当前实现确认“不能编辑 / 不能真正对比”的直接原因
+- [x] 与用户确认本轮是否要支持“在 diff 右侧直接编辑工作区文件并保存”（已确认为：需要）
+- [x] 基于确认结果提出 2-3 个实现方案并给出推荐（已确认选择 A：一次性全量对齐 IDEA，包括 conflicted 三路 merge）
+- [x] 设计确认后写入 `docs/plans/2026-03-26-commit-editable-compare-design.md`
+- [x] 设计确认后写入实施计划 `docs/plans/2026-03-26-commit-editable-compare.md`
+- [x] 设计确认后按 TDD 实施并验证
+
+## Review（2026-03-26 Commit 可编辑 Compare / Merge Editor）
+
+- 结果：
+  1. `WorkspaceDiffSource.workingTreeChange(...)` 现在会显式携带 `group / status / oldPath`，Commit preview 打开 working tree 文件时不再只有 filePath 粒度。
+  2. `WorkspaceDiffModels.swift` 已把 runtime diff loaded document 从单一 patch 扩展为 `patch / compare / merge` 三类：
+     - `WorkspaceDiffCompareDocument`
+     - `WorkspaceDiffMergeDocument`
+     - `WorkspaceDiffEditorPane`
+  3. `NativeGitRepositoryService` 已新增 compare / merge 所需内容接口：
+     - 读取 `HEAD`
+     - 读取 `INDEX`
+     - 读取 `LOCAL`
+     - 读取 conflict stages `:1/:2/:3`
+     - 把 editable LOCAL/result 文本写回工作区文件
+  4. `WorkspaceDiffTabViewModel` 已升级为真正的 compare/merge 状态层：
+     - working tree source 会按 group 分流为 staged / unstaged / untracked compare，或 conflicted merge
+     - 支持 `updateEditableContent(...)`
+     - 支持 `saveEditableContent()`
+     - 支持 `applyMergeAction(...)`
+  5. `WorkspaceDiffTabView` 不再只有 patch viewer，现已支持：
+     - patch viewer
+     - two-way compare editor
+     - three-way merge editor
+     并通过新增的 `WorkspaceTextEditorView`（`NSTextView` 宿主）承接 LOCAL/result 侧编辑。
+  6. Commit 单实例 preview 仍保持不变；现在只是同一个 preview 标签页内部从“只读 patch”升级成了“真实 compare / merge editor”。
+- 直接原因：
+  1. 之前的 runtime diff tab 只会加载 unified diff 文本，并交给 `WorkspaceDiffPatchParser + ScrollView + Text` 渲染。
+  2. 因为没有真实文档源、可编辑缓冲与写回链路，所以只能“看 patch”，不能像 IDEA 那样编辑 LOCAL/result 并实时重新对比。
+- 设计层诱因：
+  1. 旧模型把“patch 结果”当成了“diff viewer 真相源”，导致 compare/merge 能力天然无法落地。
+  2. `NativeGitRepositoryService` 之前只暴露 patch 与 mutation，不暴露 HEAD / INDEX / LOCAL / conflict stages 这类 compare editor 必需的内容读取接口。
+  3. 本轮通过 `patch / compare / merge` 三态模型与 Git 内容读取接口把这层缺口补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core Models：扩展 diff source 与 loaded document 三态。
+  2. Git Service：新增 HEAD / INDEX / LOCAL / conflict stage 文本读取与 LOCAL 写回。
+  3. ViewModel：把 working tree diff 从“拉 patch”改成“拉 compare/merge 文档 + 编辑/保存/应用 merge action”。
+  4. App UI：新增 `WorkspaceTextEditorView`，让 diff 标签页真正具备文本编辑宿主。
+- 长期改进建议：
+  1. 当前 conflicted merge editor 已支持三路查看和 file-level `ours/theirs/both` 结果区动作，但**还不是 IDEA 那种 hunk 级冲突块操作**；如果要进一步 1:1 复刻，这部分应在现有 merge 模型上继续细化，而不是回退到 patch 方案。
+  2. 当前 compare editor 已具备真实文档对照与保存，但还没有行级高亮 / 同步滚动 / gutter；这些应作为 viewer 增强继续补，不要重新改变数据主链。
+  3. staged compare 当前按 IDEA 语义保持只读；若未来需要更强交互，可补 hunk 级 stage/unstage 动作，但不要把 index blob 变成任意文本编辑器。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|NativeAppViewModelWorkspaceDiffTabTests'`
+    - 初次失败，核心报错为：
+      - `WorkspaceDiffLoadedDocument / WorkspaceDiffCompareDocument / WorkspaceDiffMergeDocument` 不存在
+      - `NativeGitRepositoryService` 缺少 `loadHeadFileContent / loadIndexFileContent / loadLocalFileContent / loadConflictFileContents / saveLocalFileContent`
+      - `openActiveWorkspaceCommitDiffPreview(...)` 与 source 仍缺少 change metadata
+  - 绿灯（分步）：
+    - `swift test --package-path macos --skip-build --filter 'WorkspaceDiffTabViewModelTests'` → `8 tests, 0 failures`
+    - `swift test --package-path macos --skip-build --filter 'NativeGitRepositoryServiceTests'` → `30 tests, 0 failures`
+    - `swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests'` → `13 tests, 0 failures`
+  - 回归：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `68 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+
+## 2026-03-26 Commit Diff 复刻 IDEA 单实例查看链路
+
+- [x] 排查当前 Commit 查看 diff 为“一个文件一个标签页”的直接原因
+- [x] 对照 IntelliJ Community 中 Commit / Stage diff preview 实现，确认应复刻的交互形态
+- [x] 与用户确认本轮目标是“内嵌 split diff preview”还是“复用单个 diff 实例”（已确认为：Commit 内复用单个 diff 实例并在实例内切文件）
+- [x] 基于确认结果提出 2-3 个实现方案并给出推荐
+- [x] 设计确认后写入 `docs/plans/2026-03-26-commit-single-diff-preview-design.md`
+- [x] 设计确认后写入实施计划 `docs/plans/2026-03-26-commit-single-diff-preview.md`
+- [x] 设计确认后补红灯测试，锁定 Commit diff 实例行为契约
+- [x] 以最小改动实现修复，并同步更新 `tasks/todo.md`
+- [x] 运行定向测试 / 回归验证，并在文末追加 Review（含根因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit 单实例 Diff Preview）
+
+- 结果：
+  1. Commit changes browser 不再按文件粒度创建多个 diff 标签页；现在按当前 execution worktree 复用单个 preview 实例。
+  2. `WorkspaceDiffOpenRequest` 已支持 `identityOverride`，Commit preview 使用稳定 identity（`commit-preview|<executionPath>`）。
+  3. `NativeAppViewModel` 已新增 `openActiveWorkspaceCommitDiffPreview(...)` 与 `syncActiveWorkspaceCommitDiffPreviewIfNeeded(...)`：
+     - 双击文件：打开或聚焦单实例 preview；
+     - 单击文件：只在 preview 已打开时同步其内容，不新建 tab、不抢主内容焦点。
+  4. `WorkspaceDiffTabViewModel` 已支持 `updateTab(_:)`，同一个 diff viewer 可在不同 working tree file source 之间切换并自动重载。
+  5. `WorkspaceCommitSideToolWindowHostView / WorkspaceCommitRootView / WorkspaceCommitChangesBrowserView` 已接通“选择同步 preview + 双击打开 preview”主链。
+  6. `AGENTS.md` 已同步记录 Commit 单实例 preview 与 runtime diff identity 约束。
+- 直接原因：
+  1. 之前 Commit 双击查看 diff 直接走 `openActiveWorkspaceDiffTab(...)`，而 working tree diff 的 identity 又按 `executionPath + filePath` 生成。
+  2. 因此每个文件都会被视为一个新的 runtime diff 文档，最终形成“一文件一标签页”。
+- 设计层诱因：
+  1. 现有 runtime diff tab 模型只有“文件级文档”语义，没有“稳定 preview session”语义。
+  2. Commit changes browser 的 selection 与 runtime diff viewer 之间缺少“已打开 preview 只更新 source、不新建文档”的桥接层。
+  3. 本轮通过 `identityOverride + Commit preview 专用入口 + WorkspaceDiffTabViewModel.updateTab(_:)` 把这层缺口补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：给 `WorkspaceDiffOpenRequest` 增加 `identityOverride`，允许 Commit preview 使用稳定 identity。
+  2. Core：给 `WorkspaceDiffTabViewModel` 增加 `updateTab(_:)`，在同一实例里切换 source 并刷新文档。
+  3. App State：在 `NativeAppViewModel` 中新增 Commit preview 的“同步已打开 preview / 打开并聚焦 preview”两条入口。
+  4. App UI：Commit browser 单击同步 preview、双击打开 preview，不再直接走 file-scoped diff 打开链路。
+- 长期改进建议：
+  1. 如果后续继续对齐 IDEA，可在同一个 Commit preview 实例上补 `Enter`、上下文件导航、最近文件切换，而不是重新引入多标签页。
+  2. 当前 preview 的稳定 identity 以 execution worktree 为粒度；若后续需要支持并行多 Commit 上下文，再考虑显式 session model，但不要提前做重型框架。
+  3. 目前 preview 更新主要由 Commit tree 选择驱动；若后续用户要求更强实时性，可继续把 working tree refresh 与 preview refresh 做更细粒度联动。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - 初次失败，核心报错为 `NativeAppViewModel` 缺少 `openActiveWorkspaceCommitDiffPreview` / `syncActiveWorkspaceCommitDiffPreviewIfNeeded`，以及 `WorkspaceDiffTabViewModel` 缺少 `updateTab`。
+  - 绿灯：同一命令复跑后通过，`28 tests, 0 failures`。
+  - 回归：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceHostViewTests|WorkspaceDiffTabViewTests'`
+    - `34 tests, 0 failures`。
+  - 质量：`git diff --check` → exit 0。
+
 
 ## 2026-03-26 复刻 IDEA Git Changes 双击查看 Diff 逻辑
 
@@ -4029,3 +4571,51 @@
   - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests/testWorkspaceCommitRootViewAutoRefreshesSnapshotWhileVisible|WorkspaceCommitViewModelTests/testRefreshChangesSnapshotPreservesExistingInclusionAndSeedsDefaultsForNewChanges|WorkspaceCommitViewModelTests/testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges'`（3 tests, 0 failures）。
   - 回归：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（38 tests, 0 failures）。
   - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 IDEA Diff 逻辑复刻（executing-plans）
+
+- [x] Task 1：锁定 Diff Session 与 Pane Metadata 基础契约（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 2：锁定 processor 的 current difference 与跨文件导航（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 3：为 processor 输出统一 viewer descriptor 与 pane header metadata（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 4：锁定顶部 navigation bar 与 pane header 结构（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 5：拆分 patch / two-side / merge viewer 子组件（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 6：统一 commit / git log 入口为 request chain session（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 7：同步 AGENTS.md / tasks 文档并跑定向回归、回归闸门与 `git diff --check`
+
+## Review（2026-03-26 IDEA Diff 逻辑复刻）
+
+- 结果：
+  1. Core 已新增 `WorkspaceDiffSessionModels.swift` 与 `WorkspaceDiffPaneMetadataModels.swift`，把 request chain、navigator state、difference anchor、pane metadata、viewer descriptor 从旧 diff 文档模型中拆出。
+  2. `WorkspaceDiffTabViewModel` 已升级为 session 级 processor：支持 `openSession(...)`、current difference 选中、previous/next difference、跨文件切换、viewer descriptor 与 pane metadata 输出。
+  3. App 层已新增 `WorkspaceDiffNavigationBarView`、`WorkspaceDiffPaneHeaderView`、`WorkspaceDiffPatchViewerView`、`WorkspaceDiffTwoSideViewerView`、`WorkspaceDiffMergeViewerView`，`WorkspaceDiffTabView` 收窄为壳层分发。
+  4. Commit 单实例 preview 与 Git Log 文件 diff 入口都已统一接到 request chain：Commit 复用 `commit-preview|<executionPath>` identity，Git Log 复用当前 selected commit detail 生成链式 session。
+  5. `WorkspaceTextEditorView` 现在显式承接 `WorkspaceTextEditorScrollRequestKind`，selected difference 驱动的滚动请求不再只是“revision + lineTargets”的隐式语义。
+- 直接原因：
+  1. 旧版 runtime diff tab 仍然以“单 source 文档加载器 + 视图层局部状态”为主，缺少 request chain、current difference、pane metadata 三个稳定真相源。
+  2. Commit preview 与 Git Log 历史 diff 都是“文件级打开”，无法像 IDEA 一样在同一 diff session 中跨文件导航。
+- 设计层诱因：
+  1. 之前 `WorkspaceDiffModels.swift` 同时承载 runtime tab、文档、交互态，session 与 metadata 没有边界，导致 processor 能力无法稳定下沉到 Core。
+  2. 之前 `WorkspaceDiffTabView` 自己拼 toolbar/subtitle/header，并直接持有 compare / merge side rail 选中态，导致 UI 结构与 processor 真相源分裂。
+  3. 之前 Commit / Git Log 的 diff 打开入口各自只知道“当前文件”，不知道“当前文件在整组 changes 里的位置”；这就是跨文件 navigation 缺失的根因。
+  4. 本轮已把这些职责分别收口到 session models、processor 与 viewer 子组件；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：新增 session / metadata 模型，给 diff tab 引入 `WorkspaceDiffRequestChain`、`WorkspaceDiffDifferenceAnchor`、`WorkspaceDiffViewerDescriptor`。
+  2. Processor：`WorkspaceDiffTabViewModel` 按 request chain 驱动 active item 与 difference selection，并在 compare / merge / patch 三类文档上统一输出 navigator state 与 pane descriptors。
+  3. App：diff tab 改为 `navigation bar + viewer dispatch` 架构，pane header、patch viewer、two-side viewer、merge viewer 各自承担明确边界。
+  4. 入口：Commit preview 现在从 `changesSnapshot` 构造 request chain，Git Log 现在从 `selectedCommitDetail.files` 构造 request chain，保持原有打开入口不变但内部语义升级为 session。
+- 长期改进建议：
+  1. 后续若继续对齐 IDEA，可把 patch viewer 也进一步升级为完整 pane header + selected hunk navigation 语义，而不只停留在文本渲染层。
+  2. 当前 Git Log request chain 仍依赖 active `selectedCommitDetail`；如果后续需要从更多入口直达 session，建议把 commit detail 摘要显式下沉为 open request 的标准输入。
+  3. 当前 request chain 仍挂在 runtime tab state 内存态；若未来需要更强的调试能力，可以补充更明确的 diagnostics，而不是回退到 view 层临时状态。
+- 验证证据：
+  - Task 1 红灯：`swift test --package-path macos --filter 'WorkspaceDiffSessionModelsTests|WorkspaceDiffPaneMetadataModelsTests'`（编译失败，缺少 `WorkspaceDiffRequestChain` / `WorkspaceDiffPaneMetadata` 等类型）。
+  - Task 1 绿灯：同命令通过（3 tests, 0 failures）。
+  - Task 2 红灯：`swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|WorkspaceDiffNavigationTests'`（缺少 `openSession`、`selectedDifferenceAnchor`、`sessionState`、previous/next difference API）。
+  - Task 2 绿灯：同命令通过（23 tests, 0 failures）。
+  - Task 3 绿灯：`swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests'`（24 tests, 0 failures）。
+  - Task 4 绿灯：`swift test --package-path macos --filter 'WorkspaceDiffNavigationBarViewTests|WorkspaceDiffPaneHeaderViewTests|WorkspaceDiffTabViewTests'`（13 tests, 0 failures）。
+  - Task 5 绿灯：`swift test --package-path macos --filter 'WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`（10 tests, 0 failures）。
+  - Task 6 定向验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitIdeaLogViewTests'`（49 tests, 0 failures）。
+  - 定向回归：`swift test --package-path macos --filter 'WorkspaceDiffSessionModelsTests|WorkspaceDiffPaneMetadataModelsTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffNavigationTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffNavigationBarViewTests|WorkspaceDiffPaneHeaderViewTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitIdeaLogViewTests'`（91 tests, 0 failures）。
+  - 回归闸门：`swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitIdeaLogViewTests'`（119 tests, 0 failures）。
+  - 质量闸门：`git diff --check`（exit 0）。
