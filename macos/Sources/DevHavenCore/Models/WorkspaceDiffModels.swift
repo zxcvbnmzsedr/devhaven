@@ -34,6 +34,7 @@ public struct WorkspaceDiffOpenRequest: Equatable, Sendable {
     public var source: WorkspaceDiffSource
     public var preferredTitle: String
     public var preferredViewerMode: WorkspaceDiffViewerMode
+    public var requestChain: WorkspaceDiffRequestChain?
     public var identityOverride: String?
     public var originContext: WorkspaceDiffOriginContext?
 
@@ -42,6 +43,7 @@ public struct WorkspaceDiffOpenRequest: Equatable, Sendable {
         source: WorkspaceDiffSource,
         preferredTitle: String,
         preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide,
+        requestChain: WorkspaceDiffRequestChain? = nil,
         identityOverride: String? = nil,
         originContext: WorkspaceDiffOriginContext? = nil
     ) {
@@ -49,6 +51,7 @@ public struct WorkspaceDiffOpenRequest: Equatable, Sendable {
         self.source = source
         self.preferredTitle = preferredTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         self.preferredViewerMode = preferredViewerMode
+        self.requestChain = requestChain
         self.identityOverride = identityOverride?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.originContext = originContext
     }
@@ -67,6 +70,7 @@ public struct WorkspaceDiffTabState: Identifiable, Equatable, Sendable {
     public var title: String
     public var source: WorkspaceDiffSource
     public var viewerMode: WorkspaceDiffViewerMode
+    public var requestChain: WorkspaceDiffRequestChain?
     public var originContext: WorkspaceDiffOriginContext?
 
     public init(
@@ -75,6 +79,7 @@ public struct WorkspaceDiffTabState: Identifiable, Equatable, Sendable {
         title: String,
         source: WorkspaceDiffSource,
         viewerMode: WorkspaceDiffViewerMode,
+        requestChain: WorkspaceDiffRequestChain? = nil,
         originContext: WorkspaceDiffOriginContext? = nil
     ) {
         self.id = id
@@ -82,6 +87,7 @@ public struct WorkspaceDiffTabState: Identifiable, Equatable, Sendable {
         self.title = title
         self.source = source
         self.viewerMode = viewerMode
+        self.requestChain = requestChain
         self.originContext = originContext
     }
 }

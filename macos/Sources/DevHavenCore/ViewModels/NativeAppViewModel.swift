@@ -1118,49 +1118,102 @@ public final class NativeAppViewModel {
         guard let activeWorkspaceProjectPath else {
             return nil
         }
-        return openWorkspaceDiffTab(
-            WorkspaceDiffOpenRequest(
-                projectPath: activeWorkspaceProjectPath,
-                source: source,
-                preferredTitle: preferredTitle,
-                preferredViewerMode: preferredViewerMode,
-                originContext: WorkspaceDiffOriginContext(
-                    presentedTabSelection: workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath),
-                    focusedArea: workspaceFocusedArea
-                )
-            )
+        let chain = requestChainForActiveDiffSource(
+            source: source,
+            preferredTitle: preferredTitle,
+            preferredViewerMode: preferredViewerMode
+        )
+        return openActiveWorkspaceDiffSession(chain: chain)
+    }
+
+    @discardableResult
+    public func openActiveWorkspaceDiffSession(
+        chain: WorkspaceDiffRequestChain,
+        identityOverride: String? = nil
+    ) -> WorkspaceDiffTabState? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return openWorkspaceDiffSession(
+            projectPath: activeWorkspaceProjectPath,
+            chain: chain,
+            identityOverride: identityOverride,
+            originContext: WorkspaceDiffOriginContext(
+                presentedTabSelection: workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath),
+                focusedArea: workspaceFocusedArea
+            ),
+            focusTab: true,
+            createIfNeeded: true
         )
     }
 
     @discardableResult
-    public func openWorkspaceDiffTab(_ request: WorkspaceDiffOpenRequest) -> WorkspaceDiffTabState {
-        activeWorkspaceProjectPath = request.projectPath
-
-        if var existing = workspaceDiffTabsByProjectPath[request.projectPath]?.first(where: { $0.identity == request.identity }) {
-            if let originContext = request.originContext,
-               var tabs = workspaceDiffTabsByProjectPath[request.projectPath],
-               let existingIndex = tabs.firstIndex(where: { $0.id == existing.id }) {
-                tabs[existingIndex].originContext = originContext
-                existing = tabs[existingIndex]
-                workspaceDiffTabsByProjectPath[request.projectPath] = tabs
-            }
-            workspaceSelectedPresentedTabByProjectPath[request.projectPath] = .diff(existing.id)
-            workspaceFocusedArea = .diffTab(existing.id)
-            return existing
+    public func openActiveWorkspaceCommitDiffPreview(
+        repositoryPath: String,
+        executionPath: String,
+        filePath: String,
+        group: WorkspaceCommitChangeGroup?,
+        status: WorkspaceCommitChangeStatus?,
+        oldPath: String?,
+        allChanges: [WorkspaceCommitChange]? = nil,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide
+    ) -> WorkspaceDiffTabState? {
+        guard let request = activeWorkspaceCommitDiffPreviewRequest(
+            repositoryPath: repositoryPath,
+            executionPath: executionPath,
+            filePath: filePath,
+            group: group,
+            status: status,
+            oldPath: oldPath,
+            allChanges: allChanges,
+            preferredTitle: preferredTitle,
+            preferredViewerMode: preferredViewerMode
+        ) else {
+            return nil
         }
+        return syncWorkspaceDiffTab(request, focusTab: true, createIfNeeded: true)
+    }
 
-        let tab = WorkspaceDiffTabState(
-            id: "workspace-diff:\(UUID().uuidString.lowercased())",
-            identity: request.identity,
-            title: request.preferredTitle,
-            source: request.source,
-            viewerMode: request.preferredViewerMode,
-            originContext: request.originContext
-        )
-        workspaceDiffTabsByProjectPath[request.projectPath, default: []].append(tab)
-        workspaceSelectedPresentedTabByProjectPath[request.projectPath] = .diff(tab.id)
-        workspaceFocusedArea = .diffTab(tab.id)
-        return tab
+    public func syncActiveWorkspaceCommitDiffPreviewIfNeeded(
+        repositoryPath: String,
+        executionPath: String,
+        filePath: String,
+        group: WorkspaceCommitChangeGroup?,
+        status: WorkspaceCommitChangeStatus?,
+        oldPath: String?,
+        allChanges: [WorkspaceCommitChange]? = nil,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide
+    ) {
+        guard let request = activeWorkspaceCommitDiffPreviewRequest(
+            repositoryPath: repositoryPath,
+            executionPath: executionPath,
+            filePath: filePath,
+            group: group,
+            status: status,
+            oldPath: oldPath,
+            allChanges: allChanges,
+            preferredTitle: preferredTitle,
+            preferredViewerMode: preferredViewerMode
+        ) else {
+            return
+        }
+        _ = syncWorkspaceDiffTab(request, focusTab: false, createIfNeeded: false)
+    }
+
+    @discardableResult
+    public func openWorkspaceDiffTab(_ request: WorkspaceDiffOpenRequest) -> WorkspaceDiffTabState {
+        syncWorkspaceDiffTab(request, focusTab: true, createIfNeeded: true)
+            ?? WorkspaceDiffTabState(
+                id: "workspace-diff:\(UUID().uuidString.lowercased())",
+                identity: request.identity,
+                title: request.preferredTitle,
+                source: request.source,
+                viewerMode: request.preferredViewerMode,
+                requestChain: request.requestChain,
+                originContext: request.originContext
+            )
     }
 
     public func selectWorkspacePresentedTab(_ selection: WorkspacePresentedTabSelection, in projectPath: String? = nil) {
@@ -2238,6 +2291,342 @@ public final class NativeAppViewModel {
         }
 
         return terminalTabID.map(WorkspacePresentedTabSelection.terminal)
+    }
+
+    private func requestChainForActiveDiffSource(
+        source: WorkspaceDiffSource,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffRequestChain {
+        switch source {
+        case let .gitLogCommitFile(repositoryPath, commitHash, filePath):
+            return gitLogDiffRequestChain(
+                repositoryPath: repositoryPath,
+                commitHash: commitHash,
+                activeFilePath: filePath,
+                activePreferredTitle: preferredTitle,
+                preferredViewerMode: preferredViewerMode
+            )
+        case let .workingTreeChange(repositoryPath, executionPath, filePath, group, status, oldPath):
+            return commitDiffRequestChain(
+                repositoryPath: repositoryPath,
+                executionPath: executionPath,
+                activeFilePath: filePath,
+                activeGroup: group,
+                activeStatus: status,
+                activeOldPath: oldPath,
+                activePreferredTitle: preferredTitle,
+                preferredViewerMode: preferredViewerMode,
+                changes: nil
+            )
+        }
+    }
+
+    private func commitDiffRequestChain(
+        repositoryPath: String,
+        executionPath: String,
+        activeFilePath: String,
+        activeGroup: WorkspaceCommitChangeGroup?,
+        activeStatus: WorkspaceCommitChangeStatus?,
+        activeOldPath: String?,
+        activePreferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode,
+        changes: [WorkspaceCommitChange]?
+    ) -> WorkspaceDiffRequestChain {
+        let snapshotChanges = changes ?? activeWorkspaceCommitViewModel?.changesSnapshot?.changes
+        guard let snapshotChanges, !snapshotChanges.isEmpty else {
+            return WorkspaceDiffRequestChain(
+                items: [
+                    workingTreeRequestItem(
+                        repositoryPath: repositoryPath,
+                        executionPath: executionPath,
+                        filePath: activeFilePath,
+                        group: activeGroup,
+                        status: activeStatus,
+                        oldPath: activeOldPath,
+                        title: activePreferredTitle,
+                        preferredViewerMode: preferredViewerMode
+                    )
+                ]
+            )
+        }
+
+        let items = snapshotChanges.map { change in
+            workingTreeRequestItem(
+                repositoryPath: repositoryPath,
+                executionPath: executionPath,
+                filePath: change.path,
+                group: change.group,
+                status: change.status,
+                oldPath: change.oldPath,
+                title: change.path == activeFilePath ? activePreferredTitle : "Changes: \(diffDisplayTitle(for: change.path))",
+                preferredViewerMode: preferredViewerMode
+            )
+        }
+        let activeIndex = items.firstIndex(where: {
+            if case let .workingTreeChange(_, _, filePath, _, _, oldPath) = $0.source {
+                return filePath == activeFilePath && oldPath == activeOldPath
+            }
+            return false
+        }) ?? 0
+        return WorkspaceDiffRequestChain(items: items, activeIndex: activeIndex)
+    }
+
+    private func gitLogDiffRequestChain(
+        repositoryPath: String,
+        commitHash: String,
+        activeFilePath: String,
+        activePreferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffRequestChain {
+        guard let detail = activeWorkspaceGitViewModel?.logViewModel.selectedCommitDetail,
+              detail.hash == commitHash,
+              !detail.files.isEmpty
+        else {
+            return WorkspaceDiffRequestChain(
+                items: [
+                    gitLogRequestItem(
+                        repositoryPath: repositoryPath,
+                        commitHash: commitHash,
+                        file: WorkspaceGitCommitFileChange(path: activeFilePath, status: .modified),
+                        detail: nil,
+                        title: activePreferredTitle,
+                        preferredViewerMode: preferredViewerMode
+                    )
+                ]
+            )
+        }
+
+        let items = detail.files.map { file in
+            gitLogRequestItem(
+                repositoryPath: repositoryPath,
+                commitHash: commitHash,
+                file: file,
+                detail: detail,
+                title: file.path == activeFilePath ? activePreferredTitle : "Commit: \(diffDisplayTitle(for: file.path))",
+                preferredViewerMode: preferredViewerMode
+            )
+        }
+        let activeIndex = items.firstIndex(where: {
+            if case let .gitLogCommitFile(_, _, filePath) = $0.source {
+                return filePath == activeFilePath
+            }
+            return false
+        }) ?? 0
+        return WorkspaceDiffRequestChain(items: items, activeIndex: activeIndex)
+    }
+
+    private func workingTreeRequestItem(
+        repositoryPath: String,
+        executionPath: String,
+        filePath: String,
+        group: WorkspaceCommitChangeGroup?,
+        status: WorkspaceCommitChangeStatus?,
+        oldPath: String?,
+        title: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffRequestItem {
+        WorkspaceDiffRequestItem(
+            id: "working-tree|\(executionPath)|\(filePath)",
+            title: title,
+            source: .workingTreeChange(
+                repositoryPath: repositoryPath,
+                executionPath: executionPath,
+                filePath: filePath,
+                group: group,
+                status: status,
+                oldPath: oldPath
+            ),
+            preferredViewerMode: preferredViewerMode
+        )
+    }
+
+    private func gitLogRequestItem(
+        repositoryPath: String,
+        commitHash: String,
+        file: WorkspaceGitCommitFileChange,
+        detail: WorkspaceGitCommitDetail?,
+        title: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffRequestItem {
+        let timestampText = detail.map { gitDiffTimestampText($0.authorTimestamp) }
+        let parentRevision = detail?.parentHashes.first
+        return WorkspaceDiffRequestItem(
+            id: "git-log|\(repositoryPath)|\(commitHash)|\(file.path)",
+            title: title,
+            source: .gitLogCommitFile(
+                repositoryPath: repositoryPath,
+                commitHash: commitHash,
+                filePath: file.path
+            ),
+            preferredViewerMode: preferredViewerMode,
+            paneMetadataSeeds: [
+                WorkspaceDiffPaneMetadataSeed(
+                    role: .left,
+                    title: "Before",
+                    path: file.oldPath ?? file.path,
+                    revision: parentRevision,
+                    hash: parentRevision,
+                    author: detail?.authorName,
+                    timestamp: timestampText
+                ),
+                WorkspaceDiffPaneMetadataSeed(
+                    role: .right,
+                    title: "After",
+                    path: file.path,
+                    oldPath: file.oldPath,
+                    revision: detail?.shortHash ?? commitHash,
+                    hash: detail?.hash ?? commitHash,
+                    author: detail?.authorName,
+                    timestamp: timestampText,
+                    copyPayloads: [
+                        WorkspaceDiffPaneCopyPayload(
+                            id: "commit-hash",
+                            label: "提交哈希",
+                            value: detail?.hash ?? commitHash
+                        )
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private func diffDisplayTitle(for path: String) -> String {
+        let fileName = (path as NSString).lastPathComponent
+        return fileName.isEmpty ? path : fileName
+    }
+
+    private func gitDiffTimestampText(_ timestamp: TimeInterval) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: Date(timeIntervalSince1970: timestamp))
+    }
+
+    private func activeWorkspaceCommitDiffPreviewRequest(
+        repositoryPath: String,
+        executionPath: String,
+        filePath: String,
+        group: WorkspaceCommitChangeGroup?,
+        status: WorkspaceCommitChangeStatus?,
+        oldPath: String?,
+        allChanges: [WorkspaceCommitChange]? = nil,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffOpenRequest? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        let chain = commitDiffRequestChain(
+            repositoryPath: repositoryPath,
+            executionPath: executionPath,
+            activeFilePath: filePath,
+            activeGroup: group,
+            activeStatus: status,
+            activeOldPath: oldPath,
+            activePreferredTitle: preferredTitle,
+            preferredViewerMode: preferredViewerMode,
+            changes: allChanges
+        )
+        guard let activeItem = chain.activeItem else {
+            return nil
+        }
+        return WorkspaceDiffOpenRequest(
+            projectPath: activeWorkspaceProjectPath,
+            source: activeItem.source,
+            preferredTitle: activeItem.title,
+            preferredViewerMode: activeItem.preferredViewerMode,
+            requestChain: chain,
+            identityOverride: commitPreviewIdentity(for: executionPath),
+            originContext: WorkspaceDiffOriginContext(
+                presentedTabSelection: workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath),
+                focusedArea: workspaceFocusedArea
+            )
+        )
+    }
+
+    @discardableResult
+    private func openWorkspaceDiffSession(
+        projectPath: String,
+        chain: WorkspaceDiffRequestChain,
+        identityOverride: String? = nil,
+        originContext: WorkspaceDiffOriginContext?,
+        focusTab: Bool,
+        createIfNeeded: Bool
+    ) -> WorkspaceDiffTabState? {
+        guard let activeItem = chain.activeItem else {
+            return nil
+        }
+        return syncWorkspaceDiffTab(
+            WorkspaceDiffOpenRequest(
+                projectPath: projectPath,
+                source: activeItem.source,
+                preferredTitle: activeItem.title,
+                preferredViewerMode: activeItem.preferredViewerMode,
+                requestChain: chain,
+                identityOverride: identityOverride,
+                originContext: originContext
+            ),
+            focusTab: focusTab,
+            createIfNeeded: createIfNeeded
+        )
+    }
+
+    private func commitPreviewIdentity(for executionPath: String) -> String {
+        "commit-preview|\(executionPath)"
+    }
+
+    @discardableResult
+    private func syncWorkspaceDiffTab(
+        _ request: WorkspaceDiffOpenRequest,
+        focusTab: Bool,
+        createIfNeeded: Bool
+    ) -> WorkspaceDiffTabState? {
+        activeWorkspaceProjectPath = request.projectPath
+
+        if var tabs = workspaceDiffTabsByProjectPath[request.projectPath],
+           let existingIndex = tabs.firstIndex(where: { $0.identity == request.identity }) {
+            var existing = tabs[existingIndex]
+            existing.title = request.preferredTitle
+            existing.source = request.source
+            existing.viewerMode = request.preferredViewerMode
+            existing.requestChain = request.requestChain
+            if let originContext = request.originContext {
+                existing.originContext = originContext
+            }
+            tabs[existingIndex] = existing
+            workspaceDiffTabsByProjectPath[request.projectPath] = tabs
+            if let requestChain = request.requestChain {
+                workspaceDiffTabViewModels[existing.id]?.openSession(requestChain)
+            } else {
+                workspaceDiffTabViewModels[existing.id]?.updateTab(existing)
+            }
+            if focusTab {
+                workspaceSelectedPresentedTabByProjectPath[request.projectPath] = .diff(existing.id)
+                workspaceFocusedArea = .diffTab(existing.id)
+            }
+            return existing
+        }
+
+        guard createIfNeeded else {
+            return nil
+        }
+
+        let tab = WorkspaceDiffTabState(
+            id: "workspace-diff:\(UUID().uuidString.lowercased())",
+            identity: request.identity,
+            title: request.preferredTitle,
+            source: request.source,
+            viewerMode: request.preferredViewerMode,
+            requestChain: request.requestChain,
+            originContext: request.originContext
+        )
+        workspaceDiffTabsByProjectPath[request.projectPath, default: []].append(tab)
+        if focusTab {
+            workspaceSelectedPresentedTabByProjectPath[request.projectPath] = .diff(tab.id)
+            workspaceFocusedArea = .diffTab(tab.id)
+        }
+        return tab
     }
 
     private func restoreOriginContext(

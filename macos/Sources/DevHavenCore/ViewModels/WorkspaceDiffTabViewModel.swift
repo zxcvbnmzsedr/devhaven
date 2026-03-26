@@ -76,10 +76,10 @@ public final class WorkspaceDiffTabViewModel {
         self.tab = tab
         self.client = client
         self.parser = parser
+        let initialRequestChain = tab.requestChain
+            ?? WorkspaceDiffRequestChain(items: [makeRequestItem(from: tab)])
         self.sessionState = WorkspaceDiffSessionState(
-            requestChain: WorkspaceDiffRequestChain(
-                items: [makeRequestItem(from: tab)]
-            )
+            requestChain: initialRequestChain
         )
         self.selectedDifferenceAnchor = nil
         self.viewerDescriptor = nil
@@ -119,9 +119,10 @@ public final class WorkspaceDiffTabViewModel {
         }
 
         sessionState = WorkspaceDiffSessionState(
-            requestChain: WorkspaceDiffRequestChain(
-                items: [makeRequestItem(from: tab)]
-            )
+            requestChain: tab.requestChain
+                ?? WorkspaceDiffRequestChain(
+                    items: [makeRequestItem(from: tab)]
+                )
         )
         selectedDifferenceAnchor = nil
         pendingSelectionPreference = nil
@@ -137,6 +138,7 @@ public final class WorkspaceDiffTabViewModel {
 
     public func openSession(_ chain: WorkspaceDiffRequestChain) {
         sessionState = WorkspaceDiffSessionState(requestChain: chain)
+        tab.requestChain = chain
         selectedDifferenceAnchor = nil
         pendingSelectionPreference = .first
         rebuildNavigatorState()
@@ -429,6 +431,7 @@ public final class WorkspaceDiffTabViewModel {
             return
         }
         sessionState.requestChain = sessionState.requestChain.updatingActiveIndex(index)
+        tab.requestChain = sessionState.requestChain
         pendingSelectionPreference = selectionPreference
         selectedDifferenceAnchor = nil
         rebuildNavigatorState()

@@ -21,8 +21,11 @@ struct WorkspaceCommitSideToolWindowHostView: View {
             } else if let commitViewModel = viewModel.activeWorkspaceCommitViewModel {
                 WorkspaceCommitRootView(
                     viewModel: commitViewModel,
-                    onOpenDiff: { change in
-                        openCommitDiffTab(commitViewModel: commitViewModel, change: change)
+                    onSyncDiffPreviewIfNeeded: { change in
+                        syncCommitDiffPreviewIfNeeded(commitViewModel: commitViewModel, change: change)
+                    },
+                    onOpenDiffPreview: { change in
+                        openCommitDiffPreview(commitViewModel: commitViewModel, change: change)
                     }
                 )
             } else {
@@ -48,16 +51,34 @@ struct WorkspaceCommitSideToolWindowHostView: View {
         return viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activePath })?.isQuickTerminal ?? false
     }
 
-    private func openCommitDiffTab(
+    private func syncCommitDiffPreviewIfNeeded(
         commitViewModel: WorkspaceCommitViewModel,
         change: WorkspaceCommitChange
     ) {
-        viewModel.openActiveWorkspaceDiffTab(
-            source: .workingTreeChange(
-                repositoryPath: commitViewModel.repositoryContext.repositoryPath,
-                executionPath: commitViewModel.repositoryContext.executionPath,
-                filePath: change.path
-            ),
+        viewModel.syncActiveWorkspaceCommitDiffPreviewIfNeeded(
+            repositoryPath: commitViewModel.repositoryContext.repositoryPath,
+            executionPath: commitViewModel.repositoryContext.executionPath,
+            filePath: change.path,
+            group: change.group,
+            status: change.status,
+            oldPath: change.oldPath,
+            allChanges: commitViewModel.changesSnapshot?.changes,
+            preferredTitle: "Changes: \(commitDiffTitle(for: change))"
+        )
+    }
+
+    private func openCommitDiffPreview(
+        commitViewModel: WorkspaceCommitViewModel,
+        change: WorkspaceCommitChange
+    ) {
+        viewModel.openActiveWorkspaceCommitDiffPreview(
+            repositoryPath: commitViewModel.repositoryContext.repositoryPath,
+            executionPath: commitViewModel.repositoryContext.executionPath,
+            filePath: change.path,
+            group: change.group,
+            status: change.status,
+            oldPath: change.oldPath,
+            allChanges: commitViewModel.changesSnapshot?.changes,
             preferredTitle: "Changes: \(commitDiffTitle(for: change))"
         )
     }
