@@ -13,7 +13,7 @@ public enum WorkspaceDiffSource: Equatable, Sendable {
         switch self {
         case let .gitLogCommitFile(repositoryPath, commitHash, filePath):
             return "git-log|\(repositoryPath)|\(commitHash)|\(filePath)"
-        case let .workingTreeChange(_, executionPath, filePath):
+        case let .workingTreeChange(_, executionPath, filePath, _, _, _):
             return "working-tree|\(executionPath)|\(filePath)"
         }
     }
