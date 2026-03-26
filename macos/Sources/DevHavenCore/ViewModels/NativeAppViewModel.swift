@@ -1123,7 +1123,17 @@ public final class NativeAppViewModel {
             preferredTitle: preferredTitle,
             preferredViewerMode: preferredViewerMode
         )
-        return openActiveWorkspaceDiffSession(chain: chain)
+        return openWorkspaceDiffSession(
+            projectPath: activeWorkspaceProjectPath,
+            chain: chain,
+            identityOverride: nil,
+            originContext: WorkspaceDiffOriginContext(
+                presentedTabSelection: workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath),
+                focusedArea: workspaceFocusedArea
+            ),
+            focusTab: true,
+            createIfNeeded: true
+        )
     }
 
     @discardableResult
