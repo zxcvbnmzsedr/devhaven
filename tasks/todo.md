@@ -3841,3 +3841,104 @@
   - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（9 tests, 2 failures；核心失败为源码仍按 `switch change.status` 着色，缺少 `switch change.group` 与 `.untracked` 分支）。
   - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（34 tests, 0 failures）。
   - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 切换项目时 Git 面板不自动刷新
+
+- [x] 梳理项目切换与 Git tool window 刷新主链，定位直接原因与设计诱因
+- [x] 先补失败测试，锁定“切换 active project/worktree 后可见 Git 面板必须刷新上下文与内容”契约
+- [x] 以最小改动修复项目切换后的 Git 面板自动刷新行为
+- [x] 运行定向验证并在 Review 记录证据、根因、修复方案与长期建议
+
+## Review（2026-03-26 切换项目时 Git 面板不自动刷新）
+
+- 结果：
+  1. `WorkspaceGitRootView` 新增对 `viewModel.repositoryContext.repositoryPath` 的监听；当 active project 切到另一个 root repository 时，会先把顶层 `Git / Log / Console` UI 状态同步到新 `section`，再刷新当前可见内容。
+  2. 新增 `WorkspaceGitRootViewTests.testWorkspaceGitRootViewRefreshesVisibleContentWhenRepositoryContextChanges`，锁定“切换仓库上下文时必须主动刷新 Git 面板”的契约，避免后续回归。
+- 直接原因：
+  1. Git 面板内容刷新只挂在 `WorkspaceGitRootView.onAppear`。切换项目时，这个底部 panel 通常不会真正 disappear/appear，因此不会重新触发 `refreshVisibleContent()`。
+  2. `WorkspaceGitRootView` 还持有 `selectedTopLevelTab` 等 `@State`，当绑定到新的 `WorkspaceGitViewModel` 时，如果不显式同步，就可能继续沿用旧仓库的顶层 tab 语义。
+- 设计层诱因：
+  1. 当前 Git panel 的“可见内容刷新时机”被绑在 View 生命周期 `onAppear`，但“切换 active project”其实属于**上下文变化**，不是 View 生命周期变化；两者被混用后，导致面板在同一挂载实例内切换仓库时漏刷。
+  2. 顶层 tab 是 View 层本地状态，而 repository/section 是 ViewModel 状态；项目切换时没有显式桥接这两份状态。
+  3. 未发现明显系统设计缺陷；本次问题主要是刷新触发点遗漏在 View 边界层。
+- 当前修复方案：
+  1. 在 `WorkspaceGitRootView` 中新增 `.onChange(of: viewModel.repositoryContext.repositoryPath)`。
+  2. 在该回调里先执行 `syncTopLevelTab(with: viewModel.section)`，确保切换到新仓库时顶层 tab 语义和新 ViewModel 保持一致。
+  3. 随后执行 `refreshVisibleContent()`，让当前可见的 Git / Log 内容立即刷新，而不是等待用户再点一次。
+- 长期建议：
+  1. 如果后续 Git panel 继续扩展更多“当前可见子页”，建议把“可见页类型”从 `WorkspaceGitRootView` 的本地 `@State` 收到可测试的运行时状态层，减少 View 层局部状态与 ViewModel 状态脱节。
+  2. 对这类“上下文切换但视图不重建”的面板，后续新增功能时要优先检查：刷新触发点是否绑定到了真正的上下文真相源，而不是只绑 `onAppear`。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests/testWorkspaceGitRootViewRefreshesVisibleContentWhenRepositoryContextChanges'`（1 test, 1 failure，新增契约在修复前失败）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests/testWorkspaceGitRootViewRefreshesVisibleContentWhenRepositoryContextChanges'`（1 test, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests|WorkspaceShellViewTests|WorkspaceGitViewModelTests|WorkspaceGitLogViewModelTests'`（44 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 切换项目时 Commit 面板不自动展示变更文件
+
+- [x] 梳理项目切换与 Commit tool window 刷新主链，定位直接原因与设计诱因
+- [x] 先补失败测试，锁定“切换 active project/worktree 后可见 Commit 面板必须自动刷新变更快照”契约
+- [x] 以最小改动修复项目切换后的 Commit 面板自动刷新行为
+- [x] 运行定向验证并在 Review 记录证据、根因、修复方案与长期建议
+
+## Review（2026-03-26 切换项目时 Commit 面板不自动展示变更文件）
+
+- 结果：
+  1. `WorkspaceCommitViewModel.updateRepositoryContext(...)` 现在在 repository/execution path 变化时会主动刷新变更快照，因此切换项目或 worktree 后，Commit 面板无需手动刷新也会展示新上下文下的文件列表。
+  2. 刷新前会取消旧的 diff preview task 并递增 `diffPreviewRevision`，避免旧项目的 diff 异步结果回写到新项目。
+  3. 新增 `WorkspaceCommitViewModelTests.testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges`，锁定“切换上下文时必须自动重读 changes snapshot”的契约。
+- 直接原因：
+  1. `NativeAppViewModel.prepareActiveWorkspaceCommitViewModel()` 在项目切换时会复用已缓存的 `WorkspaceCommitViewModel`，并调用 `updateRepositoryContext(...)`。
+  2. 但 `WorkspaceCommitViewModel.updateRepositoryContext(...)` 之前只更新 `repositoryContext` 字段，没有调用 `refreshChangesSnapshot()`，所以 `changesSnapshot`、`includedPaths` 和 branch 信息都会停留在旧项目，直到用户手动刷新。
+- 设计层诱因：
+  1. Commit 面板把“进入面板首次加载”放在 `WorkspaceCommitRootView.onAppear`，但“切换 active project/worktree”本质上是 **上下文变化**，不是 View 生命周期变化。
+  2. 由于 Commit ViewModel 是按 root project 缓存复用的，context update 成了常态路径；如果这条路径不自带刷新，UI 就会天然陈旧。
+  3. 未发现明显系统设计缺陷；本次问题主要是 `updateRepositoryContext` 作为上下文切换入口却没有承担刷新职责。
+- 当前修复方案：
+  1. 在 `WorkspaceCommitViewModel.updateRepositoryContext(...)` 中比较旧新 `repositoryPath / executionPath`。
+  2. 只有在上下文真实变化时，才取消旧 diff task、递增 revision，并立即执行 `refreshChangesSnapshot()`。
+  3. 未改变 Commit 面板的 `onAppear` 初次加载逻辑；本轮只补齐“缓存 ViewModel 的上下文切换刷新”缺口。
+- 长期建议：
+  1. 对这种会被 `NativeAppViewModel` 缓存并跨项目复用的业务 ViewModel，今后新增 `updateRepositoryContext(...)` / `updateExecutionContext(...)` 入口时，应默认检查：是否需要同步刷新主快照、是否需要取消旧异步任务。
+  2. 对所有“用户看见的是同一块 panel，但背后上下文已切换”的工具窗，优先把刷新责任落在 ViewModel context update 路径，而不是只依赖 `onAppear`。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests/testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges'`（1 test, 4 assertions failed；修复前只读取旧 executionPath，快照未刷新）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests/testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges'`（1 test, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（36 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+
+## 2026-03-26 Commit 面板在工作区变更后仍需手动刷新
+
+- [x] 重新确认用户反馈，区分“项目切换”与“同一面板内工作区内容变化”两类触发条件
+- [x] 梳理 Commit 面板自动刷新主链，定位为什么只能靠手动刷新按钮更新文件列表
+- [x] 先补红灯测试，锁定“面板可见期间自动刷新 + 自动刷新不覆盖现有 inclusion 选择”契约
+- [x] 以最小改动修复可见期间自动刷新，并跑定向验证
+
+## Review（2026-03-26 Commit 面板在工作区变更后仍需手动刷新）
+
+- 结果：
+  1. `WorkspaceCommitRootView` 现在在可见期间通过 timer 自动触发 `refreshChangesSnapshot()`，因此工作区文件发生变化后，Commit 面板不再只能依赖手动刷新按钮更新。
+  2. `WorkspaceCommitViewModel.refreshChangesSnapshot(...)` 现在支持保留用户对现有文件的 inclusion 选择，仅对新增文件采用默认 inclusion，并在 snapshot 未变化时直接短路，避免定时刷新每秒都重置选择或重复重载 diff。
+  3. `WorkspaceCommitViewModel.updateRepositoryContext(...)` 在真正切换仓库/执行路径时，会显式按“新上下文”清空旧 selection/snapshot，再重新读取，避免把同一路径名的旧状态错误带到新项目。
+- 直接原因：
+  1. `WorkspaceCommitRootView` 之前只有 `onAppear` 首次刷新和 toolbar 手动刷新按钮，没有任何“面板可见期间自动刷新”的机制。
+  2. 因此在同一项目内通过 terminal / 外部操作改动工作区时，Commit 面板根本不会自动读新的 changes snapshot。
+  3. 上一轮只修了 `updateRepositoryContext(...)` 的项目切换路径，但这条路径并不会覆盖“同一面板保持挂载、工作区内容变化”的主场景，所以用户体感仍然是“修复无效”。
+- 设计层诱因：
+  1. 我上一轮过早把“必须手动刷新才出现文件”收窄成了“项目切换时没刷新”，没有先把触发条件区分为 **上下文切换** 与 **同一上下文内容变化**。
+  2. Commit 面板的刷新职责此前过度依赖 View 生命周期 `onAppear`；但工作区变更是运行时数据变化，不会天然伴随 View 重建。
+  3. 若直接给当前实现加轮询，又会因为旧的 `refreshChangesSnapshot()` 每次都重置 inclusion/default selection 而引入新回归；因此根因不只是“缺少自动刷新”，还包括“刷新语义不具备可轮询性”。
+  4. 未发现明显系统设计缺陷；主要问题仍是刷新触发点和刷新语义没有成对设计。
+- 当前修复方案：
+  1. App 层：`WorkspaceCommitRootView` 增加自动刷新 timer，并在 `.onReceive(...)` 中调用 `viewModel.refreshChangesSnapshot()`。
+  2. Core 层：`WorkspaceCommitViewModel.refreshChangesSnapshot(preservingUserState:)` 在同上下文轮询时保留已有 inclusion，仅对新增文件采用默认 inclusion；当 snapshot 完全没变化时直接返回。
+  3. Core 层：`updateRepositoryContext(...)` 走 `preservingUserState: false` 的重载路径，显式清空旧项目状态，再加载新上下文。
+- 长期建议：
+  1. 以后凡是用户描述“某个面板必须手动刷新才更新”，先明确区分：到底是**上下文切换漏刷新**，还是**同一上下文的数据变化漏刷新**，不要在没有证据时提前收窄到其中一种。
+  2. 对会长期挂载在 Workspace 中的工具窗，如果计划引入自动刷新，必须同时设计“刷新是否保留用户局部编辑状态 / 选择状态”，否则自动刷新本身就会成为新的 bug。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests/testWorkspaceCommitRootViewAutoRefreshesSnapshotWhileVisible|WorkspaceCommitViewModelTests/testRefreshChangesSnapshotPreservesExistingInclusionAndSeedsDefaultsForNewChanges'`（2 tests, 3 failures；修复前既没有自动刷新 timer，也会在 refresh 时覆盖已有 inclusion 选择）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests/testWorkspaceCommitRootViewAutoRefreshesSnapshotWhileVisible|WorkspaceCommitViewModelTests/testRefreshChangesSnapshotPreservesExistingInclusionAndSeedsDefaultsForNewChanges|WorkspaceCommitViewModelTests/testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges'`（3 tests, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（38 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。

@@ -90,24 +90,47 @@ public final class WorkspaceCommitViewModel {
     }
 
     public func updateRepositoryContext(_ repositoryContext: WorkspaceCommitRepositoryContext) {
+        let pathChanged = self.repositoryContext.repositoryPath != repositoryContext.repositoryPath
+            || self.repositoryContext.executionPath != repositoryContext.executionPath
         self.repositoryContext = repositoryContext
+        guard pathChanged else {
+            return
+        }
+
+        diffPreviewTask?.cancel()
+        diffPreviewRevision += 1
+        selectedChangePath = nil
+        diffPreview = .idle
+        changesSnapshot = nil
+        includedPaths = []
+        refreshChangesSnapshot(preservingUserState: false)
     }
 
-    public func refreshChangesSnapshot() {
+    public func refreshChangesSnapshot(preservingUserState: Bool = true) {
         do {
             let snapshot = try client.loadChangesSnapshot(repositoryContext.executionPath)
+            let previousSnapshot = changesSnapshot
+            let previousIncludedPaths = includedPaths
+            let previousSelectedChangePath = preservingUserState ? selectedChangePath : nil
+
+            guard snapshot != previousSnapshot else {
+                errorMessage = nil
+                return
+            }
+
             changesSnapshot = snapshot
-            includedPaths = Set(
-                snapshot.changes
-                    .filter(\.isIncludedByDefault)
-                    .map(\.path)
+            includedPaths = mergedIncludedPaths(
+                for: snapshot,
+                previousSnapshot: previousSnapshot,
+                previousIncludedPaths: previousIncludedPaths,
+                preservingUserState: preservingUserState
             )
-            if let selectedChangePath,
-               !snapshot.changes.contains(where: { $0.path == selectedChangePath }) {
+            if let previousSelectedChangePath,
+               !snapshot.changes.contains(where: { $0.path == previousSelectedChangePath }) {
                 self.selectedChangePath = nil
                 diffPreview = .idle
-            } else if let selectedChangePath {
-                selectChange(selectedChangePath)
+            } else if let previousSelectedChangePath {
+                selectChange(previousSelectedChangePath)
             }
             errorMessage = nil
         } catch {
@@ -294,6 +317,29 @@ public final class WorkspaceCommitViewModel {
         }
         let trimmed = author.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func mergedIncludedPaths(
+        for snapshot: WorkspaceCommitChangesSnapshot,
+        previousSnapshot: WorkspaceCommitChangesSnapshot?,
+        previousIncludedPaths: Set<String>,
+        preservingUserState: Bool
+    ) -> Set<String> {
+        guard preservingUserState, let previousSnapshot else {
+            return Set(
+                snapshot.changes
+                    .filter(\.isIncludedByDefault)
+                    .map(\.path)
+            )
+        }
+
+        let previousPaths = Set(previousSnapshot.changes.map(\.path))
+        return Set(snapshot.changes.compactMap { change in
+            if previousPaths.contains(change.path) {
+                return previousIncludedPaths.contains(change.path) ? change.path : nil
+            }
+            return change.isIncludedByDefault ? change.path : nil
+        })
     }
 
     private func clearExecutionFeedbackIfNeeded() {

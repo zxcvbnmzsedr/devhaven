@@ -55,6 +55,10 @@ struct WorkspaceGitRootView: View {
         .onAppear {
             refreshVisibleContent()
         }
+        .onChange(of: viewModel.repositoryContext.repositoryPath) { _, _ in
+            syncTopLevelTab(with: viewModel.section)
+            refreshVisibleContent()
+        }
         .onChange(of: viewModel.section) { _, newSection in
             syncTopLevelTab(with: newSection)
         }

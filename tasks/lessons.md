@@ -165,3 +165,6 @@
 - 对齐 IDEA 这类 tree browser 时，很多“看起来不对齐”的问题不在 section，而在 **row renderer 级别**。如果 IDEA 源码是 `appendFileName + appendParentPath` 单行连续渲染，就不要在 SwiftUI 里偷懒做成 `VStack` 两行；哪怕信息都展示出来了，视觉也会立刻露馅。
 - 对齐 IDEA 的文件列表时，要先分清 **文件图标** 和 **状态语义** 是两条独立通道。IDEA 用 `setIcon(filePath, isDirectory)` 渲染文件类型图标，再用文件名颜色表达 VCS 状态；如果把状态问号/字母 badge 塞到图标列，用户会立刻感知为“图标全错了”。
 - 当用户已经明确给出更高层的视觉规则（例如“Changes 蓝色、Unversioned 红色”）时，不要继续停留在按底层 status 细粒度分色的实现习惯。颜色语义应该绑定到**当前界面真正暴露给用户的分组心智层**，否则技术上更细、视觉上却更不对。
+- 对会在 Workspace 内长期挂载、且背后项目/仓库上下文会切换的 tool window，不能把刷新只绑在 `onAppear`。如果 ViewModel 会被缓存复用，`updateRepositoryContext(...)` / `updateExecutionContext(...)` 必须承担快照刷新与旧异步任务失效职责，否则用户就会看到“必须手动刷新才更新”的陈旧内容。
+- 当用户描述“某个面板必须手动刷新才会显示最新内容”时，先拆成两个独立假设：`上下文切换未刷新` 与 `同一上下文的数据变化未刷新`。如果没先验证触发条件就直接收窄，很容易把修复打在错误入口上。
+- 给工具窗补自动刷新时，不能只关注“多久刷新一次”；还要先确认 `refresh` 是否会重置用户已有选择、筛选或草稿。只有当 refresh 语义本身具备“可轮询而不破坏本地编辑态”能力时，timer/polling 才是安全的。

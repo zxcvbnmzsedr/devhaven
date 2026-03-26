@@ -335,6 +335,115 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         XCTAssertTrue(worktreeCommitViewModel === rootCommitViewModel)
     }
 
+    func testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges() {
+        let recorder = WorkspaceCommitClientRecorder()
+        recorder.snapshotsByExecutionPath["/tmp/root"] = WorkspaceCommitChangesSnapshot(
+            branchName: "main",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "README.md",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .unstaged,
+                    isIncludedByDefault: false
+                ),
+            ]
+        )
+        recorder.snapshotsByExecutionPath["/tmp/root-worktree"] = WorkspaceCommitChangesSnapshot(
+            branchName: "feature/demo",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "Sources/Feature.swift",
+                    oldPath: nil,
+                    status: .added,
+                    group: .staged,
+                    isIncludedByDefault: true
+                ),
+            ]
+        )
+
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.refreshChangesSnapshot()
+
+        XCTAssertEqual(viewModel.changesSnapshot?.changes.map(\.path), ["README.md"])
+        XCTAssertEqual(viewModel.includedPaths, [])
+
+        viewModel.updateRepositoryContext(
+            WorkspaceCommitRepositoryContext(
+                rootProjectPath: "/tmp/root",
+                repositoryPath: "/tmp/root",
+                executionPath: "/tmp/root-worktree"
+            )
+        )
+
+        XCTAssertEqual(recorder.loadedExecutionPaths, ["/tmp/root", "/tmp/root-worktree"])
+        XCTAssertEqual(viewModel.changesSnapshot?.branchName, "feature/demo")
+        XCTAssertEqual(viewModel.changesSnapshot?.changes.map(\.path), ["Sources/Feature.swift"])
+        XCTAssertEqual(viewModel.includedPaths, Set(["Sources/Feature.swift"]))
+    }
+
+    func testRefreshChangesSnapshotPreservesExistingInclusionAndSeedsDefaultsForNewChanges() {
+        let recorder = WorkspaceCommitClientRecorder()
+        recorder.snapshot = WorkspaceCommitChangesSnapshot(
+            branchName: "main",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "README.md",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .unstaged,
+                    isIncludedByDefault: false
+                ),
+                WorkspaceCommitChange(
+                    path: "Sources/Keep.swift",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .staged,
+                    isIncludedByDefault: true
+                ),
+            ]
+        )
+        let viewModel = makeWorkspaceCommitViewModel(recorder: recorder)
+        viewModel.refreshChangesSnapshot()
+        viewModel.setInclusion(for: "README.md", included: true)
+        viewModel.setInclusion(for: "Sources/Keep.swift", included: false)
+
+        recorder.snapshot = WorkspaceCommitChangesSnapshot(
+            branchName: "main",
+            changes: [
+                WorkspaceCommitChange(
+                    path: "README.md",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .unstaged,
+                    isIncludedByDefault: false
+                ),
+                WorkspaceCommitChange(
+                    path: "Sources/Keep.swift",
+                    oldPath: nil,
+                    status: .modified,
+                    group: .staged,
+                    isIncludedByDefault: true
+                ),
+                WorkspaceCommitChange(
+                    path: "Sources/New.swift",
+                    oldPath: nil,
+                    status: .added,
+                    group: .staged,
+                    isIncludedByDefault: true
+                ),
+            ]
+        )
+
+        viewModel.refreshChangesSnapshot()
+
+        XCTAssertEqual(
+            viewModel.includedPaths,
+            Set(["README.md", "Sources/New.swift"]),
+            "自动刷新不应覆盖用户对现有文件的 inclusion 选择，但应对新增文件继续采用默认 inclusion"
+        )
+    }
+
     private func makeWorkspaceCommitViewModel(recorder: WorkspaceCommitClientRecorder) -> WorkspaceCommitViewModel {
         WorkspaceCommitViewModel(
             repositoryContext: WorkspaceCommitRepositoryContext(
@@ -379,15 +488,21 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
 
 private final class WorkspaceCommitClientRecorder: @unchecked Sendable {
     var snapshot = WorkspaceCommitChangesSnapshot(branchName: nil, changes: [])
+    var snapshotsByExecutionPath: [String: WorkspaceCommitChangesSnapshot] = [:]
     var diffByPath: [String: String] = [:]
     var diffErrorByPath: [String: Error] = [:]
     var executeError: Error?
+    private(set) var loadedExecutionPaths: [String] = []
     private(set) var requests: [WorkspaceCommitExecutionRequest] = []
 
     var client: WorkspaceCommitViewModel.Client {
         .init(
-            loadChangesSnapshot: { [weak self] _ in
-                self?.snapshot ?? WorkspaceCommitChangesSnapshot(branchName: nil, changes: [])
+            loadChangesSnapshot: { [weak self] executionPath in
+                self?.loadedExecutionPaths.append(executionPath)
+                if let snapshot = self?.snapshotsByExecutionPath[executionPath] {
+                    return snapshot
+                }
+                return self?.snapshot ?? WorkspaceCommitChangesSnapshot(branchName: nil, changes: [])
             },
             loadDiffPreview: { [weak self] _, path in
                 if let error = self?.diffErrorByPath[path] {

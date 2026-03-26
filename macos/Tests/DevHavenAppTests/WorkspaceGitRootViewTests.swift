@@ -37,6 +37,23 @@ final class WorkspaceGitRootViewTests: XCTestCase {
         XCTAssertTrue(source.contains("WorkspaceGitConsoleView("), "Git Root 容器应提供 Console 占位路由，先对齐 IDEA 顶层结构")
     }
 
+    func testWorkspaceGitRootViewRefreshesVisibleContentWhenRepositoryContextChanges() throws {
+        let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitRootView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(".onChange(of: viewModel.repositoryContext.repositoryPath)"),
+            "切换 active project 导致 repositoryPath 变化时，Git Root 容器应监听 repositoryPath 变化"
+        )
+        XCTAssertTrue(
+            source.contains("syncTopLevelTab(with: viewModel.section)"),
+            "切换仓库后，Git Root 容器应先把顶层 tab 状态同步到新 viewModel 的 section"
+        )
+        XCTAssertTrue(
+            source.contains("refreshVisibleContent()"),
+            "切换仓库后，Git Root 容器应主动刷新当前可见内容，避免面板停留在旧仓库数据"
+        )
+    }
+
     private func sourceFileURL(named name: String) -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

@@ -16,6 +16,14 @@ final class WorkspaceCommitRootViewTests: XCTestCase {
         XCTAssertTrue(source.contains("refreshChangesSnapshot()"), "Commit 根容器应在进入时刷新 changes snapshot")
     }
 
+    func testWorkspaceCommitRootViewAutoRefreshesSnapshotWhileVisible() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("Timer.publish("), "Commit 根容器应提供自动刷新 timer，避免只能依赖手动刷新按钮")
+        XCTAssertTrue(source.contains(".onReceive("), "Commit 根容器应在可见期间消费自动刷新 timer")
+        XCTAssertTrue(source.contains("viewModel.refreshChangesSnapshot()"), "自动刷新 timer 到期后应主动刷新 changes snapshot")
+    }
+
     func testWorkspaceCommitChangesBrowserUsesIdeaLikeToolbarGroupHeaderAndFileRows() throws {
         let source = try String(contentsOf: changesBrowserSourceFileURL(), encoding: .utf8)
 

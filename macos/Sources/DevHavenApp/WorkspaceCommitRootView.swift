@@ -4,6 +4,7 @@ import DevHavenCore
 struct WorkspaceCommitRootView: View {
     @Bindable var viewModel: WorkspaceCommitViewModel
     @State private var topAreaRatio: Double = 0.7
+    private let autoRefreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         WorkspaceSplitView(
@@ -17,6 +18,9 @@ struct WorkspaceCommitRootView: View {
             WorkspaceCommitPanelView(viewModel: viewModel)
         }
         .onAppear {
+            viewModel.refreshChangesSnapshot()
+        }
+        .onReceive(autoRefreshTimer) { _ in
             viewModel.refreshChangesSnapshot()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
