@@ -546,11 +546,36 @@ public final class NativeAppViewModel {
         return workspaceDiffTabsByProjectPath[activeWorkspaceProjectPath] ?? []
     }
 
+    public func workspacePresentedTabs(for projectPath: String) -> [WorkspacePresentedTabItem] {
+        let selected = resolvedWorkspacePresentedTabSelection(for: projectPath)
+        let terminalTabs = workspaceController(for: projectPath)?.tabs.map { tab in
+            WorkspacePresentedTabItem(
+                id: tab.id,
+                title: tab.title,
+                selection: .terminal(tab.id),
+                isSelected: selected == .terminal(tab.id)
+            )
+        } ?? []
+        let diffTabs = (workspaceDiffTabsByProjectPath[projectPath] ?? []).map { tab in
+            WorkspacePresentedTabItem(
+                id: tab.id,
+                title: tab.title,
+                selection: .diff(tab.id),
+                isSelected: selected == .diff(tab.id)
+            )
+        }
+        return terminalTabs + diffTabs
+    }
+
+    public func workspaceSelectedPresentedTab(for projectPath: String) -> WorkspacePresentedTabSelection? {
+        resolvedWorkspacePresentedTabSelection(for: projectPath)
+    }
+
     public var activeWorkspaceSelectedPresentedTab: WorkspacePresentedTabSelection? {
         guard let activeWorkspaceProjectPath else {
             return nil
         }
-        return resolvedWorkspacePresentedTabSelection(for: activeWorkspaceProjectPath)
+        return workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath)
     }
 
     public var activeWorkspaceSelectedDiffTabID: String? {

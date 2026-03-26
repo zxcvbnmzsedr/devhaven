@@ -12,7 +12,7 @@
 - [x] 设计确认后写入实施计划 `docs/plans/2026-03-26-idea-git-diff-open.md`
 - [ ] 按 TDD 实现双击/回车查看 diff 主链
   - [x] Task 1：锁定 runtime diff tab 与 close planner 契约（先红后绿）
-  - [ ] Task 2：把 Workspace 顶部 tab bar 升级为 terminal + diff 共用展示层
+  - [x] Task 2：把 Workspace 顶部 tab bar 升级为 terminal + diff 共用展示层
   - [ ] Task 3：建立 diff 文档模型、完整 diff 加载链路与 patch parser
   - [ ] Task 4：落地独立 Diff 标签页 viewer（side-by-side / unified）
   - [ ] Task 5：统一接入 Git Log / Commit 的双击打开逻辑

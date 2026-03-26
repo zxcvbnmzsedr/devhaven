@@ -68,3 +68,22 @@ public enum WorkspacePresentedTabSelection: Equatable, Sendable {
     case terminal(String)
     case diff(String)
 }
+
+public struct WorkspacePresentedTabItem: Identifiable, Equatable, Sendable {
+    public var id: String
+    public var title: String
+    public var selection: WorkspacePresentedTabSelection
+    public var isSelected: Bool
+
+    public init(
+        id: String,
+        title: String,
+        selection: WorkspacePresentedTabSelection,
+        isSelected: Bool
+    ) {
+        self.id = id
+        self.title = title
+        self.selection = selection
+        self.isSelected = isSelected
+    }
+}
