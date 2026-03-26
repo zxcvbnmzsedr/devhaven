@@ -6,9 +6,22 @@
 
 - [x] 审阅当前工作区变更，确认提交范围覆盖代码 / 文档 / 任务记录
 - [x] 运行 fresh 验证命令，确认当前改动可安全提交
-- [ ] 生成提交摘要并执行 git commit
-- [ ] 推送当前分支到远端
-- [ ] 在本文件追加 Review，记录提交结果与验证证据
+- [x] 生成提交摘要并执行 git commit
+- [x] 推送当前分支到远端
+- [x] 在本文件追加 Review，记录提交结果与验证证据
+
+
+## Review（2026-03-26 提交并推送 Codex 展示态窗口缓存改动）
+
+- 结果：
+  1. 已将 Codex 展示态窗口缓存相关代码、测试、设计文档与任务记录提交为 `a15e75e`（`Use cached Codex display snapshots`）。
+  2. 已将当前 `main` 推送到 `origin/main`，远端从 `e74db62` 前进到 `a15e75e`。
+- 验证证据：
+  - `git diff --check` → 无输出。
+  - `swift build --package-path macos` → `Build complete!`。
+  - `swift test --package-path macos` → 最近一次全量重跑为 `347 tests, 5 skipped, 0 failures`。
+  - `swift test --package-path macos --filter WorkspaceRunManagerTests/testStartSupportsMultilineCommandsWithAssignmentsBeforeInnerExec` → 单测重跑通过；用于核对首次全量测试里该用例的一次性断言失败是否可复现。
+  - `git push origin main` → `e74db62..a15e75e  main -> main`。
 
 ## 2026-03-26 Codex 展示态增量滑动窗口设计
 
