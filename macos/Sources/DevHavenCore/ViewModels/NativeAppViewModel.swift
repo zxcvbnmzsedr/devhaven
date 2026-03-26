@@ -89,6 +89,8 @@ public final class NativeAppViewModel {
     public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
     public var workspaceBottomToolWindowState: WorkspaceBottomToolWindowState
     public var workspaceFocusedArea: WorkspaceFocusedArea
+    private var workspaceDiffTabsByProjectPath: [String: [WorkspaceDiffTabState]]
+    private var workspaceSelectedPresentedTabByProjectPath: [String: WorkspacePresentedTabSelection]
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
     private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     private var currentBranchByProjectPath: [String: String]
@@ -157,6 +159,8 @@ public final class NativeAppViewModel {
         self.workspaceSideToolWindowState = WorkspaceSideToolWindowState()
         self.workspaceBottomToolWindowState = WorkspaceBottomToolWindowState()
         self.workspaceFocusedArea = .terminal
+        self.workspaceDiffTabsByProjectPath = [:]
+        self.workspaceSelectedPresentedTabByProjectPath = [:]
         self.attentionStateByProjectPath = [:]
         self.agentDisplayOverridesByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
@@ -535,6 +539,27 @@ public final class NativeAppViewModel {
         activeWorkspaceController?.selectedPane?.request
     }
 
+    public var activeWorkspaceDiffTabs: [WorkspaceDiffTabState] {
+        guard let activeWorkspaceProjectPath else {
+            return []
+        }
+        return workspaceDiffTabsByProjectPath[activeWorkspaceProjectPath] ?? []
+    }
+
+    public var activeWorkspaceSelectedPresentedTab: WorkspacePresentedTabSelection? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return resolvedWorkspacePresentedTabSelection(for: activeWorkspaceProjectPath)
+    }
+
+    public var activeWorkspaceSelectedDiffTabID: String? {
+        guard case let .diff(tabID)? = activeWorkspaceSelectedPresentedTab else {
+            return nil
+        }
+        return tabID
+    }
+
     public var isWorkspacePresented: Bool {
         activeWorkspaceProjectPath != nil && activeWorkspaceController != nil
     }
@@ -867,6 +892,7 @@ public final class NativeAppViewModel {
             removedPaths = Set([path])
             openWorkspaceSessions.remove(at: index)
         }
+        clearWorkspaceRuntimePresentationState(for: removedPaths)
         attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
         pruneWorkspaceAgentDisplayOverrides()
 
@@ -1039,6 +1065,75 @@ public final class NativeAppViewModel {
 
     public func setWorkspaceFocusedArea(_ area: WorkspaceFocusedArea) {
         workspaceFocusedArea = area
+    }
+
+    @discardableResult
+    public func openWorkspaceDiffTab(_ request: WorkspaceDiffOpenRequest) -> WorkspaceDiffTabState {
+        activeWorkspaceProjectPath = request.projectPath
+
+        if let existing = workspaceDiffTabsByProjectPath[request.projectPath]?.first(where: { $0.identity == request.identity }) {
+            workspaceSelectedPresentedTabByProjectPath[request.projectPath] = .diff(existing.id)
+            return existing
+        }
+
+        let tab = WorkspaceDiffTabState(
+            id: "workspace-diff:\(UUID().uuidString.lowercased())",
+            identity: request.identity,
+            title: request.preferredTitle,
+            source: request.source,
+            viewerMode: request.preferredViewerMode
+        )
+        workspaceDiffTabsByProjectPath[request.projectPath, default: []].append(tab)
+        workspaceSelectedPresentedTabByProjectPath[request.projectPath] = .diff(tab.id)
+        return tab
+    }
+
+    public func selectWorkspacePresentedTab(_ selection: WorkspacePresentedTabSelection, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+
+        switch selection {
+        case let .terminal(tabID):
+            guard workspaceController(for: resolvedProjectPath)?.tabs.contains(where: { $0.id == tabID }) == true else {
+                return
+            }
+            workspaceController(for: resolvedProjectPath)?.selectTab(tabID)
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .terminal(tabID)
+        case let .diff(tabID):
+            guard workspaceDiffTabsByProjectPath[resolvedProjectPath]?.contains(where: { $0.id == tabID }) == true else {
+                return
+            }
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(tabID)
+        }
+    }
+
+    public func closeWorkspaceDiffTab(_ tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var tabs = workspaceDiffTabsByProjectPath[resolvedProjectPath],
+              let removedIndex = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return
+        }
+
+        tabs.remove(at: removedIndex)
+        workspaceDiffTabsByProjectPath[resolvedProjectPath] = tabs
+
+        guard activeWorkspaceSelectedPresentedTab == .diff(tabID) else {
+            return
+        }
+
+        if tabs.indices.contains(removedIndex) {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(tabs[removedIndex].id)
+        } else if let previous = tabs.last {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(previous.id)
+        } else if let terminalTabID = workspaceController(for: resolvedProjectPath)?.selectedTabId
+            ?? workspaceController(for: resolvedProjectPath)?.selectedTab?.id
+        {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .terminal(terminalTabID)
+        } else {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = nil
+        }
     }
 
     public func syncActiveWorkspaceToolWindowContext() {
@@ -2034,6 +2129,34 @@ public final class NativeAppViewModel {
 
     private func isQuickTerminalSessionPath(_ path: String) -> Bool {
         openWorkspaceSessions.first(where: { $0.projectPath == path })?.isQuickTerminal ?? false
+    }
+
+    private func resolvedWorkspacePresentedTabSelection(for projectPath: String) -> WorkspacePresentedTabSelection? {
+        let terminalTabID = workspaceController(for: projectPath)?.selectedTabId
+            ?? workspaceController(for: projectPath)?.selectedTab?.id
+        let diffTabs = workspaceDiffTabsByProjectPath[projectPath] ?? []
+
+        if let stored = workspaceSelectedPresentedTabByProjectPath[projectPath] {
+            switch stored {
+            case let .terminal(tabID):
+                if workspaceController(for: projectPath)?.tabs.contains(where: { $0.id == tabID }) == true {
+                    return .terminal(tabID)
+                }
+            case let .diff(tabID):
+                if diffTabs.contains(where: { $0.id == tabID }) {
+                    return .diff(tabID)
+                }
+            }
+        }
+
+        return terminalTabID.map(WorkspacePresentedTabSelection.terminal)
+    }
+
+    private func clearWorkspaceRuntimePresentationState(for paths: Set<String>) {
+        for path in paths {
+            workspaceDiffTabsByProjectPath[path] = nil
+            workspaceSelectedPresentedTabByProjectPath[path] = nil
+        }
     }
 
     private func workspaceController(for projectPath: String? = nil) -> GhosttyWorkspaceController? {

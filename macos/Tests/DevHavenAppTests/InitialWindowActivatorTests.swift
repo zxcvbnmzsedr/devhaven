@@ -146,6 +146,27 @@ final class MainWindowCloseShortcutPlannerTests: XCTestCase {
         XCTAssertEqual(action, .closePane("pane-2"))
     }
 
+    func testPlannerClosesSelectedDiffTabBeforePaneAndTerminalTab() {
+        let planner = MainWindowCloseShortcutPlanner()
+        let action = planner.action(
+            for: MainWindowCloseShortcutContext(
+                isDashboardPresented: false,
+                isSettingsPresented: false,
+                isRecycleBinPresented: false,
+                isDetailPanelPresented: false,
+                workspace: MainWindowCloseShortcutWorkspaceContext(
+                    selectedPaneID: "pane-2",
+                    selectedTabID: "tab-1",
+                    selectedDiffTabID: "diff-1",
+                    selectedTabPaneCount: 2,
+                    tabCount: 2
+                )
+            )
+        )
+
+        XCTAssertEqual(action, .closeDiffTab("diff-1"))
+    }
+
     func testPlannerClosesTabWhenSelectedTabHasSinglePaneButWorkspaceHasMultipleTabs() {
         let planner = MainWindowCloseShortcutPlanner()
         let action = planner.action(
