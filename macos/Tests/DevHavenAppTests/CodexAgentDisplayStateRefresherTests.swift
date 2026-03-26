@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class CodexAgentDisplayStateRefresherTests: XCTestCase {
-    func testWaitingSignalPromotesBackToRunningWhenVisibleTextChangesAwayFromIdleScreen() {
+    func testWaitingSignalPromotesBackToRunningWhenSnapshotTextChangesAwayFromIdleScreen() {
         let candidate = WorkspaceAgentDisplayCandidate(
             projectPath: "/tmp/devhaven",
             paneID: "pane-1",
@@ -22,7 +22,10 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
             runtimeState: &runtimeState,
             now: Date(timeIntervalSince1970: 100)
         ) { _, _ in
-            initialWaitingScreen
+            makeSnapshot(
+                text: initialWaitingScreen,
+                lastActivityAt: Date(timeIntervalSince1970: 100)
+            )
         }
 
         let changedOutput = """
@@ -34,7 +37,10 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
             runtimeState: &runtimeState,
             now: Date(timeIntervalSince1970: 101)
         ) { _, _ in
-            changedOutput
+            makeSnapshot(
+                text: changedOutput,
+                lastActivityAt: Date(timeIntervalSince1970: 101)
+            )
         }
 
         XCTAssertEqual(overrides["/tmp/devhaven"]?["pane-1"]?.state, .running)
@@ -57,7 +63,10 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
             runtimeState: &runtimeState,
             now: Date(timeIntervalSince1970: 200)
         ) { _, _ in
-            previousOutput
+            makeSnapshot(
+                text: previousOutput,
+                lastActivityAt: Date(timeIntervalSince1970: 200)
+            )
         }
 
         let waitingScreen = """
@@ -70,7 +79,10 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
             runtimeState: &runtimeState,
             now: Date(timeIntervalSince1970: 201)
         ) { _, _ in
-            waitingScreen
+            makeSnapshot(
+                text: waitingScreen,
+                lastActivityAt: Date(timeIntervalSince1970: 201)
+            )
         }
 
         XCTAssertNil(overrides["/tmp/devhaven"]?["pane-1"])
@@ -94,7 +106,10 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
             runtimeState: &runtimeState,
             now: Date(timeIntervalSince1970: 300)
         ) { _, _ in
-            waitingScreen
+            makeSnapshot(
+                text: waitingScreen,
+                lastActivityAt: Date(timeIntervalSince1970: 300)
+            )
         }
 
         let overrides = CodexAgentDisplayStateRefresher.presentationOverrides(
@@ -102,9 +117,41 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
             runtimeState: &runtimeState,
             now: Date(timeIntervalSince1970: 305)
         ) { _, _ in
-            waitingScreen
+            makeSnapshot(
+                text: waitingScreen,
+                lastActivityAt: Date(timeIntervalSince1970: 300)
+            )
         }
 
         XCTAssertEqual(overrides["/tmp/devhaven"]?["pane-1"]?.state, .waiting)
+    }
+
+    func testIgnoresCandidateWhenSnapshotProviderReturnsNil() {
+        let candidate = WorkspaceAgentDisplayCandidate(
+            projectPath: "/tmp/devhaven",
+            paneID: "pane-1",
+            signalState: .running
+        )
+        var runtimeState = CodexAgentDisplayStateRefresher.RuntimeState()
+
+        let overrides = CodexAgentDisplayStateRefresher.presentationOverrides(
+            for: [candidate],
+            runtimeState: &runtimeState,
+            now: Date(timeIntervalSince1970: 400)
+        ) { _, _ in
+            nil
+        }
+
+        XCTAssertTrue(overrides.isEmpty)
+    }
+
+    private func makeSnapshot(
+        text: String,
+        lastActivityAt: Date
+    ) -> CodexAgentDisplaySnapshot {
+        CodexAgentDisplaySnapshot(
+            recentTextWindow: text,
+            lastActivityAt: lastActivityAt
+        )
     }
 }

@@ -29,7 +29,12 @@ final class GhosttySurfaceBridge {
     var onDesktopNotification: ((String, String) -> Void)?
     var onTaskStatusChange: ((GhosttySurfaceTaskStatus) -> Void)?
     var onBell: (() -> Void)?
+    var onContentInvalidated: (() -> Void)?
     var onCloseRequest: ((Bool) -> Void)?
+
+    func invalidateRenderedContent() {
+        onContentInvalidated?()
+    }
 
     @MainActor
     func handleAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {

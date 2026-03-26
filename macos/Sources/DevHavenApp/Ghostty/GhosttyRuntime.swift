@@ -311,6 +311,12 @@ final class GhosttyRuntime {
     private func tick() {
         guard let app else { return }
         ghostty_app_tick(app)
+        for ref in surfaceRefs where ref.isValid {
+            guard let bridge = ref.callbackContext.activeBridge() else {
+                continue
+            }
+            bridge.invalidateRenderedContent()
+        }
     }
 
     private static func runtime(from userdata: UnsafeMutableRawPointer?) -> GhosttyRuntime? {

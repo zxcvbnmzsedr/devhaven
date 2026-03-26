@@ -56,6 +56,12 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
         modelsByPaneID[paneID]
     }
 
+    func syncCodexDisplayTracking(_ trackedPaneIDs: Set<String>) {
+        for (paneID, model) in modelsByPaneID {
+            model.setCodexDisplayTrackingEnabled(trackedPaneIDs.contains(paneID))
+        }
+    }
+
     func syncRetainedPaneIDs(_ paneIDs: Set<String>) {
         let removedIDs = Set(modelsByPaneID.keys).subtracting(paneIDs)
         for paneID in removedIDs {
@@ -112,5 +118,13 @@ final class WorkspaceTerminalStoreRegistry: ObservableObject {
 
     func modelIfLoaded(for projectPath: String, paneID: String) -> GhosttySurfaceHostModel? {
         storesByProjectPath[projectPath]?.modelIfLoaded(for: paneID)
+    }
+
+    func syncCodexDisplayTracking(
+        _ trackedPaneIDsByProjectPath: [String: Set<String>]
+    ) {
+        for (projectPath, store) in storesByProjectPath {
+            store.syncCodexDisplayTracking(trackedPaneIDsByProjectPath[projectPath] ?? [])
+        }
     }
 }

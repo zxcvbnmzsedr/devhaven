@@ -13,8 +13,8 @@ enum CodexAgentDisplayStateRefresher {
     }
 
     fileprivate struct Observation: Equatable {
-        var lastVisibleText: String
-        var lastChangedAt: Date
+        var lastRecentTextWindow: String
+        var lastActivityAt: Date
     }
 
     private static let recentActivityWindow: TimeInterval = 2
@@ -23,14 +23,14 @@ enum CodexAgentDisplayStateRefresher {
         viewModel: NativeAppViewModel,
         runtimeState: RuntimeState,
         now: Date = Date(),
-        visibleTextProvider: (_ projectPath: String, _ paneID: String) -> String?
+        snapshotProvider: (_ projectPath: String, _ paneID: String) -> CodexAgentDisplaySnapshot?
     ) -> RuntimeState {
         var mutableRuntimeState = runtimeState
         let overridesByProjectPath = presentationOverrides(
             for: viewModel.codexDisplayCandidates(),
             runtimeState: &mutableRuntimeState,
             now: now,
-            visibleTextProvider: visibleTextProvider
+            snapshotProvider: snapshotProvider
         )
         viewModel.replaceWorkspaceAgentDisplayOverrides(overridesByProjectPath)
         return mutableRuntimeState
@@ -40,7 +40,7 @@ enum CodexAgentDisplayStateRefresher {
         for candidates: [WorkspaceAgentDisplayCandidate],
         runtimeState: inout RuntimeState,
         now: Date = Date(),
-        visibleTextProvider: (_ projectPath: String, _ paneID: String) -> String?
+        snapshotProvider: (_ projectPath: String, _ paneID: String) -> CodexAgentDisplaySnapshot?
     ) -> [String: [String: WorkspaceAgentPresentationOverride]] {
         let validPaneKeys = Set(
             candidates.map { PaneKey(projectPath: $0.projectPath, paneID: $0.paneID) }
@@ -52,24 +52,28 @@ enum CodexAgentDisplayStateRefresher {
         var overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]] = [:]
 
         for candidate in candidates {
-            guard let visibleText = normalizedVisibleText(
-                visibleTextProvider(candidate.projectPath, candidate.paneID)
-            ) else {
+            guard let snapshot = snapshotProvider(candidate.projectPath, candidate.paneID),
+                  let recentTextWindow = normalizedVisibleText(snapshot.recentTextWindow)
+            else {
                 continue
             }
 
             let paneKey = PaneKey(projectPath: candidate.projectPath, paneID: candidate.paneID)
             var observation = runtimeState.observationsByPaneKey[paneKey]
-                ?? Observation(lastVisibleText: visibleText, lastChangedAt: now)
+                ?? Observation(
+                    lastRecentTextWindow: recentTextWindow,
+                    lastActivityAt: snapshot.lastActivityAt
+                )
 
-            if observation.lastVisibleText != visibleText {
-                observation.lastVisibleText = visibleText
-                observation.lastChangedAt = now
+            if observation.lastRecentTextWindow != recentTextWindow
+                || observation.lastActivityAt != snapshot.lastActivityAt {
+                observation.lastRecentTextWindow = recentTextWindow
+                observation.lastActivityAt = snapshot.lastActivityAt
             }
             runtimeState.observationsByPaneKey[paneKey] = observation
 
-            let displayState = CodexAgentDisplayHeuristics.displayState(for: visibleText)
-            let isRecentlyActive = now.timeIntervalSince(observation.lastChangedAt) < recentActivityWindow
+            let displayState = CodexAgentDisplayHeuristics.displayState(for: recentTextWindow)
+            let isRecentlyActive = now.timeIntervalSince(snapshot.lastActivityAt) < recentActivityWindow
 
             switch candidate.signalState {
             case .waiting:

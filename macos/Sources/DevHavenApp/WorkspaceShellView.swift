@@ -279,12 +279,23 @@ struct WorkspaceShellView: View {
     }
 
     private func refreshCodexDisplayStates() {
+        syncCodexDisplayTracking()
         codexDisplayRefreshState = CodexAgentDisplayStateRefresher.refresh(
             viewModel: viewModel,
             runtimeState: codexDisplayRefreshState
         ) { projectPath, paneID in
-            terminalStoreRegistry.modelIfLoaded(for: projectPath, paneID: paneID)?.currentVisibleText()
+            terminalStoreRegistry.modelIfLoaded(for: projectPath, paneID: paneID)?.codexDisplaySnapshot()
         }
+    }
+
+    private func syncCodexDisplayTracking() {
+        let trackedPaneIDsByProjectPath = Dictionary(
+            grouping: viewModel.codexDisplayCandidates(),
+            by: \.projectPath
+        ).mapValues { candidates in
+            Set(candidates.map(\.paneID))
+        }
+        terminalStoreRegistry.syncCodexDisplayTracking(trackedPaneIDsByProjectPath)
     }
 
     private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider {

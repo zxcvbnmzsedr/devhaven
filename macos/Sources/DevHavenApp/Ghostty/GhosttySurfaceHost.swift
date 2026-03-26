@@ -314,6 +314,8 @@ struct GhosttySurfaceHost: View {
 
 @MainActor
 final class GhosttySurfaceHostModel: ObservableObject {
+    static let codexDisplaySnapshotWindowLimit = CodexAgentDisplaySnapshot.windowLimit
+
     struct SnapshotContext: Equatable, Sendable {
         var workingDirectory: String?
         var title: String?
@@ -352,9 +354,16 @@ final class GhosttySurfaceHostModel: ObservableObject {
     private var lastSurfaceIsVisible = false
     private var lastSurfaceIsFocused = false
     private var pendingWindowResponderRestoreTask: Task<Void, Never>?
+    private var pendingCodexDisplaySnapshotRefreshTask: Task<Void, Never>?
+    private var codexDisplayTrackingEnabled = false
+    private var cachedCodexDisplaySnapshot: CodexAgentDisplaySnapshot?
 
     var currentSurfaceView: GhosttyTerminalSurfaceView? {
         ownedSurfaceView
+    }
+
+    func codexDisplaySnapshot() -> CodexAgentDisplaySnapshot? {
+        cachedCodexDisplaySnapshot
     }
 
     func currentVisibleText() -> String? {
@@ -416,6 +425,35 @@ final class GhosttySurfaceHostModel: ObservableObject {
         self.surfaceTitle = request.restoreContext?.title
     }
 
+    func setCodexDisplayTrackingEnabled(_ enabled: Bool) {
+        guard codexDisplayTrackingEnabled != enabled else {
+            if enabled, cachedCodexDisplaySnapshot == nil {
+                scheduleCodexDisplaySnapshotRefresh(immediate: true)
+            }
+            return
+        }
+        codexDisplayTrackingEnabled = enabled
+        if enabled {
+            scheduleCodexDisplaySnapshotRefresh(immediate: true)
+        } else {
+            clearCodexDisplaySnapshot()
+        }
+    }
+
+    func updateCodexDisplaySnapshot(
+        withVisibleText visibleText: String?,
+        now: Date = Date()
+    ) {
+        guard codexDisplayTrackingEnabled else {
+            return
+        }
+        cachedCodexDisplaySnapshot = CodexAgentDisplaySnapshot.capture(
+            from: visibleText,
+            now: now,
+            windowLimit: Self.codexDisplaySnapshotWindowLimit
+        )
+    }
+
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
         _ = preferredFocus
         if let ownedSurfaceView {
@@ -466,6 +504,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
             }
             self.bellCount += 1
             self.onBell?()
+        }
+        bridge.onContentInvalidated = { [weak self] in
+            self?.scheduleCodexDisplaySnapshotRefresh()
         }
         bridge.onCloseRequest = { [weak self] processAlive in
             self?.handleProcessExit(processAlive: processAlive)
@@ -573,12 +614,16 @@ final class GhosttySurfaceHostModel: ObservableObject {
 
     func releaseSurface() {
         cancelPendingWindowResponderRestore()
+        cancelPendingCodexDisplaySnapshotRefresh()
         ownedSurfaceView?.tearDown()
         ownedSurfaceView = nil
         hasPreparedSurfaceView = false
         lastPreferredFocus = false
         lastSurfaceIsVisible = false
         lastSurfaceIsFocused = false
+        if codexDisplayTrackingEnabled {
+            cachedCodexDisplaySnapshot = nil
+        }
     }
 
     private func handleProcessExit(processAlive: Bool) {
@@ -587,12 +632,16 @@ final class GhosttySurfaceHostModel: ObservableObject {
         }
 
         cancelPendingWindowResponderRestore()
+        cancelPendingCodexDisplaySnapshotRefresh()
         ownedSurfaceView?.tearDown()
         ownedSurfaceView = nil
         hasPreparedSurfaceView = false
         lastPreferredFocus = false
         lastSurfaceIsVisible = false
         lastSurfaceIsFocused = false
+        if codexDisplayTrackingEnabled {
+            cachedCodexDisplaySnapshot = nil
+        }
         rendererHealthy = true
         processState = .exited
         onSurfaceExit?()
@@ -633,6 +682,42 @@ final class GhosttySurfaceHostModel: ObservableObject {
     private func cancelPendingWindowResponderRestore() {
         pendingWindowResponderRestoreTask?.cancel()
         pendingWindowResponderRestoreTask = nil
+    }
+
+    private func scheduleCodexDisplaySnapshotRefresh(immediate: Bool = false) {
+        guard codexDisplayTrackingEnabled else {
+            return
+        }
+        let delay: TimeInterval = immediate ? 0 : 0.25
+        pendingCodexDisplaySnapshotRefreshTask?.cancel()
+        pendingCodexDisplaySnapshotRefreshTask = Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+            if delay > 0 {
+                try? await ContinuousClock().sleep(for: .seconds(delay))
+            } else {
+                await Task.yield()
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            self.pendingCodexDisplaySnapshotRefreshTask = nil
+            self.updateCodexDisplaySnapshot(
+                withVisibleText: self.ownedSurfaceView?.debugVisibleText(),
+                now: Date()
+            )
+        }
+    }
+
+    private func cancelPendingCodexDisplaySnapshotRefresh() {
+        pendingCodexDisplaySnapshotRefreshTask?.cancel()
+        pendingCodexDisplaySnapshotRefreshTask = nil
+    }
+
+    private func clearCodexDisplaySnapshot() {
+        cancelPendingCodexDisplaySnapshotRefresh()
+        cachedCodexDisplaySnapshot = nil
     }
 
     private func shouldScheduleWindowResponderRestore() -> Bool {

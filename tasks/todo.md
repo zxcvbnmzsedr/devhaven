@@ -1,6 +1,97 @@
 # Todo
 
 
+
+## 2026-03-26 提交并推送 Codex 展示态窗口缓存改动
+
+- [x] 审阅当前工作区变更，确认提交范围覆盖代码 / 文档 / 任务记录
+- [x] 运行 fresh 验证命令，确认当前改动可安全提交
+- [ ] 生成提交摘要并执行 git commit
+- [ ] 推送当前分支到远端
+- [ ] 在本文件追加 Review，记录提交结果与验证证据
+
+## 2026-03-26 Codex 展示态增量滑动窗口设计
+
+- [x] 探查当前 Codex 展示态刷新链路、Ghostty bridge 回调能力与相关模块边界
+- [x] 与用户确认设计目标边界：只服务 Codex 展示态，不抽象成通用 terminal 文本缓存
+- [x] 给出 2~3 种可选方案、权衡取舍并推荐“增量滑动窗口”方向
+- [x] 分段确认设计细节（模块落点、数据流、容错与验证）
+- [x] 设计确认后，写入 `docs/plans/` 设计文档并登记后续实施计划
+
+## 2026-03-26 Codex 展示态增量滑动窗口实现
+
+- [x] 先补 failing tests，锁定 snapshot 输入、HostModel 窗口缓存与 WorkspaceShellView 新接线
+- [x] 以最小改动实现 runtime/bridge/host 的内容失效脉冲与 Codex 小窗口缓存
+- [x] 用 snapshot provider 替换 WorkspaceShellView 的 currentVisibleText 读取，并收口 tracking 开关
+- [x] 更新 AGENTS.md 与本文件 Review，记录新边界、直接原因、设计诱因与验证证据
+- [x] 运行定向测试与构建验证，确认修复闭环
+
+## Review（2026-03-26 Codex 展示态增量滑动窗口实现）
+
+- 结果：
+  1. Codex 展示态 fallback 已从“WorkspaceShellView 定时读 `currentVisibleText()`”改为“Ghostty host 维护 pane 级 `CodexAgentDisplaySnapshot` 最近文本窗口 + 最近活动时间”。
+  2. `WorkspaceShellView` 现在仍可保留轻量刷新入口，但刷新阶段只读取内存中的 cached snapshot；Codex 展示态闭环不再直接触发整屏 `ghostty_surface_read_text(...)`。
+  3. `GhosttyRuntime.tick()` 之后会向活跃 surface 广播内容失效脉冲，`GhosttySurfaceHostModel` 仅在 Codex tracking 开启时 debounce 更新最近文本窗口；pane 移除/退出/关闭 tracking 时会取消 pending task 并清空缓存。
+- 直接原因：
+  1. 旧实现把 `GhosttySurfaceHostModel.currentVisibleText()` 接到了 `WorkspaceShellView.refreshCodexDisplayStates()` 的固定定时刷新链路上。
+  2. 这会让 sidebar 展示态修正在后台长期触发 `debugVisibleText()` / `ghostty_surface_read_text(...)` 与多轮字符串处理，长时间运行后持续制造 `MALLOC_SMALL` 压力。
+- 设计层诱因：
+  1. Codex 展示态 fallback 原本只是 UI 修正语义，但实现上跨层依赖了终端全文 readback，把昂贵调试式读取放进了常驻刷新路径。
+  2. 这属于“展示态纠偏依赖重型数据源”的职责错配：UI 只想知道 running / waiting，却每次都反向拉 pane 全文。
+- 当前修复方案：
+  1. 新增 `CodexAgentDisplaySnapshot`，只保留 pane 级最近文本窗口与最近活动时间。
+  2. `GhosttyRuntime` / `GhosttySurfaceBridge` / `GhosttySurfaceHostModel` 新增内容失效脉冲与 host 侧 debounce 缓存更新；`WorkspaceShellView` 改读 `codexDisplaySnapshot()`，并按当前 `codexDisplayCandidates()` 同步 tracking 开关。
+  3. `CodexAgentDisplayStateRefresher` 现改为消费 snapshot，而不是直接消费全文字符串。
+- 长期改进建议：
+  1. 后续若 Ghostty Swift 层能拿到更细的文本增量/活动回调，应继续把 host 侧 debounce readback 收缩成真正的增量窗口更新，进一步减少 readback 次数。
+  2. 如果 signal / notify 主链继续增强，可继续减少甚至删除文本 heuristic fallback，让最近文本窗口只保留为最后兜底手段。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests'` → 失败，缺少 `CodexAgentDisplaySnapshot` 与 host tracking 接口。
+  - 绿灯：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests'` → 15 tests，0 failures。
+  - 定向回归：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests|WorkspaceAgentStatusAccessoryTests|NativeAppViewModelWorkspaceEntryTests'` → 51 tests，0 failures。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+
+
+## 2026-03-26 DevHaven.app 异常内存占用排查
+
+- [x] 记录当前运行中的 DevHaven 进程与内存异常现象，建立排查证据基线
+- [x] 收集 footprint / heap / sample 等运行时证据，确认主要占用类别与热点线程
+- [x] 对照仓库代码定位直接原因，并判断是否存在设计层诱因
+- [x] 在本文件追加 Review，记录结论、证据、长期建议与必要后续动作
+
+## Review（2026-03-26 DevHaven.app 异常内存占用排查）
+
+- 结果：
+  1. 当前 `/Applications/DevHaven.app` 主进程 `DevHavenApp`（PID `27999`）已运行约 `14:49:21`，`top` / `footprint` 一致显示内存 footprint 约 `32.8 GB`，属于明显异常。
+  2. `footprint 27999` 显示主要占用为 `MALLOC_SMALL 31 GB`，其次是 `IOSurface 857 MB`、`IOAccelerator 536 MB`；这更像是**大量小块堆分配长期累积**，而不是单个巨型缓冲区。
+  3. 运行时采样 `sample 27999 5 1` 命中一条非常明确的 App 侧周期路径：`WorkspaceShellView.refreshCodexDisplayStates()` → `CodexAgentDisplayStateRefresher.presentationOverrides(...)` → `GhosttySurfaceHostModel.currentVisibleText()` → `GhosttyTerminalSurfaceView.debugVisibleText()` → `terminal.formatter.PageFormatter.formatWithState`。
+  4. 结合当前进程下存在 `6` 条 DevHaven 内嵌 Codex wrapper 会话，以及 `WorkspaceShellView` 中固定 `1` 秒一次的 `codexDisplayRefreshTimer`，可以高置信度判断：**内存压力主要来自“为了修正 Codex running/waiting 展示态而对多个 pane 周期性轮询终端可见文本”这条链路。**
+- 直接原因：
+  1. `WorkspaceShellView` 从 2026-03-22 的 Agent 状态感知特性开始，引入了 `Timer.publish(every: 1, on: .main, in: .common)`，每秒都会触发 `refreshCodexDisplayStates()`。
+  2. 这个刷新逻辑会对所有 `codexDisplayCandidates()` 调用 `currentVisibleText()`；后者不是轻量状态查询，而是通过 `GhosttyTerminalSurfaceView.debugVisibleText()` 走 `ghostty_surface_read_text(...)`，把终端当前可见文本重新格式化并桥接成新的 Swift `String`。
+  3. 之后同一批文本又会在 `currentVisibleText()`、`normalizedVisibleText()`、`CodexAgentDisplayHeuristics.displayState(for:)` 中多次 `trimmingCharacters(...)`、`String.contains(...)`、整串比较，并被 `Observation.lastVisibleText` 再保存一份；这会持续制造大量短生命周期小对象/字符串分配。
+  4. `sample` 已直接证明当前在线进程确实在走这条路径，而 `footprint` 的 `MALLOC_SMALL 31 GB` 也与“高频小对象 / 字符串分配累积”高度一致。
+- 设计层诱因：
+  1. **展示态修正逻辑跨层依赖了终端 UI 文本读回。** 按 AGENTS 约束，Codex 主链本应以 `wrapper signal + official notify` 为主，终端可见文本只作 fallback；但当前 fallback 的实现方式是全量文本轮询，成本过高。
+  2. `debugVisibleText()` 从命名和实现上都更像调试/诊断接口，却被接入了常驻 1 秒轮询的生产路径；这把本应偶发的“整屏文本序列化”变成了长期后台任务。
+  3. 刷新范围也偏大：`codexDisplayCandidates()` 面向所有打开项目里的 Codex pane，而不只是当前可见/当前聚焦 pane，所以隐藏 pane 也会持续参与文本读回。
+  4. 因此，存在明显系统设计诱因：**为了修正 sidebar 展示语义，把昂贵的 terminal 可见文本读取放进了全局定时器。**
+- 当前处置建议：
+  1. 临时止血：先关闭不需要的 Codex pane / 项目，或重启 DevHaven 释放已经累积的内存；只要没有活跃的 Codex 展示态候选，这条 1 秒轮询链路的压力就会显著下降。
+  2. 真正修复时，优先收口为“只有 signal 不足以判定时才做最小范围 fallback”，并尽量只看当前活动 pane，而不是所有已加载 pane。
+  3. 如果仍需要 fallback，建议改成**更便宜的最小信息提取**（例如有限前缀/末行/增量活动标记），不要每秒做整屏文本 readback + 多次全串 trim/contains。
+- 长期改进建议：
+  1. 优先把 Codex waiting/running 的判断继续收敛到 signal / notify 主链，避免把终端内容分析当作长期真相源。
+  2. 若必须保留 heuristic fallback，应增加硬边界：仅活动 pane、仅短时间窗口、仅必要状态、仅一次字符串归一化，避免重复复制同一份大文本。
+  3. 给这条展示态刷新链路补性能 / 内存回归测试或至少 profiling 基线，防止类似“UI 语义修正引入后台轮询”再次悄悄进主线。
+- 验证证据：
+  - `top -l 1 -pid 27999 -stats pid,command,mem,cpu,time,threads` → `DevHavenApp 32G~33G`。
+  - `footprint 27999` → `Footprint: 32 GB`，其中 `MALLOC_SMALL 31 GB`。
+  - `sample 27999 5 1 -mayDie` → 主线程周期性命中 `WorkspaceShellView.refreshCodexDisplayStates()`、`CodexAgentDisplayStateRefresher.presentationOverrides(...)`、`GhosttySurfaceHostModel.currentVisibleText()`、`GhosttyTerminalSurfaceView.debugVisibleText()`、`terminal.formatter.PageFormatter.formatWithState`。
+  - `ps -axo pid,args | grep '/Applications/DevHaven.app/.../AgentResources/bin/codex'` → 当前共有 `6` 条 DevHaven 内嵌 Codex wrapper 会话，与该轮询路径的候选 pane 数量级相符。
+
+
 ## 2026-03-25 Workspace 焦点恢复触发 SwiftUI 崩溃排查
 
 - [x] 基于崩溃栈与相关源码定位直接原因，确认是否存在设计层诱因

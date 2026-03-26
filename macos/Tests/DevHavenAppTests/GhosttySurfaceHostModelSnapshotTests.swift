@@ -57,4 +57,49 @@ final class GhosttySurfaceHostModelSnapshotTests: XCTestCase {
         XCTAssertEqual(snapshot.title, "实时标题")
         XCTAssertEqual(snapshot.visibleText, "old text")
     }
+
+    func testCodexDisplaySnapshotKeepsOnlyTrailingWindowWhenTrackingEnabled() {
+        let request = WorkspaceTerminalLaunchRequest(
+            projectPath: "/tmp/devhaven",
+            workspaceId: "workspace:test",
+            tabId: "tab:test",
+            paneId: "pane:test",
+            surfaceId: "surface:test",
+            terminalSessionId: "session:test"
+        )
+        let model = GhosttySurfaceHostModel(request: request)
+        model.setCodexDisplayTrackingEnabled(true)
+
+        let longText = String(repeating: "0123456789", count: 600)
+        model.updateCodexDisplaySnapshot(withVisibleText: longText, now: Date(timeIntervalSince1970: 123))
+
+        let snapshot = try? XCTUnwrap(model.codexDisplaySnapshot())
+        XCTAssertNotNil(snapshot)
+        XCTAssertEqual(snapshot?.lastActivityAt, Date(timeIntervalSince1970: 123))
+        XCTAssertEqual(snapshot?.recentTextWindow.count, GhosttySurfaceHostModel.codexDisplaySnapshotWindowLimit)
+        XCTAssertTrue(snapshot?.recentTextWindow.hasSuffix(String(repeating: "0123456789", count: 20)) == true)
+    }
+
+    func testDisablingCodexDisplayTrackingClearsCachedSnapshot() {
+        let request = WorkspaceTerminalLaunchRequest(
+            projectPath: "/tmp/devhaven",
+            workspaceId: "workspace:test",
+            tabId: "tab:test",
+            paneId: "pane:test",
+            surfaceId: "surface:test",
+            terminalSessionId: "session:test"
+        )
+        let model = GhosttySurfaceHostModel(request: request)
+        model.setCodexDisplayTrackingEnabled(true)
+        model.updateCodexDisplaySnapshot(
+            withVisibleText: "OpenAI Codex\nWorking (13s • esc to interrupt)",
+            now: Date(timeIntervalSince1970: 456)
+        )
+
+        XCTAssertNotNil(model.codexDisplaySnapshot())
+
+        model.setCodexDisplayTrackingEnabled(false)
+
+        XCTAssertNil(model.codexDisplaySnapshot())
+    }
 }

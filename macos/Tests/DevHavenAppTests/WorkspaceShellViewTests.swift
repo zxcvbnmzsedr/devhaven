@@ -41,12 +41,13 @@ final class WorkspaceShellViewTests: XCTestCase {
         )
     }
 
-    func testWorkspaceShellViewRefreshesCodexDisplayStateOnTimer() throws {
+    func testWorkspaceShellViewRefreshesCodexDisplayStateFromCachedSnapshotInsteadOfReadingVisibleText() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
         XCTAssertTrue(source.contains("CodexAgentDisplayStateRefresher.refresh"), "WorkspaceShellView 应定期刷新 Codex 展示态")
-        XCTAssertTrue(source.contains("Timer.publish"), "WorkspaceShellView 应以定时方式触发 Codex 展示态刷新")
         XCTAssertTrue(source.contains("codexDisplayRefreshState"), "WorkspaceShellView 应保留 Codex 展示态刷新所需的运行时观测状态")
+        XCTAssertTrue(source.contains("codexDisplaySnapshot()"), "WorkspaceShellView 应读取 pane 级缓存 snapshot，而不是直接扫终端全文")
+        XCTAssertFalse(source.contains("currentVisibleText()"), "WorkspaceShellView 的 Codex 刷新链路不应再直接读取当前可见全文")
     }
 
     func testWorkspaceShellStartsWorktreeCreationWithoutWaitingForFullProgressFlow() throws {
