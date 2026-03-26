@@ -156,7 +156,11 @@ struct WorkspaceHostView: View {
     private func workspacePresentedContent(_ selection: WorkspacePresentedTabSelection?) -> some View {
         switch selection {
         case let .diff(diffTabID):
-            diffTabPlaceholderContent(diffTabID)
+            if let diffViewModel = viewModel.workspaceDiffTabViewModel(for: project.path, tabID: diffTabID) {
+                WorkspaceDiffTabView(viewModel: diffViewModel)
+            } else {
+                diffTabUnavailableContent
+            }
         case .terminal, .none:
             terminalTabContent
         }
@@ -223,11 +227,11 @@ struct WorkspaceHostView: View {
         }
     }
 
-    private func diffTabPlaceholderContent(_ diffTabID: String) -> some View {
+    private var diffTabUnavailableContent: some View {
         ContentUnavailableView(
-            "Diff 标签页即将接入",
+            "Diff 标签页不可用",
             systemImage: "square.split.2x1",
-            description: Text("已切换到独立 diff 标签页 \(diffTabID)。下一步会在这里挂载真正的 diff viewer。")
+            description: Text("当前 diff 标签页状态已失效，请重新从 changes browser 打开。")
         )
         .foregroundStyle(NativeTheme.textSecondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

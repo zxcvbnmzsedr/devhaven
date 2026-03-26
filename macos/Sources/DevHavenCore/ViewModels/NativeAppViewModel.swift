@@ -96,6 +96,7 @@ public final class NativeAppViewModel {
     private var currentBranchByProjectPath: [String: String]
     private var workspaceCommitViewModels: [String: WorkspaceCommitViewModel]
     private var workspaceGitViewModels: [String: WorkspaceGitViewModel]
+    private var workspaceDiffTabViewModels: [String: WorkspaceDiffTabViewModel]
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
     public var selectedTag: String?
@@ -166,6 +167,7 @@ public final class NativeAppViewModel {
         self.currentBranchByProjectPath = [:]
         self.workspaceCommitViewModels = [:]
         self.workspaceGitViewModels = [:]
+        self.workspaceDiffTabViewModels = [:]
         self.searchQuery = ""
         self.selectedDirectory = .all
         self.selectedTag = nil
@@ -569,6 +571,21 @@ public final class NativeAppViewModel {
 
     public func workspaceSelectedPresentedTab(for projectPath: String) -> WorkspacePresentedTabSelection? {
         resolvedWorkspacePresentedTabSelection(for: projectPath)
+    }
+
+    public func workspaceDiffTabViewModel(for projectPath: String, tabID: String) -> WorkspaceDiffTabViewModel? {
+        guard let tab = workspaceDiffTabsByProjectPath[projectPath]?.first(where: { $0.id == tabID }) else {
+            return nil
+        }
+        if let existing = workspaceDiffTabViewModels[tabID] {
+            return existing
+        }
+        let viewModel = WorkspaceDiffTabViewModel(
+            tab: tab,
+            client: .live(repositoryService: gitRepositoryService)
+        )
+        workspaceDiffTabViewModels[tabID] = viewModel
+        return viewModel
     }
 
     public var activeWorkspaceSelectedPresentedTab: WorkspacePresentedTabSelection? {
@@ -1143,6 +1160,7 @@ public final class NativeAppViewModel {
 
         tabs.remove(at: removedIndex)
         workspaceDiffTabsByProjectPath[resolvedProjectPath] = tabs
+        workspaceDiffTabViewModels[tabID] = nil
 
         guard activeWorkspaceSelectedPresentedTab == .diff(tabID) else {
             return
@@ -2179,6 +2197,9 @@ public final class NativeAppViewModel {
 
     private func clearWorkspaceRuntimePresentationState(for paths: Set<String>) {
         for path in paths {
+            for tab in workspaceDiffTabsByProjectPath[path] ?? [] {
+                workspaceDiffTabViewModels[tab.id] = nil
+            }
             workspaceDiffTabsByProjectPath[path] = nil
             workspaceSelectedPresentedTabByProjectPath[path] = nil
         }

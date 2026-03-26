@@ -13,7 +13,7 @@ final class WorkspaceHostViewTests: XCTestCase {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
         XCTAssertTrue(source.contains("case let .diff(diffTabID)"), "WorkspaceHostView 应显式识别 diff tab 选中分支")
-        XCTAssertTrue(source.contains("diffTabPlaceholderContent"), "在真正 viewer 落地前，WorkspaceHostView 至少应有独立 diff host 占位分支")
+        XCTAssertTrue(source.contains("WorkspaceDiffTabView(viewModel:"), "WorkspaceHostView 在 diff tab 选中时应真正挂载 WorkspaceDiffTabView")
         XCTAssertFalse(source.contains("ForEach(workspace.tabs)"), "WorkspaceHostView 不应继续把 terminal tabs 当作唯一顶层内容来源")
     }
 
