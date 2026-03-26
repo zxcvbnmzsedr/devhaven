@@ -216,6 +216,22 @@ final class WorkspaceGitIdeaLogViewTests: XCTestCase {
         XCTAssertFalse(source.contains("Text(file.path)"), "changes browser 不应继续直接把 file.path 作为唯一主文本")
     }
 
+    func testIdeaLogDoubleClickRoutesThroughUnifiedWorkspaceDiffOpenPath() throws {
+        let shellSource = try String(contentsOf: sourceFileURL(named: "WorkspaceShellView.swift"), encoding: .utf8)
+        let rootSource = try String(contentsOf: sourceFileURL(named: "WorkspaceGitRootView.swift"), encoding: .utf8)
+        let logSource = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogView.swift"), encoding: .utf8)
+        let sidebarSource = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogRightSidebarView.swift"), encoding: .utf8)
+        let changesSource = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogChangesView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(shellSource.contains("openActiveWorkspaceDiffTab("), "Git Log 双击打开应统一收口到 NativeAppViewModel 的 active workspace diff 打开入口")
+        XCTAssertTrue(shellSource.contains(".gitLogCommitFile("), "Git Log 双击打开时应构造 commit-file diff source")
+        XCTAssertTrue(rootSource.contains("onOpenDiff:"), "WorkspaceGitRootView 应把统一 open diff 闭包继续向下传递")
+        XCTAssertTrue(logSource.contains("onOpenDiff:"), "WorkspaceGitIdeaLogView 应把统一 open diff 闭包继续向右侧信息栏传递")
+        XCTAssertTrue(sidebarSource.contains("onOpenDiff:"), "WorkspaceGitIdeaLogRightSidebarView 应把统一 open diff 闭包继续向 changes browser 传递")
+        XCTAssertTrue(changesSource.contains(".onTapGesture(count: 2)"), "Git Log changes browser 文件行应支持双击打开独立 diff 标签页")
+        XCTAssertTrue(changesSource.contains("onOpenDiff(file)"), "Git Log changes browser 双击后应调用统一 open diff 闭包，而不是留在 preview 内部")
+    }
+
     func testIdeaLogDetailsViewClassifiesBranchAndTagBadges() throws {
         let source = try String(contentsOf: sourceFileURL(named: "WorkspaceGitIdeaLogDetailsView.swift"), encoding: .utf8)
 

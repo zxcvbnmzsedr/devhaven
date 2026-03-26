@@ -103,6 +103,18 @@ final class WorkspaceCommitRootViewTests: XCTestCase {
         XCTAssertTrue(source.contains("case .failed"), "Commit Panel 应显式处理 failed execution state")
     }
 
+    func testWorkspaceCommitChangesBrowserDoubleClickRoutesThroughUnifiedWorkspaceDiffOpenPath() throws {
+        let hostSource = try String(contentsOf: commitHostSourceFileURL(), encoding: .utf8)
+        let rootSource = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+        let changesSource = try String(contentsOf: changesBrowserSourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(hostSource.contains("openActiveWorkspaceDiffTab("), "Commit 双击打开应统一收口到 NativeAppViewModel 的 active workspace diff 打开入口")
+        XCTAssertTrue(hostSource.contains(".workingTreeChange("), "Commit 双击打开时应构造 working-tree diff source")
+        XCTAssertTrue(rootSource.contains("onOpenDiff:"), "WorkspaceCommitRootView 应把统一 open diff 闭包向 changes browser 传递")
+        XCTAssertTrue(changesSource.contains(".onTapGesture(count: 2)"), "Commit changes browser 文件行应支持双击打开独立 diff 标签页")
+        XCTAssertTrue(changesSource.contains("onOpenDiff(change)"), "Commit changes browser 双击后应调用统一 open diff 闭包，而不是继续停留在 preview 心智里")
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -133,5 +145,13 @@ final class WorkspaceCommitRootViewTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/DevHavenApp/WorkspaceCommitPanelView.swift")
+    }
+
+    private func commitHostSourceFileURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevHavenApp/WorkspaceCommitSideToolWindowHostView.swift")
     }
 }

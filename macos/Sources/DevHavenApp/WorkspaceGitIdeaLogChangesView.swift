@@ -3,6 +3,7 @@ import DevHavenCore
 
 struct WorkspaceGitIdeaLogChangesView: View {
     @Bindable var viewModel: WorkspaceGitLogViewModel
+    let onOpenDiff: (WorkspaceGitCommitFileChange) -> Void
     @State private var expandedDirectoryIDs = Set<String>()
     @State private var lastExpandedTreeSignature = ""
 
@@ -205,6 +206,14 @@ struct WorkspaceGitIdeaLogChangesView: View {
             .clipShape(.rect(cornerRadius: 6))
         }
         .buttonStyle(.plain)
+        .onTapGesture(count: 2) {
+            openFileDiff(file)
+        }
+    }
+
+    private func openFileDiff(_ file: WorkspaceGitCommitFileChange) {
+        viewModel.selectCommitFile(file.path)
+        onOpenDiff(file)
     }
 
     private func fileSubtitle(for file: WorkspaceGitCommitFileChange) -> String? {

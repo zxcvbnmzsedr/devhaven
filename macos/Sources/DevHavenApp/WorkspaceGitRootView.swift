@@ -22,12 +22,17 @@ private enum WorkspaceGitTopLevelTab: String, CaseIterable, Identifiable {
 
 struct WorkspaceGitRootView: View {
     @Bindable var viewModel: WorkspaceGitViewModel
+    let onOpenDiff: (WorkspaceGitCommitFileChange) -> Void
     @State private var sidebarRatio = 0.22
     @State private var selectedTopLevelTab: WorkspaceGitTopLevelTab
     @State private var lastGitSection: WorkspaceGitSection
 
-    init(viewModel: WorkspaceGitViewModel) {
+    init(
+        viewModel: WorkspaceGitViewModel,
+        onOpenDiff: @escaping (WorkspaceGitCommitFileChange) -> Void
+    ) {
         self.viewModel = viewModel
+        self.onOpenDiff = onOpenDiff
         let initialTopLevelTab: WorkspaceGitTopLevelTab = viewModel.section == .log ? .log : .git
         let initialGitSection: WorkspaceGitSection = viewModel.section == .log ? .branches : viewModel.section
         _selectedTopLevelTab = State(initialValue: initialTopLevelTab)
@@ -43,7 +48,7 @@ struct WorkspaceGitRootView: View {
                 case .git:
                     gitTabContent
                 case .log:
-                    WorkspaceGitIdeaLogView(viewModel: viewModel.logViewModel)
+                    WorkspaceGitIdeaLogView(viewModel: viewModel.logViewModel, onOpenDiff: onOpenDiff)
                 case .console:
                     WorkspaceGitConsoleView(repositoryPath: viewModel.repositoryContext.repositoryPath)
                 }

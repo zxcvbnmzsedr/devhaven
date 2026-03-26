@@ -19,7 +19,12 @@ struct WorkspaceCommitSideToolWindowHostView: View {
                     description: "Commit 工具窗只会对当前 active project 所属的 root repository 生效。"
                 )
             } else if let commitViewModel = viewModel.activeWorkspaceCommitViewModel {
-                WorkspaceCommitRootView(viewModel: commitViewModel)
+                WorkspaceCommitRootView(
+                    viewModel: commitViewModel,
+                    onOpenDiff: { change in
+                        openCommitDiffTab(commitViewModel: commitViewModel, change: change)
+                    }
+                )
             } else {
                 commitModeEmptyState(
                     title: "Commit 工具窗尚未就绪",
@@ -41,6 +46,25 @@ struct WorkspaceCommitSideToolWindowHostView: View {
             return false
         }
         return viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activePath })?.isQuickTerminal ?? false
+    }
+
+    private func openCommitDiffTab(
+        commitViewModel: WorkspaceCommitViewModel,
+        change: WorkspaceCommitChange
+    ) {
+        viewModel.openActiveWorkspaceDiffTab(
+            source: .workingTreeChange(
+                repositoryPath: commitViewModel.repositoryContext.repositoryPath,
+                executionPath: commitViewModel.repositoryContext.executionPath,
+                filePath: change.path
+            ),
+            preferredTitle: "Changes: \(commitDiffTitle(for: change))"
+        )
+    }
+
+    private func commitDiffTitle(for change: WorkspaceCommitChange) -> String {
+        let fileName = (change.path as NSString).lastPathComponent
+        return fileName.isEmpty ? change.path : fileName
     }
 
     private func commitModeEmptyState(title: String, systemImage: String, description: String) -> some View {

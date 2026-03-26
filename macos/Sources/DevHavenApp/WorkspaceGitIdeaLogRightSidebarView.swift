@@ -3,6 +3,7 @@ import DevHavenCore
 
 struct WorkspaceGitIdeaLogRightSidebarView: View {
     @Bindable var viewModel: WorkspaceGitLogViewModel
+    let onOpenDiff: (WorkspaceGitCommitFileChange) -> Void
     @State private var detailsRatio = 0.56
 
     var body: some View {
@@ -11,7 +12,7 @@ struct WorkspaceGitIdeaLogRightSidebarView: View {
             ratio: detailsRatio,
             onRatioChange: { detailsRatio = $0 },
             leading: {
-                WorkspaceGitIdeaLogChangesView(viewModel: viewModel)
+                WorkspaceGitIdeaLogChangesView(viewModel: viewModel, onOpenDiff: onOpenDiff)
                     .background(NativeTheme.window)
             },
             trailing: {

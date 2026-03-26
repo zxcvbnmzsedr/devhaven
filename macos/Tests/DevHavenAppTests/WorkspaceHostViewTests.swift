@@ -17,6 +17,12 @@ final class WorkspaceHostViewTests: XCTestCase {
         XCTAssertFalse(source.contains("ForEach(workspace.tabs)"), "WorkspaceHostView 不应继续把 terminal tabs 当作唯一顶层内容来源")
     }
 
+    func testWorkspaceHostBridgesDiffContentTapBackIntoDiffFocusedArea() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("setWorkspaceFocusedArea(.diffTab(diffTabID))"), "点击 diff 内容区时，WorkspaceHostView 应显式把 focused area 回写到当前 diff 标签页")
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

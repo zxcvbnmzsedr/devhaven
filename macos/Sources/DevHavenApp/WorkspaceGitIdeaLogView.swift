@@ -3,6 +3,7 @@ import DevHavenCore
 
 struct WorkspaceGitIdeaLogView: View {
     @Bindable var viewModel: WorkspaceGitLogViewModel
+    let onOpenDiff: (WorkspaceGitCommitFileChange) -> Void
     @State private var isBranchesPanelVisible = true
     @State private var branchesPanelRatio = 0.20
     @State private var rightSidebarRatio = 0.76
@@ -77,7 +78,7 @@ struct WorkspaceGitIdeaLogView: View {
                 mainFramePrimaryColumn
             },
             trailing: {
-                WorkspaceGitIdeaLogRightSidebarView(viewModel: viewModel)
+                WorkspaceGitIdeaLogRightSidebarView(viewModel: viewModel, onOpenDiff: onOpenDiff)
             }
         )
     }

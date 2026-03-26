@@ -158,6 +158,12 @@ struct WorkspaceHostView: View {
         case let .diff(diffTabID):
             if let diffViewModel = viewModel.workspaceDiffTabViewModel(for: project.path, tabID: diffTabID) {
                 WorkspaceDiffTabView(viewModel: diffViewModel)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            viewModel.setWorkspaceFocusedArea(.diffTab(diffTabID))
+                        }
+                    )
             } else {
                 diffTabUnavailableContent
             }

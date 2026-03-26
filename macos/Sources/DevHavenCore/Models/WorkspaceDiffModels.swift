@@ -24,17 +24,20 @@ public struct WorkspaceDiffOpenRequest: Equatable, Sendable {
     public var source: WorkspaceDiffSource
     public var preferredTitle: String
     public var preferredViewerMode: WorkspaceDiffViewerMode
+    public var originContext: WorkspaceDiffOriginContext?
 
     public init(
         projectPath: String,
         source: WorkspaceDiffSource,
         preferredTitle: String,
-        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide
+        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide,
+        originContext: WorkspaceDiffOriginContext? = nil
     ) {
         self.projectPath = projectPath
         self.source = source
         self.preferredTitle = preferredTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         self.preferredViewerMode = preferredViewerMode
+        self.originContext = originContext
     }
 
     public var identity: String {
@@ -48,25 +51,41 @@ public struct WorkspaceDiffTabState: Identifiable, Equatable, Sendable {
     public var title: String
     public var source: WorkspaceDiffSource
     public var viewerMode: WorkspaceDiffViewerMode
+    public var originContext: WorkspaceDiffOriginContext?
 
     public init(
         id: String,
         identity: String,
         title: String,
         source: WorkspaceDiffSource,
-        viewerMode: WorkspaceDiffViewerMode
+        viewerMode: WorkspaceDiffViewerMode,
+        originContext: WorkspaceDiffOriginContext? = nil
     ) {
         self.id = id
         self.identity = identity
         self.title = title
         self.source = source
         self.viewerMode = viewerMode
+        self.originContext = originContext
     }
 }
 
 public enum WorkspacePresentedTabSelection: Equatable, Sendable {
     case terminal(String)
     case diff(String)
+}
+
+public struct WorkspaceDiffOriginContext: Equatable, Sendable {
+    public var presentedTabSelection: WorkspacePresentedTabSelection?
+    public var focusedArea: WorkspaceFocusedArea
+
+    public init(
+        presentedTabSelection: WorkspacePresentedTabSelection?,
+        focusedArea: WorkspaceFocusedArea
+    ) {
+        self.presentedTabSelection = presentedTabSelection
+        self.focusedArea = focusedArea
+    }
 }
 
 public struct WorkspacePresentedTabItem: Identifiable, Equatable, Sendable {

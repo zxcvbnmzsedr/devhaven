@@ -121,7 +121,12 @@ struct WorkspaceShellView: View {
                 description: "Git 面板只会对当前 active project 所属的 root repository 生效。"
             )
         } else if let gitViewModel = viewModel.activeWorkspaceGitViewModel {
-            WorkspaceGitRootView(viewModel: gitViewModel)
+            WorkspaceGitRootView(
+                viewModel: gitViewModel,
+                onOpenDiff: { file in
+                    openGitLogDiffTab(logViewModel: gitViewModel.logViewModel, file: file)
+                }
+            )
         } else {
             gitModeEmptyState(
                 title: "Git 面板尚未就绪",
@@ -249,6 +254,29 @@ struct WorkspaceShellView: View {
     private func clampedToolWindowHeight(_ proposedHeight: CGFloat, totalHeight: CGFloat) -> CGFloat {
         let upperBound = max(10, totalHeight - 10)
         return min(max(10, proposedHeight), upperBound)
+    }
+
+    private func openGitLogDiffTab(
+        logViewModel: WorkspaceGitLogViewModel,
+        file: WorkspaceGitCommitFileChange
+    ) {
+        guard let selectedCommitHash = logViewModel.selectedCommitHash else {
+            return
+        }
+
+        viewModel.openActiveWorkspaceDiffTab(
+            source: .gitLogCommitFile(
+                repositoryPath: logViewModel.repositoryContext.repositoryPath,
+                commitHash: selectedCommitHash,
+                filePath: file.path
+            ),
+            preferredTitle: "Commit: \(gitLogDiffTitle(for: file))"
+        )
+    }
+
+    private func gitLogDiffTitle(for file: WorkspaceGitCommitFileChange) -> String {
+        let fileName = (file.path as NSString).lastPathComponent
+        return fileName.isEmpty ? file.path : fileName
     }
 
     private func syncTerminalStores() {

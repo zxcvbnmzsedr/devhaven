@@ -10,14 +10,82 @@
 - [x] 输出设计并等待用户确认
 - [x] 设计确认后写入 `docs/plans/2026-03-26-idea-git-diff-open-design.md`
 - [x] 设计确认后写入实施计划 `docs/plans/2026-03-26-idea-git-diff-open.md`
-- [ ] 按 TDD 实现双击/回车查看 diff 主链
+- [x] 按 TDD 实现双击查看 diff 主链
   - [x] Task 1：锁定 runtime diff tab 与 close planner 契约（先红后绿）
   - [x] Task 2：把 Workspace 顶部 tab bar 升级为 terminal + diff 共用展示层
   - [x] Task 3：建立 diff 文档模型、完整 diff 加载链路与 patch parser
   - [x] Task 4：落地独立 Diff 标签页 viewer（side-by-side / unified）
-  - [ ] Task 5：统一接入 Git Log / Commit 的双击打开逻辑
-  - [ ] Task 6：更新架构文档、完整验证并回填 Review
-- [ ] 运行定向测试与必要回归，回填 Review（含根因、修复方案、长期建议、验证证据）
+  - [x] Task 5：统一接入 Git Log / Commit 的双击打开逻辑
+  - [x] Task 6：更新架构文档、完整验证并回填 Review
+- [x] 运行定向测试与必要回归，回填 Review（含根因、修复方案、长期建议、验证证据）
+
+## 2026-03-26 Diff 标签页焦点与关闭回退细节
+
+- [x] 与用户确认打开后焦点策略（已确认为：切到 diff 标签页并把主焦点交给 diff 内容区）
+- [x] 与用户确认关闭回退策略（已确认为：关闭 diff 后恢复到打开前的 Git/Commit 上下文，而不是只回上一个 tab）
+- [x] 按 TDD 实现 diff focused area 与 origin context
+  - [x] Task 1：补红灯测试，锁定“打开 diff 切焦点 / 关闭 diff 恢复 origin context”契约
+  - [x] Task 2：扩展 runtime diff 状态模型与 NativeAppViewModel 焦点主链
+  - [x] Task 3：补 App 层 diff 内容区 focused area 回写与回归验证
+  - [x] Task 4：更新 AGENTS.md、回填 Review
+
+## Review（2026-03-26 Diff 标签页焦点与关闭回退细节）
+
+- 结果：
+  1. `WorkspaceFocusedArea` 已新增 `.diffTab(String)` 语义，diff 标签页不再伪装成 terminal focused area。
+  2. `WorkspaceDiffOpenRequest / WorkspaceDiffTabState` 已补齐 origin context（打开前的 presented tab + focused area）；双击打开 diff 时会记录来源上下文。
+  3. `NativeAppViewModel.openWorkspaceDiffTab(...) / selectWorkspacePresentedTab(...)` 现在会在激活 diff 时统一把 `workspaceFocusedArea` 切到 `.diffTab(tabID)`。
+  4. `NativeAppViewModel.closeWorkspaceDiffTab(...)` 在关闭当前选中 diff 时，会优先恢复 origin context：回到打开前的 terminal tab，并恢复 Git bottom tool window / Commit side tool window 焦点；只有 origin 失效时才退回既有 fallback。
+  5. `WorkspaceHostView` 已补充 diff 内容区点击桥接，会把当前 diff viewer 的交互重新回写到 `.diffTab(diffTabID)`。
+- 直接原因：
+  1. 上一轮虽然已经有独立 diff 标签页，但打开 diff 后没有专门的 diff focused area，仍然缺少“编辑器接管焦点”的明确状态语义。
+  2. 关闭 diff 时也只有“相邻 diff / 上一个 terminal tab”的通用 fallback，没有“返回发起打开动作前的 Git / Commit 上下文”能力。
+- 设计层诱因：
+  1. runtime diff tab 之前只建模了 `source/title/viewerMode`，没有把“从哪里打开”显式记录下来，导致关闭时只能猜测回退目标。
+  2. `workspaceFocusedArea` 原先只覆盖 terminal / side / bottom tool window 三类区域，缺少 diff 文档区这一层，使得独立 diff 标签页在状态机里没有自己的位置。
+  3. 本轮已通过 `.diffTab(...) + origin context` 把这层状态补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：为 `WorkspaceFocusedArea` 新增 `.diffTab(String)`，为 runtime diff tab 增加 origin context。
+  2. ViewModel：在打开 / 选择 diff tab 时切换到 `.diffTab(tabID)`；在关闭当前 diff 时优先恢复 origin presented tab + origin focused area。
+  3. App：在 `WorkspaceHostView` 的 diff viewer 内容区补 focused area 回写，确保点击 diff 后仍处于 diff 主交互语义。
+- 长期改进建议：
+  1. 下一步如果继续对齐 IDEA，建议把 `Enter/Return` 打开 diff 也接到同一套 origin context 主链，而不是额外发明快捷键分支。
+  2. 当前“恢复 origin context”仍是 runtime-only；后续若要支持更复杂的 diff 文档导航，可再考虑补“最近来源栈”，但不要提前做成通用历史系统。
+  3. 现在 diff focused area 主要用于交互语义与关闭回退；后续若要补更细的菜单/快捷键守门，可继续基于 `.diffTab(...)` 扩展，不要回退成模糊的 `.terminal`。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceHostViewTests'` → 初次失败，核心报错为 `WorkspaceFocusedArea` 缺少 `.diffTab`。
+  - 绿灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceHostViewTests'` → 9 tests, 0 failures。
+  - 回归：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|MainWindowCloseShortcutPlannerTests|WorkspaceHostViewTests|WorkspaceTabBarViewTests|WorkspaceDiffPatchParserTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitRootViewTests'` → 82 tests, 0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## Review（2026-03-26 Task 5-6：统一 Git Log / Commit 双击打开独立 Diff 标签页）
+
+- 结果：
+  1. `NativeAppViewModel` 已新增 `openActiveWorkspaceDiffTab(...)`，把“当前 active workspace session 下打开独立 diff 标签页”统一收口到一条 App 级入口，再复用既有 `openWorkspaceDiffTab(...)` runtime tab 主链。
+  2. Git Log 已打通 `WorkspaceShellView -> WorkspaceGitRootView -> WorkspaceGitIdeaLogView -> WorkspaceGitIdeaLogRightSidebarView -> WorkspaceGitIdeaLogChangesView` 的统一闭包链；changes browser 中文件节点现在保持**单击选中**，并支持**双击打开独立 diff 标签页**。
+  3. Commit 已打通 `WorkspaceCommitSideToolWindowHostView -> WorkspaceCommitRootView -> WorkspaceCommitChangesBrowserView` 的统一闭包链；changes browser 现在同样保持**单击选中**，并支持**双击打开独立 diff 标签页**。
+  4. `AGENTS.md` 已同步记录 runtime diff tab 的文件职责、Git/Commit 双击打开边界，以及“diff tab 不进入 restore snapshot”的架构约束。
+- 直接原因：
+  1. 之前 Git Log 与 Commit changes browser 都只有“单击选中 + 工具窗内 preview”语义，没有 workspace 级独立 diff 标签页打开入口，因此用户无法像 IDEA 一样通过双击直接进入独立标签页。
+  2. 更具体地说，diff 标签页的宿主是当前 workspace session 的顶部 tab bar，而 Git/Commit ViewModel 的 repository context 又是按 root repository 缓存；如果没有一个以 **active workspace session** 为准的统一入口，就容易把 diff tab 归到错误的 project/session。
+- 设计层诱因：
+  1. 旧实现把“Git/Commit 内部 preview 状态”和“workspace 顶部文档式标签页”分成了两条互不相通的路径，缺少统一的 App 层 open contract。
+  2. Git/Commit 面板的运行时真相源以 root repository 为中心，而顶部 presented tabs 以当前 workspace session/project path 为中心；这两个维度没有统一桥接时，就会天然诱发“打开 diff 时归属错 host”的问题。
+  3. 本轮已通过 `openActiveWorkspaceDiffTab(...)` 把这层桥接显式化；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：新增 `NativeAppViewModel.openActiveWorkspaceDiffTab(...)`，统一根据当前 active workspace session 生成 diff tab 归属 projectPath。
+  2. App：Git Log changes browser 双击时构造 `.gitLogCommitFile(...)` source，并通过统一入口打开 `Commit: <文件名>` 独立标签页。
+  3. App：Commit changes browser 双击时构造 `.workingTreeChange(...)` source，并通过统一入口打开 `Changes: <文件名>` 独立标签页。
+  4. App：保留单击 selection 行为，不回退到工具窗内部 preview 心智；diff viewer 继续复用已完成的 runtime tab / parser / side-by-side / unified 主链。
+- 长期改进建议：
+  1. 当前已完成双击打开；若继续对齐 IDEA，可在同一条 `openActiveWorkspaceDiffTab(...)` 主链上补 `Enter/Return` 键盘打开能力，而不是在 Git Log / Commit 各自实现分叉逻辑。
+  2. 若后续恢复工具窗内 preview，也应继续把“preview 选择态”和“独立文档标签页打开态”分层，不要重新耦合成同一套状态机。
+  3. 现在 diff 标签页 title 先采用 `Commit: 文件名 / Changes: 文件名` 的轻量策略；若后续需要更贴近 IDEA，可在不改变 source identity 的前提下再增强 rename/path 展示规则。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceGitIdeaLogViewTests|WorkspaceCommitRootViewTests'` → 初次失败，核心报错为 `NativeAppViewModel` 缺少 `openActiveWorkspaceDiffTab`，说明统一入口尚未落地。
+  - 绿灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceGitIdeaLogViewTests|WorkspaceCommitRootViewTests'` → 37 tests, 0 failures。
+  - 回归：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|MainWindowCloseShortcutPlannerTests|WorkspaceHostViewTests|WorkspaceTabBarViewTests|WorkspaceDiffPatchParserTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitRootViewTests'` → 79 tests, 0 failures。
+  - 质量：`git diff --check` → exit 0。
 
 ## 2026-03-25 复刻 IDEA Commit 面板产品方案
 

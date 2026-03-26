@@ -45,6 +45,7 @@ public enum WorkspaceFocusedArea: Equatable, Sendable {
     case terminal
     case sideToolWindow(WorkspaceToolWindowKind)
     case bottomToolWindow(WorkspaceToolWindowKind)
+    case diffTab(String)
 }
 
 public struct WorkspaceSideToolWindowState: Equatable, Sendable {

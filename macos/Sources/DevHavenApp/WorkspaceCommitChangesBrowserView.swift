@@ -4,6 +4,7 @@ import DevHavenCore
 
 struct WorkspaceCommitChangesBrowserView: View {
     @Bindable var viewModel: WorkspaceCommitViewModel
+    let onOpenDiff: (WorkspaceCommitChange) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -163,6 +164,14 @@ struct WorkspaceCommitChangesBrowserView: View {
         .onTapGesture {
             viewModel.selectChange(change.path)
         }
+        .onTapGesture(count: 2) {
+            openChangeDiff(change)
+        }
+    }
+
+    private func openChangeDiff(_ change: WorkspaceCommitChange) {
+        viewModel.selectChange(change.path)
+        onOpenDiff(change)
     }
 
     private func inlineTitleRow(_ change: WorkspaceCommitChange) -> some View {
