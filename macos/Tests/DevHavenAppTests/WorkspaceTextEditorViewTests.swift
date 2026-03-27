@@ -32,6 +32,15 @@ final class WorkspaceTextEditorViewTests: XCTestCase {
         XCTAssertTrue(source.contains(".manual"), "滚动请求默认语义应保持为 manual，避免破坏旧调用")
     }
 
+    func testWorkspaceTextEditorViewShortCircuitsRemoteScrollEchoAndNoOpSyncWrites() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("remoteScrollTolerance"), "文本编辑宿主应为程序化同步滚动提供位置容差，避免滚动回环")
+        XCTAssertTrue(source.contains("localScrollEmissionThreshold"), "文本编辑宿主应限制本地滚动状态写频率，避免每个像素都打脏 SwiftUI")
+        XCTAssertTrue(source.contains("lastProgrammaticScrollOriginY"), "文本编辑宿主应记录最近一次程序化滚动目标位置，用于吞掉 boundsDidChange 回声")
+        XCTAssertTrue(source.contains("abs(clipView.bounds.origin.y - targetY) < Self.remoteScrollTolerance"), "同步滚动命中近似目标时应直接短路，而不是重复 scroll(to:)")
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

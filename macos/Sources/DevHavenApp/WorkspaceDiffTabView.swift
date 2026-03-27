@@ -3,8 +3,6 @@ import DevHavenCore
 
 struct WorkspaceDiffTabView: View {
     @Bindable var viewModel: WorkspaceDiffTabViewModel
-    @State private var editorScrollSyncState = WorkspaceTextEditorScrollSyncState()
-    @State private var editorScrollRequestState = WorkspaceTextEditorScrollRequestState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -114,9 +112,7 @@ struct WorkspaceDiffTabView: View {
                         viewModel: viewModel,
                         document: compareDocument,
                         paneDescriptors: viewModel.viewerDescriptor?.paneDescriptors ?? [],
-                        selectedDifference: viewModel.viewerDescriptor?.selectedDifference,
-                        scrollSyncState: $editorScrollSyncState,
-                        scrollRequestState: $editorScrollRequestState
+                        selectedDifference: viewModel.viewerDescriptor?.selectedDifference
                     )
                 }
             case let .merge(mergeDocument):
@@ -124,9 +120,7 @@ struct WorkspaceDiffTabView: View {
                     viewModel: viewModel,
                     document: mergeDocument,
                     paneDescriptors: viewModel.viewerDescriptor?.paneDescriptors ?? [],
-                    selectedDifference: viewModel.viewerDescriptor?.selectedDifference,
-                    scrollSyncState: $editorScrollSyncState,
-                    scrollRequestState: $editorScrollRequestState
+                    selectedDifference: viewModel.viewerDescriptor?.selectedDifference
                 )
             }
         }

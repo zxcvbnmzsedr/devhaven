@@ -15,6 +15,7 @@ private struct WorkspaceDialogProject: Identifiable {
 
 struct WorkspaceProjectSidebarHostView: View {
     @Bindable var viewModel: NativeAppViewModel
+    @StateObject private var sidebarProjectionStore = WorkspaceSidebarProjectionStore()
     @State private var isProjectPickerPresented = false
     @State private var worktreeDialogProjectPath: String?
     @State private var pendingDeleteRequest: WorktreeDeleteRequest?
@@ -28,8 +29,8 @@ struct WorkspaceProjectSidebarHostView: View {
 
     var body: some View {
         WorkspaceProjectListView(
-            groups: viewModel.workspaceSidebarGroups,
-            canOpenMoreProjects: !viewModel.availableWorkspaceProjects.isEmpty,
+            groups: sidebarProjectionStore.projection.groups,
+            canOpenMoreProjects: !sidebarProjectionStore.projection.availableProjects.isEmpty,
             onSelectProject: viewModel.activateWorkspaceProject,
             onOpenProjectPicker: { isProjectPickerPresented = true },
             onRequestCreateWorktree: { projectPath in
@@ -63,10 +64,16 @@ struct WorkspaceProjectSidebarHostView: View {
             onCloseProject: viewModel.closeWorkspaceProject,
             onExit: viewModel.exitWorkspace
         )
+        .onAppear {
+            syncSidebarProjection()
+        }
+        .onChange(of: viewModel.workspaceSidebarProjectionRevision) { _, _ in
+            syncSidebarProjection()
+        }
         .focusedSceneValue(\.openWorkspaceProjectPickerAction, openWorkspaceProjectPickerAction)
         .sheet(isPresented: $isProjectPickerPresented) {
             WorkspaceProjectPickerView(
-                projects: viewModel.availableWorkspaceProjects,
+                projects: sidebarProjectionStore.projection.availableProjects,
                 onOpenProject: { path in
                     viewModel.enterWorkspace(path)
                     isProjectPickerPresented = false
@@ -144,11 +151,15 @@ struct WorkspaceProjectSidebarHostView: View {
     }
 
     private var openWorkspaceProjectPickerAction: (() -> Void)? {
-        guard !viewModel.availableWorkspaceProjects.isEmpty else {
+        guard !sidebarProjectionStore.projection.availableProjects.isEmpty else {
             return nil
         }
         return {
             isProjectPickerPresented = true
         }
+    }
+
+    private func syncSidebarProjection() {
+        sidebarProjectionStore.sync(from: viewModel)
     }
 }

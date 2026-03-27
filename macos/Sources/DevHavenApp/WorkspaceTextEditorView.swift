@@ -137,6 +137,9 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
+        private static let remoteScrollTolerance: CGFloat = 2
+        private static let localScrollEmissionThreshold: CGFloat = 0.01
+
         private let editorID: String
         private var text: Binding<String>
         private let scrollSyncState: Binding<WorkspaceTextEditorScrollSyncState>?
@@ -147,6 +150,8 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         private var lastAppliedRevision = -1
         private var lastAppliedScrollRequestRevision = -1
         private var lastAppliedDecorationSignature: WorkspaceTextEditorDecorationSignature?
+        private var lastProgrammaticScrollOriginY: CGFloat?
+        private var lastProgrammaticScrollRevision: Int?
 
         init(
             editorID: String,
@@ -234,13 +239,19 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             isApplyingRemoteScroll = true
             lastAppliedRevision = scrollSyncState.wrappedValue.revision
             let clipView = scrollView.contentView
+            let targetY = maxVerticalOffset(for: scrollView) * scrollSyncState.wrappedValue.normalizedYOffset
+            if abs(clipView.bounds.origin.y - targetY) < Self.remoteScrollTolerance {
+                isApplyingRemoteScroll = false
+                lastProgrammaticScrollOriginY = nil
+                lastProgrammaticScrollRevision = nil
+                return
+            }
             var origin = clipView.bounds.origin
-            origin.y = maxVerticalOffset(for: scrollView) * scrollSyncState.wrappedValue.normalizedYOffset
+            origin.y = targetY
+            lastProgrammaticScrollOriginY = targetY
+            lastProgrammaticScrollRevision = scrollSyncState.wrappedValue.revision
             clipView.scroll(to: origin)
             scrollView.reflectScrolledClipView(clipView)
-            Task { @MainActor [weak self] in
-                self?.isApplyingRemoteScroll = false
-            }
         }
 
         func scrollToRequestedLineIfNeeded() {
@@ -264,10 +275,9 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             isApplyingRemoteScroll = true
             textView.scrollRangeToVisible(NSRange(location: location, length: 0))
             if let scrollView {
+                lastProgrammaticScrollOriginY = scrollView.contentView.bounds.origin.y
+                lastProgrammaticScrollRevision = scrollRequestState.wrappedValue.revision
                 scrollView.reflectScrolledClipView(scrollView.contentView)
-            }
-            Task { @MainActor [weak self] in
-                self?.isApplyingRemoteScroll = false
             }
         }
 
@@ -278,18 +288,46 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
 
         private func handleBoundsDidChange() {
             guard let scrollView,
-                  let scrollSyncState,
-                  !isApplyingRemoteScroll
+                  let scrollSyncState
             else {
                 return
             }
-            let normalizedYOffset = normalizedYOffset(for: scrollView)
+            let currentOriginY = scrollView.contentView.bounds.origin.y
             let currentState = scrollSyncState.wrappedValue
+
+            if let lastProgrammaticScrollRevision,
+               let lastProgrammaticScrollOriginY,
+               (currentState.revision == lastProgrammaticScrollRevision
+                || scrollRequestState?.wrappedValue.revision == lastProgrammaticScrollRevision),
+               abs(currentOriginY - lastProgrammaticScrollOriginY) < Self.remoteScrollTolerance
+            {
+                isApplyingRemoteScroll = false
+                return
+            }
+
+            if isApplyingRemoteScroll {
+                isApplyingRemoteScroll = false
+                lastProgrammaticScrollOriginY = nil
+                lastProgrammaticScrollRevision = nil
+                return
+            }
+
+            let normalizedYOffset = normalizedYOffset(for: scrollView)
             if currentState.sourceID == editorID,
-               abs(currentState.normalizedYOffset - normalizedYOffset) < 0.0005
+               abs(currentState.normalizedYOffset - normalizedYOffset) < Self.localScrollEmissionThreshold
             {
                 return
             }
+            if currentState.sourceID != editorID,
+               abs(currentState.normalizedYOffset - normalizedYOffset) < Self.localScrollEmissionThreshold
+            {
+                lastProgrammaticScrollOriginY = nil
+                lastProgrammaticScrollRevision = nil
+                isApplyingRemoteScroll = false
+                return
+            }
+            lastProgrammaticScrollOriginY = nil
+            lastProgrammaticScrollRevision = nil
             scrollSyncState.wrappedValue = WorkspaceTextEditorScrollSyncState(
                 sourceID: editorID,
                 normalizedYOffset: normalizedYOffset,

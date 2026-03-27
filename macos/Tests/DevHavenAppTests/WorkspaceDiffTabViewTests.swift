@@ -29,6 +29,19 @@ final class WorkspaceDiffTabViewTests: XCTestCase {
         XCTAssertTrue(source.contains("WorkspaceDiffMergeViewerView("), "Diff 标签页应把 merge viewer 路由到独立子组件")
     }
 
+    func testDiffTabViewDoesNotOwnEditorScrollSyncStateAtTabLevel() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+        let twoSideSource = try String(contentsOf: twoSideViewerFileURL(), encoding: .utf8)
+        let mergeSource = try String(contentsOf: mergeViewerFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("@State private var editorScrollSyncState"), "Diff 标签页不应在 tab 级持有 editor 滚动同步状态，避免滚动时整块 diff 容器重渲染")
+        XCTAssertFalse(source.contains("@State private var editorScrollRequestState"), "Diff 标签页不应在 tab 级持有 editor 滚动请求状态")
+        XCTAssertTrue(twoSideSource.contains("@State private var scrollSyncState"), "two-side viewer 应在更窄的 viewer 层持有滚动同步状态")
+        XCTAssertTrue(twoSideSource.contains("@State private var scrollRequestState"), "two-side viewer 应在更窄的 viewer 层持有滚动请求状态")
+        XCTAssertTrue(mergeSource.contains("@State private var scrollSyncState"), "merge viewer 应在更窄的 viewer 层持有滚动同步状态")
+        XCTAssertTrue(mergeSource.contains("@State private var scrollRequestState"), "merge viewer 应在更窄的 viewer 层持有滚动请求状态")
+    }
+
     func testDiffTabViewUsesEditableTextHostInsteadOfOnlyReadOnlyPatchText() throws {
         let twoSideSource = try String(contentsOf: twoSideViewerFileURL(), encoding: .utf8)
         let mergeSource = try String(contentsOf: mergeViewerFileURL(), encoding: .utf8)

@@ -6,10 +6,10 @@ struct WorkspaceDiffTwoSideViewerView: View {
     let document: WorkspaceDiffCompareDocument
     let paneDescriptors: [WorkspaceDiffPaneDescriptor]
     let selectedDifference: WorkspaceDiffDifferenceAnchor?
-    @Binding var scrollSyncState: WorkspaceTextEditorScrollSyncState
-    @Binding var scrollRequestState: WorkspaceTextEditorScrollRequestState
 
     @State private var selectedCompareBlockID: String?
+    @State private var scrollSyncState = WorkspaceTextEditorScrollSyncState()
+    @State private var scrollRequestState = WorkspaceTextEditorScrollRequestState()
 
     var body: some View {
         HStack(spacing: 0) {

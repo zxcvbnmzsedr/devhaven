@@ -199,6 +199,31 @@ public struct WorkspaceRunConsoleState: Equatable, Sendable {
     }
 }
 
+public struct WorkspaceRunToolbarState: Equatable, Sendable {
+    public var configurations: [WorkspaceRunConfiguration]
+    public var selectedConfigurationID: String?
+    public var canRun: Bool
+    public var canStop: Bool
+    public var hasSessions: Bool
+    public var isLogsVisible: Bool
+
+    public init(
+        configurations: [WorkspaceRunConfiguration] = [],
+        selectedConfigurationID: String? = nil,
+        canRun: Bool = false,
+        canStop: Bool = false,
+        hasSessions: Bool = false,
+        isLogsVisible: Bool = false
+    ) {
+        self.configurations = configurations
+        self.selectedConfigurationID = selectedConfigurationID
+        self.canRun = canRun
+        self.canStop = canStop
+        self.hasSessions = hasSessions
+        self.isLogsVisible = isLogsVisible
+    }
+}
+
 public struct WorkspaceRunStartRequest: Equatable, Sendable {
     public var sessionID: String
     public var configurationID: String

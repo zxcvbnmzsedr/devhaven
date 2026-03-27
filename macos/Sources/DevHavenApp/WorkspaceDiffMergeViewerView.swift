@@ -6,10 +6,10 @@ struct WorkspaceDiffMergeViewerView: View {
     let document: WorkspaceDiffMergeDocument
     let paneDescriptors: [WorkspaceDiffPaneDescriptor]
     let selectedDifference: WorkspaceDiffDifferenceAnchor?
-    @Binding var scrollSyncState: WorkspaceTextEditorScrollSyncState
-    @Binding var scrollRequestState: WorkspaceTextEditorScrollRequestState
 
     @State private var selectedMergeBlockID: String?
+    @State private var scrollSyncState = WorkspaceTextEditorScrollSyncState()
+    @State private var scrollRequestState = WorkspaceTextEditorScrollRequestState()
 
     var body: some View {
         HStack(spacing: 0) {

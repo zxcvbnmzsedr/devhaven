@@ -180,6 +180,32 @@ final class GhosttySurfaceHostTests: XCTestCase {
         )
     }
 
+    func testCodexDisplaySnapshotObserverReceivesUpdateAndClearEvents() {
+        let model = makeManagedHostModel()
+        var receivedSnapshots: [CodexAgentDisplaySnapshot?] = []
+
+        model.setCodexDisplayTrackingEnabled(true)
+        model.setCodexDisplaySnapshotObserver { snapshot in
+            receivedSnapshots.append(snapshot)
+        }
+
+        let timestamp = Date(timeIntervalSince1970: 123)
+        model.updateCodexDisplaySnapshot(
+            withVisibleText: """
+            OpenAI Codex (v0.116.0)
+            Working (13s • esc to interrupt)
+            """,
+            now: timestamp
+        )
+        model.setCodexDisplayTrackingEnabled(false)
+
+        XCTAssertEqual(receivedSnapshots.count, 3)
+        XCTAssertNil(receivedSnapshots[0], "首次绑定 observer 时应先收到当前缓存态（初始为空）")
+        XCTAssertEqual(receivedSnapshots[1]?.lastActivityAt, timestamp)
+        XCTAssertTrue(receivedSnapshots[1]?.recentTextWindow.contains("Working") == true)
+        XCTAssertNil(receivedSnapshots[2], "关闭 tracking 后应显式清空缓存 snapshot，避免 coordinator 继续消费陈旧文本窗口")
+    }
+
     func testGhosttyControlDExitTearsDownSurfaceWithoutLockingHost() throws {
         try requireSmokeEnabled()
 

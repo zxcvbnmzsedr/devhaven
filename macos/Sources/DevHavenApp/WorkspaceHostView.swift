@@ -15,6 +15,7 @@ struct WorkspaceHostView: View {
         let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
         let presentedTabs = viewModel.workspacePresentedTabs(for: project.path)
         let selectedPresentedTab = viewModel.workspaceSelectedPresentedTab(for: project.path)
+        let runToolbarState = viewModel.workspaceRunToolbarState(for: project.path)
 
         VStack(alignment: .leading, spacing: chromePolicy.showsWorkspaceHeader ? 16 : 0) {
             if chromePolicy.showsWorkspaceHeader {
@@ -45,13 +46,12 @@ struct WorkspaceHostView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 WorkspaceRunToolbarView(
-                    configurations: viewModel.availableWorkspaceRunConfigurations(in: project.path),
-                    selectedConfigurationID: viewModel.workspaceRunConsoleState(for: project.path)?.selectedConfigurationID
-                        ?? viewModel.selectedWorkspaceRunConfiguration(in: project.path)?.id,
-                    canRun: viewModel.selectedWorkspaceRunConfiguration(in: project.path)?.canRun ?? false,
-                    canStop: viewModel.workspaceRunConsoleState(for: project.path)?.selectedSession?.state.isActive ?? false,
-                    hasSessions: !(viewModel.workspaceRunConsoleState(for: project.path)?.sessions.isEmpty ?? true),
-                    isLogsVisible: viewModel.workspaceRunConsoleState(for: project.path)?.isVisible ?? false,
+                    configurations: runToolbarState.configurations,
+                    selectedConfigurationID: runToolbarState.selectedConfigurationID,
+                    canRun: runToolbarState.canRun,
+                    canStop: runToolbarState.canStop,
+                    hasSessions: runToolbarState.hasSessions,
+                    isLogsVisible: runToolbarState.isLogsVisible,
                     onSelectConfiguration: { viewModel.selectWorkspaceRunConfiguration($0, in: project.path) },
                     onRun: {
                         do {

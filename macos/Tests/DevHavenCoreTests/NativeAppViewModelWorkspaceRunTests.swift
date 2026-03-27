@@ -42,6 +42,40 @@ final class NativeAppViewModelWorkspaceRunTests: XCTestCase {
         XCTAssertEqual(state.selectedSession?.configurationID, "project::\(project.path)::worker")
     }
 
+    func testWorkspaceRunToolbarStateBundlesSelectionAndExecutionFlags() throws {
+        let runManager = TestWorkspaceRunManager()
+        let viewModel = makeViewModel(runManager: runManager)
+        let project = makeProject(
+            runConfigurations: [
+                ProjectRunConfiguration(
+                    id: "dev",
+                    name: "Dev",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "npm run dev")
+                ),
+                ProjectRunConfiguration(
+                    id: "worker",
+                    name: "Worker",
+                    kind: .customShell,
+                    customShell: ProjectRunCustomShellConfiguration(command: "python worker.py")
+                )
+            ]
+        )
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        viewModel.selectWorkspaceRunConfiguration("project::\(project.path)::worker")
+        try viewModel.runSelectedWorkspaceConfiguration(in: project.path)
+
+        let toolbarState = viewModel.workspaceRunToolbarState(for: project.path)
+        XCTAssertEqual(toolbarState.configurations.map(\.sourceID), ["dev", "worker"])
+        XCTAssertEqual(toolbarState.selectedConfigurationID, "project::\(project.path)::worker")
+        XCTAssertTrue(toolbarState.canRun)
+        XCTAssertTrue(toolbarState.canStop)
+        XCTAssertTrue(toolbarState.hasSessions)
+        XCTAssertTrue(toolbarState.isLogsVisible)
+    }
+
     func testRemoteLogViewerConfigurationResolvesToSSHProcessExecutable() throws {
         let runManager = TestWorkspaceRunManager()
         let viewModel = makeViewModel(runManager: runManager)

@@ -14,13 +14,15 @@ final class WorkspaceShellViewTests: XCTestCase {
         )
     }
 
-    func testWorkspaceShellViewRefreshesCodexDisplayStateFromCachedSnapshotInsteadOfReadingVisibleText() throws {
+    func testWorkspaceShellViewUsesEventDrivenCodexPresentationCoordinator() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
-        XCTAssertTrue(source.contains("CodexAgentDisplayStateRefresher.refresh"), "WorkspaceShellView 应定期刷新 Codex 展示态")
-        XCTAssertTrue(source.contains("codexDisplayRefreshState"), "WorkspaceShellView 应保留 Codex 展示态刷新所需的运行时观测状态")
-        XCTAssertTrue(source.contains("codexDisplaySnapshot()"), "WorkspaceShellView 应读取 pane 级缓存 snapshot，而不是直接扫终端全文")
-        XCTAssertFalse(source.contains("currentVisibleText()"), "WorkspaceShellView 的 Codex 刷新链路不应再直接读取当前可见全文")
+        XCTAssertTrue(source.contains("CodexAgentPresentationCoordinator"), "WorkspaceShellView 应通过独立 coordinator 收口 Codex 展示态")
+        XCTAssertTrue(source.contains("syncCodexPresentationCoordinator()"), "WorkspaceShellView 应在 workspace/runtime 边界变化时同步 coordinator")
+        XCTAssertTrue(source.contains("viewModel.codexDisplayCandidates()"), "WorkspaceShellView 应在 agent signal 候选集合变化时重同步展示态 coordinator")
+        XCTAssertFalse(source.contains("Timer.publish(every: 1"), "WorkspaceShellView 不应继续通过 1 秒定时器轮询 Codex 展示态")
+        XCTAssertFalse(source.contains("CodexAgentDisplayStateRefresher.refresh"), "WorkspaceShellView 不应直接在 body 链路里调用 refresher.refresh")
+        XCTAssertFalse(source.contains("currentVisibleText()"), "WorkspaceShellView 的 Codex 展示态链路不应直接读取当前可见全文")
     }
 
     func testWorkspaceProjectSidebarHostStartsWorktreeCreationWithoutWaitingForFullProgressFlow() throws {

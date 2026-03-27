@@ -3,9 +3,8 @@ import DevHavenCore
 
 struct WorkspaceShellView: View {
     @Bindable var viewModel: NativeAppViewModel
-    @State private var codexDisplayRefreshState = CodexAgentDisplayStateRefresher.RuntimeState()
+    @State private var codexPresentationCoordinator = CodexAgentPresentationCoordinator()
     @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
-    private let codexDisplayRefreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         workspaceContent
@@ -15,22 +14,20 @@ struct WorkspaceShellView: View {
             .focusedSceneValue(\.navigateTerminalSearchNextAction, navigateTerminalSearchNextAction)
             .focusedSceneValue(\.navigateTerminalSearchPreviousAction, navigateTerminalSearchPreviousAction)
             .focusedSceneValue(\.endTerminalSearchAction, endTerminalSearchAction)
-            .onReceive(codexDisplayRefreshTimer) { _ in
-                refreshCodexDisplayStates()
-            }
             .onAppear {
                 viewModel.setWorkspacePaneSnapshotProvider(workspacePaneSnapshotProvider)
                 viewModel.startWorkspaceAgentSignalObservation()
                 syncTerminalStores()
                 warmActiveWorkspace()
                 viewModel.syncActiveWorkspaceToolWindowContext()
-                refreshCodexDisplayStates()
+                syncCodexPresentationCoordinator()
                 WorkspaceLaunchDiagnostics.shared.recordShellMounted(
                     activeProjectPath: viewModel.activeWorkspaceProjectPath,
                     openSessionCount: viewModel.openWorkspaceSessions.count
                 )
             }
             .onDisappear {
+                codexPresentationCoordinator.disconnect()
                 viewModel.stopWorkspaceAgentSignalObservation()
                 viewModel.setWorkspacePaneSnapshotProvider(nil)
             }
@@ -39,12 +36,15 @@ struct WorkspaceShellView: View {
                 viewModel.refreshWorkspaceAgentSignals()
                 warmActiveWorkspace()
                 viewModel.syncActiveWorkspaceToolWindowContext()
-                refreshCodexDisplayStates()
+                syncCodexPresentationCoordinator()
             }
             .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
                 warmActiveWorkspace()
                 viewModel.syncActiveWorkspaceToolWindowContext()
-                refreshCodexDisplayStates()
+                syncCodexPresentationCoordinator()
+            }
+            .onChange(of: viewModel.codexDisplayCandidates()) { _, _ in
+                syncCodexPresentationCoordinator()
             }
             .onChange(of: viewModel.workspaceBottomToolWindowState.activeKind) { _, _ in
                 viewModel.syncActiveWorkspaceToolWindowContext()
@@ -60,7 +60,7 @@ struct WorkspaceShellView: View {
             }
             .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
                 warmActiveWorkspace()
-                refreshCodexDisplayStates()
+                syncCodexPresentationCoordinator()
             }
     }
 
@@ -297,24 +297,11 @@ struct WorkspaceShellView: View {
         )
     }
 
-    private func refreshCodexDisplayStates() {
-        syncCodexDisplayTracking()
-        codexDisplayRefreshState = CodexAgentDisplayStateRefresher.refresh(
+    private func syncCodexPresentationCoordinator() {
+        codexPresentationCoordinator.connect(
             viewModel: viewModel,
-            runtimeState: codexDisplayRefreshState
-        ) { projectPath, paneID in
-            terminalStoreRegistry.modelIfLoaded(for: projectPath, paneID: paneID)?.codexDisplaySnapshot()
-        }
-    }
-
-    private func syncCodexDisplayTracking() {
-        let trackedPaneIDsByProjectPath = Dictionary(
-            grouping: viewModel.codexDisplayCandidates(),
-            by: \.projectPath
-        ).mapValues { candidates in
-            Set(candidates.map(\.paneID))
-        }
-        terminalStoreRegistry.syncCodexDisplayTracking(trackedPaneIDsByProjectPath)
+            terminalStoreRegistry: terminalStoreRegistry
+        )
     }
 
     private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider {

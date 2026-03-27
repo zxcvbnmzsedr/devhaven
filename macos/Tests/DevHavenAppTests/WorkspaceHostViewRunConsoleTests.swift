@@ -5,6 +5,7 @@ final class WorkspaceHostViewRunConsoleTests: XCTestCase {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
         XCTAssertTrue(source.contains("WorkspaceRunToolbarView("), "WorkspaceHostView 顶部右侧应接入运行工具栏")
+        XCTAssertTrue(source.contains("workspaceRunToolbarState(for: project.path)"), "WorkspaceHostView 应先收口 toolbar state，避免 body 中重复现算运行配置")
         XCTAssertTrue(source.contains("WorkspaceRunConsolePanel("), "WorkspaceHostView 底部应挂载 Run Console 面板")
         XCTAssertTrue(source.contains("viewModel.runSelectedWorkspaceConfiguration"), "WorkspaceHostView 应把 Run 动作桥接到运行配置级 ViewModel API")
         XCTAssertTrue(source.contains("viewModel.stopSelectedWorkspaceRunSession"), "WorkspaceHostView 应把 Stop 动作桥接到 ViewModel")

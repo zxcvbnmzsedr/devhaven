@@ -211,6 +211,37 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
 
     public var id: String { rootProject.id }
     public var hasUnreadNotifications: Bool { unreadNotificationCount > 0 }
+
+    public static func == (lhs: WorkspaceSidebarProjectGroup, rhs: WorkspaceSidebarProjectGroup) -> Bool {
+        lhs.rootProject == rhs.rootProject &&
+            lhs.worktrees == rhs.worktrees &&
+            lhs.isActive == rhs.isActive &&
+            lhs.currentBranch == rhs.currentBranch &&
+            lhs.notifications == rhs.notifications &&
+            lhs.unreadNotificationCount == rhs.unreadNotificationCount &&
+            lhs.taskStatus == rhs.taskStatus &&
+            lhs.agentState == rhs.agentState &&
+            lhs.agentSummary == rhs.agentSummary &&
+            lhs.agentKind == rhs.agentKind
+    }
+}
+
+public struct WorkspaceSidebarProjectionState: Equatable, Sendable {
+    public var groups: [WorkspaceSidebarProjectGroup]
+    public var availableProjects: [Project]
+
+    public init(
+        groups: [WorkspaceSidebarProjectGroup] = [],
+        availableProjects: [Project] = []
+    ) {
+        self.groups = groups
+        self.availableProjects = availableProjects
+    }
+
+    public static func == (lhs: WorkspaceSidebarProjectionState, rhs: WorkspaceSidebarProjectionState) -> Bool {
+        lhs.groups == rhs.groups &&
+            lhs.availableProjects == rhs.availableProjects
+    }
 }
 
 public struct WorktreeInteractionState: Equatable, Sendable {
