@@ -20,6 +20,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let projectImportDiagnostics: ProjectImportDiagnostics
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
+    @ObservationIgnored private let gitRepositoryService: NativeGitRepositoryService
     @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
     @ObservationIgnored private let runManager: any WorkspaceRunManaging
     @ObservationIgnored private let workspaceRestoreCoordinator: WorkspaceRestoreCoordinator
@@ -86,10 +87,18 @@ public final class NativeAppViewModel {
     public var selectedProjectPath: String?
     public var openWorkspaceSessions: [OpenWorkspaceSessionState]
     public var activeWorkspaceProjectPath: String?
+    public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
+    public var workspaceBottomToolWindowState: WorkspaceBottomToolWindowState
+    public var workspaceFocusedArea: WorkspaceFocusedArea
+    private var workspaceDiffTabsByProjectPath: [String: [WorkspaceDiffTabState]]
+    private var workspaceSelectedPresentedTabByProjectPath: [String: WorkspacePresentedTabSelection]
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
     private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     private var workspaceRunConsoleStateByProjectPath: [String: WorkspaceRunConsoleState]
     private var currentBranchByProjectPath: [String: String]
+    private var workspaceCommitViewModels: [String: WorkspaceCommitViewModel]
+    private var workspaceGitViewModels: [String: WorkspaceGitViewModel]
+    private var workspaceDiffTabViewModels: [String: WorkspaceDiffTabViewModel]
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
     public var selectedTag: String?
@@ -124,6 +133,7 @@ public final class NativeAppViewModel {
         projectImportDiagnostics: ProjectImportDiagnostics = .shared,
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
         worktreeService: (any NativeWorktreeServicing)? = nil,
+        gitRepositoryService: NativeGitRepositoryService = NativeGitRepositoryService(),
         agentSignalStore: WorkspaceAgentSignalStore? = nil,
         runManager: (any WorkspaceRunManaging)? = nil,
         workspaceRestoreStore: WorkspaceRestoreStore? = nil,
@@ -138,6 +148,7 @@ public final class NativeAppViewModel {
         self.projectImportDiagnostics = projectImportDiagnostics
         self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.worktreeService = worktreeService ?? NativeGitWorktreeService()
+        self.gitRepositoryService = gitRepositoryService
         self.agentSignalStore = agentSignalStore ?? WorkspaceAgentSignalStore(
             baseDirectoryURL: store.agentStatusSessionsDirectoryURL
         )
@@ -154,10 +165,18 @@ public final class NativeAppViewModel {
         self.selectedProjectPath = nil
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
+        self.workspaceSideToolWindowState = WorkspaceSideToolWindowState()
+        self.workspaceBottomToolWindowState = WorkspaceBottomToolWindowState()
+        self.workspaceFocusedArea = .terminal
+        self.workspaceDiffTabsByProjectPath = [:]
+        self.workspaceSelectedPresentedTabByProjectPath = [:]
         self.attentionStateByProjectPath = [:]
         self.agentDisplayOverridesByProjectPath = [:]
         self.workspaceRunConsoleStateByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
+        self.workspaceCommitViewModels = [:]
+        self.workspaceGitViewModels = [:]
+        self.workspaceDiffTabViewModels = [:]
         self.searchQuery = ""
         self.selectedDirectory = .all
         self.selectedTag = nil
@@ -713,12 +732,126 @@ public final class NativeAppViewModel {
         return openWorkspaceSessions.first(where: { $0.projectPath == activeWorkspaceProjectPath })?.controller
     }
 
+    public var activeWorkspaceRootProjectPath: String? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return openWorkspaceSessions.first(where: { $0.projectPath == activeWorkspaceProjectPath })?.rootProjectPath
+    }
+
+    public var activeWorkspaceRootProject: Project? {
+        guard let activeWorkspaceRootProjectPath else {
+            return nil
+        }
+        return snapshot.projects.first(where: { $0.path == activeWorkspaceRootProjectPath })
+    }
+
+    public var activeWorkspaceGitRepositoryContext: WorkspaceGitRepositoryContext? {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository
+        else {
+            return nil
+        }
+        return WorkspaceGitRepositoryContext(
+            rootProjectPath: rootProject.path,
+            repositoryPath: rootProject.path
+        )
+    }
+
+    public var activeWorkspaceCommitRepositoryContext: WorkspaceCommitRepositoryContext? {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository
+        else {
+            return nil
+        }
+        return WorkspaceCommitRepositoryContext(
+            rootProjectPath: rootProject.path,
+            repositoryPath: rootProject.path,
+            executionPath: preferredWorkspaceGitExecutionPath(for: rootProject.path)
+        )
+    }
+
+    public var activeWorkspaceCommitViewModel: WorkspaceCommitViewModel? {
+        guard let rootProjectPath = activeWorkspaceRootProjectPath else {
+            return nil
+        }
+        return workspaceCommitViewModels[rootProjectPath]
+    }
+
+    public var activeWorkspaceGitViewModel: WorkspaceGitViewModel? {
+        guard let rootProjectPath = activeWorkspaceRootProjectPath else {
+            return nil
+        }
+        return workspaceGitViewModels[rootProjectPath]
+    }
+
     public var activeWorkspaceState: WorkspaceSessionState? {
         activeWorkspaceController?.sessionState
     }
 
     public var activeWorkspaceLaunchRequest: WorkspaceTerminalLaunchRequest? {
         activeWorkspaceController?.selectedPane?.request
+    }
+
+    public var activeWorkspaceDiffTabs: [WorkspaceDiffTabState] {
+        guard let activeWorkspaceProjectPath else {
+            return []
+        }
+        return workspaceDiffTabsByProjectPath[activeWorkspaceProjectPath] ?? []
+    }
+
+    public func workspacePresentedTabs(for projectPath: String) -> [WorkspacePresentedTabItem] {
+        let selected = resolvedWorkspacePresentedTabSelection(for: projectPath)
+        let terminalTabs = workspaceController(for: projectPath)?.tabs.map { tab in
+            WorkspacePresentedTabItem(
+                id: tab.id,
+                title: tab.title,
+                selection: .terminal(tab.id),
+                isSelected: selected == .terminal(tab.id)
+            )
+        } ?? []
+        let diffTabs = (workspaceDiffTabsByProjectPath[projectPath] ?? []).map { tab in
+            WorkspacePresentedTabItem(
+                id: tab.id,
+                title: tab.title,
+                selection: .diff(tab.id),
+                isSelected: selected == .diff(tab.id)
+            )
+        }
+        return terminalTabs + diffTabs
+    }
+
+    public func workspaceSelectedPresentedTab(for projectPath: String) -> WorkspacePresentedTabSelection? {
+        resolvedWorkspacePresentedTabSelection(for: projectPath)
+    }
+
+    public func workspaceDiffTabViewModel(for projectPath: String, tabID: String) -> WorkspaceDiffTabViewModel? {
+        guard let tab = workspaceDiffTabsByProjectPath[projectPath]?.first(where: { $0.id == tabID }) else {
+            return nil
+        }
+        if let existing = workspaceDiffTabViewModels[tabID] {
+            return existing
+        }
+        let viewModel = WorkspaceDiffTabViewModel(
+            tab: tab,
+            client: .live(repositoryService: gitRepositoryService)
+        )
+        workspaceDiffTabViewModels[tabID] = viewModel
+        return viewModel
+    }
+
+    public var activeWorkspaceSelectedPresentedTab: WorkspacePresentedTabSelection? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath)
+    }
+
+    public var activeWorkspaceSelectedDiffTabID: String? {
+        guard case let .diff(tabID)? = activeWorkspaceSelectedPresentedTab else {
+            return nil
+        }
+        return tabID
     }
 
     public var isWorkspacePresented: Bool {
@@ -1054,6 +1187,7 @@ public final class NativeAppViewModel {
             openWorkspaceSessions.remove(at: index)
         }
         removedPaths.forEach { runManager.stopAll(projectPath: $0) }
+        clearWorkspaceRuntimePresentationState(for: removedPaths)
         attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
         workspaceRunConsoleStateByProjectPath = workspaceRunConsoleStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
         pruneWorkspaceAgentDisplayOverrides()
@@ -1105,6 +1239,328 @@ public final class NativeAppViewModel {
         isDetailPanelPresented = false
         scheduleSelectedProjectDocumentRefresh()
         scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func prepareActiveWorkspaceGitViewModel() {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository,
+              let repositoryContext = activeWorkspaceGitRepositoryContext
+        else {
+            return
+        }
+
+        let executionWorktrees = workspaceGitExecutionContexts(for: rootProject)
+        let preferredExecutionPath = preferredWorkspaceGitExecutionPath(for: rootProject.path)
+
+        if let existing = workspaceGitViewModels[rootProject.path] {
+            existing.updateRepositoryContext(
+                repositoryContext,
+                executionWorktrees: executionWorktrees,
+                preferredExecutionWorktreePath: preferredExecutionPath
+            )
+            return
+        }
+
+        workspaceGitViewModels[rootProject.path] = WorkspaceGitViewModel(
+            repositoryContext: repositoryContext,
+            executionWorktrees: executionWorktrees,
+            preferredExecutionWorktreePath: preferredExecutionPath,
+            client: .live(service: gitRepositoryService)
+        )
+    }
+
+    public func prepareActiveWorkspaceCommitViewModel() {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository,
+              let repositoryContext = activeWorkspaceCommitRepositoryContext
+        else {
+            return
+        }
+
+        if let existing = workspaceCommitViewModels[rootProject.path] {
+            existing.updateRepositoryContext(repositoryContext)
+            return
+        }
+
+        workspaceCommitViewModels[rootProject.path] = WorkspaceCommitViewModel(
+            repositoryContext: repositoryContext,
+            client: .live(service: gitRepositoryService)
+        )
+    }
+
+    public func toggleWorkspaceToolWindow(_ kind: WorkspaceToolWindowKind) {
+        switch kind.placement {
+        case .side:
+            if workspaceSideToolWindowState.activeKind == kind, workspaceSideToolWindowState.isVisible {
+                hideWorkspaceSideToolWindow()
+                return
+            }
+            showWorkspaceSideToolWindow(kind)
+        case .bottom:
+            if workspaceBottomToolWindowState.activeKind == kind, workspaceBottomToolWindowState.isVisible {
+                hideWorkspaceBottomToolWindow()
+                return
+            }
+            showWorkspaceBottomToolWindow(kind)
+        }
+    }
+
+    public func showWorkspaceSideToolWindow(_ kind: WorkspaceToolWindowKind) {
+        guard kind.placement == .side else {
+            return
+        }
+        workspaceSideToolWindowState.activeKind = kind
+        workspaceSideToolWindowState.isVisible = true
+        workspaceSideToolWindowState.width = workspaceSideToolWindowState.lastExpandedWidth
+        syncActiveWorkspaceToolWindowContext()
+        workspaceFocusedArea = .sideToolWindow(kind)
+    }
+
+    public func hideWorkspaceSideToolWindow() {
+        if workspaceSideToolWindowState.isVisible {
+            workspaceSideToolWindowState.lastExpandedWidth = workspaceSideToolWindowState.width
+        }
+        workspaceSideToolWindowState.isVisible = false
+        if case .sideToolWindow = workspaceFocusedArea {
+            workspaceFocusedArea = .terminal
+        }
+    }
+
+    public func updateWorkspaceSideToolWindowWidth(_ width: Double) {
+        let clamped = max(220, width)
+        workspaceSideToolWindowState.width = clamped
+        workspaceSideToolWindowState.lastExpandedWidth = clamped
+    }
+
+    public func showWorkspaceBottomToolWindow(_ kind: WorkspaceToolWindowKind) {
+        guard kind.placement == .bottom else {
+            return
+        }
+        workspaceBottomToolWindowState.activeKind = kind
+        workspaceBottomToolWindowState.isVisible = true
+        workspaceBottomToolWindowState.height = workspaceBottomToolWindowState.lastExpandedHeight
+        syncActiveWorkspaceToolWindowContext()
+        workspaceFocusedArea = .bottomToolWindow(kind)
+    }
+
+    public func hideWorkspaceBottomToolWindow() {
+        if workspaceBottomToolWindowState.isVisible {
+            workspaceBottomToolWindowState.lastExpandedHeight = workspaceBottomToolWindowState.height
+        }
+        workspaceBottomToolWindowState.isVisible = false
+        if case .bottomToolWindow = workspaceFocusedArea {
+            workspaceFocusedArea = .terminal
+        }
+    }
+
+    public func updateWorkspaceBottomToolWindowHeight(_ height: Double) {
+        let clamped = max(160, height)
+        workspaceBottomToolWindowState.height = clamped
+        workspaceBottomToolWindowState.lastExpandedHeight = clamped
+    }
+
+    public func setWorkspaceFocusedArea(_ area: WorkspaceFocusedArea) {
+        workspaceFocusedArea = area
+    }
+
+    @discardableResult
+    public func openActiveWorkspaceDiffTab(
+        source: WorkspaceDiffSource,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide
+    ) -> WorkspaceDiffTabState? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        let chain = requestChainForActiveDiffSource(
+            source: source,
+            preferredTitle: preferredTitle,
+            preferredViewerMode: preferredViewerMode
+        )
+        return openWorkspaceDiffSession(
+            projectPath: activeWorkspaceProjectPath,
+            chain: chain,
+            identityOverride: nil,
+            originContext: WorkspaceDiffOriginContext(
+                presentedTabSelection: workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath),
+                focusedArea: workspaceFocusedArea
+            ),
+            focusTab: true,
+            createIfNeeded: true
+        )
+    }
+
+    @discardableResult
+    public func openActiveWorkspaceDiffSession(
+        chain: WorkspaceDiffRequestChain,
+        identityOverride: String? = nil
+    ) -> WorkspaceDiffTabState? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return openWorkspaceDiffSession(
+            projectPath: activeWorkspaceProjectPath,
+            chain: chain,
+            identityOverride: identityOverride,
+            originContext: WorkspaceDiffOriginContext(
+                presentedTabSelection: workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath),
+                focusedArea: workspaceFocusedArea
+            ),
+            focusTab: true,
+            createIfNeeded: true
+        )
+    }
+
+    @discardableResult
+    public func openActiveWorkspaceCommitDiffPreview(
+        repositoryPath: String,
+        executionPath: String,
+        filePath: String,
+        group: WorkspaceCommitChangeGroup?,
+        status: WorkspaceCommitChangeStatus?,
+        oldPath: String?,
+        allChanges: [WorkspaceCommitChange]? = nil,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide
+    ) -> WorkspaceDiffTabState? {
+        guard let request = activeWorkspaceCommitDiffPreviewRequest(
+            repositoryPath: repositoryPath,
+            executionPath: executionPath,
+            filePath: filePath,
+            group: group,
+            status: status,
+            oldPath: oldPath,
+            allChanges: allChanges,
+            preferredTitle: preferredTitle,
+            preferredViewerMode: preferredViewerMode
+        ) else {
+            return nil
+        }
+        return syncWorkspaceDiffTab(request, focusTab: true, createIfNeeded: true)
+    }
+
+    public func syncActiveWorkspaceCommitDiffPreviewIfNeeded(
+        repositoryPath: String,
+        executionPath: String,
+        filePath: String,
+        group: WorkspaceCommitChangeGroup?,
+        status: WorkspaceCommitChangeStatus?,
+        oldPath: String?,
+        allChanges: [WorkspaceCommitChange]? = nil,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode = .sideBySide
+    ) {
+        guard let request = activeWorkspaceCommitDiffPreviewRequest(
+            repositoryPath: repositoryPath,
+            executionPath: executionPath,
+            filePath: filePath,
+            group: group,
+            status: status,
+            oldPath: oldPath,
+            allChanges: allChanges,
+            preferredTitle: preferredTitle,
+            preferredViewerMode: preferredViewerMode
+        ) else {
+            return
+        }
+        _ = syncWorkspaceDiffTab(request, focusTab: false, createIfNeeded: false)
+    }
+
+    @discardableResult
+    public func openWorkspaceDiffTab(_ request: WorkspaceDiffOpenRequest) -> WorkspaceDiffTabState {
+        syncWorkspaceDiffTab(request, focusTab: true, createIfNeeded: true)
+            ?? WorkspaceDiffTabState(
+                id: "workspace-diff:\(UUID().uuidString.lowercased())",
+                identity: request.identity,
+                title: request.preferredTitle,
+                source: request.source,
+                viewerMode: request.preferredViewerMode,
+                requestChain: request.requestChain,
+                originContext: request.originContext
+            )
+    }
+
+    public func selectWorkspacePresentedTab(_ selection: WorkspacePresentedTabSelection, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+
+        switch selection {
+        case let .terminal(tabID):
+            guard workspaceController(for: resolvedProjectPath)?.tabs.contains(where: { $0.id == tabID }) == true else {
+                return
+            }
+            workspaceController(for: resolvedProjectPath)?.selectTab(tabID)
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .terminal(tabID)
+            workspaceFocusedArea = .terminal
+        case let .diff(tabID):
+            guard workspaceDiffTabsByProjectPath[resolvedProjectPath]?.contains(where: { $0.id == tabID }) == true else {
+                return
+            }
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(tabID)
+            workspaceFocusedArea = .diffTab(tabID)
+        }
+    }
+
+    public func closeWorkspaceDiffTab(_ tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var tabs = workspaceDiffTabsByProjectPath[resolvedProjectPath],
+              let removedIndex = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return
+        }
+
+        let removedTab = tabs[removedIndex]
+        let isClosingSelectedTab = resolvedWorkspacePresentedTabSelection(for: resolvedProjectPath) == .diff(tabID)
+        tabs.remove(at: removedIndex)
+        workspaceDiffTabsByProjectPath[resolvedProjectPath] = tabs
+        workspaceDiffTabViewModels[tabID] = nil
+
+        guard isClosingSelectedTab else {
+            return
+        }
+
+        if restoreOriginContext(for: removedTab, in: resolvedProjectPath, remainingDiffTabs: tabs) {
+            return
+        }
+
+        if tabs.indices.contains(removedIndex) {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(tabs[removedIndex].id)
+            workspaceFocusedArea = .diffTab(tabs[removedIndex].id)
+        } else if let previous = tabs.last {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(previous.id)
+            workspaceFocusedArea = .diffTab(previous.id)
+        } else if let terminalTabID = workspaceController(for: resolvedProjectPath)?.selectedTabId
+            ?? workspaceController(for: resolvedProjectPath)?.selectedTab?.id
+        {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .terminal(terminalTabID)
+            workspaceFocusedArea = .terminal
+        } else {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = nil
+            workspaceFocusedArea = .terminal
+        }
+    }
+
+    public func syncActiveWorkspaceToolWindowContext() {
+        if workspaceSideToolWindowState.isVisible,
+           let kind = workspaceSideToolWindowState.activeKind {
+            switch kind {
+            case .commit:
+                prepareActiveWorkspaceCommitViewModel()
+            case .git:
+                prepareActiveWorkspaceGitViewModel()
+            }
+        }
+
+        if workspaceBottomToolWindowState.isVisible,
+           let kind = workspaceBottomToolWindowState.activeKind {
+            switch kind {
+            case .commit:
+                prepareActiveWorkspaceCommitViewModel()
+            case .git:
+                prepareActiveWorkspaceGitViewModel()
+            }
+        }
     }
 
     public func createWorkspaceTab(in projectPath: String? = nil) {
@@ -2082,6 +2538,455 @@ public final class NativeAppViewModel {
         openWorkspaceSessions.first(where: { $0.projectPath == path })?.isQuickTerminal ?? false
     }
 
+    private func resolvedWorkspacePresentedTabSelection(for projectPath: String) -> WorkspacePresentedTabSelection? {
+        let terminalTabID = workspaceController(for: projectPath)?.selectedTabId
+            ?? workspaceController(for: projectPath)?.selectedTab?.id
+        let diffTabs = workspaceDiffTabsByProjectPath[projectPath] ?? []
+
+        if let stored = workspaceSelectedPresentedTabByProjectPath[projectPath] {
+            switch stored {
+            case let .terminal(tabID):
+                if workspaceController(for: projectPath)?.tabs.contains(where: { $0.id == tabID }) == true {
+                    return .terminal(tabID)
+                }
+            case let .diff(tabID):
+                if diffTabs.contains(where: { $0.id == tabID }) {
+                    return .diff(tabID)
+                }
+            }
+        }
+
+        return terminalTabID.map(WorkspacePresentedTabSelection.terminal)
+    }
+
+    private func requestChainForActiveDiffSource(
+        source: WorkspaceDiffSource,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffRequestChain {
+        switch source {
+        case let .gitLogCommitFile(repositoryPath, commitHash, filePath):
+            return gitLogDiffRequestChain(
+                repositoryPath: repositoryPath,
+                commitHash: commitHash,
+                activeFilePath: filePath,
+                activePreferredTitle: preferredTitle,
+                preferredViewerMode: preferredViewerMode
+            )
+        case let .workingTreeChange(repositoryPath, executionPath, filePath, group, status, oldPath):
+            return commitDiffRequestChain(
+                repositoryPath: repositoryPath,
+                executionPath: executionPath,
+                activeFilePath: filePath,
+                activeGroup: group,
+                activeStatus: status,
+                activeOldPath: oldPath,
+                activePreferredTitle: preferredTitle,
+                preferredViewerMode: preferredViewerMode,
+                changes: nil
+            )
+        }
+    }
+
+    private func commitDiffRequestChain(
+        repositoryPath: String,
+        executionPath: String,
+        activeFilePath: String,
+        activeGroup: WorkspaceCommitChangeGroup?,
+        activeStatus: WorkspaceCommitChangeStatus?,
+        activeOldPath: String?,
+        activePreferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode,
+        changes: [WorkspaceCommitChange]?
+    ) -> WorkspaceDiffRequestChain {
+        let snapshotChanges = changes ?? activeWorkspaceCommitViewModel?.changesSnapshot?.changes
+        guard let snapshotChanges, !snapshotChanges.isEmpty else {
+            return WorkspaceDiffRequestChain(
+                items: [
+                    workingTreeRequestItem(
+                        repositoryPath: repositoryPath,
+                        executionPath: executionPath,
+                        filePath: activeFilePath,
+                        group: activeGroup,
+                        status: activeStatus,
+                        oldPath: activeOldPath,
+                        title: activePreferredTitle,
+                        preferredViewerMode: preferredViewerMode
+                    )
+                ]
+            )
+        }
+
+        let items = snapshotChanges.map { change in
+            workingTreeRequestItem(
+                repositoryPath: repositoryPath,
+                executionPath: executionPath,
+                filePath: change.path,
+                group: change.group,
+                status: change.status,
+                oldPath: change.oldPath,
+                title: change.path == activeFilePath ? activePreferredTitle : "Changes: \(diffDisplayTitle(for: change.path))",
+                preferredViewerMode: preferredViewerMode
+            )
+        }
+        let activeIndex = items.firstIndex(where: {
+            if case let .workingTreeChange(_, _, filePath, _, _, oldPath) = $0.source {
+                return filePath == activeFilePath && oldPath == activeOldPath
+            }
+            return false
+        }) ?? 0
+        return WorkspaceDiffRequestChain(items: items, activeIndex: activeIndex)
+    }
+
+    private func gitLogDiffRequestChain(
+        repositoryPath: String,
+        commitHash: String,
+        activeFilePath: String,
+        activePreferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffRequestChain {
+        guard let detail = activeWorkspaceGitViewModel?.logViewModel.selectedCommitDetail,
+              detail.hash == commitHash,
+              !detail.files.isEmpty
+        else {
+            return WorkspaceDiffRequestChain(
+                items: [
+                    gitLogRequestItem(
+                        repositoryPath: repositoryPath,
+                        commitHash: commitHash,
+                        file: WorkspaceGitCommitFileChange(path: activeFilePath, status: .modified),
+                        detail: nil,
+                        title: activePreferredTitle,
+                        preferredViewerMode: preferredViewerMode
+                    )
+                ]
+            )
+        }
+
+        let items = detail.files.map { file in
+            gitLogRequestItem(
+                repositoryPath: repositoryPath,
+                commitHash: commitHash,
+                file: file,
+                detail: detail,
+                title: file.path == activeFilePath ? activePreferredTitle : "Commit: \(diffDisplayTitle(for: file.path))",
+                preferredViewerMode: preferredViewerMode
+            )
+        }
+        let activeIndex = items.firstIndex(where: {
+            if case let .gitLogCommitFile(_, _, filePath) = $0.source {
+                return filePath == activeFilePath
+            }
+            return false
+        }) ?? 0
+        return WorkspaceDiffRequestChain(items: items, activeIndex: activeIndex)
+    }
+
+    private func workingTreeRequestItem(
+        repositoryPath: String,
+        executionPath: String,
+        filePath: String,
+        group: WorkspaceCommitChangeGroup?,
+        status: WorkspaceCommitChangeStatus?,
+        oldPath: String?,
+        title: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffRequestItem {
+        WorkspaceDiffRequestItem(
+            id: "working-tree|\(executionPath)|\(filePath)",
+            title: title,
+            source: .workingTreeChange(
+                repositoryPath: repositoryPath,
+                executionPath: executionPath,
+                filePath: filePath,
+                group: group,
+                status: status,
+                oldPath: oldPath
+            ),
+            preferredViewerMode: preferredViewerMode
+        )
+    }
+
+    private func gitLogRequestItem(
+        repositoryPath: String,
+        commitHash: String,
+        file: WorkspaceGitCommitFileChange,
+        detail: WorkspaceGitCommitDetail?,
+        title: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffRequestItem {
+        let timestampText = detail.map { gitDiffTimestampText($0.authorTimestamp) }
+        let parentRevision = detail?.parentHashes.first
+        return WorkspaceDiffRequestItem(
+            id: "git-log|\(repositoryPath)|\(commitHash)|\(file.path)",
+            title: title,
+            source: .gitLogCommitFile(
+                repositoryPath: repositoryPath,
+                commitHash: commitHash,
+                filePath: file.path
+            ),
+            preferredViewerMode: preferredViewerMode,
+            paneMetadataSeeds: [
+                WorkspaceDiffPaneMetadataSeed(
+                    role: .left,
+                    title: "Before",
+                    path: file.oldPath ?? file.path,
+                    revision: parentRevision,
+                    hash: parentRevision,
+                    author: detail?.authorName,
+                    timestamp: timestampText
+                ),
+                WorkspaceDiffPaneMetadataSeed(
+                    role: .right,
+                    title: "After",
+                    path: file.path,
+                    oldPath: file.oldPath,
+                    revision: detail?.shortHash ?? commitHash,
+                    hash: detail?.hash ?? commitHash,
+                    author: detail?.authorName,
+                    timestamp: timestampText,
+                    copyPayloads: [
+                        WorkspaceDiffPaneCopyPayload(
+                            id: "commit-hash",
+                            label: "提交哈希",
+                            value: detail?.hash ?? commitHash
+                        )
+                    ]
+                ),
+            ]
+        )
+    }
+
+    private func diffDisplayTitle(for path: String) -> String {
+        let fileName = (path as NSString).lastPathComponent
+        return fileName.isEmpty ? path : fileName
+    }
+
+    private func gitDiffTimestampText(_ timestamp: TimeInterval) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.string(from: Date(timeIntervalSince1970: timestamp))
+    }
+
+    private func activeWorkspaceCommitDiffPreviewRequest(
+        repositoryPath: String,
+        executionPath: String,
+        filePath: String,
+        group: WorkspaceCommitChangeGroup?,
+        status: WorkspaceCommitChangeStatus?,
+        oldPath: String?,
+        allChanges: [WorkspaceCommitChange]? = nil,
+        preferredTitle: String,
+        preferredViewerMode: WorkspaceDiffViewerMode
+    ) -> WorkspaceDiffOpenRequest? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        let chain = commitDiffRequestChain(
+            repositoryPath: repositoryPath,
+            executionPath: executionPath,
+            activeFilePath: filePath,
+            activeGroup: group,
+            activeStatus: status,
+            activeOldPath: oldPath,
+            activePreferredTitle: preferredTitle,
+            preferredViewerMode: preferredViewerMode,
+            changes: allChanges
+        )
+        guard let activeItem = chain.activeItem else {
+            return nil
+        }
+        return WorkspaceDiffOpenRequest(
+            projectPath: activeWorkspaceProjectPath,
+            source: activeItem.source,
+            preferredTitle: activeItem.title,
+            preferredViewerMode: activeItem.preferredViewerMode,
+            requestChain: chain,
+            identityOverride: commitPreviewIdentity(for: executionPath),
+            originContext: WorkspaceDiffOriginContext(
+                presentedTabSelection: workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath),
+                focusedArea: workspaceFocusedArea
+            )
+        )
+    }
+
+    @discardableResult
+    private func openWorkspaceDiffSession(
+        projectPath: String,
+        chain: WorkspaceDiffRequestChain,
+        identityOverride: String? = nil,
+        originContext: WorkspaceDiffOriginContext?,
+        focusTab: Bool,
+        createIfNeeded: Bool
+    ) -> WorkspaceDiffTabState? {
+        guard let activeItem = chain.activeItem else {
+            return nil
+        }
+        return syncWorkspaceDiffTab(
+            WorkspaceDiffOpenRequest(
+                projectPath: projectPath,
+                source: activeItem.source,
+                preferredTitle: activeItem.title,
+                preferredViewerMode: activeItem.preferredViewerMode,
+                requestChain: chain,
+                identityOverride: identityOverride,
+                originContext: originContext
+            ),
+            focusTab: focusTab,
+            createIfNeeded: createIfNeeded
+        )
+    }
+
+    private func commitPreviewIdentity(for executionPath: String) -> String {
+        "commit-preview|\(executionPath)"
+    }
+
+    @discardableResult
+    private func syncWorkspaceDiffTab(
+        _ request: WorkspaceDiffOpenRequest,
+        focusTab: Bool,
+        createIfNeeded: Bool
+    ) -> WorkspaceDiffTabState? {
+        activeWorkspaceProjectPath = request.projectPath
+
+        if var tabs = workspaceDiffTabsByProjectPath[request.projectPath],
+           let existingIndex = tabs.firstIndex(where: { $0.identity == request.identity }) {
+            var existing = tabs[existingIndex]
+            existing.title = request.preferredTitle
+            existing.source = request.source
+            existing.viewerMode = request.preferredViewerMode
+            existing.requestChain = request.requestChain
+            if let originContext = request.originContext {
+                existing.originContext = originContext
+            }
+            tabs[existingIndex] = existing
+            workspaceDiffTabsByProjectPath[request.projectPath] = tabs
+            if let requestChain = request.requestChain {
+                workspaceDiffTabViewModels[existing.id]?.openSession(requestChain)
+            } else {
+                workspaceDiffTabViewModels[existing.id]?.updateTab(existing)
+            }
+            if focusTab {
+                workspaceSelectedPresentedTabByProjectPath[request.projectPath] = .diff(existing.id)
+                workspaceFocusedArea = .diffTab(existing.id)
+            }
+            return existing
+        }
+
+        guard createIfNeeded else {
+            return nil
+        }
+
+        let tab = WorkspaceDiffTabState(
+            id: "workspace-diff:\(UUID().uuidString.lowercased())",
+            identity: request.identity,
+            title: request.preferredTitle,
+            source: request.source,
+            viewerMode: request.preferredViewerMode,
+            requestChain: request.requestChain,
+            originContext: request.originContext
+        )
+        workspaceDiffTabsByProjectPath[request.projectPath, default: []].append(tab)
+        if focusTab {
+            workspaceSelectedPresentedTabByProjectPath[request.projectPath] = .diff(tab.id)
+            workspaceFocusedArea = .diffTab(tab.id)
+        }
+        return tab
+    }
+
+    private func restoreOriginContext(
+        for tab: WorkspaceDiffTabState,
+        in projectPath: String,
+        remainingDiffTabs: [WorkspaceDiffTabState]
+    ) -> Bool {
+        guard let originContext = tab.originContext,
+              let originSelection = validPresentedTabSelection(
+                originContext.presentedTabSelection,
+                in: projectPath,
+                diffTabs: remainingDiffTabs
+              )
+        else {
+            return false
+        }
+
+        selectWorkspacePresentedTab(originSelection, in: projectPath)
+        return restoreFocusedArea(
+            originContext.focusedArea,
+            for: originSelection,
+            in: projectPath,
+            remainingDiffTabs: remainingDiffTabs
+        )
+    }
+
+    private func validPresentedTabSelection(
+        _ selection: WorkspacePresentedTabSelection?,
+        in projectPath: String,
+        diffTabs: [WorkspaceDiffTabState]
+    ) -> WorkspacePresentedTabSelection? {
+        guard let selection else {
+            return nil
+        }
+
+        switch selection {
+        case let .terminal(tabID):
+            guard workspaceController(for: projectPath)?.tabs.contains(where: { $0.id == tabID }) == true else {
+                return nil
+            }
+            return .terminal(tabID)
+        case let .diff(tabID):
+            guard diffTabs.contains(where: { $0.id == tabID }) else {
+                return nil
+            }
+            return .diff(tabID)
+        }
+    }
+
+    private func restoreFocusedArea(
+        _ area: WorkspaceFocusedArea,
+        for selection: WorkspacePresentedTabSelection,
+        in projectPath: String,
+        remainingDiffTabs: [WorkspaceDiffTabState]
+    ) -> Bool {
+        switch area {
+        case .terminal:
+            workspaceFocusedArea = .terminal
+            return true
+        case let .sideToolWindow(kind):
+            showWorkspaceSideToolWindow(kind)
+            return true
+        case let .bottomToolWindow(kind):
+            showWorkspaceBottomToolWindow(kind)
+            return true
+        case let .diffTab(tabID):
+            guard validPresentedTabSelection(.diff(tabID), in: projectPath, diffTabs: remainingDiffTabs) != nil else {
+                workspaceFocusedArea = defaultFocusedArea(for: selection)
+                return false
+            }
+            workspaceFocusedArea = .diffTab(tabID)
+            return true
+        }
+    }
+
+    private func defaultFocusedArea(for selection: WorkspacePresentedTabSelection) -> WorkspaceFocusedArea {
+        switch selection {
+        case .terminal:
+            return .terminal
+        case let .diff(tabID):
+            return .diffTab(tabID)
+        }
+    }
+
+    private func clearWorkspaceRuntimePresentationState(for paths: Set<String>) {
+        for path in paths {
+            for tab in workspaceDiffTabsByProjectPath[path] ?? [] {
+                workspaceDiffTabViewModels[tab.id] = nil
+            }
+            workspaceDiffTabsByProjectPath[path] = nil
+            workspaceSelectedPresentedTabByProjectPath[path] = nil
+        }
+    }
+
     private func workspaceController(for projectPath: String? = nil) -> GhosttyWorkspaceController? {
         let targetProjectPath = projectPath ?? activeWorkspaceProjectPath
         guard let targetProjectPath else {
@@ -2264,6 +3169,35 @@ public final class NativeAppViewModel {
         }
         mutate(&state)
         workspaceRunConsoleStateByProjectPath[projectPath] = state
+    }
+
+    private func preferredWorkspaceGitExecutionPath(for rootProjectPath: String) -> String {
+        if let activeWorkspaceProjectPath,
+           openWorkspaceSessions.contains(where: {
+               $0.projectPath == activeWorkspaceProjectPath && $0.rootProjectPath == rootProjectPath
+           })
+        {
+            return activeWorkspaceProjectPath
+        }
+        return rootProjectPath
+    }
+
+    private func workspaceGitExecutionContexts(for rootProject: Project) -> [WorkspaceGitWorktreeContext] {
+        let rootContext = WorkspaceGitWorktreeContext(
+            path: rootProject.path,
+            displayName: rootProject.name,
+            branchName: currentBranchByProjectPath[rootProject.path],
+            isRootProject: true
+        )
+        let worktreeContexts = rootProject.worktrees.map { worktree in
+            WorkspaceGitWorktreeContext(
+                path: worktree.path,
+                displayName: worktree.name,
+                branchName: worktree.branch,
+                isRootProject: false
+            )
+        }
+        return [rootContext] + worktreeContexts
     }
 
     private func refreshCurrentBranch(for projectPath: String) {

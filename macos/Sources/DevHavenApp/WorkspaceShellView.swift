@@ -1,226 +1,67 @@
 import SwiftUI
 import DevHavenCore
 
-private struct WorktreeDeleteRequest: Identifiable, Equatable {
-    let rootProjectPath: String
-    let worktreePath: String
-
-    var id: String { "\(rootProjectPath)|\(worktreePath)" }
-}
-
 struct WorkspaceShellView: View {
     @Bindable var viewModel: NativeAppViewModel
-    @State private var isProjectPickerPresented = false
-    @State private var worktreeDialogProjectPath: String?
-    @State private var pendingDeleteRequest: WorktreeDeleteRequest?
-    @State private var sidebarWidth: CGFloat = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
     @State private var codexDisplayRefreshState = CodexAgentDisplayStateRefresher.RuntimeState()
     @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
     private let codexDisplayRefreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    private var worktreeDialogProject: Project? {
-        guard let worktreeDialogProjectPath else {
-            return nil
-        }
-        return viewModel.snapshot.projects.first(where: { $0.path == worktreeDialogProjectPath })
-    }
-
     var body: some View {
-        GeometryReader { geometry in
-            let totalWidth = geometry.size.width
-            WorkspaceSplitView(
-                direction: .horizontal,
-                ratio: WorkspaceSidebarLayoutPolicy.sidebarRatio(
-                    for: sidebarWidth,
-                    totalWidth: totalWidth
-                ),
-                onRatioChange: { ratio in
-                    sidebarWidth = WorkspaceSidebarLayoutPolicy.sidebarWidth(
-                        for: ratio,
-                        totalWidth: totalWidth
-                    )
-                },
-                onRatioChangeEnded: { ratio in
-                    let committedWidth = WorkspaceSidebarLayoutPolicy.sidebarWidth(
-                        for: ratio,
-                        totalWidth: totalWidth
-                    )
-                    sidebarWidth = committedWidth
-                    persistSidebarWidth(committedWidth)
-                },
-                onEqualize: {
-                    sidebarWidth = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
-                    persistSidebarWidth(WorkspaceSidebarLayoutPolicy.defaultSidebarWidth)
-                }
-            ) {
-                WorkspaceProjectListView(
-                    groups: viewModel.workspaceSidebarGroups,
-                    canOpenMoreProjects: !viewModel.availableWorkspaceProjects.isEmpty,
-                    onSelectProject: viewModel.activateWorkspaceProject,
-                    onOpenProjectPicker: { isProjectPickerPresented = true },
-                    onRequestCreateWorktree: { projectPath in
-                        worktreeDialogProjectPath = projectPath
-                    },
-                    onRefreshWorktrees: { projectPath in
-                        Task {
-                            do {
-                                try await viewModel.refreshProjectWorktrees(projectPath)
-                            } catch {
-                                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                            }
-                        }
-                    },
-                    onOpenWorktree: { rootProjectPath, worktreePath in
-                        viewModel.openWorkspaceWorktree(worktreePath, from: rootProjectPath)
-                    },
-                    onRetryWorktree: { rootProjectPath, worktreePath in
-                        Task {
-                            do {
-                                try await viewModel.retryWorkspaceWorktree(worktreePath, from: rootProjectPath)
-                            } catch {
-                                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                            }
-                        }
-                    },
-                    onRequestDeleteWorktree: { rootProjectPath, worktreePath in
-                        pendingDeleteRequest = WorktreeDeleteRequest(rootProjectPath: rootProjectPath, worktreePath: worktreePath)
-                    },
-                    onFocusNotification: viewModel.focusWorkspaceNotification,
-                    onCloseProject: viewModel.closeWorkspaceProject,
-                    onExit: viewModel.exitWorkspace
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } trailing: {
-                workspaceContent
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(NativeTheme.window)
+        workspaceContent
+            .background(NativeTheme.window)
+            .focusedSceneValue(\.startTerminalSearchAction, startTerminalSearchAction)
+            .focusedSceneValue(\.searchSelectionAction, searchSelectionAction)
+            .focusedSceneValue(\.navigateTerminalSearchNextAction, navigateTerminalSearchNextAction)
+            .focusedSceneValue(\.navigateTerminalSearchPreviousAction, navigateTerminalSearchPreviousAction)
+            .focusedSceneValue(\.endTerminalSearchAction, endTerminalSearchAction)
+            .onReceive(codexDisplayRefreshTimer) { _ in
+                refreshCodexDisplayStates()
             }
             .onAppear {
-                syncSidebarWidth(totalWidth: totalWidth)
+                viewModel.setWorkspacePaneSnapshotProvider(workspacePaneSnapshotProvider)
+                viewModel.startWorkspaceAgentSignalObservation()
+                syncTerminalStores()
+                warmActiveWorkspace()
+                viewModel.syncActiveWorkspaceToolWindowContext()
+                refreshCodexDisplayStates()
+                WorkspaceLaunchDiagnostics.shared.recordShellMounted(
+                    activeProjectPath: viewModel.activeWorkspaceProjectPath,
+                    openSessionCount: viewModel.openWorkspaceSessions.count
+                )
             }
-            .onChange(of: viewModel.workspaceSidebarWidth) { _, _ in
-                syncSidebarWidth(totalWidth: totalWidth)
+            .onDisappear {
+                viewModel.stopWorkspaceAgentSignalObservation()
+                viewModel.setWorkspacePaneSnapshotProvider(nil)
             }
-            .onChange(of: totalWidth) { _, _ in
-                syncSidebarWidth(totalWidth: totalWidth)
+            .onChange(of: viewModel.openWorkspaceProjectPaths) { _, _ in
+                syncTerminalStores()
+                viewModel.refreshWorkspaceAgentSignals()
+                warmActiveWorkspace()
+                viewModel.syncActiveWorkspaceToolWindowContext()
+                refreshCodexDisplayStates()
             }
-        }
-        .background(NativeTheme.window)
-        .focusedSceneValue(\.startTerminalSearchAction, startTerminalSearchAction)
-        .focusedSceneValue(\.searchSelectionAction, searchSelectionAction)
-        .focusedSceneValue(\.navigateTerminalSearchNextAction, navigateTerminalSearchNextAction)
-        .focusedSceneValue(\.navigateTerminalSearchPreviousAction, navigateTerminalSearchPreviousAction)
-        .focusedSceneValue(\.endTerminalSearchAction, endTerminalSearchAction)
-        .focusedSceneValue(\.openWorkspaceProjectPickerAction, openWorkspaceProjectPickerAction)
-        .onReceive(codexDisplayRefreshTimer) { _ in
-            refreshCodexDisplayStates()
-        }
-        .onAppear {
-            viewModel.setWorkspacePaneSnapshotProvider(workspacePaneSnapshotProvider)
-            viewModel.startWorkspaceAgentSignalObservation()
-            syncTerminalStores()
-            warmActiveWorkspace()
-            refreshCodexDisplayStates()
-            WorkspaceLaunchDiagnostics.shared.recordShellMounted(
-                activeProjectPath: viewModel.activeWorkspaceProjectPath,
-                openSessionCount: viewModel.openWorkspaceSessions.count
-            )
-        }
-        .onDisappear {
-            viewModel.stopWorkspaceAgentSignalObservation()
-            viewModel.setWorkspacePaneSnapshotProvider(nil)
-        }
-        .onChange(of: viewModel.openWorkspaceProjectPaths) { _, _ in
-            syncTerminalStores()
-            viewModel.refreshWorkspaceAgentSignals()
-            warmActiveWorkspace()
-            refreshCodexDisplayStates()
-        }
-        .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
-            warmActiveWorkspace()
-            refreshCodexDisplayStates()
-        }
-        .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
-            warmActiveWorkspace()
-            refreshCodexDisplayStates()
-        }
-        .sheet(isPresented: $isProjectPickerPresented) {
-            WorkspaceProjectPickerView(
-                projects: viewModel.availableWorkspaceProjects,
-                onOpenProject: { path in
-                    viewModel.enterWorkspace(path)
-                    isProjectPickerPresented = false
-                },
-                onClose: { isProjectPickerPresented = false }
-            )
-            .preferredColorScheme(.dark)
-        }
-        .sheet(item: Binding(
-            get: {
-                worktreeDialogProject.flatMap { WorkspaceDialogProject(project: $0) }
-            },
-            set: { newValue in
-                worktreeDialogProjectPath = newValue?.project.path
+            .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
+                warmActiveWorkspace()
+                viewModel.syncActiveWorkspaceToolWindowContext()
+                refreshCodexDisplayStates()
             }
-        )) { dialogProject in
-            WorkspaceWorktreeDialogView(
-                sourceProject: dialogProject.project,
-                loadBranches: { try await viewModel.listWorkspaceBranches(for: $0) },
-                loadWorktrees: { try await viewModel.listProjectWorktrees(for: $0) },
-                managedPathPreview: { try viewModel.managedWorktreePathPreview(for: $0, branch: $1) },
-                onCreateWorktree: { branch, createBranch, baseBranch, autoOpen in
-                    try viewModel.startCreateWorkspaceWorktree(
-                        from: dialogProject.project.path,
-                        branch: branch,
-                        createBranch: createBranch,
-                        baseBranch: baseBranch,
-                        autoOpen: autoOpen
-                    )
-                },
-                onAddExistingWorktree: { worktreePath, branch, autoOpen in
-                    try viewModel.addExistingWorkspaceWorktree(
-                        from: dialogProject.project.path,
-                        worktreePath: worktreePath,
-                        branch: branch,
-                        autoOpen: autoOpen
-                    )
-                },
-                onClose: { worktreeDialogProjectPath = nil }
-            )
-            .preferredColorScheme(.dark)
-        }
-        .confirmationDialog(
-            "删除 worktree",
-            isPresented: Binding(
-                get: { pendingDeleteRequest != nil },
-                set: { if !$0 { pendingDeleteRequest = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            Button("删除", role: .destructive) {
-                guard let pendingDeleteRequest else {
-                    return
-                }
-                Task {
-                    do {
-                        try await viewModel.deleteWorkspaceWorktree(
-                            pendingDeleteRequest.worktreePath,
-                            from: pendingDeleteRequest.rootProjectPath
-                        )
-                    } catch {
-                        viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    }
-                    self.pendingDeleteRequest = nil
-                }
+            .onChange(of: viewModel.workspaceBottomToolWindowState.activeKind) { _, _ in
+                viewModel.syncActiveWorkspaceToolWindowContext()
             }
-            Button("取消", role: .cancel) {
-                pendingDeleteRequest = nil
+            .onChange(of: viewModel.workspaceBottomToolWindowState.isVisible) { _, _ in
+                viewModel.syncActiveWorkspaceToolWindowContext()
             }
-        } message: {
-            if let pendingDeleteRequest {
-                Text("将删除 \(pendingDeleteRequest.worktreePath)，并丢弃其中未提交修改与未跟踪文件。若该 worktree 由 DevHaven 创建，还会尝试删除对应本地分支。")
+            .onChange(of: viewModel.workspaceSideToolWindowState.activeKind) { _, _ in
+                viewModel.syncActiveWorkspaceToolWindowContext()
             }
-        }
+            .onChange(of: viewModel.workspaceSideToolWindowState.isVisible) { _, _ in
+                viewModel.syncActiveWorkspaceToolWindowContext()
+            }
+            .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
+                warmActiveWorkspace()
+                refreshCodexDisplayStates()
+            }
     }
 
     @ViewBuilder
@@ -233,30 +74,220 @@ struct WorkspaceShellView: View {
             )
             .foregroundStyle(NativeTheme.textSecondary)
         } else {
-            ZStack {
-                ForEach(viewModel.openWorkspaceSessions) { session in
-                    let project: Project? = session.isQuickTerminal
-                        ? .quickTerminal(at: session.projectPath)
-                        : viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath })
-                    if let project {
-                        WorkspaceHostView(
-                            viewModel: viewModel,
-                            project: project,
-                            workspace: session.controller,
-                            terminalSessionStore: terminalStoreRegistry.store(for: session.projectPath)
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(session.projectPath == viewModel.activeWorkspaceProjectPath ? 1 : 0)
-                        .allowsHitTesting(session.projectPath == viewModel.activeWorkspaceProjectPath)
-                        .accessibilityHidden(session.projectPath != viewModel.activeWorkspaceProjectPath)
-                    }
-                }
+            GeometryReader { geometry in
+                bottomToolWindowHost(totalSize: geometry.size)
             }
         }
     }
 
+    private var terminalModeContent: some View {
+        ZStack {
+            ForEach(viewModel.openWorkspaceSessions) { session in
+                let project: Project? = session.isQuickTerminal
+                    ? .quickTerminal(at: session.projectPath)
+                    : viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath })
+                if let project {
+                    WorkspaceHostView(
+                        viewModel: viewModel,
+                        project: project,
+                        workspace: session.controller,
+                        terminalSessionStore: terminalStoreRegistry.store(for: session.projectPath)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(session.projectPath == viewModel.activeWorkspaceProjectPath ? 1 : 0)
+                    .allowsHitTesting(session.projectPath == viewModel.activeWorkspaceProjectPath)
+                    .accessibilityHidden(session.projectPath != viewModel.activeWorkspaceProjectPath)
+                }
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            viewModel.setWorkspaceFocusedArea(.terminal)
+        }
+    }
+
+    @ViewBuilder
+    private var gitToolWindowContent: some View {
+        if isActiveQuickTerminalSession {
+            gitModeEmptyState(
+                title: "快速终端暂不支持 Git 模式",
+                systemImage: "bolt.horizontal.circle",
+                description: "请先打开一个 Git 项目或 worktree，再使用 Git 管理面板。"
+            )
+        } else if viewModel.activeWorkspaceGitRepositoryContext == nil {
+            gitModeEmptyState(
+                title: "当前项目不是 Git 仓库",
+                systemImage: "point.3.connected.trianglepath.dotted",
+                description: "Git 面板只会对当前 active project 所属的 root repository 生效。"
+            )
+        } else if let gitViewModel = viewModel.activeWorkspaceGitViewModel {
+            WorkspaceGitRootView(
+                viewModel: gitViewModel,
+                onOpenDiff: { file in
+                    openGitLogDiffTab(logViewModel: gitViewModel.logViewModel, file: file)
+                }
+            )
+        } else {
+            gitModeEmptyState(
+                title: "Git 面板尚未就绪",
+                systemImage: "tray",
+                description: "请重新选择当前项目，或稍后再试。"
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func topWorkspaceContent(totalWidth: CGFloat) -> some View {
+        if viewModel.workspaceSideToolWindowState.isVisible,
+           viewModel.workspaceSideToolWindowState.activeKind == .commit {
+            WorkspaceSplitView(
+                direction: .horizontal,
+                ratio: sideToolWindowSplitRatio(totalWidth: totalWidth),
+                onRatioChange: { ratio in
+                    let nextWidth = sideToolWindowWidth(for: ratio, totalWidth: totalWidth)
+                    viewModel.updateWorkspaceSideToolWindowWidth(nextWidth)
+                },
+                onEqualize: {
+                    viewModel.updateWorkspaceSideToolWindowWidth(WorkspaceSideToolWindowState.defaultWidth)
+                }
+            ) {
+                WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } trailing: {
+                terminalModeContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            terminalModeContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder
+    private func bottomToolWindowHost(totalSize: CGSize) -> some View {
+        let totalHeight = totalSize.height
+        let totalWidth = totalSize.width
+        if viewModel.workspaceBottomToolWindowState.isVisible {
+            WorkspaceSplitView(
+                direction: .vertical,
+                ratio: toolWindowSplitRatio(totalHeight: totalHeight),
+                onRatioChange: { ratio in
+                    let nextHeight = toolWindowHeight(for: ratio, totalHeight: totalHeight)
+                    viewModel.updateWorkspaceBottomToolWindowHeight(nextHeight)
+                },
+                onEqualize: {
+                    viewModel.updateWorkspaceBottomToolWindowHeight(WorkspaceBottomToolWindowState.defaultHeight)
+                }
+            ) {
+                topWorkspaceContent(totalWidth: totalWidth)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } trailing: {
+                Group {
+                    if viewModel.workspaceBottomToolWindowState.activeKind == .git {
+                        gitToolWindowContent
+                    } else {
+                        EmptyView()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if viewModel.workspaceBottomToolWindowState.activeKind == .git {
+                        viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.git))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            topWorkspaceContent(totalWidth: totalWidth)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func sideToolWindowSplitRatio(totalWidth: CGFloat) -> Double {
+        guard totalWidth > 0 else {
+            return 0.5
+        }
+        let sideWidth = clampedSideToolWindowWidth(
+            CGFloat(viewModel.workspaceSideToolWindowState.width),
+            totalWidth: totalWidth
+        )
+        return Double(sideWidth / totalWidth)
+    }
+
+    private func sideToolWindowWidth(for ratio: Double, totalWidth: CGFloat) -> Double {
+        guard totalWidth > 0 else {
+            return viewModel.workspaceSideToolWindowState.width
+        }
+        let desiredWidth = CGFloat(ratio) * totalWidth
+        let clampedWidth = clampedSideToolWindowWidth(desiredWidth, totalWidth: totalWidth)
+        return Double(clampedWidth.rounded())
+    }
+
+    private func clampedSideToolWindowWidth(_ proposedWidth: CGFloat, totalWidth: CGFloat) -> CGFloat {
+        let upperBound = max(220, totalWidth - 10)
+        return min(max(220, proposedWidth), upperBound)
+    }
+
+    private func toolWindowSplitRatio(totalHeight: CGFloat) -> Double {
+        guard totalHeight > 0 else {
+            return 1
+        }
+        let toolWindowHeight = clampedToolWindowHeight(
+            CGFloat(viewModel.workspaceBottomToolWindowState.height),
+            totalHeight: totalHeight
+        )
+        return Double((totalHeight - toolWindowHeight) / totalHeight)
+    }
+
+    private func toolWindowHeight(for ratio: Double, totalHeight: CGFloat) -> Double {
+        guard totalHeight > 0 else {
+            return viewModel.workspaceBottomToolWindowState.height
+        }
+        let leadingHeight = CGFloat(ratio) * totalHeight
+        let desiredHeight = totalHeight - leadingHeight
+        let clampedHeight = clampedToolWindowHeight(desiredHeight, totalHeight: totalHeight)
+        return Double(clampedHeight.rounded())
+    }
+
+    private func clampedToolWindowHeight(_ proposedHeight: CGFloat, totalHeight: CGFloat) -> CGFloat {
+        let upperBound = max(10, totalHeight - 10)
+        return min(max(10, proposedHeight), upperBound)
+    }
+
+    private func openGitLogDiffTab(
+        logViewModel: WorkspaceGitLogViewModel,
+        file: WorkspaceGitCommitFileChange
+    ) {
+        guard let selectedCommitHash = logViewModel.selectedCommitHash else {
+            return
+        }
+
+        viewModel.openActiveWorkspaceDiffTab(
+            source: .gitLogCommitFile(
+                repositoryPath: logViewModel.repositoryContext.repositoryPath,
+                commitHash: selectedCommitHash,
+                filePath: file.path
+            ),
+            preferredTitle: "Commit: \(gitLogDiffTitle(for: file))"
+        )
+    }
+
+    private func gitLogDiffTitle(for file: WorkspaceGitCommitFileChange) -> String {
+        let fileName = (file.path as NSString).lastPathComponent
+        return fileName.isEmpty ? file.path : fileName
+    }
+
     private func syncTerminalStores() {
         terminalStoreRegistry.syncRetainedProjectPaths(Set(viewModel.openWorkspaceProjectPaths))
+    }
+
+    private var isActiveQuickTerminalSession: Bool {
+        guard let activePath = viewModel.activeWorkspaceProjectPath else {
+            return false
+        }
+        return viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activePath })?.isQuickTerminal ?? false
     }
 
     private func warmActiveWorkspace() {
@@ -264,18 +295,6 @@ struct WorkspaceShellView: View {
             sessions: viewModel.openWorkspaceSessions,
             activeProjectPath: viewModel.activeWorkspaceProjectPath
         )
-    }
-
-    private func syncSidebarWidth(totalWidth: CGFloat) {
-        sidebarWidth = WorkspaceSidebarLayoutPolicy.clampSidebarWidth(
-            CGFloat(viewModel.workspaceSidebarWidth),
-            totalWidth: totalWidth
-        )
-    }
-
-    private func persistSidebarWidth(_ width: CGFloat) {
-        let persistedWidth = Double(width.rounded())
-        viewModel.updateWorkspaceSidebarWidth(persistedWidth)
     }
 
     private func refreshCodexDisplayStates() {
@@ -327,18 +346,12 @@ struct WorkspaceShellView: View {
         terminalSearchAction { $0.endSearch() }
     }
 
-    private var openWorkspaceProjectPickerAction: (() -> Void)? {
-        guard !viewModel.availableWorkspaceProjects.isEmpty else {
-            return nil
-        }
-        return {
-            isProjectPickerPresented = true
-        }
-    }
-
     private func terminalSearchAction(
         _ perform: @escaping (GhosttySurfaceHostModel) -> Void
     ) -> (() -> Void)? {
+        guard viewModel.workspaceFocusedArea == .terminal else {
+            return nil
+        }
         guard viewModel.activeWorkspaceController?.selectedPane != nil else {
             return nil
         }
@@ -359,6 +372,15 @@ struct WorkspaceShellView: View {
         }
         return terminalStoreRegistry.store(for: activeProjectPath).model(for: selectedPane)
     }
+
+    private func gitModeEmptyState(title: String, systemImage: String, description: String) -> some View {
+        ContentUnavailableView(
+            title,
+            systemImage: systemImage,
+            description: Text(description)
+        )
+        .foregroundStyle(NativeTheme.textSecondary)
+    }
 }
 
 private extension GhosttySurfaceHostModel.SnapshotContext {
@@ -370,11 +392,6 @@ private extension GhosttySurfaceHostModel.SnapshotContext {
             agentSummary: agentSummary
         )
     }
-}
-
-private struct WorkspaceDialogProject: Identifiable {
-    let project: Project
-    var id: String { project.path }
 }
 
 enum WorkspaceSidebarLayoutPolicy {

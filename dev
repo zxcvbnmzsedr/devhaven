@@ -109,7 +109,8 @@ LOG_COMMAND=(log stream --style compact --level debug --predicate "$LOG_PREDICAT
 
 if (( DRY_RUN )); then
   for command in "${VENDOR_COMMANDS[@]}"; do
-    print_command "vendor命令" ${=command}
+    read -r -a parsed_command <<< "$command"
+    print_command "vendor命令" "${parsed_command[@]}"
   done
   if (( ENABLE_LOG )); then
     print_command "日志命令" "${LOG_COMMAND[@]}"

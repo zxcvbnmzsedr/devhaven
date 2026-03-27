@@ -2,16 +2,24 @@ import SwiftUI
 import DevHavenCore
 
 struct WorkspaceTabBarView: View {
-    let tabs: [WorkspaceTabState]
-    let selectedTabID: String?
+    let tabs: [WorkspacePresentedTabItem]
     let canSplit: Bool
-    let onSelectTab: (String) -> Void
-    let onCloseTab: (String) -> Void
+    let onSelectTab: (WorkspacePresentedTabSelection) -> Void
+    let onCloseTab: (WorkspacePresentedTabSelection) -> Void
     let onCreateTab: () -> Void
     let onSplitHorizontally: () -> Void
     let onSplitVertically: () -> Void
 
     var body: some View {
+        let isDiffTabSelected = tabs.contains { tab in
+            tab.isSelected && {
+                if case .diff = tab.selection {
+                    return true
+                }
+                return false
+            }()
+        }
+
         HStack(spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -32,34 +40,45 @@ struct WorkspaceTabBarView: View {
                     title: "左右分屏",
                     systemImage: "square.split.2x1",
                     action: onSplitVertically,
-                    disabled: !canSplit
+                    disabled: !canSplit || isDiffTabSelected
                 )
                 toolbarButton(
                     title: "上下分屏",
                     systemImage: "rectangle.split.1x2",
                     action: onSplitHorizontally,
-                    disabled: !canSplit
+                    disabled: !canSplit || isDiffTabSelected
                 )
             }
         }
         .padding(.vertical, 6)
     }
 
-    private func tabChip(_ tab: WorkspaceTabState) -> some View {
-        let isSelected = tab.id == selectedTabID
+    private func tabChip(_ tab: WorkspacePresentedTabItem) -> some View {
+        let isSelected = tab.isSelected
+
         return HStack(spacing: 8) {
             Button {
-                onSelectTab(tab.id)
+                onSelectTab(tab.selection)
             } label: {
-                Text(tab.title)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(isSelected ? NativeTheme.textPrimary : NativeTheme.textSecondary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    switch tab.selection {
+                    case .terminal:
+                        Image(systemName: "terminal")
+                            .font(.caption)
+                    case .diff:
+                        Image(systemName: "square.split.2x1")
+                            .font(.caption)
+                    }
+                    Text(tab.title)
+                        .lineLimit(1)
+                }
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(isSelected ? NativeTheme.textPrimary : NativeTheme.textSecondary)
             }
             .buttonStyle(.plain)
 
             Button {
-                onCloseTab(tab.id)
+                onCloseTab(tab.selection)
             } label: {
                 Image(systemName: "xmark")
                     .font(.caption.weight(.bold))

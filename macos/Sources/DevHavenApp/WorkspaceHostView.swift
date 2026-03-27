@@ -13,6 +13,8 @@ struct WorkspaceHostView: View {
 
     var body: some View {
         let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
+        let presentedTabs = viewModel.workspacePresentedTabs(for: project.path)
+        let selectedPresentedTab = viewModel.workspaceSelectedPresentedTab(for: project.path)
 
         VStack(alignment: .leading, spacing: chromePolicy.showsWorkspaceHeader ? 16 : 0) {
             if chromePolicy.showsWorkspaceHeader {
@@ -21,12 +23,18 @@ struct WorkspaceHostView: View {
 
             HStack(alignment: .center, spacing: 12) {
                 WorkspaceTabBarView(
-                    tabs: workspace.tabs,
-                    selectedTabID: workspace.selectedTabId,
-                    canSplit: workspace.selectedPane != nil,
-                    onSelectTab: { workspace.selectTab($0) },
-                    onCloseTab: { workspace.closeTab($0) },
-                    onCreateTab: { _ = workspace.createTab() },
+                    tabs: presentedTabs,
+                    canSplit: canSplit(for: selectedPresentedTab),
+                    onSelectTab: { selection in
+                        viewModel.selectWorkspacePresentedTab(selection, in: project.path)
+                    },
+                    onCloseTab: { selection in
+                        closePresentedTab(selection)
+                    },
+                    onCreateTab: {
+                        let tab = workspace.createTab()
+                        viewModel.selectWorkspacePresentedTab(.terminal(tab.id), in: project.path)
+                    },
                     onSplitHorizontally: {
                         _ = workspace.splitFocusedPane(direction: .down)
                     },
@@ -58,63 +66,8 @@ struct WorkspaceHostView: View {
                 )
             }
 
-            ZStack {
-                ForEach(workspace.tabs) { tab in
-                    WorkspaceSplitTreeView(
-                        tab: tab,
-                        isTabSelected: tab.id == workspace.selectedTabId,
-                        surfaceModelForPane: surfaceModel,
-                        onFocusPane: { workspace.focusPane($0) },
-                        onClosePane: { workspace.closePane($0) },
-                        onSplitPane: { paneID, direction in
-                            workspace.focusPane(paneID)
-                            _ = workspace.splitFocusedPane(direction: direction)
-                        },
-                        onFocusDirection: { paneID, direction in
-                            workspace.focusPane(paneID)
-                            workspace.focusPane(direction: direction)
-                        },
-                        onResizePane: { paneID, direction, amount in
-                            workspace.focusPane(paneID)
-                            workspace.resizeFocusedPane(direction: direction, amount: amount)
-                        },
-                        onEqualize: { paneID in
-                            workspace.focusPane(paneID)
-                            workspace.equalizeSelectedTabSplits()
-                        },
-                        onToggleZoom: { paneID in
-                            workspace.focusPane(paneID)
-                            workspace.toggleZoomOnFocusedPane()
-                        },
-                        onSurfaceExit: { workspace.closePane($0) },
-                        onUpdateTabTitle: { title in
-                            workspace.updateTitle(for: tab.id, title: title)
-                        },
-                        onNewTab: {
-                            _ = workspace.createTab()
-                            return true
-                        },
-                        onCloseTabAction: { mode in
-                            handleCloseTab(mode, tabID: tab.id)
-                        },
-                        onGotoTabAction: handleGotoTab,
-                        onMoveTabAction: { move in
-                            handleMoveTab(move, tabID: tab.id)
-                        },
-                        onSetSplitRatio: { path, ratio in
-                            guard tab.id == workspace.selectedTabId else {
-                                return
-                            }
-                            workspace.setSelectedTabSplitRatio(at: path, ratio: ratio)
-                        }
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(tab.id == workspace.selectedTabId ? 1 : 0)
-                    .allowsHitTesting(tab.id == workspace.selectedTabId)
-                    .accessibilityHidden(tab.id != workspace.selectedTabId)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            workspacePresentedContent(selectedPresentedTab)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if let runConsoleState = viewModel.workspaceRunConsoleState(for: project.path),
                runConsoleState.isVisible,
@@ -287,6 +240,104 @@ struct WorkspaceHostView: View {
         Set(workspace.tabs.flatMap(\.leaves).map(\.id))
     }
 
+    private func canSplit(for selection: WorkspacePresentedTabSelection?) -> Bool {
+        guard case .terminal = selection else {
+            return false
+        }
+        return workspace.selectedPane != nil
+    }
+
+    @ViewBuilder
+    private func workspacePresentedContent(_ selection: WorkspacePresentedTabSelection?) -> some View {
+        switch selection {
+        case let .diff(diffTabID):
+            if let diffViewModel = viewModel.workspaceDiffTabViewModel(for: project.path, tabID: diffTabID) {
+                WorkspaceDiffTabView(viewModel: diffViewModel)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            viewModel.setWorkspaceFocusedArea(.diffTab(diffTabID))
+                        }
+                    )
+            } else {
+                diffTabUnavailableContent
+            }
+        case .terminal, .none:
+            terminalTabContent
+        }
+    }
+
+    private var terminalTabContent: some View {
+        let terminalTabs = workspace.tabs
+        return ZStack {
+            ForEach(terminalTabs) { tab in
+                WorkspaceSplitTreeView(
+                    tab: tab,
+                    isTabSelected: tab.id == workspace.selectedTabId,
+                    surfaceModelForPane: surfaceModel,
+                    onFocusPane: { workspace.focusPane($0) },
+                    onClosePane: { workspace.closePane($0) },
+                    onSplitPane: { paneID, direction in
+                        workspace.focusPane(paneID)
+                        _ = workspace.splitFocusedPane(direction: direction)
+                    },
+                    onFocusDirection: { paneID, direction in
+                        workspace.focusPane(paneID)
+                        workspace.focusPane(direction: direction)
+                    },
+                    onResizePane: { paneID, direction, amount in
+                        workspace.focusPane(paneID)
+                        workspace.resizeFocusedPane(direction: direction, amount: amount)
+                    },
+                    onEqualize: { paneID in
+                        workspace.focusPane(paneID)
+                        workspace.equalizeSelectedTabSplits()
+                    },
+                    onToggleZoom: { paneID in
+                        workspace.focusPane(paneID)
+                        workspace.toggleZoomOnFocusedPane()
+                    },
+                    onSurfaceExit: { workspace.closePane($0) },
+                    onUpdateTabTitle: { title in
+                        workspace.updateTitle(for: tab.id, title: title)
+                    },
+                    onNewTab: {
+                        let newTab = workspace.createTab()
+                        viewModel.selectWorkspacePresentedTab(.terminal(newTab.id), in: project.path)
+                        return true
+                    },
+                    onCloseTabAction: { mode in
+                        handleCloseTab(mode, tabID: tab.id)
+                    },
+                    onGotoTabAction: handleGotoTab,
+                    onMoveTabAction: { move in
+                        handleMoveTab(move, tabID: tab.id)
+                    },
+                    onSetSplitRatio: { path, ratio in
+                        guard tab.id == workspace.selectedTabId else {
+                            return
+                        }
+                        workspace.setSelectedTabSplitRatio(at: path, ratio: ratio)
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(tab.id == workspace.selectedTabId ? 1 : 0)
+                .allowsHitTesting(tab.id == workspace.selectedTabId)
+                .accessibilityHidden(tab.id != workspace.selectedTabId)
+            }
+        }
+    }
+
+    private var diffTabUnavailableContent: some View {
+        ContentUnavailableView(
+            "Diff 标签页不可用",
+            systemImage: "square.split.2x1",
+            description: Text("当前 diff 标签页状态已失效，请重新从 changes browser 打开。")
+        )
+        .foregroundStyle(NativeTheme.textSecondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private func surfaceModel(for pane: WorkspacePaneState) -> GhosttySurfaceHostModel {
         let model = terminalSessionStore.model(
             for: pane,
@@ -397,6 +448,15 @@ struct WorkspaceHostView: View {
             return true
         default:
             return false
+        }
+    }
+
+    private func closePresentedTab(_ selection: WorkspacePresentedTabSelection) {
+        switch selection {
+        case let .terminal(tabID):
+            workspace.closeTab(tabID)
+        case let .diff(diffTabID):
+            viewModel.closeWorkspaceDiffTab(diffTabID, in: project.path)
         }
     }
 

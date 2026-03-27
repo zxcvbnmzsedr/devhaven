@@ -1,43 +1,16 @@
 import XCTest
 
 final class WorkspaceShellViewTests: XCTestCase {
-    func testWorkspaceShellUsesResizableSplitViewForSidebar() throws {
-        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
-
-        XCTAssertTrue(
-            source.contains("WorkspaceSplitView("),
-            "工作区壳层应改用可拖拽的分栏容器，否则左侧项目侧边栏无法调整宽度"
-        )
-    }
-
-    func testWorkspaceShellDoesNotPinSidebarToFixedWidth() throws {
+    func testWorkspaceShellNoLongerOwnsProjectSidebarSplit() throws {
         let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
 
         XCTAssertFalse(
-            source.contains(".frame(width: 280)"),
-            "工作区左侧侧边栏不应再被固定到 280pt，否则拖拽分隔线不会生效"
+            source.contains("WorkspaceProjectSidebarHostView("),
+            "项目导航已经外置到 Workspace 根布局，WorkspaceShellView 不应重新直接承载项目导航宿主"
         )
-    }
-
-    func testWorkspaceShellReadsInitialSidebarWidthFromViewModelSettings() throws {
-        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
-
-        XCTAssertTrue(
-            source.contains("viewModel.workspaceSidebarWidth"),
-            "工作区侧边栏初始宽度应从 ViewModel 的全局设置读取，而不是永远只用运行时默认值"
-        )
-    }
-
-    func testWorkspaceShellPersistsSidebarWidthWhenDragEnds() throws {
-        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
-
-        XCTAssertTrue(
-            source.contains("onRatioChangeEnded"),
-            "工作区侧边栏应在拖拽结束时提交持久化，而不是只更新本地状态"
-        )
-        XCTAssertTrue(
-            source.contains("viewModel.updateWorkspaceSidebarWidth"),
-            "工作区侧边栏拖拽结束后应把宽度写回全局设置"
+        XCTAssertFalse(
+            source.contains("WorkspaceProjectListView("),
+            "项目列表应位于 Workspace 外层导航，而不是继续直接挂在 WorkspaceShellView 里"
         )
     }
 
@@ -50,26 +23,47 @@ final class WorkspaceShellViewTests: XCTestCase {
         XCTAssertFalse(source.contains("currentVisibleText()"), "WorkspaceShellView 的 Codex 刷新链路不应再直接读取当前可见全文")
     }
 
-    func testWorkspaceShellStartsWorktreeCreationWithoutWaitingForFullProgressFlow() throws {
-        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+    func testWorkspaceProjectSidebarHostStartsWorktreeCreationWithoutWaitingForFullProgressFlow() throws {
+        let source = try String(contentsOf: workspaceProjectSidebarHostFileURL(), encoding: .utf8)
 
         XCTAssertTrue(
             source.contains("startCreateWorkspaceWorktree"),
-            "WorkspaceShellView 应调用“先启动、后后台执行”的创建入口，让 worktree 对话框能立即退出并把全局进度弹窗露到最前面"
+            "外层项目导航宿主应调用“先启动、后后台执行”的创建入口，让 worktree 对话框能立即退出并把全局进度弹窗露到最前面"
         )
     }
 
-    func testWorkspaceShellProvidesFocusedOpenProjectPickerAction() throws {
-        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+    func testWorkspaceProjectSidebarHostProvidesFocusedOpenProjectPickerAction() throws {
+        let source = try String(contentsOf: workspaceProjectSidebarHostFileURL(), encoding: .utf8)
 
         XCTAssertTrue(
             source.contains(".focusedSceneValue(\\.openWorkspaceProjectPickerAction, openWorkspaceProjectPickerAction)"),
-            "WorkspaceShellView 应向当前 scene 注入打开项目命令动作，供应用菜单快捷键路由"
+            "WorkspaceProjectSidebarHostView 应向当前 scene 注入打开项目命令动作，供应用菜单快捷键路由"
         )
         XCTAssertTrue(
             source.contains("private var openWorkspaceProjectPickerAction: (() -> Void)?"),
-            "WorkspaceShellView 应把打开项目命令封装为 focused action，而不是把命令状态散落到菜单层"
+            "WorkspaceProjectSidebarHostView 应把打开项目命令封装为 focused action，而不是把命令状态散落到菜单层"
         )
+    }
+
+    func testWorkspaceShellNoLongerRoutesCommitToolWindowThroughBottomHost() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertFalse(source.contains("commitToolWindowContent"), "Commit 改为左侧独立工具窗后，WorkspaceShellView 不应继续提供 commit 底部路由")
+        XCTAssertFalse(source.contains("WorkspaceCommitRootView("), "Commit 改为左侧独立工具窗后，WorkspaceShellView 不应继续直接挂载 Commit 根容器")
+    }
+
+    func testWorkspaceShellBottomToolWindowTapSetsFocusedAreaToBottomGitKind() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("setWorkspaceFocusedArea(.bottomToolWindow(.git))"), "点击底部 Git tool window 内容时应显式把 focused area 切到底部 Git")
+    }
+
+    func testWorkspaceShellHostsCommitSidePanelInTopAreaAboveBottomToolWindow() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)"), "Commit 侧边工具窗宿主应下沉到 WorkspaceShellView 的主内容层")
+        XCTAssertTrue(source.contains("workspaceSideToolWindowState.isVisible"), "Shell 应基于 side tool window state 决定是否展示 Commit 侧边工具窗")
+        XCTAssertTrue(source.contains("updateWorkspaceSideToolWindowWidth"), "Commit 侧边工具窗宽度拖拽应由 Shell 承接")
     }
 
     private func sourceFileURL() -> URL {
@@ -78,5 +72,13 @@ final class WorkspaceShellViewTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/DevHavenApp/WorkspaceShellView.swift")
+    }
+
+    private func workspaceProjectSidebarHostFileURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DevHavenApp/WorkspaceProjectSidebarHostView.swift")
     }
 }

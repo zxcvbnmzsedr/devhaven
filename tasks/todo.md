@@ -1,163 +1,1633 @@
 # Todo
 
+## 2026-03-27 修复 Unversioned Files 把目录当成文件项展示
 
+- [x] 复核 Git status 与 Commit snapshot 链路，确认 Unversioned Files 中的目录项来自 `git status --porcelain=v2` 默认 untracked 折叠行为
+- [x] 做最小修复：让 Git working tree snapshot 展开 untracked 目录为真实文件路径，而不是 `dir/` 条目
+- [x] 补定向测试，锁定“非空目录展开为文件、空目录不出现”的契约
+- [x] 运行定向测试、构建与 `git diff --check`
 
-## 2026-03-26 提交并推送 Codex 展示态窗口缓存改动
-
-- [x] 审阅当前工作区变更，确认提交范围覆盖代码 / 文档 / 任务记录
-- [x] 运行 fresh 验证命令，确认当前改动可安全提交
-- [x] 生成提交摘要并执行 git commit
-- [x] 推送当前分支到远端
-- [x] 在本文件追加 Review，记录提交结果与验证证据
-
-
-## Review（2026-03-26 提交并推送 Codex 展示态窗口缓存改动）
+## Review（2026-03-27 修复 Unversioned Files 把目录当成文件项展示）
 
 - 结果：
-  1. 已将 Codex 展示态窗口缓存相关代码、测试、设计文档与任务记录提交为 `a15e75e`（`Use cached Codex display snapshots`）。
-  2. 已将当前 `main` 推送到 `origin/main`，远端从 `e74db62` 前进到 `a15e75e`。
-- 验证证据：
-  - `git diff --check` → 无输出。
-  - `swift build --package-path macos` → `Build complete!`。
-  - `swift test --package-path macos` → 最近一次全量重跑为 `347 tests, 5 skipped, 0 failures`。
-  - `swift test --package-path macos --filter WorkspaceRunManagerTests/testStartSupportsMultilineCommandsWithAssignmentsBeforeInnerExec` → 单测重跑通过；用于核对首次全量测试里该用例的一次性断言失败是否可复现。
-  - `git push origin main` → `e74db62..a15e75e  main -> main`。
-
-## 2026-03-26 Codex 展示态增量滑动窗口设计
-
-- [x] 探查当前 Codex 展示态刷新链路、Ghostty bridge 回调能力与相关模块边界
-- [x] 与用户确认设计目标边界：只服务 Codex 展示态，不抽象成通用 terminal 文本缓存
-- [x] 给出 2~3 种可选方案、权衡取舍并推荐“增量滑动窗口”方向
-- [x] 分段确认设计细节（模块落点、数据流、容错与验证）
-- [x] 设计确认后，写入 `docs/plans/` 设计文档并登记后续实施计划
-
-## 2026-03-26 Codex 展示态增量滑动窗口实现
-
-- [x] 先补 failing tests，锁定 snapshot 输入、HostModel 窗口缓存与 WorkspaceShellView 新接线
-- [x] 以最小改动实现 runtime/bridge/host 的内容失效脉冲与 Codex 小窗口缓存
-- [x] 用 snapshot provider 替换 WorkspaceShellView 的 currentVisibleText 读取，并收口 tracking 开关
-- [x] 更新 AGENTS.md 与本文件 Review，记录新边界、直接原因、设计诱因与验证证据
-- [x] 运行定向测试与构建验证，确认修复闭环
-
-## Review（2026-03-26 Codex 展示态增量滑动窗口实现）
-
-- 结果：
-  1. Codex 展示态 fallback 已从“WorkspaceShellView 定时读 `currentVisibleText()`”改为“Ghostty host 维护 pane 级 `CodexAgentDisplaySnapshot` 最近文本窗口 + 最近活动时间”。
-  2. `WorkspaceShellView` 现在仍可保留轻量刷新入口，但刷新阶段只读取内存中的 cached snapshot；Codex 展示态闭环不再直接触发整屏 `ghostty_surface_read_text(...)`。
-  3. `GhosttyRuntime.tick()` 之后会向活跃 surface 广播内容失效脉冲，`GhosttySurfaceHostModel` 仅在 Codex tracking 开启时 debounce 更新最近文本窗口；pane 移除/退出/关闭 tracking 时会取消 pending task 并清空缓存。
+  1. `NativeGitRepositoryService.loadChanges(...)` 现在改为使用 `git status --porcelain=v2 --branch --untracked-files=all`。
+  2. 因此 `Unversioned Files` 拿到的将是 **真实未跟踪文件路径**，不再是 Git 默认折叠出来的 `filled-dir/` 这类目录条目。
+  3. 空文件夹本来就不应进入 Git 变更快照；修复后这点也被测试显式锁住，不会再被误展示成 Unversioned Files 项。
 - 直接原因：
-  1. 旧实现把 `GhosttySurfaceHostModel.currentVisibleText()` 接到了 `WorkspaceShellView.refreshCodexDisplayStates()` 的固定定时刷新链路上。
-  2. 这会让 sidebar 展示态修正在后台长期触发 `debugVisibleText()` / `ghostty_surface_read_text(...)` 与多轮字符串处理，长时间运行后持续制造 `MALLOC_SMALL` 压力。
-- 设计层诱因：
-  1. Codex 展示态 fallback 原本只是 UI 修正语义，但实现上跨层依赖了终端全文 readback，把昂贵调试式读取放进了常驻刷新路径。
-  2. 这属于“展示态纠偏依赖重型数据源”的职责错配：UI 只想知道 running / waiting，却每次都反向拉 pane 全文。
+  1. 之前 `loadChanges(...)` 用的是默认 `git status --porcelain=v2 --branch`。
+  2. 在这个模式下，Git 会把“包含未跟踪文件的目录”折叠成单条 `dir/` 记录。
+  3. Commit browser 当前又是扁平列表，不是树形 children 视图，所以折叠目录会被直接显示成一个像“空文件夹”的 leaf row，造成语义错误。
+- 设计诱因：
+  1. Commit browser 的当前设计是假设上游给到的是文件级变更列表；一旦 Git service 传来目录级 untracked 折叠项，UI 就只能把它当普通文件行显示。
+  2. 这不是 browser 独立渲染问题，而是 Git snapshot 粒度和 UI 展示粒度不匹配。
 - 当前修复方案：
-  1. 新增 `CodexAgentDisplaySnapshot`，只保留 pane 级最近文本窗口与最近活动时间。
-  2. `GhosttyRuntime` / `GhosttySurfaceBridge` / `GhosttySurfaceHostModel` 新增内容失效脉冲与 host 侧 debounce 缓存更新；`WorkspaceShellView` 改读 `codexDisplaySnapshot()`，并按当前 `codexDisplayCandidates()` 同步 tracking 开关。
-  3. `CodexAgentDisplayStateRefresher` 现改为消费 snapshot，而不是直接消费全文字符串。
-- 长期改进建议：
-  1. 后续若 Ghostty Swift 层能拿到更细的文本增量/活动回调，应继续把 host 侧 debounce readback 收缩成真正的增量窗口更新，进一步减少 readback 次数。
-  2. 如果 signal / notify 主链继续增强，可继续减少甚至删除文本 heuristic fallback，让最近文本窗口只保留为最后兜底手段。
+  1. Core/Storage：把 `loadChanges(...)` 切到 `--untracked-files=all`，从源头把 untracked 目录展开成文件路径。
+  2. Tests：新增 `testLoadChangesSnapshotExpandsUntrackedDirectoriesIntoFilesAndSkipsEmptyDirectories`，锁定：
+     - 非空目录 → 返回真实文件路径
+     - 空目录 → 不出现在 `untracked`
+     - 不再返回 `filled-dir/` 这类目录项
+- 长期建议：
+  1. 如果后续 Commit browser 想进一步对齐 IDEA 的树结构，可以再在 UI 层做目录节点聚合；但前提也应是上游先提供文件级真实条目，而不是目录折叠项。
+  2. Git 查询层凡是直接喂给 UI 列表的数据，都应优先避免“为了 CLI 简洁而折叠”的输出模式，否则 UI 很容易被迫展示错误语义。
 - 验证证据：
-  - 红灯：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests'` → 失败，缺少 `CodexAgentDisplaySnapshot` 与 host tracking 接口。
-  - 绿灯：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests'` → 15 tests，0 failures。
-  - 定向回归：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests|WorkspaceAgentStatusAccessoryTests|NativeAppViewModelWorkspaceEntryTests'` → 51 tests，0 failures。
-  - 构建验证：`swift build --package-path macos` → Build complete。
-  - 差异校验：`git diff --check` → 无输出。
+  - 定向测试：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests/(testLoadChangesSnapshotSeparatesStagedUnstagedAndUntracked|testLoadChangesSnapshotExpandsUntrackedDirectoriesIntoFilesAndSkipsEmptyDirectories)'`
+    - `2 tests, 0 failures`
+    - `swift test --package-path macos --filter NativeGitCommitWorkflowServiceTests/testLoadChangesSnapshotBuildsCommitChangesWithDefaultInclusion`
+    - `1 test, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
 
+## 2026-03-27 修复 Diff「查看模式」切换无效
 
-## 2026-03-26 DevHaven.app 异常内存占用排查
+- [x] 排查 `WorkspaceDiffNavigationBarView -> WorkspaceDiffTabView` viewer mode 链路，确认 compare/merge 分支未真正消费切换结果
+- [x] 做最小修复：compare 支持切到 unified viewer；merge 隐藏不支持的 unified 切换
+- [x] 同步调整顶部操作区，仅在 side-by-side 编辑态展示保存 / merge action 按钮
+- [x] 更新 source-based 测试与 Review
+- [x] 运行定向测试、构建与 `git diff --check`
 
-- [x] 记录当前运行中的 DevHaven 进程与内存异常现象，建立排查证据基线
-- [x] 收集 footprint / heap / sample 等运行时证据，确认主要占用类别与热点线程
-- [x] 对照仓库代码定位直接原因，并判断是否存在设计层诱因
-- [x] 在本文件追加 Review，记录结论、证据、长期建议与必要后续动作
-
-## Review（2026-03-26 DevHaven.app 异常内存占用排查）
+## Review（2026-03-27 修复 Diff「查看模式」切换无效）
 
 - 结果：
-  1. 当前 `/Applications/DevHaven.app` 主进程 `DevHavenApp`（PID `27999`）已运行约 `14:49:21`，`top` / `footprint` 一致显示内存 footprint 约 `32.8 GB`，属于明显异常。
-  2. `footprint 27999` 显示主要占用为 `MALLOC_SMALL 31 GB`，其次是 `IOSurface 857 MB`、`IOAccelerator 536 MB`；这更像是**大量小块堆分配长期累积**，而不是单个巨型缓冲区。
-  3. 运行时采样 `sample 27999 5 1` 命中一条非常明确的 App 侧周期路径：`WorkspaceShellView.refreshCodexDisplayStates()` → `CodexAgentDisplayStateRefresher.presentationOverrides(...)` → `GhosttySurfaceHostModel.currentVisibleText()` → `GhosttyTerminalSurfaceView.debugVisibleText()` → `terminal.formatter.PageFormatter.formatWithState`。
-  4. 结合当前进程下存在 `6` 条 DevHaven 内嵌 Codex wrapper 会话，以及 `WorkspaceShellView` 中固定 `1` 秒一次的 `codexDisplayRefreshTimer`，可以高置信度判断：**内存压力主要来自“为了修正 Codex running/waiting 展示态而对多个 pane 周期性轮询终端可见文本”这条链路。**
+  1. `WorkspaceDiffNavigationBarView` 不再无条件展示固定的两档 segmented control，而是按当前文档支持的 viewer modes 渲染。
+  2. `WorkspaceDiffTabView` 现在会真正消费 viewer mode：
+     - `patch`：继续支持 `side-by-side / unified`
+     - `compare`：`side-by-side` 走现有 compare editor；`unified` 改走统一的 patch-style viewer
+     - `merge`：当前只保留 `side-by-side`，不再继续暴露无效的 unified 开关
+  3. Compare 切到 unified 后不再停留在原 two-side editor，因此“并排/统一切换无效”的问题已收口。
+  4. 只对 side-by-side 编辑器有意义的操作（保存、merge accept 按钮）已限制在 side-by-side 模式展示，避免 unified 呈现下继续出现误导性按钮。
 - 直接原因：
-  1. `WorkspaceShellView` 从 2026-03-22 的 Agent 状态感知特性开始，引入了 `Timer.publish(every: 1, on: .main, in: .common)`，每秒都会触发 `refreshCodexDisplayStates()`。
-  2. 这个刷新逻辑会对所有 `codexDisplayCandidates()` 调用 `currentVisibleText()`；后者不是轻量状态查询，而是通过 `GhosttyTerminalSurfaceView.debugVisibleText()` 走 `ghostty_surface_read_text(...)`，把终端当前可见文本重新格式化并桥接成新的 Swift `String`。
-  3. 之后同一批文本又会在 `currentVisibleText()`、`normalizedVisibleText()`、`CodexAgentDisplayHeuristics.displayState(for:)` 中多次 `trimmingCharacters(...)`、`String.contains(...)`、整串比较，并被 `Observation.lastVisibleText` 再保存一份；这会持续制造大量短生命周期小对象/字符串分配。
-  4. `sample` 已直接证明当前在线进程确实在走这条路径，而 `footprint` 的 `MALLOC_SMALL 31 GB` 也与“高频小对象 / 字符串分配累积”高度一致。
-- 设计层诱因：
-  1. **展示态修正逻辑跨层依赖了终端 UI 文本读回。** 按 AGENTS 约束，Codex 主链本应以 `wrapper signal + official notify` 为主，终端可见文本只作 fallback；但当前 fallback 的实现方式是全量文本轮询，成本过高。
-  2. `debugVisibleText()` 从命名和实现上都更像调试/诊断接口，却被接入了常驻 1 秒轮询的生产路径；这把本应偶发的“整屏文本序列化”变成了长期后台任务。
-  3. 刷新范围也偏大：`codexDisplayCandidates()` 面向所有打开项目里的 Codex pane，而不只是当前可见/当前聚焦 pane，所以隐藏 pane 也会持续参与文本读回。
-  4. 因此，存在明显系统设计诱因：**为了修正 sidebar 展示语义，把昂贵的 terminal 可见文本读取放进了全局定时器。**
-- 当前处置建议：
-  1. 临时止血：先关闭不需要的 Codex pane / 项目，或重启 DevHaven 释放已经累积的内存；只要没有活跃的 Codex 展示态候选，这条 1 秒轮询链路的压力就会显著下降。
-  2. 真正修复时，优先收口为“只有 signal 不足以判定时才做最小范围 fallback”，并尽量只看当前活动 pane，而不是所有已加载 pane。
-  3. 如果仍需要 fallback，建议改成**更便宜的最小信息提取**（例如有限前缀/末行/增量活动标记），不要每秒做整屏文本 readback + 多次全串 trim/contains。
-- 长期改进建议：
-  1. 优先把 Codex waiting/running 的判断继续收敛到 signal / notify 主链，避免把终端内容分析当作长期真相源。
-  2. 若必须保留 heuristic fallback，应增加硬边界：仅活动 pane、仅短时间窗口、仅必要状态、仅一次字符串归一化，避免重复复制同一份大文本。
-  3. 给这条展示态刷新链路补性能 / 内存回归测试或至少 profiling 基线，防止类似“UI 语义修正引入后台轮询”再次悄悄进主线。
-- 验证证据：
-  - `top -l 1 -pid 27999 -stats pid,command,mem,cpu,time,threads` → `DevHavenApp 32G~33G`。
-  - `footprint 27999` → `Footprint: 32 GB`，其中 `MALLOC_SMALL 31 GB`。
-  - `sample 27999 5 1 -mayDie` → 主线程周期性命中 `WorkspaceShellView.refreshCodexDisplayStates()`、`CodexAgentDisplayStateRefresher.presentationOverrides(...)`、`GhosttySurfaceHostModel.currentVisibleText()`、`GhosttyTerminalSurfaceView.debugVisibleText()`、`terminal.formatter.PageFormatter.formatWithState`。
-  - `ps -axo pid,args | grep '/Applications/DevHaven.app/.../AgentResources/bin/codex'` → 当前共有 `6` 条 DevHaven 内嵌 Codex wrapper 会话，与该轮询路径的候选 pane 数量级相符。
-
-
-## 2026-03-25 Workspace 焦点恢复触发 SwiftUI 崩溃排查
-
-- [x] 基于崩溃栈与相关源码定位直接原因，确认是否存在设计层诱因
-- [x] 先补失败测试，覆盖“恢复 terminal responder 不应在当前 SwiftUI 更新栈内同步抢焦点”
-- [x] 实施最小修复，并保持 focused pane 仍能在下一轮主线程安全取回 responder
-- [x] 运行定向验证并在本文件追加 Review（直接原因、设计层诱因、修复方案、长期建议、证据）
-
-## Review（2026-03-25 Workspace 焦点恢复触发 SwiftUI 崩溃排查）
-
-- 结果：
-  1. 已定位并修复这次 3.1.0 的意外退出：`WorkspaceHostView.surfaceModel(for:)` 在 SwiftUI `body` 更新栈里同步调用 `GhosttySurfaceHostModel.restoreWindowResponderIfNeeded()`，进而立刻 `window.makeFirstResponder(ownedSurfaceView)`。
-  2. 当此时 AppKit 正在结束一个 `NSTextField` / 输入法会话（你的崩溃栈里是搜狗输入法 deactive 链路）时，这个同步抢 responder 会把 `NSTextInputContext deactivate -> textDidEndEditing -> SwiftUI transaction update` 重新嵌套回当前 AttributeGraph 更新，最终触发 `AG::precondition_failure` 并 `SIGABRT`。
-  3. 现在 responder 恢复改为 **延后一拍的主线程任务**：只在确实需要时调度一次，离开当前 SwiftUI/AppKit 更新栈后再执行真正的 `makeFirstResponder`；若 pane 已失焦、surface 释放或恢复已在路上，会自动取消/跳过。
-- 直接原因：
-  1. 崩溃栈主线程清楚显示：`WorkspaceHostView.surfaceModel(for:) -> GhosttySurfaceHostModel.restoreWindowResponderIfNeeded() -> NSWindow._realMakeFirstResponder -> NSTextView resignFirstResponder -> NSTextField textDidEndEditing -> SwiftUI/AttributeGraph abort`。
-  2. 也就是说，触发崩溃的不是 Ghostty renderer 本身，而是 **在 SwiftUI 视图计算期间同步修改 AppKit firstResponder**。
-- 设计层诱因：
-  1. `surfaceModel(for:)` 名义上是“拿 pane 对应 model”的纯查询入口，但实际上夹带了 responder 修复这种命令式副作用；这让 View builder 期间混入了窗口焦点变更。
-  2. `restoreWindowResponderIfNeeded()` 之前默认同步执行 `makeFirstResponder`，没有区分“当前正在 SwiftUI/AppKit 更新栈内”与“安全的下一轮主线程时机”。
-  3. 这是典型的 **pure model lookup 与 imperative UI side effect 职责混杂**。未发现更大的系统设计缺陷，但这一处职责边界此前不够清晰。
+  1. 顶栏 `Picker` 的值确实会写到 `viewModel.documentState.viewerMode`，但 `WorkspaceDiffTabView` 里的 compare / merge 分支始终直接路由到固定子视图，没有使用该值做任何分发。
+  2. 因此用户切换“并排/统一”时，运行时状态变了，实际 UI 却没有变，看起来就是开关失效。
+- 设计诱因：
+  1. 首轮 diff tab viewer 落地时，`viewerMode` 主要只在 patch viewer 上接通；后来 compare / merge viewer 接入了统一导航壳，但没有把 viewer mode 能力一并补齐。
+  2. merge 本身是 3/4-pane 编辑器，当前模型也没有自然的 unified merge viewer 描述，因此保留统一开关只会继续制造伪功能。
 - 当前修复方案：
-  1. 给 `GhosttySurfaceHostModel` 增加 `pendingWindowResponderRestoreTask`，把 responder 恢复改为延后一拍执行，避免在当前 SwiftUI transaction / AppKit 文本输入结束栈内同步抢焦点。
-  2. 恢复前先同步判断：pane 仍是逻辑焦点、window 仍存在、surface 仍未拥有 responder、且当前没有同类恢复任务在途；不满足则记录 diagnostics 并跳过。
-  3. 当 pane 失焦、surface 释放或进程退出时，主动取消挂起的 responder restore，避免旧 pane 的晚到任务再去操作新窗口状态。
-  4. 回归测试 `GhosttySurfaceHostTests.testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` 先红后绿，约束“不能同步抢焦点，但必须随后安全夺回 terminal responder”。
-- 长期改进建议：
-  1. 后续应继续把 `WorkspaceHostView.surfaceModel(for:)` 收敛为**纯数据/依赖解析**入口，任何窗口焦点、第一响应者、弹窗展示之类命令式动作都尽量迁到显式 lifecycle hook（如 attach/onChange/task）或专用 coordinator。
-  2. 对 AppKit `firstResponder` 这类会牵动输入法、文本编辑与 SwiftUI transaction 的动作，默认都应假设“同步调用是高风险操作”；若来源于 View 计算链路，优先延后到下一轮主线程。
+  1. App/UI：`WorkspaceDiffNavigationBarView` 新增 `availableViewerModes`，由上层显式传入当前文档支持的模式集合。
+  2. App/UI：`WorkspaceDiffTabView` 新增 `effectiveViewerMode / availableViewerModes`，compare 在 unified 下路由到 `WorkspaceDiffPatchViewerView`，merge 强制收口为 side-by-side。
+  3. App/UI：新增 `unifiedPatchDocument(for: compareDocument)`，把 compare blocks 转成统一 patch-style 文档，供 unified viewer 使用。
+- 长期建议：
+  1. 当前 compare unified 是基于现有 compare blocks 合成的 patch-style 视图，已满足“切换真实生效”；如果后续继续追 IDEA 级 fidelity，可以再把 unified compare 也升级成更完整的 editor/selection 语义，而不是只做只读 viewer。
+  2. merge 若未来也要支持 unified，需要先明确产品语义：到底是 `base -> result` 的 unified diff，还是 conflict-oriented 的专用统一视图；在此之前不应继续暴露一个假的 segmented option。
 - 验证证据：
-  - 红灯：`swift test --package-path macos --filter GhosttySurfaceHostTests/testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` → 失败，断言“恢复 responder 不应在当前 SwiftUI/AppKit 更新栈内同步抢焦点”未成立。
-  - 绿灯：`swift test --package-path macos --filter GhosttySurfaceHostTests/testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` → 1 test，0 failures。
-  - 相关回归：`swift test --package-path macos --filter 'GhosttySurfaceHostTests|GhosttySurfaceLifecycleLoggingIntegrationTests|GhosttySurfaceRepresentableUpdatePolicyTests|WorkspaceSurfaceActivityPolicyTests'` → 22 tests，5 skipped，0 failures。
-  - 构建验证：`swift build --package-path macos` → Build complete。
-  - 差异校验：`git diff --check` → 无输出。
+  - 定向测试：
+    - `swift test --package-path macos --filter 'WorkspaceDiffNavigationBarViewTests|WorkspaceDiffTabViewTests'`
+    - `12 tests, 0 failures`
+    - `swift test --package-path macos --filter WorkspaceDiffTabViewModelTests/testUpdateViewerModeDoesNotDropLoadedDocument`
+    - `1 test, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 Diff 导航条图标化 + 移除 compare「Diff Blocks」栏
+
+- [x] 定位 compare viewer 里的 `Diff Blocks` 侧栏与顶部 Previous/Next Difference 按钮实现
+- [x] 做最小 SwiftUI 改动：移除 compare `Diff Blocks` 栏，保留 overview gutter
+- [x] 将 Previous / Next Difference 文案按钮改成图标按钮，并补 accessibility / help 文案
+- [x] 更新对应 source-based 测试与 Review
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 Diff 导航条图标化 + 移除 compare「Diff Blocks」栏）
+
+- 结果：
+  1. `WorkspaceDiffTwoSideViewerView` 已移除 compare 侧的 `Diff Blocks` 整栏，不再展示左侧块列表与对应标题。
+  2. compare viewer 保留 `compareOverviewGutter`，因此块级定位能力仍然存在；点击 overview marker 仍会同步当前选中块并滚动到对应位置。
+  3. `WorkspaceDiffNavigationBarView` 已把 `Previous Difference / Next Difference` 从文案按钮改成图标按钮，分别使用 `chevron.up / chevron.down`。
+  4. 为避免图标按钮语义退化，仍保留了 `.accessibilityLabel(...)` 与 `.help(...)` 的英文语义文案。
+- 直接原因：
+  1. 用户明确表示 compare viewer 左侧 `Diff Blocks` 栏“用不着”，因此需要直接删掉这层 UI。
+  2. 用户同时要求把顶部 Previous / Next Difference 入口改成更紧凑的图标形态。
+- 设计诱因：
+  1. compare viewer 当前同时存在左侧 block 栏和 overview gutter，两层导航 affordance 有冗余；这次按用户要求删掉更重的那一层。
+  2. 顶部导航按钮此前直接使用长文本，在当前 diff 顶栏密度下占位偏大，不够紧凑。
+- 当前修复方案：
+  1. App/UI：从 `WorkspaceDiffTwoSideViewerView` 的根 `HStack` 中移除 `compareBlocksSidebar`，保留 `compareOverviewGutter + editors` 布局。
+  2. App/UI：把 diff navigation bar 的前后跳转入口切成 icon-only `Button`，并补 accessibility/help 语义。
+  3. Tests：同步调整 `WorkspaceDiffNavigationBarViewTests` 与 `WorkspaceDiffTabViewTests` 的 source-based 断言。
+- 长期建议：
+  1. 当前 compare 侧栏移除后，块级 stage/revert/unstage 入口也一并不再显示；如果后续用户仍希望保留这些动作但不要独立侧栏，可以再讨论把动作收口到更轻量的 hover/toolbar/context menu 方案。
+  2. 若后续 merge viewer 也出现类似冗余反馈，可以同样评估是否仅保留 overview gutter，而不是默认保留左侧冲突块栏。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'WorkspaceDiffNavigationBarViewTests|WorkspaceDiffTabViewTests'`
+    - `9 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 修复 `./dev` 启动失败（working tree diff live client / Commit side tool window 签名断裂）
+
+- [x] 复现 `./dev --no-log` 启动失败，记录首个编译错误与后续阻塞链路
+- [x] 为 `NativeGitRepositoryService` 补齐 working tree diff live client 依赖的文件读取 / patch mutation helper
+- [x] 为新增 Git helper 补定向测试，覆盖 head/index/local/conflict/patch mutation 场景
+- [x] 修复 `WorkspaceCommitSideToolWindowHostView -> WorkspaceCommitRootView -> WorkspaceCommitChangesBrowserView` 的闭包签名断裂
+- [x] 修复 `./dev --dry-run` 的 bash 兼容问题
+- [x] 运行构建 / 定向测试 / 启动烟测 / `git diff --check`
+
+## Review（2026-03-27 修复 `./dev` 启动失败）
+
+- 结果：
+  1. `./dev --no-log` 现在能完成 SwiftPM 构建并进入 App 运行态，不再在编译阶段直接失败。
+  2. `NativeGitRepositoryService` 已补齐 `loadHeadFileContent`、`loadIndexFileContent`、`loadConflictFileContents`、`loadLocalFileContent`、`saveLocalFileContent`、`stagePatch`、`unstagePatch`，使 `WorkspaceDiffTabViewModel.Client.live(...)` 的 working tree compare / merge 主链重新可编译、可运行。
+  3. `WorkspaceCommitSideToolWindowHostView`、`WorkspaceCommitRootView`、`WorkspaceCommitChangesBrowserView` 现在统一使用“单击同步已打开 preview / 双击打开或聚焦 preview”的闭包签名，不再卡在 host 与 root/browser API 脱节。
+  4. `dev` 的 dry-run 分支已改成 bash 可执行的数组拆分写法，`./dev --dry-run` 不再报 `bad substitution`。
+- 直接原因：
+  1. `WorkspaceDiffTabViewModel.Client.live(...)` 在 2026-03-26 diff 架构升级后，开始调用一组并不存在于 `NativeGitRepositoryService` 的 working tree helper，导致 `./dev` 首次编译直接失败。
+  2. 修掉第一层后，`WorkspaceCommitSideToolWindowHostView` 仍在按“sync/open preview 双闭包”调用 `WorkspaceCommitRootView`，但 `WorkspaceCommitRootView` / `WorkspaceCommitChangesBrowserView` 还停留在旧的单 `onOpenDiff` 签名，形成第二层编译断裂。
+  3. `dev` 脚本的 dry-run 分支误用了 zsh 的 `${=command}` 语法，在 bash shebang 下天然不可执行。
+- 设计诱因：
+  1. Diff Viewer 主链从 patch preview 升级到 working tree compare/merge 后，live client 与 Git service 的 API 演进没有同提交闭环，导致 ViewModel 先引用、Storage 层后补的断层。
+  2. Commit side tool window 迁移到“单实例 preview”后，host 层已切到新语义，但 root/browser 仍保留旧入口，说明这条 UI 子链路没有被一次性联动收口。
+  3. `dev` 的 dry-run 分支缺少最基本的 bash 执行验证。
+- 当前修复方案：
+  1. Core/Storage：补齐 working tree compare/merge 所需的 Git 文件读取与 patch mutation helper，并通过临时 patch 文件 + `git apply --cached [--reverse] --unidiff-zero --recount` 实现块级 stage/unstage。
+  2. App/Commit：把 root/browser 统一切到 `onSyncDiffPreviewIfNeeded` + `onOpenDiffPreview` 双闭包，使单击/双击 preview 语义与 host 对齐。
+  3. Script：dry-run 改用 bash `read -r -a` 数组拆分，不再依赖 zsh-only 扩展。
+- 长期建议：
+  1. `WorkspaceDiffTabViewModel.Client.live(...)` 新增依赖时，优先让 `NativeGitRepositoryServiceTests` 或 compile-only smoke 覆盖这组 live wiring，避免再出现“ViewModel 先接线、Service API 缺失”的低级断裂。
+  2. Commit side tool window 这类三层 View 传参链，后续改 preview/open 语义时最好补一条 source-based 或 compile-level contract test，锁定 host/root/browser 的闭包签名。
+  3. `dev` 建议保留一个超轻量 smoke（至少 `./dev --dry-run`），专门守住脚本层 bash 兼容性。
+- 验证证据：
+  - 红灯（复现）：
+    - `./dev --dry-run` → `./dev: line 112: ${=command}: bad substitution`
+    - `./dev --no-log` → 首次编译失败于 `WorkspaceDiffTabViewModel.swift`，报 `NativeGitRepositoryService` 缺少 `saveLocalFileContent / stagePatch / unstagePatch / loadHeadFileContent / loadIndexFileContent / loadConflictFileContents / loadLocalFileContent`
+    - 修掉第一层后，继续失败于 `WorkspaceCommitSideToolWindowHostView.swift` 与 `WorkspaceCommitRootView` 闭包签名不匹配
+  - 绿灯（定向测试）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests/(testLoadHeadIndexAndLocalFileContentsReflectWorkingTreeState|testLoadConflictFileContentsReturnsBaseOursTheirsAndResult|testStageAndUnstagePatchOnlyMutateIndex)'`
+    - `3 tests, 0 failures`
+  - 绿灯（构建）：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 绿灯（脚本/启动烟测）：
+    - `./dev --dry-run` → 正常打印 vendor/log/run 命令
+    - `./dev --no-log` → `Build of product 'DevHavenApp' complete!`，随后进程保持运行，手动 `Ctrl-C` 退出
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 复刻 IDEA Diff 逻辑（brainstorming）
+
+- [x] 探查当前 DevHaven diff 架构、既有设计文档、测试边界与近期提交，明确现状
+- [x] 逐项向用户澄清“复刻 IDEA diff 逻辑”的范围、优先级与验收标准
+  - 已确认：范围同时覆盖 working tree / commit diff 与 git log 历史 diff，其中优先级是先做 working tree / commit diff，再补 git log 历史 diff
+  - 已确认：顶部导航条按完整链式版对齐，包含 previous / next difference，并支持当前文件到头后继续跳转到下一个文件
+  - 已确认：左右 pane 顶部信息按重度版对齐，除版本名 / 路径外，还需要统一 metadata provider，承载可复制 revision/hash、作者/时间等详情
+  - 已确认：compare / merge 编辑区按强复刻版推进，尽量补齐编辑器内块级动作、selected changes 语义、冲突间导航与更接近 IDEA 的动作分布
+- [x] 基于 IntelliJ `diff-impl` 主链提出 2-3 套方案，比较取舍并给出推荐
+  - 已完成方案比较；用户明确选择方案 C：按 IntelliJ `diff-impl` 分层重做一套更接近 IDEA 的 Diff Viewer 框架
+- [x] 分段呈现最终设计（架构 / 组件 / 数据流 / 交互 / 测试），获得用户确认
+  - 已完成并获认可：架构与状态边界，确定升级为 `Runtime Diff Tab -> Diff Session -> Viewer Processor -> Viewer Layout`
+  - 已完成并获认可：组件与文件改造方案，确定新增 session / pane metadata 模型与 diff navigation / pane header / viewer 子视图
+  - 已完成并获认可：数据流与交互闭环，确定 commit / git log 统一通过 request chain 驱动 current difference 与跨文件 navigation
+  - 已完成并获认可：错误处理、边界约束与不做项，确定本轮仅重做 diff viewer framework，不重写 workspace / Git service 主链
+- [x] 将确认后的设计写入 `docs/plans/2026-03-26-idea-diff-parity-design.md`
+  - 已写入并提交：`docs/plans/2026-03-26-idea-diff-parity-design.md`
+  - 提交：`7a6cfa2 docs: add idea diff parity design`
+- [x] 切换到 implementation planning，产出实施计划文档并进入执行阶段
+  - 已产出实施计划：`docs/plans/2026-03-26-idea-diff-parity.md`
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第六阶段（gutter 导航 / 编辑器刷新缓存）
+
+- [x] 复查当前 side rail 与 `WorkspaceTextEditorView` 刷新路径，明确本轮 UI 导航增强与性能优化边界
+- [x] 先补红灯测试，锁定 gutter overview rail 与 decoration signature cache 契约
+- [x] 实现 App 层 gutter overview rail、block marker 选中/跳转增强
+- [x] 实现 `WorkspaceTextEditorView` decoration signature cache，避免无关刷新时重复重刷全文高亮
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第六阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第六阶段：gutter 导航 / 编辑器刷新缓存）
+
+- 结果：
+  1. `WorkspaceDiffTabView` 现在在 compare / merge editor 的 side rail 与正文之间新增了更像 IDEA 的 **overview gutter rail**：
+     - `compareOverviewGutter`
+     - `mergeOverviewGutter`
+     - `blockOverviewMarker`
+  2. gutter marker 会按 block 的行号范围在可用高度内做比例布局，并与现有的 `scrollCompareBlockIntoView(...) / scrollMergeBlockIntoView(...)` 复用同一跳转主链，所以点击 gutter marker 也会选中并滚到对应 block。
+  3. `WorkspaceTextEditorView` 现在新增 `WorkspaceTextEditorDecorationSignature` 与 `lastAppliedDecorationSignature`，并通过 `applyDecorationsIfNeeded(...)` 控制何时真正重刷全文高亮。
+  4. 因而在无关状态变化导致 `updateNSView` 被反复调用时，不会再每次都执行：
+     - `setAttributes(fullRange)`
+     - 重铺 line highlight
+     - 重铺 inline highlight
+  5. 之前已经修好的：
+     - render-path getter 纯读取
+     - `updateTab(_:)` 幂等短路
+     - side rail 自动滚动
+     - merge result inline highlight
+     本轮回归后均未被破坏。
+- 直接原因：
+  1. 第五阶段后，导航语义已经具备，但视觉上仍主要是“左侧卡片列表”，距离 IDEA 常见的 gutter overview rail 还差一层全局定位感。
+  2. `WorkspaceTextEditorView.updateNSView` 之前即使文本和高亮都没变，也会无条件重刷全文 decorations，是 diff editor 重绘链中的高频成本点。
+- 设计层诱因：
+  1. 之前 block 导航只有“详细 side rail”，缺少一层按全文比例定位的 overview rail。
+  2. 之前 editor 宿主只知道“收到 update 就重刷”，没有“decoration 是否真的变化”的签名缓存。
+  3. 本轮通过“overview gutter + decoration signature cache”把导航和刷新成本一起收口；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. App / UI：新增 compare / merge overview gutter，并复用已有 block 选中与滚动请求主链。
+  2. App / Editor：新增 decoration signature cache，仅在文本变化或 decorations 真变化时重刷全文高亮。
+- 长期改进建议：
+  1. 当前 gutter rail 已提供全局定位与跳转，但还没做到“根据当前可见区域反向点亮最近 block”；若继续追 1:1 IDEA，可在现有 overview rail 上再补可见区域 -> marker 反向联动。
+  2. decoration cache 目前聚焦“跳过无关高亮重刷”；若后续继续做性能收口，可再补文本布局/attributed string 级别的增量更新，而不是每次文本变化都重设整段 string。
+  3. 若后续要做更扎实的性能回归，可补 profile/script 或 UI instrumentation，量化 `updateNSView` 高频场景下的 decoration 命中率。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - 初次失败：
+      - `WorkspaceDiffTabViewTests.testDiffTabViewProvidesIdeaLikeOverviewGutterForBlocks`
+      - `WorkspaceTextEditorViewTests.testWorkspaceTextEditorViewCachesDecorationSignatureBeforeReapplyingHighlights`
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - `12 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `91 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 修复 Workspace diff getter 引发的 SwiftUI invalidation storm
+
+- [x] 复核用户给出的主线程采样结论，对照 `WorkspaceHostView -> NativeAppViewModel -> WorkspaceDiffTabViewModel` 调用链确认 render-path 写状态根因
+- [x] 先补红灯测试，锁定“纯 getter 不得触发 diff view model 观察失效 / 相同 tab 不得重复 invalidation”契约
+- [x] 实现最小修复：getter 改纯读取、`updateTab(_:)` 增加幂等短路与差异写入
+- [x] 运行定向测试，确认 invalidation storm 回归闸门生效
+- [x] 在本文件追加本次 Review（含直接原因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 修复 Workspace diff getter 引发的 SwiftUI invalidation storm）
+
+- 结果：
+  1. `NativeAppViewModel.workspaceDiffTabViewModel(for:tabID:)` 已改成**纯读取**：命中缓存时直接返回既有 `WorkspaceDiffTabViewModel`，不再在 render path 内调用 `updateTab(_:)`。
+  2. `WorkspaceDiffTabViewModel.updateTab(_:)` 已补幂等保护：`self.tab == tab` 时直接返回；只有标题/查看模式真的变化时才写 `documentState`，只有 `source` 变化时才 reset + refresh。
+  3. 新增两条 Observation 回归测试，直接锁住：
+     - “相同 tab 不得触发新的观察失效”
+     - “纯 getter 不得触发已有 diff view model 观察失效”
+  4. 这让 `WorkspaceHostView.body -> workspaceDiffTabViewModel(for:)` 这条渲染路径不再具备写状态副作用，用户指出的 invalidation storm 闭环被切断。
+- 直接原因：
+  1. `WorkspaceHostView.body` 渲染 diff 标签页时调用了名为 getter、实际会写状态的 `workspaceDiffTabViewModel(for:tabID:)`。
+  2. 该 getter 会对已有 `WorkspaceDiffTabViewModel` 执行 `updateTab(_:)`。
+  3. `updateTab(_:)` 之前即使收到相同 tab，也会无条件写 `tab / documentState.title / documentState.viewerMode`，从而触发 Observation invalidation。
+- 设计层诱因：
+  1. **render-path accessor 与显式事件同步职责混在一起**，导致 `body` 内看似无害的读取变成了写状态入口。
+  2. **状态同步入口缺少幂等短路**，把“值相同的同步”也变成了实际失效。
+  3. 高成本的 diff/editor 刷新链是放大器，但这次根因仍然是读写边界混乱；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. getter 改纯读取，事件流里的显式 `syncWorkspaceDiffTab(...)` 继续负责需要的 view model 同步。
+  2. `updateTab(_:)` 加 `guard self.tab != tab else { return }`，并细化到字段级差异写入。
+- 长期改进建议：
+  1. 把“纯读取 accessor 不得写 `@Observable` 状态”固化成 Workspace runtime 的通用约束。
+  2. 后续可把 diff tab 外部同步进一步收敛成显式 `syncFromState(...)` / `replaceSource(...)` 之类更窄 API，避免再把整个 tab state 暴露给 render path。
+  3. `WorkspaceTextEditorView` 后续仍可继续做文本/高亮签名缓存，降低无关刷新时的成本。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests/testUpdateTabWithIdenticalTabDoesNotInvalidateObservedState|NativeAppViewModelWorkspaceDiffTabTests/testWorkspaceDiffTabViewModelGetterDoesNotInvalidateExistingDiffViewModel'`
+    - 初次失败：
+      - `相同 tab 不应触发新的观察失效`
+      - `纯 getter 不应触发 diff view model 的观察失效`
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests'`
+    - `42 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `89 tests, 0 failures`
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第五阶段（side rail 自动滚动 / merge result inline）
+
+- [x] 复查第四阶段后的剩余差距，确认优先补 side rail 点击自动滚动与 merge result pane 字符级高亮
+- [x] 基于现有 side rail / inline highlight 主链补写第五阶段设计
+- [x] 补写第五阶段实施计划，明确 scroll request 与 result inline highlight 边界
+- [x] 补红灯测试，锁定自动滚动与 merge result inline highlight 契约
+- [x] 实现 Core / App 改动并同步 `AGENTS.md`
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第五阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第五阶段：side rail 自动滚动 / merge result inline）
+
+- 结果：
+  1. merge builder 现在会把冲突块中的 ours/theirs 字符级差异继续映射到 `resultPane.inlineHighlights`，因此 result 区不再只有冲突块级背景，而是能看见冲突正文里的字符级提示。
+  2. `WorkspaceDiffTabView` 已补显式 side rail 滚动请求：
+     - `@State private var editorScrollRequestState`
+     - `scrollCompareBlockIntoView(_:)`
+     - `scrollMergeBlockIntoView(_:)`
+  3. `WorkspaceTextEditorView` 新增 `WorkspaceTextEditorScrollRequestState` 与 `scrollToRequestedLineIfNeeded()`，收到 side rail 请求后会把对应 editor 滚到指定行。
+  4. compare / merge side rail 的点击与块级动作按钮现在都会同步发出滚动请求，因此不是只有“选中态”，而是能真正把文档定位到对应 block。
+  5. 本轮未引入新的架构级目录/边界调整，因此 `AGENTS.md` 无需新增变更说明。
+- 直接原因：
+  1. 第四阶段后 side rail 已有选中态和动作入口，但点击 block 还不会把编辑器滚到对应位置。
+  2. merge editor 的 inline highlight 只覆盖 ours/theirs，result pane 仍缺少冲突正文里的字符级提示。
+- 设计层诱因：
+  1. 之前只有连续滚动同步状态（`WorkspaceTextEditorScrollSyncState`），缺少“离散跳转到某一行”的显式 contract。
+  2. merge inline highlight 之前只在 `ours/theirs` 两个 pane 上落地，没有把 conflict block 中 result 侧的行范围一起建模。
+  3. 本轮通过“scroll request 状态 + result line range inline 映射”补齐差距；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：`WorkspaceDiffMergeConflictBlock` 承载 `resultOursLineRange / resultTheirsLineRange`，`buildMergeInlineHighlights(...)` 把 ours/theirs 的字符差异同时投射到 result pane。
+  2. App：新增 `WorkspaceTextEditorScrollRequestState`，由 `WorkspaceDiffTabView` 的 side rail 把 block 点击转成 per-editor line target，再由 `WorkspaceTextEditorView` 执行实际滚动。
+- 长期改进建议：
+  1. 当前滚动是“按 block 起始行定位”，已满足 side rail 自动跳转；若继续追 1:1 IDEA，可后续再补 block 在 side rail / gutter 的可视位置联动。
+  2. merge `base` pane 当前用最接近的 conflict 起始行做辅助定位；如果后续用户对 base 对齐精度有更高要求，可再补更严格的 base-range 映射。
+  3. 后续若要继续提升可靠性，可补真正的交互测试，验证实际 `NSTextView` programmatic scroll 后的可见区域变化。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceHostViewTests'`
+    - 初次失败：
+      - `WorkspaceDiffTabViewTests.testDiffTabViewIssuesScrollRequestWhenSideRailBlockTapped`
+      - `WorkspaceTextEditorViewTests.testWorkspaceTextEditorViewBridgesHighlightsAndScrollSync`
+      - 新增 Observation 回归测试也曾先红后绿
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests'`
+    - `42 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `89 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第四阶段（merge inline highlight / side rail）
+
+- [x] 复查第三阶段后的剩余差距，确认优先补 merge editor 字符级高亮与更像 IDEA 的 side rail block 导航
+- [x] 基于现有 compare/merge 主链补写第四阶段设计
+- [x] 补写第四阶段实施计划，明确 merge inline highlight 与 side rail UI 边界
+- [x] 补红灯测试，锁定 merge inline highlight 与 side rail 契约
+- [x] 实现 Core / App 改动并同步 `AGENTS.md`
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第四阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第四阶段：merge inline highlight / side rail）
+
+- 结果：
+  1. `WorkspaceDiffTabViewModel` 的 merge builder 现在会基于 conflict blocks 生成 `oursPane.inlineHighlights / theirsPane.inlineHighlights`，所以 merge editor 不再只有行块级高亮。
+  2. merge inline highlight 复用了 compare 已有的字符差异算法，没有重新引入第二套 merge 专用字符 diff 逻辑。
+  3. `WorkspaceDiffTabView` 已把 compare / merge block 操作入口从“顶部横向条带”为主，升级为靠近编辑器左侧的 side rail：
+     - `compareBlocksSidebar`
+     - `mergeConflictSidebar`
+  4. side rail 现在具备：
+     - block summary
+     - 当前选中态
+     - block-level action
+     因而整体交互已经更接近 IDEA 的 diff navigator / gutter-side affordance。
+  5. 第三阶段已完成的：
+     - untracked block stage
+     - compare inline highlight
+     - 同步滚动
+     - Commit 单实例 preview
+     本轮回归后都未被破坏。
+- 直接原因：
+  1. 第三阶段后，compare editor 已能看见字符级差异，但 merge editor 的 ours/theirs 仍只有行块级高亮，冲突块内部细节不够清晰。
+  2. block 操作入口主要位于顶部横条，和 IDEA 更贴近编辑器左侧的操作心智仍有明显差距。
+- 设计层诱因：
+  1. inline highlight 之前只在 compare builder 内生成，没有继续复用到 merge conflict 场景。
+  2. block action UI 之前采用顶部 strip，更像“工具条”，而不是“文档块导航”。
+  3. 本轮通过“merge 复用 inline highlight 模型 + App 侧 side rail 重构”把这层差距补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：merge builder 基于 conflict block 逐行生成 ours/theirs inline highlight。
+  2. App：compare / merge editor 都改为左侧 side rail + 右侧编辑器主体布局，并加入 block 选中态。
+- 长期改进建议：
+  1. 当前 side rail 仍是独立 SwiftUI 导航列，不是和 `NSTextView` 行号完全对齐的真实 gutter；后续若继续追 1:1，可在现有 side rail 语义稳定后再考虑更细的 gutter 对齐，不要现在把状态重新散回 editor 宿主。
+  2. 当前点击 block card 只做选中视觉态，不会自动滚到对应行；若后续继续增强，可在现有 `WorkspaceTextEditorView` 基础上补显式 scroll-to-line 请求。
+  3. merge inline highlight 目前聚焦 ours/theirs；若后续需要更细效果，可继续补 result 区在“已接受块/已编辑块”场景下的字符级提示，但不要把 unresolved marker 文本强行做成误导性字符高亮。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests'`
+    - 初次失败：
+      - `WorkspaceDiffTabViewModelTests.testRefreshBuildsInlineHighlightsForMergeConflictOursAndTheirs`
+      - `WorkspaceDiffTabViewTests` 中关于 `compareBlocksSidebar / mergeConflictSidebar / selected block` 的断言
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests'`
+    - `25 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `83 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 DevHavenApp 未响应采样分析
+
+- [x] 复核用户提供的 `sample`，提取主线程热点与可疑调用链
+- [x] 对照采样涉及的 `WorkspaceHostView` / `NativeAppViewModel` / `WorkspaceDiffTabViewModel` / `WorkspaceTextEditorView` 源码定位直接原因
+- [x] 判断是否存在设计层诱因，并区分“高概率根因”与“次级放大因素”
+- [x] 整理分析结论、修复建议与验证依据
+- [x] 在本文件追加本次分析 Review（含直接原因、设计诱因、当前建议、长期改进、证据）
+
+## Review（2026-03-26 DevHavenApp 未响应采样分析）
+
+- 结果：
+  1. 这次“未响应”不是主线程被锁/被 I/O 阻塞，而是 **SwiftUI 观察与布局自激活（livelock）**：主线程几乎全部采样都落在 `SwiftUICore / AttributeGraph / libswiftObservation`。
+  2. 采样已给出完整闭环：
+     - `WorkspaceHostView.workspacePresentedContent(_:)`（`WorkspaceHostView.swift:159`）
+     - `NativeAppViewModel.workspaceDiffTabViewModel(for:tabID:)`（`NativeAppViewModel.swift:581`）
+     - `WorkspaceDiffTabViewModel.updateTab(_:)`
+     - `ObservationRegistrar.willSet / ObservationCenter.invalidate`
+     - `GraphHost.asyncTransaction / NSHostingView.beginTransaction`
+     - 再回到 `WorkspaceHostView.body`
+     这说明 render path 内发生了状态写入，导致视图不断把自己重新标脏并重复布局。
+  3. 最可疑的直接代码点是：
+     - `NativeAppViewModel.workspaceDiffTabViewModel(for:tabID:)` 在“getter”里对已存在的 `WorkspaceDiffTabViewModel` 无条件执行 `existing.updateTab(tab)`；
+     - `WorkspaceDiffTabViewModel.updateTab(_:)` 又无条件执行 `self.tab = tab`、`documentState.title = tab.title`、`documentState.viewerMode = tab.viewerMode`，即使值完全没变也照样触发 `@Observable` 写入。
+  4. 采样里的 `WorkspaceTextEditorView.updateNSView(_:context:)`、`applyHighlights(...)`、`SystemSegmentedControl.updateNSView(...)`、`WorkspaceTabBarView` 等热点，更像是这场自激活循环中的 **成本放大器**：每轮重渲染都会再次做大文本比较、整段高亮重刷、segmented control 尺寸测量和 tab bar diff。
+  5. Ghostty/renderer/io 线程大多都在 `kevent64` / `poll` 等待，说明后台终端线程不是主因。
+- 直接原因：
+  1. `WorkspaceHostView.body` 渲染 diff 标签页时，会调用带副作用的 `viewModel.workspaceDiffTabViewModel(for:tabID:)`。
+  2. 该函数对已缓存的 diff view model 执行 `updateTab`，而 `updateTab` 即使收到“相同 tab 状态”也会写回 observable 属性。
+  3. 这些写入在 SwiftUI 观察系统里触发新的 invalidation/transaction，形成主线程持续自旋，最终表现为 App “未响应”。
+- 设计层诱因：
+  1. **读写边界混乱**：`workspaceDiffTabViewModel(for:tabID:)` 从命名与调用位置上看像纯 getter，但内部却做了 view model 同步写入；把它放在 `body` 里调用非常危险。
+  2. **状态同步缺少幂等保护**：`WorkspaceDiffTabViewModel.updateTab(_:)` 没有先判断 `self.tab == tab`，也没有对 `title / viewerMode` 做差异短路。
+  3. **高成本 UI 更新缺少缓存**：`WorkspaceTextEditorView.updateNSView` 每轮都可能触发大字符串慢比较、全文属性重置、逐段高亮计算；一旦进入观察风暴，代价会被迅速放大。
+- 当前建议：
+  1. 第一优先级：把 `NativeAppViewModel.workspaceDiffTabViewModel(for:tabID:)` 改成**纯读取**，不要在 getter / `body` 渲染路径里调用 `updateTab`。
+  2. 最小止血：即便暂时保留当前结构，也至少要给 `WorkspaceDiffTabViewModel.updateTab(_:)` 增加幂等短路，例如先 `guard self.tab != tab else { return }`，并只在 `title / viewerMode / source` 真变化时写入。
+  3. 第二优先级：把 diff tab 状态同步移到显式事件流里，例如“打开 diff tab / Commit preview 切换 source / viewer mode 变化”时同步，而不是在 View 取值时偷偷同步。
+  4. 第三优先级：为 `WorkspaceTextEditorView` 增加文本与高亮签名缓存，避免在无关状态变化时反复全文 compare / 全文 setAttributes。
+- 长期改进建议：
+  1. 明确约束：**任何 `View.body` 内调用的 accessor 必须是纯函数**；如果要同步状态，应走 `.onChange` / action / explicit sync API。
+  2. 把 `WorkspaceDiffTabViewModel.tab` 变成更窄的内部同步输入，避免把“整个 tab state”作为高频 observed 状态暴露。
+  3. 给 diff/compare/merge 大文本编辑链补性能哨兵（大文本时跳过无差异高亮重刷、按 revision/identity 缓存 character range）。
+- 验证证据：
+  - 用户提供采样中，主线程 1495/1495 samples 均在 SwiftUI 事务/布局链；
+  - 采样明确落到：
+    - `WorkspaceHostView.swift:159`
+    - `NativeAppViewModel.swift:581`
+    - `WorkspaceDiffTabViewModel.updateTab(_:)`
+    - `ObservationRegistrar.willSet`
+    - `ObservationCenter.invalidate`
+  - 本地源码核对：
+    - `NativeAppViewModel.swift:576-589`
+    - `WorkspaceDiffTabViewModel.swift:87-99`
+    - `WorkspaceHostView.swift:155-169`
+    - `WorkspaceTextEditorView.swift:84-97`、`214+`
+  - 采样同时显示 `WorkspaceTextEditorView.updateNSView(_:context:)` 中的大字符串比较与高亮重刷、`SystemSegmentedControl` 更新和 AttributeGraph diff/compare 热点，符合“主循环自激活 + 重 UI 更新放大”的判断。
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第三阶段（untracked block stage / 字符级高亮）
+
+- [x] 复查第二阶段后的剩余差距，确认优先补 `untracked block stage` 与 `intra-line highlight`
+- [x] 基于现有 compare/merge block 主链补写第三阶段设计
+- [x] 补写第三阶段实施计划，明确 untracked patch 头部与字符级高亮边界
+- [x] 补红灯测试，锁定 untracked block stage 与 inline highlight 契约
+- [x] 实现 Core 模型、ViewModel、Git service 与 App 编辑器增强
+- [x] 同步更新 `AGENTS.md`
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第三阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第三阶段：untracked block stage / 字符级高亮）
+
+- 结果：
+  1. `WorkspaceDiffModels.swift` 现已支持 editor 级字符差异模型：
+     - `WorkspaceDiffInlineRange`
+     - `WorkspaceDiffEditorInlineHighlight`
+     - `WorkspaceDiffEditorPane.inlineHighlights`
+  2. `WorkspaceDiffTabViewModel` 的 compare builder 现在除了行块级高亮，还会对“左右都存在但内容不同”的替换行生成 **intra-line highlight**。
+  3. `WorkspaceTextEditorView` 现在会把 line highlight 与 inline highlight 叠加到 `NSTextStorage`，所以 compare editor 已经不只是“这一行不同”，而能看到“这一行内部哪一段不同”。
+  4. `WorkspaceDiffTabView` 已把 `inlineHighlights` 桥接到文本编辑器，并把 untracked compare 纳入 block 级“暂存此块”入口。
+  5. `WorkspaceDiffTabViewModel.applyCompareBlockAction(.stage, ...)` 不再只接受 `.unstaged`；`.untracked` 也能走 block stage。
+  6. patch builder 已支持新文件头：
+     - `new file mode 100644`
+     - `--- /dev/null`
+     - `+++ b/<file>`
+     因而 untracked compare block 现在可以直接生成可应用到 index 的 patch。
+  7. `NativeGitRepositoryService.stagePatch(...)` 已通过新文件 `/dev/null -> file` patch 的真实测试验证。
+- 直接原因：
+  1. 第二阶段的高亮仍然停留在行块级，用户只能看到“哪几行变了”，看不到“行内哪一段变了”。
+  2. 第二阶段虽然已有 block stage 主链，但 patch builder 仍按 tracked file 的常规头部生成 patch，没有覆盖新文件语义。
+- 设计层诱因：
+  1. 现有 editor 模型之前只有 `lineRange`，没有 `lineIndex + columnRange` 这类字符级表达。
+  2. compare block action 之前把 `.stage` 约束死在 `.unstaged`，导致 untracked compare 明明已经进入统一 diff editor，却仍停在旁路。
+  3. 本轮通过“inline highlight 模型 + compare builder + `/dev/null` patch 头”把这层差距补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core Models：补 `inlineHighlights` 共享模型。
+  2. ViewModel：逐行替换块按最长公共前缀/后缀生成字符级差异片段。
+  3. ViewModel/Patch Builder：为 untracked block stage 生成新文件 patch 头并放开 `.untracked` 的 `.stage` 动作。
+  4. App：文本编辑器宿主叠加渲染 inline highlight，Diff 视图把新字段桥接下去。
+- 长期改进建议：
+  1. 当前 intra-line highlight 使用的是“最长公共前缀/后缀裁剪”策略，适合大多数单行替换，但还不是 JetBrains 那种更完整的字符 diff；若继续对齐，可在现有 inline 模型上替换算法，而不必改 UI 主链。
+  2. untracked 文件当前仍然通常表现为**整文件单块**；这不是主链缺失，而是 `/dev/null -> file` compare 的自然结果。若未来需要更细的新文件 partial stage，需要额外设计“人工切块/部分索引写入”策略，不应硬塞进当前块构建器。
+  3. 现在 merge editor 仍以行块/冲突块为主；若后续继续追 JetBrains 细节，可在冲突块内部继续补 inline highlight。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - 初次失败，核心报错为：
+      - `WorkspaceDiffEditorPane` 缺少 `inlineHighlights`
+      - 说明 `untracked` block stage / inline highlight contract 尚未落地
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - `57 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `83 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 Commit Diff 对齐 IDEA 第二阶段（块级交互 / 高亮 / 同步滚动）
+
+- [x] 复查当前 compare / merge editor 已具备的能力与仍未对齐 IDEA 的差距
+- [x] 基于现有单实例 preview 与 compare/merge 主链，补写第二阶段设计
+- [x] 补写第二阶段实施计划，明确按 TDD 补齐块级交互、差异高亮与同步滚动
+- [x] 补红灯测试，锁定 compare block / merge conflict block / editor 高亮 / 同步滚动 / hunk action 契约
+- [x] 实现 Core 模型、ViewModel 与 Git service 调整
+- [x] 实现 App 层高亮编辑器、同步滚动与块级操作 UI
+- [x] 同步更新 `AGENTS.md`
+- [x] 运行定向测试 / 回归 / `git diff --check`
+- [x] 在本文件追加第二阶段 Review（含根因、设计诱因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit Diff 第二阶段：块级交互 / 高亮 / 同步滚动）
+
+- 结果：
+  1. `WorkspaceDiffModels.swift` 已把 compare / merge editor 升级为真正的块模型：
+     - `WorkspaceDiffLineRange`
+     - `WorkspaceDiffEditorHighlight`
+     - `WorkspaceDiffCompareBlock`
+     - `WorkspaceDiffMergeConflictBlock`
+     - `WorkspaceDiffEditorPane.highlights`
+  2. `WorkspaceDiffTabViewModel` 不再只承接“文本 + 保存”，而是会：
+     - 对 compare 文本构建 diff blocks 与左右高亮；
+     - 对 conflicted result 构建 conflict blocks；
+     - 在编辑 LOCAL / RESULT 后实时重建 blocks/highlights；
+     - 支持 compare block 的 `stage / unstage / revert`；
+     - 支持 merge conflict block 的 `accept ours / theirs / both`。
+  3. `NativeGitRepositoryService` 已新增 tracked compare block 所需的 hunk patch mutation：
+     - `stagePatch(at:patch:)`
+     - `unstagePatch(at:patch:)`
+     内部统一通过 `git apply --cached --unidiff-zero` 执行。
+  4. `WorkspaceDiffTabView` 已新增：
+     - compare blocks strip
+     - merge conflict blocks strip
+     - editor 侧高亮桥接
+     - diff 标签页内部统一 scroll sync state
+  5. `WorkspaceTextEditorView` 已从“纯 NSTextView 宿主”升级为：
+     - 支持 line highlights
+     - 支持 bounds 变化监听
+     - 支持同一 diff 标签页内纵向同步滚动
+  6. 回归后：
+     - Commit 单实例 preview 仍保持不变；
+     - Git Log 历史 patch viewer 主链未回退；
+     - `WorkspaceHostView / NativeAppViewModel` 的 runtime diff tab 主链未被破坏。
+- 直接原因：
+  1. 第一阶段只解决了“真实 compare / merge 文档源”，但 compare / merge 仍停留在多文本框并排，缺少块级交互和视觉锚点。
+  2. `WorkspaceTextEditorView` 之前只管 `NSTextView.string`，没有高亮区间与滚动同步 contract。
+  3. `NativeGitRepositoryService` 之前没有 hunk patch mutation 能力，导致 compare editor 即使知道块，也无法把单个 tracked block stage / unstage 到 index。
+- 设计层诱因：
+  1. 旧模型只把 patch/compare/merge 看成“加载态文档”，没有把 editor block / line highlight 当成一等运行时模型。
+  2. compare / merge editor 的交互语义之前散失在 UI 之外，没有一个 Core 层可复用的 block builder。
+  3. 本轮通过“模型层 blocks/highlights + ViewModel block action + App editor bridge”把这条链补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core Models：扩展 compare/merge editor block/highlight 共享模型。
+  2. Git Service：新增 `stagePatch / unstagePatch`，让 tracked compare block 可以走 index patch mutation。
+  3. ViewModel：统一构建 compare blocks / conflict blocks，并在 edit/save/block action 后重算。
+  4. App：diff tab 增加 block strip；文本编辑器增加高亮渲染与滚动同步。
+- 长期改进建议：
+  1. 当前高亮是**行块级**，还不是 IDEA 的字符级 intra-line diff；如果要继续 1:1 对齐，可在现有 block 模型上继续补，不要回退到 patch 文本方案。
+  2. 当前 hunk patch mutation 覆盖 tracked file 的 stage / unstage；**untracked 新文件的部分暂存**仍未补齐，后续应在现有 patch builder 上单独处理 `/dev/null -> file` 的部分索引写入。
+  3. 当前 block action 以条带形式暴露，后续若要更像 IDEA，可在既有 block/highlight 主链上继续补 gutter action，不要重新分叉第二套 editor 状态机。
+- 验证证据：
+  - 红灯：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - 初次失败，核心报错为：
+      - `WorkspaceDiffCompareDocument` 缺少 `blocks`
+      - `WorkspaceDiffEditorPane` 缺少 `highlights`
+      - `WorkspaceDiffMergeDocument` 缺少 `conflictBlocks`
+      - `WorkspaceDiffTabViewModel` 缺少 `applyCompareBlockAction(...)`
+      - `NativeGitRepositoryService` 缺少 `stagePatch / unstagePatch`
+  - 绿灯（定向）：
+    - `swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`
+    - `53 tests, 0 failures`
+  - 绿灯（回归）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `79 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-26 Commit Diff 从只读 Preview 升级为可编辑对比
+
+- [x] 复查当前 Workspace diff viewer 能力边界，确认目前只是 patch 文本渲染
+- [x] 对照当前实现确认“不能编辑 / 不能真正对比”的直接原因
+- [x] 与用户确认本轮是否要支持“在 diff 右侧直接编辑工作区文件并保存”（已确认为：需要）
+- [x] 基于确认结果提出 2-3 个实现方案并给出推荐（已确认选择 A：一次性全量对齐 IDEA，包括 conflicted 三路 merge）
+- [x] 设计确认后写入 `docs/plans/2026-03-26-commit-editable-compare-design.md`
+- [x] 设计确认后写入实施计划 `docs/plans/2026-03-26-commit-editable-compare.md`
+- [x] 设计确认后按 TDD 实施并验证
+
+## Review（2026-03-26 Commit 可编辑 Compare / Merge Editor）
+
+- 结果：
+  1. `WorkspaceDiffSource.workingTreeChange(...)` 现在会显式携带 `group / status / oldPath`，Commit preview 打开 working tree 文件时不再只有 filePath 粒度。
+  2. `WorkspaceDiffModels.swift` 已把 runtime diff loaded document 从单一 patch 扩展为 `patch / compare / merge` 三类：
+     - `WorkspaceDiffCompareDocument`
+     - `WorkspaceDiffMergeDocument`
+     - `WorkspaceDiffEditorPane`
+  3. `NativeGitRepositoryService` 已新增 compare / merge 所需内容接口：
+     - 读取 `HEAD`
+     - 读取 `INDEX`
+     - 读取 `LOCAL`
+     - 读取 conflict stages `:1/:2/:3`
+     - 把 editable LOCAL/result 文本写回工作区文件
+  4. `WorkspaceDiffTabViewModel` 已升级为真正的 compare/merge 状态层：
+     - working tree source 会按 group 分流为 staged / unstaged / untracked compare，或 conflicted merge
+     - 支持 `updateEditableContent(...)`
+     - 支持 `saveEditableContent()`
+     - 支持 `applyMergeAction(...)`
+  5. `WorkspaceDiffTabView` 不再只有 patch viewer，现已支持：
+     - patch viewer
+     - two-way compare editor
+     - three-way merge editor
+     并通过新增的 `WorkspaceTextEditorView`（`NSTextView` 宿主）承接 LOCAL/result 侧编辑。
+  6. Commit 单实例 preview 仍保持不变；现在只是同一个 preview 标签页内部从“只读 patch”升级成了“真实 compare / merge editor”。
+- 直接原因：
+  1. 之前的 runtime diff tab 只会加载 unified diff 文本，并交给 `WorkspaceDiffPatchParser + ScrollView + Text` 渲染。
+  2. 因为没有真实文档源、可编辑缓冲与写回链路，所以只能“看 patch”，不能像 IDEA 那样编辑 LOCAL/result 并实时重新对比。
+- 设计层诱因：
+  1. 旧模型把“patch 结果”当成了“diff viewer 真相源”，导致 compare/merge 能力天然无法落地。
+  2. `NativeGitRepositoryService` 之前只暴露 patch 与 mutation，不暴露 HEAD / INDEX / LOCAL / conflict stages 这类 compare editor 必需的内容读取接口。
+  3. 本轮通过 `patch / compare / merge` 三态模型与 Git 内容读取接口把这层缺口补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core Models：扩展 diff source 与 loaded document 三态。
+  2. Git Service：新增 HEAD / INDEX / LOCAL / conflict stage 文本读取与 LOCAL 写回。
+  3. ViewModel：把 working tree diff 从“拉 patch”改成“拉 compare/merge 文档 + 编辑/保存/应用 merge action”。
+  4. App UI：新增 `WorkspaceTextEditorView`，让 diff 标签页真正具备文本编辑宿主。
+- 长期改进建议：
+  1. 当前 conflicted merge editor 已支持三路查看和 file-level `ours/theirs/both` 结果区动作，但**还不是 IDEA 那种 hunk 级冲突块操作**；如果要进一步 1:1 复刻，这部分应在现有 merge 模型上继续细化，而不是回退到 patch 方案。
+  2. 当前 compare editor 已具备真实文档对照与保存，但还没有行级高亮 / 同步滚动 / gutter；这些应作为 viewer 增强继续补，不要重新改变数据主链。
+  3. staged compare 当前按 IDEA 语义保持只读；若未来需要更强交互，可补 hunk 级 stage/unstage 动作，但不要把 index blob 变成任意文本编辑器。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|NativeGitRepositoryServiceTests|WorkspaceDiffTabViewTests|NativeAppViewModelWorkspaceDiffTabTests'`
+    - 初次失败，核心报错为：
+      - `WorkspaceDiffLoadedDocument / WorkspaceDiffCompareDocument / WorkspaceDiffMergeDocument` 不存在
+      - `NativeGitRepositoryService` 缺少 `loadHeadFileContent / loadIndexFileContent / loadLocalFileContent / loadConflictFileContents / saveLocalFileContent`
+      - `openActiveWorkspaceCommitDiffPreview(...)` 与 source 仍缺少 change metadata
+  - 绿灯（分步）：
+    - `swift test --package-path macos --skip-build --filter 'WorkspaceDiffTabViewModelTests'` → `8 tests, 0 failures`
+    - `swift test --package-path macos --skip-build --filter 'NativeGitRepositoryServiceTests'` → `30 tests, 0 failures`
+    - `swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests'` → `13 tests, 0 failures`
+  - 回归：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - `68 tests, 0 failures`
+  - 质量：
+    - `git diff --check` → exit 0
 
 
-## 2026-03-24 workspace 打开项目快捷键在终端焦点下无效排查
+## 2026-03-26 Commit Diff 复刻 IDEA 单实例查看链路
 
-- [x] 读取 Ghostty 键盘事件/菜单分发代码，确认快捷键在终端焦点下的实际路由
-- [x] 复现并锁定 root cause：是菜单未尝试还是 focused action 为 nil
-- [x] 先补失败测试，覆盖终端聚焦时应用菜单快捷键仍能命中菜单命令
-- [x] 实施最小修复并回归 workspace 打开项目快捷键
-- [x] 运行定向验证并在 Review 记录直接原因、设计诱因、修复方案与证据
+- [x] 排查当前 Commit 查看 diff 为“一个文件一个标签页”的直接原因
+- [x] 对照 IntelliJ Community 中 Commit / Stage diff preview 实现，确认应复刻的交互形态
+- [x] 与用户确认本轮目标是“内嵌 split diff preview”还是“复用单个 diff 实例”（已确认为：Commit 内复用单个 diff 实例并在实例内切文件）
+- [x] 基于确认结果提出 2-3 个实现方案并给出推荐
+- [x] 设计确认后写入 `docs/plans/2026-03-26-commit-single-diff-preview-design.md`
+- [x] 设计确认后写入实施计划 `docs/plans/2026-03-26-commit-single-diff-preview.md`
+- [x] 设计确认后补红灯测试，锁定 Commit diff 实例行为契约
+- [x] 以最小改动实现修复，并同步更新 `tasks/todo.md`
+- [x] 运行定向测试 / 回归验证，并在文末追加 Review（含根因、修复方案、长期建议、验证证据）
+
+## Review（2026-03-26 Commit 单实例 Diff Preview）
+
+- 结果：
+  1. Commit changes browser 不再按文件粒度创建多个 diff 标签页；现在按当前 execution worktree 复用单个 preview 实例。
+  2. `WorkspaceDiffOpenRequest` 已支持 `identityOverride`，Commit preview 使用稳定 identity（`commit-preview|<executionPath>`）。
+  3. `NativeAppViewModel` 已新增 `openActiveWorkspaceCommitDiffPreview(...)` 与 `syncActiveWorkspaceCommitDiffPreviewIfNeeded(...)`：
+     - 双击文件：打开或聚焦单实例 preview；
+     - 单击文件：只在 preview 已打开时同步其内容，不新建 tab、不抢主内容焦点。
+  4. `WorkspaceDiffTabViewModel` 已支持 `updateTab(_:)`，同一个 diff viewer 可在不同 working tree file source 之间切换并自动重载。
+  5. `WorkspaceCommitSideToolWindowHostView / WorkspaceCommitRootView / WorkspaceCommitChangesBrowserView` 已接通“选择同步 preview + 双击打开 preview”主链。
+  6. `AGENTS.md` 已同步记录 Commit 单实例 preview 与 runtime diff identity 约束。
+- 直接原因：
+  1. 之前 Commit 双击查看 diff 直接走 `openActiveWorkspaceDiffTab(...)`，而 working tree diff 的 identity 又按 `executionPath + filePath` 生成。
+  2. 因此每个文件都会被视为一个新的 runtime diff 文档，最终形成“一文件一标签页”。
+- 设计层诱因：
+  1. 现有 runtime diff tab 模型只有“文件级文档”语义，没有“稳定 preview session”语义。
+  2. Commit changes browser 的 selection 与 runtime diff viewer 之间缺少“已打开 preview 只更新 source、不新建文档”的桥接层。
+  3. 本轮通过 `identityOverride + Commit preview 专用入口 + WorkspaceDiffTabViewModel.updateTab(_:)` 把这层缺口补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：给 `WorkspaceDiffOpenRequest` 增加 `identityOverride`，允许 Commit preview 使用稳定 identity。
+  2. Core：给 `WorkspaceDiffTabViewModel` 增加 `updateTab(_:)`，在同一实例里切换 source 并刷新文档。
+  3. App State：在 `NativeAppViewModel` 中新增 Commit preview 的“同步已打开 preview / 打开并聚焦 preview”两条入口。
+  4. App UI：Commit browser 单击同步 preview、双击打开 preview，不再直接走 file-scoped diff 打开链路。
+- 长期改进建议：
+  1. 如果后续继续对齐 IDEA，可在同一个 Commit preview 实例上补 `Enter`、上下文件导航、最近文件切换，而不是重新引入多标签页。
+  2. 当前 preview 的稳定 identity 以 execution worktree 为粒度；若后续需要支持并行多 Commit 上下文，再考虑显式 session model，但不要提前做重型框架。
+  3. 目前 preview 更新主要由 Commit tree 选择驱动；若后续用户要求更强实时性，可继续把 working tree refresh 与 preview refresh 做更细粒度联动。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests'`
+    - 初次失败，核心报错为 `NativeAppViewModel` 缺少 `openActiveWorkspaceCommitDiffPreview` / `syncActiveWorkspaceCommitDiffPreviewIfNeeded`，以及 `WorkspaceDiffTabViewModel` 缺少 `updateTab`。
+  - 绿灯：同一命令复跑后通过，`28 tests, 0 failures`。
+  - 回归：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceHostViewTests|WorkspaceDiffTabViewTests'`
+    - `34 tests, 0 failures`。
+  - 质量：`git diff --check` → exit 0。
 
 
-## 2026-03-24 workspace 打开项目快捷键与弹窗焦点调整
+## 2026-03-26 复刻 IDEA Git Changes 双击查看 Diff 逻辑
 
-- [x] 阅读 AGENTS / 相关记忆 / 最近提交，确认现有 workspace 打开项目入口、设置页与焦点实现位置
-- [x] 确认“设计页面”配置范围与默认快捷键语义（默认 Command+K）
-- [x] 给出最小实现方案并等待用户确认
-- [x] 先补失败测试，覆盖快捷键配置持久化、命令入口与弹窗默认焦点
-- [x] 实现快捷键配置、菜单/命令接线与弹窗焦点修复
-- [x] 运行定向验证并在本文件追加 Review（直接原因、设计层诱因、修复方案、长期建议、证据）
+- [x] 探索 DevHaven 当前 Git Changes / Commit Changes 双击与 diff 链路现状
+- [x] 探索 IntelliJ Community 中 VCS Log / Changes Browser 双击查看 diff 的实现主链
+- [x] 与用户确认本轮复刻范围（已确认目标为独立标签页 diff 面板，并统一覆盖 Git Log Changes Browser + Commit Changes Browser）
+- [x] 提出 2-3 个复刻方案并给出推荐
+- [x] 输出设计并等待用户确认
+- [x] 设计确认后写入 `docs/plans/2026-03-26-idea-git-diff-open-design.md`
+- [x] 设计确认后写入实施计划 `docs/plans/2026-03-26-idea-git-diff-open.md`
+- [x] 按 TDD 实现双击查看 diff 主链
+  - [x] Task 1：锁定 runtime diff tab 与 close planner 契约（先红后绿）
+  - [x] Task 2：把 Workspace 顶部 tab bar 升级为 terminal + diff 共用展示层
+  - [x] Task 3：建立 diff 文档模型、完整 diff 加载链路与 patch parser
+  - [x] Task 4：落地独立 Diff 标签页 viewer（side-by-side / unified）
+  - [x] Task 5：统一接入 Git Log / Commit 的双击打开逻辑
+  - [x] Task 6：更新架构文档、完整验证并回填 Review
+- [x] 运行定向测试与必要回归，回填 Review（含根因、修复方案、长期建议、验证证据）
+
+## 2026-03-26 Diff 标签页焦点与关闭回退细节
+
+- [x] 与用户确认打开后焦点策略（已确认为：切到 diff 标签页并把主焦点交给 diff 内容区）
+- [x] 与用户确认关闭回退策略（已确认为：关闭 diff 后恢复到打开前的 Git/Commit 上下文，而不是只回上一个 tab）
+- [x] 按 TDD 实现 diff focused area 与 origin context
+  - [x] Task 1：补红灯测试，锁定“打开 diff 切焦点 / 关闭 diff 恢复 origin context”契约
+  - [x] Task 2：扩展 runtime diff 状态模型与 NativeAppViewModel 焦点主链
+  - [x] Task 3：补 App 层 diff 内容区 focused area 回写与回归验证
+  - [x] Task 4：更新 AGENTS.md、回填 Review
+
+## Review（2026-03-26 Diff 标签页焦点与关闭回退细节）
+
+- 结果：
+  1. `WorkspaceFocusedArea` 已新增 `.diffTab(String)` 语义，diff 标签页不再伪装成 terminal focused area。
+  2. `WorkspaceDiffOpenRequest / WorkspaceDiffTabState` 已补齐 origin context（打开前的 presented tab + focused area）；双击打开 diff 时会记录来源上下文。
+  3. `NativeAppViewModel.openWorkspaceDiffTab(...) / selectWorkspacePresentedTab(...)` 现在会在激活 diff 时统一把 `workspaceFocusedArea` 切到 `.diffTab(tabID)`。
+  4. `NativeAppViewModel.closeWorkspaceDiffTab(...)` 在关闭当前选中 diff 时，会优先恢复 origin context：回到打开前的 terminal tab，并恢复 Git bottom tool window / Commit side tool window 焦点；只有 origin 失效时才退回既有 fallback。
+  5. `WorkspaceHostView` 已补充 diff 内容区点击桥接，会把当前 diff viewer 的交互重新回写到 `.diffTab(diffTabID)`。
+- 直接原因：
+  1. 上一轮虽然已经有独立 diff 标签页，但打开 diff 后没有专门的 diff focused area，仍然缺少“编辑器接管焦点”的明确状态语义。
+  2. 关闭 diff 时也只有“相邻 diff / 上一个 terminal tab”的通用 fallback，没有“返回发起打开动作前的 Git / Commit 上下文”能力。
+- 设计层诱因：
+  1. runtime diff tab 之前只建模了 `source/title/viewerMode`，没有把“从哪里打开”显式记录下来，导致关闭时只能猜测回退目标。
+  2. `workspaceFocusedArea` 原先只覆盖 terminal / side / bottom tool window 三类区域，缺少 diff 文档区这一层，使得独立 diff 标签页在状态机里没有自己的位置。
+  3. 本轮已通过 `.diffTab(...) + origin context` 把这层状态补齐；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：为 `WorkspaceFocusedArea` 新增 `.diffTab(String)`，为 runtime diff tab 增加 origin context。
+  2. ViewModel：在打开 / 选择 diff tab 时切换到 `.diffTab(tabID)`；在关闭当前 diff 时优先恢复 origin presented tab + origin focused area。
+  3. App：在 `WorkspaceHostView` 的 diff viewer 内容区补 focused area 回写，确保点击 diff 后仍处于 diff 主交互语义。
+- 长期改进建议：
+  1. 下一步如果继续对齐 IDEA，建议把 `Enter/Return` 打开 diff 也接到同一套 origin context 主链，而不是额外发明快捷键分支。
+  2. 当前“恢复 origin context”仍是 runtime-only；后续若要支持更复杂的 diff 文档导航，可再考虑补“最近来源栈”，但不要提前做成通用历史系统。
+  3. 现在 diff focused area 主要用于交互语义与关闭回退；后续若要补更细的菜单/快捷键守门，可继续基于 `.diffTab(...)` 扩展，不要回退成模糊的 `.terminal`。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceHostViewTests'` → 初次失败，核心报错为 `WorkspaceFocusedArea` 缺少 `.diffTab`。
+  - 绿灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceHostViewTests'` → 9 tests, 0 failures。
+  - 回归：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|MainWindowCloseShortcutPlannerTests|WorkspaceHostViewTests|WorkspaceTabBarViewTests|WorkspaceDiffPatchParserTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitRootViewTests'` → 82 tests, 0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## Review（2026-03-26 Task 5-6：统一 Git Log / Commit 双击打开独立 Diff 标签页）
+
+- 结果：
+  1. `NativeAppViewModel` 已新增 `openActiveWorkspaceDiffTab(...)`，把“当前 active workspace session 下打开独立 diff 标签页”统一收口到一条 App 级入口，再复用既有 `openWorkspaceDiffTab(...)` runtime tab 主链。
+  2. Git Log 已打通 `WorkspaceShellView -> WorkspaceGitRootView -> WorkspaceGitIdeaLogView -> WorkspaceGitIdeaLogRightSidebarView -> WorkspaceGitIdeaLogChangesView` 的统一闭包链；changes browser 中文件节点现在保持**单击选中**，并支持**双击打开独立 diff 标签页**。
+  3. Commit 已打通 `WorkspaceCommitSideToolWindowHostView -> WorkspaceCommitRootView -> WorkspaceCommitChangesBrowserView` 的统一闭包链；changes browser 现在同样保持**单击选中**，并支持**双击打开独立 diff 标签页**。
+  4. `AGENTS.md` 已同步记录 runtime diff tab 的文件职责、Git/Commit 双击打开边界，以及“diff tab 不进入 restore snapshot”的架构约束。
+- 直接原因：
+  1. 之前 Git Log 与 Commit changes browser 都只有“单击选中 + 工具窗内 preview”语义，没有 workspace 级独立 diff 标签页打开入口，因此用户无法像 IDEA 一样通过双击直接进入独立标签页。
+  2. 更具体地说，diff 标签页的宿主是当前 workspace session 的顶部 tab bar，而 Git/Commit ViewModel 的 repository context 又是按 root repository 缓存；如果没有一个以 **active workspace session** 为准的统一入口，就容易把 diff tab 归到错误的 project/session。
+- 设计层诱因：
+  1. 旧实现把“Git/Commit 内部 preview 状态”和“workspace 顶部文档式标签页”分成了两条互不相通的路径，缺少统一的 App 层 open contract。
+  2. Git/Commit 面板的运行时真相源以 root repository 为中心，而顶部 presented tabs 以当前 workspace session/project path 为中心；这两个维度没有统一桥接时，就会天然诱发“打开 diff 时归属错 host”的问题。
+  3. 本轮已通过 `openActiveWorkspaceDiffTab(...)` 把这层桥接显式化；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：新增 `NativeAppViewModel.openActiveWorkspaceDiffTab(...)`，统一根据当前 active workspace session 生成 diff tab 归属 projectPath。
+  2. App：Git Log changes browser 双击时构造 `.gitLogCommitFile(...)` source，并通过统一入口打开 `Commit: <文件名>` 独立标签页。
+  3. App：Commit changes browser 双击时构造 `.workingTreeChange(...)` source，并通过统一入口打开 `Changes: <文件名>` 独立标签页。
+  4. App：保留单击 selection 行为，不回退到工具窗内部 preview 心智；diff viewer 继续复用已完成的 runtime tab / parser / side-by-side / unified 主链。
+- 长期改进建议：
+  1. 当前已完成双击打开；若继续对齐 IDEA，可在同一条 `openActiveWorkspaceDiffTab(...)` 主链上补 `Enter/Return` 键盘打开能力，而不是在 Git Log / Commit 各自实现分叉逻辑。
+  2. 若后续恢复工具窗内 preview，也应继续把“preview 选择态”和“独立文档标签页打开态”分层，不要重新耦合成同一套状态机。
+  3. 现在 diff 标签页 title 先采用 `Commit: 文件名 / Changes: 文件名` 的轻量策略；若后续需要更贴近 IDEA，可在不改变 source identity 的前提下再增强 rename/path 展示规则。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceGitIdeaLogViewTests|WorkspaceCommitRootViewTests'` → 初次失败，核心报错为 `NativeAppViewModel` 缺少 `openActiveWorkspaceDiffTab`，说明统一入口尚未落地。
+  - 绿灯：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceGitIdeaLogViewTests|WorkspaceCommitRootViewTests'` → 37 tests, 0 failures。
+  - 回归：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|MainWindowCloseShortcutPlannerTests|WorkspaceHostViewTests|WorkspaceTabBarViewTests|WorkspaceDiffPatchParserTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffTabViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitRootViewTests'` → 79 tests, 0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 复刻 IDEA Commit 面板产品方案
+
+- [x] 探索 DevHaven 当前 Git Changes/Commit 面板实现、相关测试与最近变更
+- [x] 探索 IntelliJ Community 中 Commit Tool Window / Changes View / Commit Workflow 主链文件与布局职责
+- [x] 向用户确认本轮范围是全量 1:1 复刻还是优先可上线 MVP（已确认为 A：全量 1:1 复刻 IDEA Commit Tool Window）
+- [x] 基于确认范围提出 2-3 个产品方案并给出推荐
+- [x] 输出产品方案（目标用户、信息架构、交互流、阶段拆分、风险与验证方式）
+
+## 2026-03-25 IDEA Commit Tool Window 一次性实施
+
+- [x] 写入设计文档 `docs/plans/2026-03-25-idea-commit-tool-window-design.md`
+- [x] 写入实施计划 `docs/plans/2026-03-25-idea-commit-tool-window.md`
+- [x] Task 1：锁定 Workspace 工具窗拓扑与 Git/Commit 边界（先红后绿）
+- [x] Task 2：建立 Commit 域 Core 模型与 ViewModel 外壳
+- [x] Task 3：抽离独立 Commit workflow service 与 inclusion 执行链路
+- [x] Task 4：新增 Commit Tool Window App 根视图并接入 Workspace host
+- [x] Task 5：落地 Changes Browser + Inclusion + Diff Preview 主链
+- [x] Task 6：落地 Commit Panel、Commit Options 与执行反馈
+- [x] Task 7：更新 Git tool window、AGENTS.md、验证与 Review
+
+## Review（2026-03-25 Task 7：Git/Commit 架构文档同步、验证与收尾）
+
+- 结果：
+  1. 已把 `AGENTS.md` 中与 Commit tool window 相关的条目从“占位/后续”更新为当前真实职责：changes browser 负责变更列表与 inclusion toggle，diff preview 负责 loading/empty/error/content 四态，commit panel 负责 message/options/action/execution state。
+  2. 已确认 `Git` tool window 仍只承载 `Log / Console / Branches / Operations` 主链，`WorkspaceGitChangesView` 不再作为 Git 工具窗入口；Commit 主链由 `WorkspaceCommitRootView` 及其子视图独立承接。
+  3. 已把本轮设计文档与实施计划文档纳入版本库：`docs/plans/2026-03-25-idea-commit-tool-window-design.md`、`docs/plans/2026-03-25-idea-commit-tool-window.md`。
+- 关键理由：
+  1. `AGENTS.md` 明确要求任何架构级变更都要同步更新作用域内文档；当前 Commit/Git 已经分拆成两条独立 tool window 主链，继续保留“占位视图”描述会形成文档技术债。
+  2. 设计与实施计划已落地并驱动了整个实现过程，应在任务结束时一并入库，保证后续追溯与复盘一致。
+- 验证证据：
+  - 综合回归：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceGitRootViewTests|NativeGitCommitWorkflowServiceTests|WorkspaceGitViewModelTests'`（62 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Task 6：Commit Panel、Commit Options 与执行反馈（TDD）
+
+- [x] 补红灯测试：锁定 Commit Panel 必须包含 message editor / status legend / options / 执行动作 / execution state UI
+- [x] 补红灯测试：锁定 WorkspaceCommitViewModel 对 message/options 更新与执行态表达的契约
+- [x] 运行定向测试并记录红灯失败信息
+- [x] 以最小改动实现 Commit Panel 与 ViewModel/模型调整，驱动上述测试转绿
+- [x] 运行定向绿灯测试并记录结果
+- [x] （若通过）提交改动并回填本文件 Review（含命令证据与风险）
+
+## Review（2026-03-25 Task 6：Commit Panel、Commit Options 与执行反馈）
+
+- 结果：
+  1. `WorkspaceCommitPanelView` 已从占位升级为可交互面板：包含 message editor、状态 legend、`Amend/Sign-off/Author` options、`Commit/Commit & Push` 动作入口、以及 execution state（idle/running/succeeded/failed）反馈行。
+  2. `WorkspaceCommitViewModel` 已补齐 Commit Panel 直连接口：`updateOptionAmend`、`updateOptionSignOff`、`updateOptionAuthor`、`canExecuteCommit(action:)`、`commitStatusLegend`。
+  3. ViewModel 现已在草稿编辑（message/options）时清理陈旧执行反馈，并统一对 author/message 做 trim 归一化，避免 UI 与执行请求状态漂移。
+  4. `WorkspaceCommitExecutionState` 已新增 `isRunning` 与 `summaryText`，作为 panel 状态显示与按钮禁用的共享语义。
+- 关键理由：
+  1. Task 5 完成后 Commit Panel 仍是“占位块 + 单行输入”，无法承接 Commit workflow 的主操作路径。
+  2. 仅在视图层拼 UI 无法稳定表达执行状态，必须补 ViewModel 的状态接口和最小模型语义，保证交互链路单一且可测。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（编译失败，核心报错：`WorkspaceCommitViewModel` 缺少 `commitStatusLegend` / `canExecuteCommit(action:)` / `updateOptionAmend` / `updateOptionSignOff` / `updateOptionAuthor`）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（15 tests，0 failures）。
+- 提交信息：
+  - commit：`feat(commit): add commit panel and execution flow`
+  - hash：见当前 `HEAD`（避免在 todo 自引用固定哈希导致 amend 后漂移）
+- 风险与后续：
+  1. 当前执行链路仍未在 `NativeGitCommitWorkflowService` 落实 `sign-off` / `author` 到真实 Git 参数，本轮仅保证 panel→request→状态反馈链路稳定；若下一轮要求“真实 CLI 生效”，需在 service 层补参数编排与回归测试。
+  2. `Commit & Push` 入口已可用，但仍依赖已有 `push` 调用语义，未扩展更复杂的 pre-push checks（属于 Task 7+ 范围）。
+
+## Review（2026-03-25 Task 5：Changes Browser + Inclusion + Diff Preview 主链）
+
+- 结果：
+  1. `WorkspaceCommitChangesBrowserView` 不再是静态占位行：已接入 inclusion toggle 与 change selection，点击文件会调用 `viewModel.selectChange(...)`，点击圆圈会调用 `viewModel.toggleInclusion(...)`。
+  2. `WorkspaceCommitDiffPreviewView` 已收紧为稳定三态：空态（未选择文件）/ 正常态（展示 diff 文本）/ 错误态（展示 error message），并保留 loading 指示。
+  3. `WorkspaceCommitViewModel.refreshChangesSnapshot()` 在选中项仍存在时会重载该项 preview，避免 snapshot 更新后 preview 残留旧内容。
+  4. 测试侧新增并锁定了 App 源码契约（changes browser 绑定 toggle/select、diff preview 三态）与 ViewModel 行为契约（toggle inclusion、diff 错误态）。
+- 关键理由：
+  1. Task 4 code review 已指出 `changeRow` 只显示图标但未绑定 toggle，这是必须修复项。
+  2. Task 3 review 已指出 preview 状态面应明确表达错误与空态，本轮优先补齐稳定状态表达，避免 Task 6 之前 UI 语义漂移。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（3 failures：缺少 toggle/select 绑定与 diff 错误态分支）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（10 tests, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceShellViewGitModeTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（26 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## Review（2026-03-25 Task 4：Commit Tool Window App 根视图与 Host 接线）
+
+- 结果：
+  1. 新增 `WorkspaceCommitRootView`，并在根容器内固定承载 `WorkspaceCommitChangesBrowserView + WorkspaceCommitDiffPreviewView + WorkspaceCommitPanelView` 三分区结构。
+  2. `WorkspaceShellView.bottomToolWindowHost(...)` 已支持 `activeKind == .commit` 路由到 `WorkspaceCommitRootView`，不再只支持 `.git`。
+  3. commit tool window 内容区点击时会显式调用 `setWorkspaceFocusedArea(.toolWindow(.commit))`，保证焦点语义可观测。
+  4. 新增 `WorkspaceCommitRootViewTests`，并扩展 `WorkspaceShellViewTests` 锁定 commit 路由与焦点契约；同时修正旧测试里“禁止任意 `WorkspaceSplitView`”的错误断言，改为只禁止 project-sidebar 的横向 split。
+- 关键理由：
+  1. Task 1-3 已完成 tool window kind 与 Core 链路，但 App 层仍缺 commit 内容挂载点，导致 stripe 入口虽可点却无 commit 主内容。
+  2. 本轮按最小改动原则只落结构壳与 host 接线，不提前实现 Task 5/6 的完整交互，避免职责扩散。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceShellViewTests'`（`WorkspaceCommitRootView.swift` 不存在、`WorkspaceShellView` 缺少 commit 路由/焦点断言失败）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests'`（12 tests, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceShellViewGitModeTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests'`（18 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## Review（2026-03-25 Task 3：Commit workflow service 与 inclusion 执行链路）
+
+- 结果：
+  1. 新增 `NativeGitCommitWorkflowService`，把 Commit 工具窗主链收口为 `loadChangesSnapshot / loadDiffPreview / executeCommit`。
+  2. `WorkspaceCommitViewModel.Client.live` 已切换为通过 `NativeGitCommitWorkflowService` 读取 diff preview 与执行 commit，修复了之前 `loadDiffPreview` 恒为空字符串的缺口。
+  3. `NativeGitRepositoryService` 新增 `loadWorkingTreeDiff(...)`，支持 unstaged/staged/untracked 场景下的工作区文件 patch 读取。
+  4. inclusion 路径不再被忽略：执行前会校验 included paths 命中当前变更，并通过 `stage/unstage` 组合确保提交仅消费 selection。
+- 关键理由：
+  1. Task 2 只有状态壳，执行链路仍直接走 `commit/amend/push`，无法体现 inclusion 选择，也无法给 UI 提供真实 working tree diff。
+  2. 把编排逻辑放到独立 service 后，后续 Task 4/5 的 App UI 可以直接对接，避免把 Git 细节散落在 ViewModel / View。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'NativeGitCommitWorkflowServiceTests'`（初次失败，`NativeGitCommitWorkflowService` 不存在）。
+  - 绿灯：`swift test --package-path macos --filter 'NativeGitCommitWorkflowServiceTests'`（5 tests, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests|NativeGitCommitWorkflowServiceTests|WorkspaceGitViewModelTests'`（31 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Workspace Git / Terminal 一体化设计
+
+- [x] 探索当前 Workspace Git / Terminal 布局、相关测试与最近变更
+- [x] 向用户确认“像 IDEA 一样在一个界面”的具体目标布局与优先级（已确认为 bottom tool window，并移除 Terminal/Git 一级模式切换）
+- [x] 提出 2-3 个可行方案并给出推荐（用户纠偏后转为推荐通用 Tool Window 框架）
+- [x] 输出分段设计并等待用户确认
+- [x] 设计确认后写入 docs/plans/2026-03-25-workspace-git-terminal-unified-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 Workspace Git / Terminal 一体化实现
+
+- [x] Task 1：补红灯测试，锁定通用 Tool Window 模型与旧主模式退场
+- [x] Task 2：引入通用 Tool Window 模型与 NativeAppViewModel 接线
+- [x] Task 3：改造 Workspace 布局为 terminal 主区 + bottom tool window host
+- [x] Task 4：接入 Git tool window 内容、空态与 focused area 守门
+- [x] Task 5：更新 AGENTS.md、跑完整验证并回填 Review
+
+## Review（2026-03-25 Workspace Git / Terminal 一体化实现）
+
+- 结果：
+  1. 已把 Workspace 从 `Terminal / Git` 一级主模式切换改成 **terminal 主区 + bottom tool window 宿主**，Git 作为首个底部工具窗接入。
+  2. `NativeAppViewModel` 已删除 `workspacePrimaryMode`，改为维护 `workspaceToolWindowState` 与 `workspaceFocusedArea`，并提供 `toggle/show/hide/update height/set focused area/sync context` 接口。
+  3. `WorkspaceShellView` 已改为 terminal 主区 + `bottomToolWindowHost` + `bottomToolWindowBar` 结构；Git 通过 `activeKind == .git` 路由到底部，Quick Terminal / 非 Git 项目仍有明确空态。
+  4. `WorkspaceChromeContainerView` 已移除 left rail / mode switcher，只保留中央 chrome 包裹职责。
+  5. `WorkspaceModeSwitcherView.swift` 已删除，避免把旧 primary mode 语义以遗留文件形式继续留在代码库里。
+- 直接原因：
+  1. `WorkspaceGitModels.swift` 已经移除了 `WorkspacePrimaryMode`，但 `NativeAppViewModel`、`WorkspaceShellView`、`WorkspaceModeSwitcherView` 等仍沿用旧模型，先造成编译失败，再造成 Workspace 主链语义断裂。
+  2. 更本质地说，Git 被错误建模为“一级主模式”，而不是“terminal 内的底部工具窗”。
+- 设计层诱因：
+  1. 旧方案把“主内容互斥切换”和“辅助工具窗显隐”混成了一套状态模型，导致 `workspacePrimaryMode` 同时承担布局、命令路由与 Git 上下文准备语义。
+  2. 在第一轮实现里，`show/toggleWorkspaceToolWindow` 只改 visible state，Git 上下文准备又散落在 `WorkspaceShellView`，属于 API 职责未完全收口。
+  3. 已在第二轮修正中把 tool window 上下文准备统一收口到 `NativeAppViewModel.syncActiveWorkspaceToolWindowContext()`；未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. Core：引入并落地 `WorkspaceToolWindowKind / Placement / State / FocusedArea` 运行时模型。
+  2. ViewModel：删除 `workspacePrimaryMode`，新增 `workspaceToolWindowState`、`workspaceFocusedArea` 与 `toggle/show/hide/updateWorkspaceToolWindowHeight/setWorkspaceFocusedArea/syncActiveWorkspaceToolWindowContext`。
+  3. App：`WorkspaceShellView` 重构为 terminal 主区 + bottom tool window host/bar；terminal 搜索菜单改为按 `workspaceFocusedArea == .terminal` 守门。
+  4. App：`WorkspaceChromeContainerView` 去除 left rail；删除 `WorkspaceModeSwitcherView.swift` 遗留实现。
+  5. 文档：同步更新 `AGENTS.md`，把 Workspace 边界改写为 bottom tool window 架构。
+- 长期建议：
+  1. 目前 `bottomToolWindowBar` 仍是首期的单个 Git 按钮，后续若继续扩展第二个工具窗，建议改为基于 `WorkspaceToolWindowKind.allCases` 渲染，而不是继续硬编码 `.git`。
+  2. `workspaceFocusedArea` 当前主要通过点击手势推进，后续如继续扩展工具窗能力，建议补更稳定的焦点桥接，而不是长期停留在轻量手势驱动。
+  3. `updateWorkspaceToolWindowHeight(_:)` 已有 API，但当前还没有真正的拖拽 resize UI 接线；下一轮若继续对齐 IDEA，可优先补齐高度拖拽能力。
+- 验证证据：
+  - 红灯阶段（Task 1）：`swift test --package-path macos --filter 'WorkspaceGitViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceChromeContainerViewTests'` → 初次按断言红灯，后因工作区处于半迁移状态演变为编译失败，进一步证明旧主模式链路已不自洽。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceGitViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceTerminalCommandsTests|WorkspaceRootViewTests'` → 37 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceChromeContainerViewTests|WorkspaceRootViewTests|WorkspaceShellViewTests|WorkspaceTerminalCommandsTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests'` → 44 tests，0 failures。
+  - 旧模式残留检查：`rg -n "WorkspaceModeSwitcherView|workspacePrimaryMode|WorkspacePrimaryMode" macos/Sources macos/Tests` → `macos/Sources` 无命中；命中仅存在于测试断言文本中。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace Tool Window 入口位置对齐 IDEA 设计
+
+- [x] 结合用户截图确认当前偏差不是 bottom tool window 逻辑，而是入口按钮放置位置不对
+- [x] 与用户确认要对齐的是“窗口边缘 tool window stripe 按钮”，而不是继续保留底部按钮栏
+- [x] 提出 2-3 个入口布局方案并给出推荐（用户进一步纠偏：正确层级是 `[项目导航] | [左侧 stripe | 主内容区]`）
+- [x] 输出修正版设计并等待用户确认
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 Workspace Tool Window 入口位置对齐 IDEA 实现
+
+- [x] Task 1：补红灯测试，锁定 stripe 必须位于 `WorkspaceChromeContainerView` 内而非底部 bar
+- [x] Task 2：把 Git icon-only 入口迁移到 chrome 内左侧 stripe，并删除 shell 底部按钮栏
+- [x] Task 3：更新 AGENTS.md、跑完整验证并回填 Review
+
+## Review（2026-03-25 Workspace Tool Window 入口位置对齐 IDEA 实现）
+
+- 结果：
+  1. 已把 Git 工具窗入口从 `WorkspaceShellView` 的底部按钮栏迁移到 `WorkspaceChromeContainerView` 内部左侧 stripe，结构现在对齐为 `[项目导航] | [左侧 stripe | 主内容区]`。
+  2. `WorkspaceShellView` 已删除 `bottomToolWindowBar`，现在只负责 terminal 主区与 bottom tool window 内容，不再承担入口按钮职责。
+  3. `WorkspaceChromeContainerView` 现在负责 `stripe | 主内容区` 双列布局；stripe 首期只放一个 Git icon-only 按钮。
+  4. stripe button helper 已收口为真正使用 `kind` 参数的泛化实现，不再是假泛化、真硬编码 `.git`。
+- 直接原因：
+  1. 上一轮只把“工具窗内容停靠到底部”做对了，但误把“工具窗入口按钮”也做成了底部 bar，和用户展示的 IDEA 心智不符。
+  2. 更具体地说，入口位置的层级理解错了：正确结构不是“整个 Workspace 最外缘 stripe”，也不是“底部按钮栏”，而是 `[项目导航] | [左侧 stripe | 主内容区]`。
+- 设计层诱因：
+  1. 在上一轮实现里，我把“bottom tool window”的语义过度简化成了“底部有一个工具窗按钮栏”，混淆了**内容停靠位置**与**入口按钮位置**。
+  2. 第一版 stripe 实现里，`toolWindowStripeButton(kind:)` 还存在假泛化硬编码 `.git` 的代码味道；已在 code quality review 后收口修正。
+  3. 当前未发现新的明显系统设计缺陷；这一轮主要是把入口层级纠正到正确位置。
+- 当前修复方案：
+  1. 在 `WorkspaceChromeContainerView` 内新增 `workspaceToolWindowStripe`，与主内容形成 `HStack(spacing: 0)` 双列布局。
+  2. stripe 内仅放 `toolWindowStripeButton(kind: .git)`，并以 `Image(systemName: kind.systemImage)` 呈现 icon-only 入口。
+  3. `WorkspaceShellView` 删除 `bottomToolWindowBar`，只保留 `terminalModeContent + bottomToolWindowHost`。
+  4. 更新 `WorkspaceChromeContainerViewTests`、`WorkspaceShellViewGitModeTests`、`WorkspaceRootViewTests`，锁定 stripe 层级与 shell 职责边界。
+  5. 同步更新 `AGENTS.md`，明确 stripe 属于 chrome 容器，而不是项目导航或 root 最外层。
+- 长期建议：
+  1. 当前 stripe 的视觉 metrics（宽度、按钮尺寸、圆角、间距）仍是直接写在 view 里的常量；下一轮如果继续做视觉保真，建议收成显式 `StripeMetrics`。
+  2. 目前 stripe 只有一个 Git 图标按钮；后续若继续扩展第二个工具窗，可考虑基于 `WorkspaceToolWindowKind.allCases` 渲染，但要先确认视觉摆放规则。
+  3. 当前 stripe 按钮上下居中，是否要改成更接近 IDEA 的靠边分组，还需要结合下一轮 UI 验收再定。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests'` → 初次失败，提示 chrome 内还缺 stripe 结构，shell 仍保留 `bottomToolWindowBar`。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceShellViewTests|WorkspaceTerminalCommandsTests'` → 16 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace Tool Window Stripe 垂直位置微调
+
+- [x] Task 1：补红灯测试，锁定 stripe Git 图标需贴底而非垂直居中
+- [x] Task 2：以最小改动把 Git icon-only 按钮移到 stripe 最底部并验证
+
+## Review（2026-03-25 Workspace Tool Window Stripe 垂直位置微调）
+
+- 结果：
+  1. 已把 `WorkspaceChromeContainerView` 中 stripe 的 Git icon-only 按钮从“上下 `Spacer` 对称居中”改成“只有上方 `Spacer` 挤压、按钮贴底放置”。
+  2. 这次微调只改了 stripe 内部的垂直分布，不影响按钮行为、bottom tool window 内容逻辑、空态或 focused area 守门。
+- 直接原因：
+  1. 之前 stripe 用的是 `VStack { Spacer; button; Spacer }`，因此 Git 图标在竖向上被居中，和用户要求的“挪到最下面”不一致。
+- 设计层诱因：
+  1. 上一轮只修正了 stripe 的横向层级与入口位置，没有继续细化 stripe 内部的垂直对齐规则。
+  2. 这是视觉规则未被显式锁定导致的偏差，未发现新的系统设计缺陷。
+- 当前修复方案：
+  1. 在 `WorkspaceChromeContainerView.workspaceToolWindowStripe` 中删除按钮下方的那一份 `Spacer(minLength: 0)`。
+  2. 在 `WorkspaceChromeContainerViewTests` 中新增 source contract，约束 `Spacer(minLength: 0)` 只能出现在按钮上方、按钮下方不再允许有 `Spacer`。
+- 长期建议：
+  1. 如果后续继续微调 IDEA 风格，建议把 stripe 的垂直对齐策略、宽度、按钮尺寸等视觉参数统一收成显式 metrics，而不是继续靠局部布局语句隐式表达。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceChromeContainerViewTests` → 初次失败，命中“Git 图标下方不应再有 Spacer”断言。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceShellViewTests|WorkspaceTerminalCommandsTests'` → 17 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Git Log 行高与线条连贯度调整设计
+
+- [x] 探索当前 commit graph 行高 / 画线 metrics 与最近相关变更
+- [x] 提出 2-3 个调整方案及取舍，给出推荐方案
+- [x] 与用户确认本轮视觉目标与可接受取舍
+- [x] 设计确认后写入 docs/plans/2026-03-25-git-log-row-height-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 Git Log 行高与线条连贯度调整实现
+
+- [x] 写 App 红灯测试，锁定 graph rowHeight / subject cell height 对齐契约
+- [x] 以最小改动调整 graph rowHeight、cell frame 与连贯度 metrics
+- [x] 跑定向验证、质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Git Log 行高与线条连贯度调整）
+
+- 结果：
+  1. 已确认截图里的“上下有一个间隔”不是 graph core 再次断线，而是 `WorkspaceGitCommitGraphView.rowHeight` 与 `Table` 实际内容行盒不一致。
+  2. 现在 graph renderer 的统一 `rowHeight` 已从 22 提升到 28，subject cell 也改为固定 `height` 复用同一真相源。
+  3. 同时把 `verticalOverflow` 从 2 提升到 3，让更高行盒下的竖线在上下边界 overdraw 更充分，视觉上更连贯。
+- 直接原因：
+  1. graph 之前只按 22pt 的内部 row box 绘制，而 `Table` 的可见行盒更高。
+  2. `WorkspaceGitIdeaLogTableView.subjectCell` 只设置了 `minHeight`，导致选中背景与 graph 都悬在中间内容区，行上下剩余空间直接表现为暗色缝隙。
+- 设计层诱因：
+  1. graph renderer 和 table subject cell 虽然都引用了 `WorkspaceGitCommitGraphView.rowHeight`，但一个是固定绘制高度，一个只是最小高度，导致“看起来共用真相源，实际上没有真正对齐”。
+  2. 之前的测试只约束了“存在统一 rowHeight 常量”，没有约束“subject cell 必须使用固定 height”，所以这类视觉缝隙没有被提前锁住。
+  3. 未发现明显系统设计缺陷；问题主要集中在 App 层布局契约不够严格。
+- 当前修复方案：
+  1. `WorkspaceGitCommitGraphView.rowHeight` 调整为 28。
+  2. `WorkspaceGitIdeaLogTableView.subjectCell` 改为先占满横向，再通过独立 `.frame(height: WorkspaceGitCommitGraphView.rowHeight, alignment: .leading)` 锁定固定内容行盒。
+  3. `GraphVisualMetrics.verticalOverflow` 调整为 3，增强上下边界的 overdraw。
+- 长期建议：
+  1. 后续如果继续做视觉保真，建议把 table row 密度、badge vertical rhythm、graph rowHeight 统一收口成一组命名明确的 App metrics，而不是分散在 view 内零散常量。
+  2. 这类“看起来像线断了，实则是行盒/背景没对齐”的问题，以后应优先写 source-level 契约测试，避免只靠截图回归。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests/testIdeaLogGraphRendererFillsTableRowHeightToAvoidBrokenVerticalLines` → 初次失败，提示 rowHeight 仍是旧值，且 subject cell 仍在使用 `minHeight`。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests/testIdeaLogGraphRendererFillsTableRowHeightToAvoidBrokenVerticalLines` → 1 test，0 failures。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests|WorkspaceGitLogViewModelTests'` → 24 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Git Log Table cell inset 补偿修复
+
+- [x] 复现并确认残余高度来自 Table cell inset，而不是 graph rowHeight 再次不足
+- [x] 先补 App 红灯测试，锁定 subject cell inset 补偿契约
+- [x] 实施最小修复并验证
+- [x] 跑定向验证、质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Git Log Table cell inset 补偿修复）
+
+- 结果：
+  1. 已确认上一轮把 `rowHeight` 拉到 28 之后，残余的“高一圈”仍然存在，说明问题不只是 graph 自己的高度，而是 `Table` 默认 cell inset 继续把 subject cell 背景和 graph 往里缩。
+  2. `WorkspaceGitIdeaLogTableView` 现在新增 `TableCellMetrics.verticalInsetCompensation`，并对 subject cell 应用 `.padding(.vertical, -TableCellMetrics.verticalInsetCompensation)` 反向补偿。
+  3. 当前修复目标是把 subject cell 的背景和 graph 更贴近 table 行边界，减少截图里那种 rounded card 式的上下留白。
+- 直接原因：
+  1. SwiftUI `Table` 自身会给 cell 内容保留默认垂直 inset。
+  2. 我们之前把固定高度和背景都挂在 subject cell 内容内部，但没有抵消这层 inset，所以背景和 graph 仍会被额外顶出上下缝。
+- 设计层诱因：
+  1. 之前的布局契约只约束了“subject cell 要有固定 height”，没有约束“若宿主控件还有默认 inset，必须显式补偿”。
+  2. 这属于 App 层宿主控件默认样式未被完全收口的问题，未发现新的系统性架构缺陷。
+- 当前修复方案：
+  1. 在 `WorkspaceGitIdeaLogTableView` 中增加 `TableCellMetrics.verticalInsetCompensation`。
+  2. 对 subject cell 内容链路追加 `.padding(.vertical, -TableCellMetrics.verticalInsetCompensation)`，以最小改动抵消 `Table` 的默认垂直 inset。
+- 长期建议：
+  1. 如果后续还要继续抠像素级保真，建议把 `Table` 宿主行为也纳入一组显式 App metrics，而不是每次通过截图反推默认 inset。
+  2. 更彻底的方向是后续评估是否需要从 SwiftUI `Table` 下沉到更可控的 AppKit table 宿主，但这不属于本轮最小修复范围。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests/testIdeaLogSubjectCellCompensatesTableVerticalInset` → 初次失败，提示缺少 `verticalInsetCompensation` 与反向补偿 padding。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests/testIdeaLogSubjectCellCompensatesTableVerticalInset` → 1 test，0 failures。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests|WorkspaceGitLogViewModelTests'` → 25 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Git Log 提交顺序对齐 IDEA
+
+- [x] 复现并确认当前 Git Log 顺序与 IDEA 的具体差异，定位是 Git CLI 顺序、解析层还是 graph 排序层偏差
+- [x] 先补红灯测试，锁定期望顺序语义
+- [x] 以最小改动修复提交顺序，并验证不破坏现有 graph / details 行为
+- [x] 跑定向验证、质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Git Log 提交顺序对齐 IDEA）
+
+- 结果：
+  1. 已确认当前 Git Log 顺序偏差不在 parser 或 graph renderer，而在 `NativeGitRepositoryService.loadLog(...)` 仍沿用 Git 默认拓扑顺序。
+  2. 服务层现已显式追加 `--date-order`，提交顺序改为更接近 IntelliJ `PermanentGraph.SortType.Normal`（Off）的“按拓扑并按日期”语义。
+  3. 已新增回归测试，锁定 merge 场景下不要再把整条 incoming branch 直接堆到 merge commit 正下方。
+- 直接原因：
+  1. `git log --graph --all` 未显式声明排序策略时，会得到更接近 incoming-branch-first 的默认/拓扑顺序。
+  2. 这与用户当前在 IDEA 中看到的 Normal/Off 顺序不一致，因此 merge commit 下方的提交排列不同。
+- 设计层诱因：
+  1. Git 面板把“顺序应该像 IDEA 哪种 graph sort”隐含交给 Git CLI 默认行为，没有在服务层建立明确契约。
+  2. 同时此前也缺少一条针对 merge 排序语义的回归测试，所以顺序偏差一直没有被锁住。
+- 当前修复方案：
+  1. `NativeGitRepositoryService.loadLog(...)` 为 log 读取显式添加 `--date-order`。
+  2. `NativeGitRepositoryServiceTests` 新增 `testLoadLogSnapshotUsesDateOrderLikeIdeaNormalSort`，用真实分支/merge 拓扑对照 CLI `--date-order` 结果做回归约束。
+- 长期建议：
+  1. 若后续要完整对齐 IDEA，应把 graph sort（Off / Standard / First Parent 等）抽成显式 UI/模型选项，而不是继续写死在服务实现里。
+  2. 与 IDEA 对齐的行为都应尽量落成“服务契约 + 回归测试”，避免再次被 Git 默认参数悄悄带偏。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter NativeGitRepositoryServiceTests/testLoadLogSnapshotUsesDateOrderLikeIdeaNormalSort` → 初次失败，服务输出为 `feat: branch two -> feat: branch one -> Merge branch 'focus'`，与 `--date-order` 期望不一致。
+  - 定向：`swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceGitLogViewModelTests|WorkspaceGitViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 70 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 标准 IDEA Log Graph 连接算法重做（对齐 IDEA PrintElement）
+
+- [x] 对照 IntelliJ `PrintElementGeneratorImpl + SimpleGraphCellPainter`，确认当前偏差来自 top/middle/bottom 边界拼接而非 branch palette 或密度
+- [x] 先补红灯测试，约束 edge model 必须携带 current/other row position，而不是 anchor 边界点
+- [x] 重写 graph edge builder 与 renderer，改为按相邻 row center 连接
+- [x] 跑定向验证、质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 标准 IDEA Log Graph 连接算法重做：对齐 IDEA PrintElement）
+
+- 结果：
+  1. 已重新对照 IntelliJ `PrintElementGeneratorImpl + SimpleGraphCellPainter`，把 graph edge 从 `top/middle/bottom` 边界拼接改成了 **current row position -> adjacent row position** 的 print element 语义。
+  2. Core 模型现在使用 `positionInCurrentRow / positionInOtherRow / direction / colorIndex`，而不是旧的 anchor 点。
+  3. SwiftUI renderer 已改为按 **当前 row center 到相邻 row center** 直接绘制线段，这一层才是 IDEA 里“线和线直接接上”的关键。
+- 直接原因：
+  1. 之前的实现本质上是“当前 row 里画半截到边界，再下一 row 接着画”，所以就算 topology 勉强对，线段连接关系仍然不像 IDEA。
+  2. IDEA 的关键不是简单 overdraw，而是 print element 本身就记录“本 row 位置”和“相邻 row 位置”，Painter 直接把这两点连起来。
+- 设计层诱因：
+  1. 旧模型把 edge 抽象成 anchor 边界点，导致 renderer 天然只能做“边界拼接”。
+  2. 一旦抽象层错了，后面再怎么调颜色、粗细、padding，都只能改善外观，不能修正真正的连线算法。
+- 当前方案：
+  1. Core：`WorkspaceGitCommitGraphEdgePrintElement` 重构为 `positionInCurrentRow / positionInOtherRow / direction / colorIndex`。
+  2. Builder：每一行只生成到相邻行的 edge segment，语义对齐 IDEA print element。
+  3. App：`WorkspaceGitCommitGraphView` 改为按 row center -> adjacent row center 画线，不再消费 anchor。
+- 长期建议：
+  1. 如果继续对齐 IDEA，应继续补 `UP/DOWN` 双向 print element、long edge arrow、以及更完整的 `GraphElementComparator` 语义。
+  2. 当前已经把“连接算法”改到更接近 IDEA 的层级，下一轮可以再继续抠 BEK 排序与 terminal edge。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphCoreTests|WorkspaceGitIdeaLogViewTests'` → 初次失败，提示缺少 `direction / positionInCurrentRow / positionInOtherRow`。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphCoreTests|WorkspaceGitLogViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 28 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 标准 IDEA Log Graph 视觉保真抛光（branch palette / density）
+
+- [x] 根据参考图确认剩余差异集中在单色 graph、密度过松、线点尺寸偏粗
+- [x] 先补 Core / App 红灯测试，约束 graph element color index 与 renderer palette 消费
+- [x] 实施最小修复：接入 branch palette，并把 rowHeight / node / stroke / spacing 调整到更接近 IDEA
+- [x] 跑定向验证与质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 标准 IDEA Log Graph 视觉保真抛光：branch palette / density）
+
+- 结果：
+  1. graph renderer 已从“整张图统一 accent 色”升级为按 graph element `colorIndex` 取 branch palette，分支可读性明显提升。
+  2. graph core 现在会为 node / edge 输出结构化 `colorIndex`，不同 branch lane 不再共用单一颜色。
+  3. 同时把 `rowHeight / columnSpacing / horizontalPadding / strokeWidth / nodeRadius` 调整到更接近 IDEA 的紧凑密度。
+- 直接原因：
+  1. 上一版虽然把 lane 拓扑和 seam 问题基本修对了，但整体仍是“单色、偏粗、偏松”的观感，所以和 IDEA 参考图相比还是显得丑。
+  2. 单色 graph 会让 branch 分离、merge 迁入迁出都不够清晰，视觉上也更像调试图而不是 IDE 正式 log。
+- 设计层诱因：
+  1. 之前的 print element 模型只承载几何信息，没有把 branch/color 语义一并带到 renderer。
+  2. 一旦 color 没进入结构化模型，App 层只能整张图用一个 accent，结果就是“模型对了，但观感还是不对”。
+- 当前方案：
+  1. Core：`WorkspaceGitCommitGraphNodePrintElement / EdgePrintElement` 新增 `colorIndex`。
+  2. Builder：按 head/layout priority 为 node 和 edge 分配 color index。
+  3. App：`WorkspaceGitCommitGraphView` 新增 branch palette，并按 color index 绘制线与节点。
+- 长期建议：
+  1. 如果继续 1:1，对齐目标应继续下沉到 JetBrains 那套完整 `GraphColorGetter / PaintParameters / GraphCellPainter` 语义，而不是只在 SwiftUI 层目测调颜色。
+  2. 之后可以再补一轮：长边 arrow、selected row 下的 node 样式、refs badge 与 graph 列宽的联动密度。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphCoreTests/testBuildVisibleModelAssignsDifferentColorIndicesToDifferentBranchLanes|WorkspaceGitIdeaLogViewTests/testIdeaLogGraphRendererUsesBranchPaletteInsteadOfSingleAccentStroke'` → 初次失败，提示缺少 `colorIndex` / `branchColor`。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphCoreTests|WorkspaceGitLogViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 26 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 标准 IDEA Log Graph 视觉断裂修复（Canvas seam / pixel alignment）
+
+- [x] 根据最新截图确认断续主要发生在 Canvas 行边界裁切与半像素未对齐，而不是 graph core lane 拓扑再次出错
+- [x] 先补 App 红灯测试，约束 graph renderer 必须 overdraw row 边界并做像素对齐
+- [x] 实施最小修复，消除线段断续与发虚感
+- [x] 跑定向验证、质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 标准 IDEA Log Graph 视觉断裂修复：Canvas seam / pixel alignment）
+
+- 结果：
+  1. 已确认这次“线段断断续续”的主因不是 graph core lane 拓扑再次错误，而是 **Canvas 每行独立裁切** 后，线段正好结束在 row 边界，叠加半像素未对齐导致 seam 明显。
+  2. `WorkspaceGitCommitGraphView` 已新增 row 边界 overdraw，并统一把 graph x/y 收口到 `pixelAligned(...)`，减少线条发虚和 row 交界的视觉裂缝。
+  3. 同时把 stroke / node 稍微收紧，图谱密度比上一版更接近 IDEA，不会再那么“粗、糊、像断开的荧光棒”。
+- 直接原因：
+  1. 之前 `GraphMetrics.y(for: .top/.bottom)` 直接返回 `0 / size.height`，线条刚好压在 Canvas 边界上，半个笔触会被裁掉。
+  2. x/y 坐标未做像素对齐，细线在暗色背景下会更容易出现发虚、忽明忽暗，视觉上就像断续。
+- 设计层诱因：
+  1. 上一轮已经把 graph core 做对了，但 renderer 仍默认把“每个 row 是独立小画布”当成理所当然，没有把 **边界 overdraw + pixel alignment** 一起纳入 commit graph metrics。
+  2. 这类问题属于典型的“模型正确、绘制边界条件错误”；如果不把它沉到 renderer metrics，而只是继续调颜色或粗细，只会反复出现“感觉还是断”的反馈。
+  3. 本轮修复后，未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. `WorkspaceGitCommitGraphView` 新增 `verticalOverflow`，让线段在 row 上下边界有可控 overdraw。
+  2. `GraphMetrics` 新增 `pixelAligned(...)`，统一对齐 graph 的 x / midY。
+  3. 轻微下调 stroke / node 尺寸，避免高亮色在暗背景中显得过粗过糊。
+- 长期建议：
+  1. 如果后续继续做 1:1 fidelity，可把 `rowHeight / strokeWidth / nodeRadius / verticalOverflow / laneSpacing` 收成完整 metrics 结构，而不是散在 renderer 里。
+  2. 当前验证仍以 source contract test 为主；若后续继续打磨像素级效果，建议增加 screenshot / snapshot 验证。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests/testIdeaLogGraphRendererOverdrawsRowBoundariesAndAlignsStrokeToPixels` → 初次失败，提示缺少 `verticalOverflow` 与 `pixelAligned`。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests|WorkspaceGitCommitGraphCoreTests'` → 21 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 标准 IDEA Log Graph Core 重构（废弃当前思路）
+
+- [x] 明确废弃当前 ASCII-prefix / 行级反推 renderer 路线，切换到 JetBrains graph core 思路
+- [x] 梳理 `PermanentGraph / VisibleGraph / PrintElement / GraphLayoutBuilder / PrintElementGenerator` 对应映射
+- [x] 写入新的 graph core 重构计划文档
+- [x] 先补 graph core 红灯测试，约束 merge 迁入/迁出与 print elements 输出
+- [x] 实现新的 permanent/visible/print element graph core
+- [x] 用新 graph core 替换旧 `WorkspaceGitCommitGraphModels` 主链并完成验证
+
+## 2026-03-25 标准 IDEA Log Graph Core 深化（layout index / 长边 print elements）
+
+- [x] 引入更接近 JetBrains `GraphLayoutBuilder` 的 permanent layout index，补齐分支 head 优先级
+- [x] 将 visible row 生成升级为“节点 + 长边可见元素”排序，而不是只按活动 lane 顺推
+- [x] 补 Core 红灯测试，约束 branch importance、长边穿行与 merge 迁入/迁出形态
+- [x] 跑定向验证、质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 标准 IDEA Log Graph Core 深化：layout index / 长边 print elements）
+
+- 结果：
+  1. `WorkspaceGitCommitGraphCoreBuilder` 已不再只按“当前活动 lane 数组”顺推，而是先计算 permanent layout index，再按每行可见的 node / long edge element 做排序。
+  2. graph core 现已支持 **branch head priority**：带 `HEAD ->` 的当前分支 head 会优先占据更靠左的 permanent layout。
+  3. 中间 row 现已显式保留长边的独立可见元素，能在兄弟分支 row 上继续穿行，并在接回主干时形成更接近 IDEA 的 merge 迁出形态。
+  4. App 渲染链路无需额外改动，`WorkspaceGitCommitGraphView` 继续消费结构化 print elements 即可获得更完整的图谱形态。
+- 直接原因：
+  1. 上一版 graph core 虽然已经摆脱 `graphPrefix`，但本质上仍是“按活动 lane 顺推”的第一版实现，branch priority 与长边独立元素都不完整。
+  2. 这会让部分 merge / split 场景里的边只能作为当前 node 的附属线段存在，难以稳定呈现 IDEA 那种 branch 穿行与迁回主干的形态。
+- 设计层诱因：
+  1. 旧实现把“lane 当前位置”当成 visible graph 的唯一真相源，缺少 JetBrains `GraphLayoutBuilder + VisibleGraph + PrintElement` 那层 **permanent layout / row-local visible elements** 抽象。
+  2. 一旦缺少这层抽象，长边就无法在中间 row 作为独立元素排序与占位，导致图谱会继续偏向“当前行临时拼线”而不是“整张图的可见元素投影”。
+  3. 本轮将 permanent layout 与 visible element 排序接回 graph core 后，未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. Core：`WorkspaceGitCommitGraphPermanentModel` 新增 `rowIndexByHash / childHashesByHash / layoutIndexByHash / headHashesInLayoutOrder`。
+  2. Builder：先按 head priority 生成 permanent layout index，再把 parent-child 关系转成跨多 row 的 edge span，并按可见元素排序生成 row 级 print elements。
+  3. Tests：新增 current HEAD 优先级、长边穿行、merge 迁回主干的定向断言，防止 graph core 回退成简单 lane 推导。
+- 长期建议：
+  1. 当前已经比第一版更接近 JetBrains，但还没有完全实现 IntelliJ 的 `VisibleGraph` 过滤/折叠、BEK 排序、long edge arrow 等完整能力；下一步如继续 1:1，应优先补这些协议层能力，而不是再堆 renderer 特效。
+  2. 若后续要继续抠像素级 fidelity，可考虑补充 screenshot/snapshot 测试，验证真实 row 中 edge 排序后的视觉位置。
+- 验证证据：
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphCoreTests|WorkspaceGitLogViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 23 tests，0 failures。
+  - 全量：`swift test --package-path macos` → 380 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+
+## 2026-03-25 标准 IDEA Log 连续 Commit Graph Renderer
+
+- [x] 明确当前偏差根因：`Text(graphPrefix)` 假图谱、固定 28pt 宽度、无跨 row 连续渲染
+- [x] 产出连续 graph renderer 实现计划，并登记到文档
+- [x] 先补 Core / App 红灯测试，约束 graph layout、Canvas renderer 与动态宽度
+- [x] 实现 Core graph row layout 与 table row 模型
+- [x] 实现 App graph Canvas 渲染并替换旧 `Text(graphPrefix)` 主链
+- [x] 更新 AGENTS.md、跑定向 / 全量验证，并在本文件追加 Review
+
+## Review（2026-03-25 标准 IDEA Log 连续 Commit Graph Renderer）
+
+- 结果：
+  1. 已将 `.log` 提交图谱从 `Text(graphPrefix)` 的字符假图谱升级为 `WorkspaceGitCommitGraphView` 的 `Canvas` 连续渲染。
+  2. 已在 Core 层新增 `WorkspaceGitCommitGraphModels.swift`，把 `previous/current/next graphPrefix` 转成结构化 glyph、node stem 与动态宽度布局。
+  3. `WorkspaceGitLogViewModel` 现在会暴露 `tableRows` 与 `preferredGraphWidth`，`WorkspaceGitIdeaLogTableView` 不再在 View 内临时拼字符串 / 写死宽度。
+  4. 标准 IDEA Log 的 graph 区域已移除固定 `28pt` 宽度，改为按当前可见 graph lane 动态扩展。
+- 直接原因：
+  1. 之前的 `.log` 只把 `git log --graph` 前缀当作普通文本显示，导致纵向连线天然按行断开。
+  2. graph 区域此前固定 `frame(width: 28)`，多 lane / merge 场景会被裁切或压缩。
+- 设计层诱因：
+  1. 上一轮标准 IDEA Log 改造只完成了布局骨架与 details/diff 主链，没有把 commit graph 升级成独立 renderer，因此图谱仍停留在“字符模拟”阶段。
+  2. graph 宽度与表格 row model 没有进入 Core 真相源，导致 App 层只能在 cell 里临时 `Text(graphPrefix)` + 固定 frame。
+  3. 本轮通过 `WorkspaceGitCommitGraphModels + WorkspaceGitCommitGraphView + WorkspaceGitLogViewModel.tableRows` 收口后，未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. Core：新增 `WorkspaceGitCommitGraphGlyphSymbol / WorkspaceGitCommitGraphRowLayout / WorkspaceGitCommitGraphTableLayout`，负责 graph glyph 解析、node stem 连续性与动态宽度计算。
+  2. App：新增 `WorkspaceGitCommitGraphView.swift`，使用 `Canvas` 绘制 vertical / slash / backslash / horizontal / node。
+  3. Table：`WorkspaceGitIdeaLogTableView` 现在消费 `WorkspaceGitLogTableRow`，并将 graph 渲染从 `Text(graphPrefix)` 替换为结构化 graph view。
+- 长期建议：
+  1. 当前 graph renderer 已解决“断线 / 裁切 / 假图谱”问题，但仍是基于 `git --graph` ASCII 前缀的结构化重绘，不是完整 DAG/lane 引擎；若继续追求 JetBrains 级 1:1，可再引入更精细的 lane 拓扑缓存。
+  2. 当前验证以 Core 行布局测试 + App 视图契约测试为主；如果下一步继续抛光，可增加截图级快照测试或实机 UI smoke 验证。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphLayoutTests|WorkspaceGitIdeaLogViewTests'` → 初次失败，报缺少 `WorkspaceGitCommitGraphTableLayout` / `Canvas renderer` / 动态宽度契约。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphLayoutTests|WorkspaceGitLogViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 20 tests，0 failures。
+  - 全量：`swift test --package-path macos` → 377 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 标准 IDEA Log 连续 Graph 行间断裂修复
+
+- [x] 根据用户新截图确认剩余问题不是 glyph 解析，而是 graph 只画在内容盒高度内，未填满 table row
+- [x] 先补 App 红灯测试，约束 graph renderer 必须提供统一 rowHeight 且 table 复用它作为最小行高
+- [x] 修正 `WorkspaceGitCommitGraphView` 与 `WorkspaceGitIdeaLogTableView` 的行高/vertical padding，消除视觉断裂
+- [x] 回归验证并在本文件追加 Review
+
+## Review（2026-03-25 标准 IDEA Log 连续 Graph 行间断裂修复）
+
+- 结果：
+  1. 已确认剩余“断线”不是 graph glyph 解析错误，而是 `Canvas` 只画在 18pt 内容盒里，未覆盖实际 table row 高度。
+  2. `WorkspaceGitCommitGraphView` 现已引入统一 `rowHeight` 真相源，`WorkspaceGitIdeaLogTableView` 也改为复用同一高度作为最小行高。
+  3. 已移除 subject cell 上会继续制造空隙的 `.padding(.vertical, 1)`，避免 graph 上下仍被挤出空白。
+- 直接原因：
+  1. 上一轮虽然把 graph 从字符串升级成 `Canvas`，但 renderer 高度仍固定为 `18pt`。
+  2. `Table` 实际 row 高度比 18pt 更高，所以纵向线只在 cell 内容中间那段可见，上下留白仍让人看到“断开”。
+- 设计层诱因：
+  1. 之前把“graph renderer 已改成 Canvas”误当成“连续性问题已结束”，漏掉了 **跨 row 连续视觉还依赖统一 rowHeight 与 table 高度约束** 这一层。
+  2. Graph 渲染与 row 布局高度此前没有共享真相源，View 层仍可各自写死高度 / padding。
+- 当前方案：
+  1. `WorkspaceGitCommitGraphView` 新增统一 `rowHeight` 常量，当前值 `26pt`。
+  2. `WorkspaceGitIdeaLogTableView` 现在把 graph view 高度与 subject cell 最小行高都绑定到 `WorkspaceGitCommitGraphView.rowHeight`。
+  3. 额外移除会制造行间空隙的 vertical padding，保证纵向 lane 视觉上真正连起来。
+- 长期建议：
+  1. 如果后续继续抠 JetBrains 级密度，可把 `rowHeight / nodeRadius / strokeWidth / laneSpacing` 再抽成一组 commit graph metrics，统一调参。
+  2. 仅靠 source contract test 能防回退，但不能代替真实 UI 像素校验；后续可考虑补 screenshot/snapshot 测试。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests/testIdeaLogGraphRendererFillsTableRowHeightToAvoidBrokenVerticalLines'` → 初次失败，提示缺少统一 `rowHeight`、table 未复用该高度、且仍保留 `.padding(.vertical, 1)`。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphLayoutTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 21 tests，0 failures。
+  - 全量：`swift test --package-path macos` → 378 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 标准 IDEA Log 1:1 实现
+
+- [x] 将已确认方案写入设计文档与实现计划，并登记实现 checklist
+- [x] 先补 Core 红灯测试：作者候选 / 文件级 diff / 标准 Log 子状态模型
+- [x] 实现 Core：结构化 filter、文件级 diff、Log 子 ViewModel，并跑定向测试转绿
+- [x] 先补 App 红灯测试：标准 IDEA Log toolbar / table / bottom pane 契约
+- [x] 实现 App：重构 `.log` section 为标准 IDEA Log，并同步更新 AGENTS.md
+- [x] 运行定向测试、全量测试、构建与 diff 检查，并在本文件追加 Review
+
+## 2026-03-25 IntelliJ Git Log 1:1 复刻设计
+
+- [x] 探索当前项目上下文：盘点现有 Git Log / refs / detail 实现、相关文档与最近提交
+- [x] 研究 IntelliJ Community 对应 Git Log 实现与界面结构，抽取 1:1 复刻目标
+- [x] 明确本次 1:1 复刻边界（仅 Log 工具窗口 / 含交互细节 / 是否暂不覆盖更深行为）
+- [x] 输出 2-3 套落地方案、权衡与推荐方案
+- [x] 分节呈现设计并取得用户确认
+- [x] 将确认后的设计写入文档并补充到仓库
+- [x] 基于已批准设计转入实现计划编写
+
+## 2026-03-25 release 包内触发 `./dev` 卡顿与日志面板丢内容
+
+- [ ] 复现并区分两个现象：release 包内执行 `./dev` 卡顿、日志面板失焦后内容丢失
+- [ ] 盘点 `./dev` 启动链路、日志采集/展示链路与焦点切换相关代码
+- [ ] 定位直接原因，并判断是否存在共享状态/生命周期设计诱因
+- [ ] 先补充失败测试或最小验证手段，再实施最小修复
+- [ ] 运行定向验证与必要回归，并在本文件追加 Review（直接原因 / 设计诱因 / 修复方案 / 长期建议 / 证据）
+
+## 2026-03-24 Git 管理功能对标设计（IDEA -> DevHaven）
+
+- [x] 探索当前项目上下文：盘点现有 Git / worktree 能力、相关 UI 入口、文档与最近提交
+- [x] 明确本次“参照 IDEA 完整实现 Git 管理”的目标边界，并确认是否需要拆分为多个独立子系统
+- [x] 输出 2-3 套可行方案、权衡与推荐落地顺序
+- [x] 分节呈现设计（架构 / 模块 / 数据流 / 错误处理 / 测试策略）并取得用户确认
+- [x] 将确认后的设计写入文档并补充到仓库
+- [x] 完成设计文档评审回路并修订问题
+- [x] 请用户审核设计文档，确认进入实现阶段
+- [x] 基于已批准设计转入实现计划编写
+
+## 2026-03-24 Workspace Git 管理 MVP 实现
+
+- [x] Task 0：实施前准备与任务登记（含 vendor 基线校验）
+- [x] Task 1：完成 Git Foundation（统一命令执行、解析与仓库查询服务）
+- [x] Task 2：完成 Git 运行时状态层与 WorkspaceShell Git mode 接线
+- [x] Task 3：完成 Log 主视图、Refs Tree、Commit Details 与 Diff 预览
+- [x] Task 4：完成 Changes 与 Branches 主链
+- [x] Task 5：完成 Operations、AGENTS 同步与全量验证
+
+## 2026-03-25 Workspace Git 面板对标修正（IDEA Log 高保真）
+
+- [x] 对照参考图与当前实现，确认偏差属于信息架构/布局/交互问题，而非单点样式问题
+- [x] 补充能约束三栏结构、紧凑 refs tree、log 行布局、右侧详情区域的测试或契约
+- [x] 将 Log 面板重构为更接近 IDEA 的三栏结构：左 refs 树 / 中 log 列表 / 右详情与文件树
+- [x] 收紧 toolbar、列表密度、选中态与元信息展示，去掉当前卡片式 Git 面板观感
+- [x] 跑定向测试与必要全量验证，并在本文件追加 Review（直接原因 / 设计诱因 / 修正方案 / 长期建议 / 证据）
+
+## 2026-03-25 Workspace Git 面板细节抛光（Log filters / toolbar fidelity）
+
+- [x] 定位当前相对参考图仍最显眼的细节差距，确定优先补齐 Log toolbar filters
+- [x] 先补 Core / App 红灯测试，约束 author/date/path 过滤能力与 toolbar 契约
+- [x] 为 `WorkspaceGitLogQuery`、`NativeGitRepositoryService` 与 `WorkspaceGitViewModel` 接入 author/date/path filter 主链
+- [x] 打磨 App 层 toolbar / log summary，接通作者、日期、路径筛选 UI
+- [x] 跑定向测试、全量测试、构建与 diff 检查，并在本文件追加 Review
+
+## Review（2026-03-25 Workspace Git 面板对标修正：IDEA Log 高保真）
+
+- 结果：
+  1. 已确认这次偏差不是单个样式问题，而是 Task 1~5 交付的 MVP 仍采用了 “Git dashboard + 卡片式列表” 信息架构，和 IDEA Log 工具窗口的 refs/tree + 高密度 log table + 详情预览模型存在系统性偏差。
+  2. 已在 `WorkspaceGitToolbarView` 收口 section 切换与当前 revision scope 展示，避免左栏继续承担“面板导航 + refs 展示”双重职责。
+  3. 已把 `WorkspaceGitSidebarView` 的 Log 左栏改成紧凑 refs tree：支持 `HEAD（当前分支）/ 本地 / 远端 / 标签` 折叠组，并通过 `selectRevisionFilter(...)` 直接驱动 log revision scope。
+  4. 已把 `WorkspaceGitLogView` 从大卡片堆栈改为高密度行列表，补齐 `graph / subject / badges / author / date / short hash` 的扫描信息。
+  5. 已把 `WorkspaceGitCommitDetailView` 改成上下结构：上半区文件树、下半区提交元信息与 raw diff 预览，并接通 `selectedFilePath` 与默认首文件选择。
+- 直接原因：
+  1. 之前的 Log 面板把“可用 Git 功能”优先于“IDEA Log 信息架构”优先，导致 toolbar、left refs、commit list、detail pane 都按 dashboard 思路搭建。
+  2. 右侧详情区此前把文件列表、提交信息与整份 diff 串成单一纵向滚动页，缺少文件树 -> 详情预览的层级。
+- 设计层诱因：
+  1. MVP 阶段把 section 切换、refs、commit list、detail 都做成独立卡片后，视觉和交互自然更像管理面板而非 IDE 工具窗口。
+  2. `WorkspaceGitViewModel` 虽然已有 `revision` 查询与 `selectedFilePath` 状态位，但上一版 App 层并没有真正把这些能力转成 Log 交互主链。
+  3. 本轮已把 revision scope 和 selected file 真正接到 UI；未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. Core 层：`WorkspaceGitViewModel` 新增 `selectedRevisionFilter`、`selectedRevisionDisplayTitle`、`selectRevisionFilter(...)` 与 `selectCommitFile(...)`，并让 log 读取与 mutation 后刷新都保留 revision scope。
+  2. App 层：`WorkspaceGitToolbarView` 负责 section 切换和 scope 展示；`WorkspaceGitSidebarView` 在 Log 下只呈现 refs tree；`WorkspaceGitLogView` 改为高密度行列表；`WorkspaceGitCommitDetailView` 改为文件树 + 详情预览上下结构。
+  3. Diff 仍保持整次提交 raw patch 预览，但 UI 已明确标注这是“整次提交”的 diff，而不是伪装成文件级 diff。
+- 长期建议：
+  1. 当前 revision filtering 已接通，但 toolbar 里的 `branch / user / date / path` 组合过滤还没有像 IDEA 那样细化；如果继续往高保真推进，下一步应先把 `WorkspaceGitLogQuery` 扩成多维过滤器，而不是再堆 UI。
+  2. 当前右侧文件树已接通选中态，但 diff 仍是整提交 patch；后续若继续对标 IDEA，可在 service 层增加按文件抽取 diff 的读取能力，再把右侧预览升级成真正文件级 diff。
+  3. `WorkspaceShellView` 外层 workspace 项目侧栏仍保留，这是 DevHaven 工作区壳层语义，不属于本轮 Log 面板修正范围；若后续要做更接近 IDE 工具窗口的沉浸模式，可单独评估 Git mode 下的外层壳层收口。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_ui_red.2vnmFP --filter 'WorkspaceGit(RootView|ViewModel)Tests'` → 因缺少 `selectRevisionFilter` / `selectedRevisionFilter` / `selectCommitFile` 等新接口而失败。
+  - 绿灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_fix_verify.wT0IB6 --filter WorkspaceGitViewModelTests` → 15 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_fix_verify.wT0IB6 --filter WorkspaceGitRootViewTests` → 13 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_fix_verify.wT0IB6 --filter WorkspaceShellViewGitModeTests` → 6 tests，0 failures。
+  - 全量：`swift test --package-path macos --scratch-path /tmp/devhaven_git_fix_verify.wT0IB6` → 368 tests，5 skipped，0 failures。
+  - 构建：`swift build --package-path macos --scratch-path /tmp/devhaven_git_fix_verify.wT0IB6` → exit 0。
+  - 质量：`git diff --check` → exit 0。
+
+## Review（2026-03-25 Workspace Git 面板细节抛光：Log filters / toolbar fidelity）
+
+- 结果：
+  1. 已在 Log toolbar 接通更接近 IDEA 的过滤语义：保留 revision scope，同时新增作者过滤、日期过滤与路径过滤输入。
+  2. `WorkspaceGitLogQuery` 已从“revision + search”扩展为支持 `author / since / path`，Git 读取链路不再只是视觉占位，而是真正把筛选条件下推到 `git log`。
+  3. `WorkspaceGitViewModel` 已补齐 `selectedAuthorFilter`、`selectedDateFilter`、`pathFilterQuery / debouncedPathFilterQuery`，并保证 mutation 刷新与 stale write-back guard 都保留当前过滤上下文。
+  4. `WorkspaceGitLogView` 已补 filters summary 行，用户在 log 中可以明确看到当前的作者 / 时间 / 路径限制，避免“为什么 commit 列表突然变少”这类无解释状态。
+- 直接原因：
+  1. 上一轮虽然把 Log 面板重构到了更接近 IDEA 的三栏结构，但 toolbar 仍然只有“搜索 + scope”两个入口，和参考图中的 branch/user/date/path filters 相比仍明显偏弱。
+  2. 如果只补 UI 控件而不把筛选语义真正下推到 service/query，面板会继续停留在“看起来像 IDEA，但实际筛选不工作”的假高保真状态。
+- 设计层诱因：
+  1. MVP 阶段的 `WorkspaceGitLogQuery` 只有 `revision` 与 `searchTerm`，天然限制了 toolbar 能表达的过滤维度。
+  2. ViewModel 之前只把 revision 视为结构化过滤，作者/日期/路径都没有 runtime 真相源，因此 App 层即便继续堆菜单，也只会变成无状态装饰。
+  3. 本轮已把 query、state、service 三层接通，未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. Core：`WorkspaceGitLogQuery` 新增 `author / since / path`；`WorkspaceGitDateFilter` 负责 UI preset 到 git `--since` 表达式的映射。
+  2. Service：`NativeGitRepositoryService.loadLog(...)` 在 revision 之外继续支持 `--author`、`--since` 与 pathspec（`-- <path>`）。
+  3. ViewModel：新增作者/日期/路径过滤状态与 action，并让 debounce 同时覆盖搜索词与路径过滤。
+  4. App：`WorkspaceGitToolbarView` 展示作者/日期 menu 与路径输入；`WorkspaceGitLogView` 展示当前生效 filters summary。
+- 长期建议：
+  1. 当前日期过滤采用 preset -> `git --since` 的单向表达，尚未扩展到“自定义日期范围”；如果继续往 IDEA 级别推进，可把 date filter 升级成 start/end range。
+  2. 当前路径过滤是单路径/前缀输入；若后续有更强需求，可扩成多 pathspec 或最近路径历史。
+  3. `availableAuthors` 当前来自当前 log snapshot；如果后续需要像 IDEA 那样在大仓库里给出更稳定的作者全集，可考虑单独走一次 author 聚合查询，而不是完全依赖当前快照。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_detail_red.LP9uUg --filter 'NativeGitRepositoryServiceTests|WorkspaceGitViewModelTests|WorkspaceGitRootViewTests'` → 因缺少 `WorkspaceGitLogQuery.author/since/path`、`WorkspaceGitDateFilter`、`selectAuthorFilter`、`selectDateFilter`、`updatePathFilterQuery` 等接口而失败。
+  - 绿灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_polish_verify.Aijel9 --filter WorkspaceGitViewModelTests` → 18 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_polish_verify.Aijel9 --filter NativeGitRepositoryServiceTests` → 24 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_polish_verify.Aijel9 --filter WorkspaceGitRootViewTests` → 13 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --scratch-path /tmp/devhaven_git_polish_verify.Aijel9 --filter WorkspaceShellViewGitModeTests` → 6 tests，0 failures。
+  - 全量：`swift test --package-path macos --scratch-path /tmp/devhaven_git_polish_verify.Aijel9` → 373 tests，5 skipped，0 failures。
+  - 构建：`swift build --package-path macos --scratch-path /tmp/devhaven_git_polish_verify.Aijel9` → exit 0。
+  - 质量：`git diff --check` → exit 0。
+
+### Task 2 执行 checklist（TDD）
+
+- [x] 梳理 NativeAppViewModel / WorkspaceShellView / Git foundation 现状与接线边界
+- [x] 先补 `WorkspaceGitViewModelTests` / `WorkspaceShellViewGitModeTests` 并跑红灯
+- [x] 以最小改动实现 `WorkspaceGitViewModel`、`WorkspaceModeSwitcherView` 与接线
+- [x] 跑 Task 2 指定测试命令并确认绿灯
+- [x] 在 todo.md 追加 Task 2 Review（直接原因 / 设计诱因 / 修复方案 / 长期建议 / 证据）
+
+## Review（2026-03-24 Task 2：Git 运行时状态层与 WorkspaceShell Git mode 接线）
+
+- 结果：
+  1. 已在 `WorkspaceShellView` 接入 `Terminal / Git` 一级模式切换，并把 Git mode 明确挂在 shell 层，而不是混入 `WorkspaceHostView` / terminal tab 树。
+  2. 已新增 `WorkspaceGitViewModel` 作为 root repository 级 runtime-only Git 状态层，覆盖 section、search/debounce、selected execution worktree、selected commit/file、loading/error 与 stale read 防护。
+  3. 已在 `NativeAppViewModel` 增加最少接线：`workspacePrimaryMode`、`active project -> root project` 解析、`rootProjectPath -> WorkspaceGitViewModel` 运行时映射。
+  4. Git mode 下 terminal focused search actions 已被 gate；quick terminal / 非 Git 项目进入 Git mode 时已有明确空状态。
+- 直接原因：
+  1. 之前 Workspace 右侧主内容区只有 terminal-only 路径，缺少 Git 一级模式与对应的运行时状态宿主。
+  2. 之前也缺少按 root repository 缓存的 Git ViewModel，因此无法在 worktree 切换场景下稳定表达“仓库级读模型 + worktree 级执行面”。
+- 设计层诱因：
+  1. 原有 Workspace 架构天然偏向 terminal pane/tree，若直接把 Git UI 混进 `WorkspaceHostView` / `WorkspaceTabBarView`，会把业务面板错误耦合进 terminal 拓扑。
+  2. 本轮已把 Git mode 明确收口在 `WorkspaceShellView -> WorkspaceGitViewModel` 这条链路，未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. 新增 `WorkspaceModeSwitcherView`，由 `WorkspaceShellView` 驱动 `Terminal / Git` 一级模式切换。
+  2. 新增 `WorkspaceGitViewModel`，通过 closure client 复用 `NativeGitRepositoryService`，并用 `readRevision + cancel` 防 stale 回写。
+  3. `NativeAppViewModel.prepareActiveWorkspaceGitViewModel()` 负责把 active project 解析到 root repository，并复用同一 root 下的 Git VM。
+  4. `WorkspaceShellView` 只保留最小 Git 占位与空状态；Task 3 起将继续把 Git 内容抽到独立 `WorkspaceGit...View` 容器中。
+- 长期建议：
+  1. Task 3 起把真实 Git UI 从 `WorkspaceShellView.gitModeContent` 继续外提，避免 shell 壳层变厚。
+  2. 后续若 execution-scoped section（如 `Changes` / `Operations`）在同 root 下切换 active worktree，需要补自动 refresh 语义与对应测试。
+  3. 当前取消语义本质仍是“取消回写而非取消底层 Git 读取”；Task 3~5 接入更重的 log/diff/operations 读取时，应继续评估是否需要把实际 IO 也纳入可取消链路。
+- 验证证据：
+  - 红灯（实现前）：`swift test --package-path macos --filter WorkspaceGitViewModelTests` / `swift test --package-path macos --filter WorkspaceShellViewGitModeTests` → 因缺失 `WorkspaceGitViewModel`、`activeWorkspaceGitViewModel`、`workspacePrimaryMode` 等类型/接口而失败。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitViewModelTests` → 4 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceShellViewGitModeTests` → 5 tests，0 failures。
+  - 规格评审（subagent）：✅ compliant，未发现违反 Task 2 规格的点。
+  - 代码质量评审（subagent）：无阻断项，可继续进入 Task 3；需在后续关注 execution-scoped refresh 与取消链路语义。
+
+### Task 3 执行 checklist（TDD）
+
+- [x] 核对指定 10 个文件的作用域约束与 review 边界
+- [x] 逐文件审查 UI / ViewModel / 测试实现，仅记录阻断项
+- [x] 回填复审结论与证据，给出是否可进入 Task 4
+- [x] 先补 `WorkspaceGitRootViewTests` / `WorkspaceGitViewModelTests` 的失败用例并跑红灯
+- [x] 把 Git placeholder 从 `WorkspaceShellView` 抽到独立 `WorkspaceGitRootView`
+- [x] 实现 Git toolbar、refs tree、commit list、commit detail 与 raw diff 预览
+- [x] 为 commit 选择补 detail / diff 加载与 diff 截断逻辑
+- [x] 跑 Task 3 指定测试命令并确认绿灯
+- [x] 发起 Task 3 规格评审与代码质量评审
+- [x] 在 todo.md 追加 Task 3 Review（结论 / 关键风险 / 长期建议 / 证据）
+
+## Review（2026-03-25 Task 3：Log 主视图、Refs Tree、Commit Details 与 Diff 预览）
+
+- 结果：
+  1. 已新增独立 `WorkspaceGitRootView`，并把 `WorkspaceShellView` 中的 Git 内容外提到 Git root 容器，Shell 只保留模式切换、空状态与 terminal focused search gate。
+  2. Log 视图已形成固定左侧 sidebar + 中央 commit list + 右侧 commit detail / raw diff 三栏结构；非 Log section 目前仍为占位，但 sidebar 会继续保留，方便 Task 4/5 继续接 `Changes / Branches / Operations`。
+  3. `WorkspaceGitViewModel` 已补 commit detail 加载、diff 截断提示、`clearFilters()` 与 execution-scoped snapshot 失效/刷新语义，能支撑后续 Task 4 的 worktree 级执行面。
+- 直接原因：
+  1. Task 2 只完成了 Git mode 接线，真实 Git UI 仍停留在 shell 层占位，需要一个独立根视图承载 Log / Detail / Diff。
+  2. 同时，commit 选择后的 details/diff 加载与大补丁预览边界此前尚未落地。
+- 设计层诱因：
+  1. 若继续把 Git 具体视图堆在 `WorkspaceShellView`，shell 会迅速变成第二个 Git ViewModel，后续 `Changes / Branches / Operations` 很难收口。
+  2. 本轮第一次实现时，`WorkspaceGitRootView` 只在 `.log` 下渲染 sidebar，导致切到其它 section 后失去 section 导航与 future execution selector；经 review 指出后，已修成“固定 sidebar + 右侧按 section 切换内容”的壳体结构。
+- 当前方案：
+  1. 新增 `WorkspaceGitRootView / WorkspaceGitSidebarView / WorkspaceGitToolbarView / WorkspaceGitLogView / WorkspaceGitCommitDetailView / WorkspaceGitDiffView` 六个 App 视图文件。
+  2. `WorkspaceGitToolbarView` 提供搜索输入、清空筛选、刷新入口；`WorkspaceGitLogView` 提供空状态与 commit 选择；`WorkspaceGitCommitDetailView` / `WorkspaceGitDiffView` 提供详情与 raw diff 预览。
+  3. `WorkspaceGitViewModel` 通过独立 commit detail task 加载选中提交详情；diff 超过 256KB 或 2000 行时会截断并给出提示。
+  4. execution path 变更时，会先失效旧的 execution-scoped snapshot 再刷新新的 worktree 数据，避免 Task 4 落地后短暂展示错误 worktree 状态。
+- 长期建议：
+  1. 当前 diff 截断仍属于“完整读取后裁剪”的 UI 保护；后续若真实仓库存在超大补丁，建议把 metadata 与 diff preview 拆成两段式读取。
+  2. `WorkspaceGitRootViewTests` 目前仍以 source-based contract 为主；Task 4 起若继续增大 Git UI 交互面，建议逐步补行为级测试。
+  3. `WorkspaceGitSection.title` 仍是英文；等 Task 4/5 UI 收口后可再统一是否中文化。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitRootViewTests` → 初次失败，因为 `WorkspaceGitRootView.swift / WorkspaceGitToolbarView.swift / WorkspaceGitDiffView.swift` 等文件尚不存在。
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitViewModelTests` → 初次失败，因为 `WorkspaceGitViewModel` 尚无 `selectCommit`、`isSelectedCommitDiffTruncated`、`selectedCommitDiffNotice` 等接口。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitRootViewTests` → 4 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitViewModelTests` → 8 tests，0 failures。
+  - 回归：`swift test --package-path macos --filter WorkspaceShellViewGitModeTests` → 6 tests，0 failures。
+  - 规格评审（subagent）初次指出：非 Log section 会丢失 sidebar，违反“execution worktree selector 只在非 Log 显示”的前提；已修复为固定 sidebar 壳体。
+  - 代码质量评审（subagent）初次指出：sidebar 丢失是阻断项，且 execution-scoped state 变更时应先失效旧数据；现已补对应实现与测试。
+
+### Task 4 执行 checklist（TDD）
+
+- [x] 先补 `NativeGitRepositoryServiceTests` / `WorkspaceGitViewModelTests` / App 层新增视图测试 的失败用例并跑红灯
+- [x] 实现 Changes 所需的 stage / unstage / stageAll / unstageAll / discard / commit / amend 主链
+- [x] 实现 Branches 所需的 create / checkout / delete local branch 主链
+- [x] 在 `WorkspaceGitViewModel` 中接入 mutation client、busy/error/refresh contract
+- [x] 新增 App 层 `WorkspaceGitChangesView` / `WorkspaceGitBranchesView` 并接入 `WorkspaceGitRootView`
+- [x] 跑 Task 4 指定测试命令并确认绿灯
+- [x] 发起 Task 4 规格评审与代码质量评审
+- [x] 在 todo.md 追加 Task 4 Review（结论 / 关键风险 / 长期建议 / 证据）
+
+## Review（2026-03-25 Task 4：Changes 与 Branches 主链）
+
+- 结果：
+  1. 已在 `NativeGitRepositoryService` 落地 `stage / unstage / stageAll / unstageAll / discard / commit / amend / createBranch / checkoutBranch / deleteLocalBranch`，并把“删除当前分支”收口为结构化拒绝错误。
+  2. 已在 `WorkspaceGitViewModel` 接入 mutation client、busy/error/refresh contract，mutation 成功后会统一刷新 `changes + log/refs`，并保持当前 root repository 级读模型与 execution worktree 级执行面的边界。
+  3. 已新增 `WorkspaceGitChangesView` 与 `WorkspaceGitBranchesView`，替换 `WorkspaceGitRootView` 中原有 placeholder；面板已具备 staged / unstaged / untracked、commit/amend、local / remote branches、create / checkout / delete local branch 主链。
+- 直接原因：
+  1. Task 3 仅完成了 Git Log 主视图，用户仍无法在 DevHaven 内完成最常见的工作树变更处理与分支切换。
+  2. 缺少 mutation 主链时，Git 面板只能读不能写，无法满足“对标 IDEA 管理面板”的最小闭环目标。
+- 设计层诱因：
+  1. 原有 Git foundation 只覆盖只读查询，缺少专门的 mutation 收口点，导致 Changes / Branches 无法在不污染 `NativeAppViewModel` 的前提下闭环。
+  2. 若直接在 App 视图里散落调用 `git` 命令，会打破仓库级读模型 + worktree 级执行面的分层；本轮已把 mutation 继续收口到 `NativeGitRepositoryService -> WorkspaceGitViewModel -> App Views` 链路，未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. `NativeGitRepositoryService` 负责 Git mutation 语义与结构化错误。
+  2. `WorkspaceGitViewModel` 负责 mutation busy/error、成功后刷新与 selected execution worktree 绑定。
+  3. `WorkspaceGitChangesView` / `WorkspaceGitBranchesView` 负责 destructive confirm 与表单交互，不直接运行 git 命令。
+- 长期建议：
+  1. 若后续引入 partial staging / stash / revert 等高级能力，建议把 mutation success/failure telemetry 进一步拆成更细粒度事件，而不是继续让同一刷新链路承载全部动作。
+  2. 当前 discard / branch mutation 已覆盖主链，但未来若补冲突处理或 interactive flows，应继续坚持“Git 面板只做非交互路径，交互式流程回终端”的边界。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter NativeGitRepositoryServiceTests` → 因缺少 stage/commit/branch mutation API 与结构化错误而失败。
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitViewModelTests` → 因缺少 mutation client 与 ViewModel action 而失败。
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitRootViewTests` → 因 `WorkspaceGitChangesView.swift` / `WorkspaceGitBranchesView.swift` 缺失以及 root view 未路由到真实视图而失败。
+  - 绿灯：`swift test --package-path macos --filter NativeGitRepositoryServiceTests` → 19 tests，0 failures（Task 4 完成时）。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitViewModelTests` → 10 tests，0 failures（Task 4 完成时）。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitRootViewTests` → 7 tests，0 failures（Task 4 完成时）。
+  - 规格评审（subagent）：无 blocker。
+  - 代码质量评审（subagent）：后续 Task 5 需补 operation 串行化、discard staged 语义与 mutation stale write-back 防护；这些已在 Task 5 收口。
+
+### Task 5 执行 checklist（TDD）
+
+- [x] 先补 `NativeGitRepositoryServiceTests` / `WorkspaceGitViewModelTests` / App 层新增视图测试 的失败用例并跑红灯
+- [x] 实现 Operations 所需的 fetch / pull / push / abortOperation 主链
+- [x] 在 `NativeGitRepositoryService` 中实现按 root repository / git common dir 的 mutation 串行化，并保留 worktree gitdir 的 operation state 语义
+- [x] 在 `WorkspaceGitViewModel` 中拆分 mutation state，避免与 read state 混淆
+- [x] 新增 App 层 `WorkspaceGitOperationsView` 并接入 `WorkspaceGitRootView`
+- [x] 同步更新 `AGENTS.md`，补齐 Git mode / 模块职责 / restore snapshot 边界说明
+- [x] 发起 Task 5 规格评审与代码质量评审，并修复 blocker
+- [x] 跑全量验证并在 todo.md 追加 Task 5 Review
+
+## Review（2026-03-25 Task 5：Operations、AGENTS 同步与全量验证）
+
+- 结果：
+  1. 已补齐 `WorkspaceGitOperationsView` 与 `fetch / pull / push / abortOperation` 主链，支持 remotes、ahead/behind、ongoing operation state 展示与安全 abort。
+  2. `NativeGitRepositoryService` 已按 `git common dir` 实现同 root repository 的 mutation 串行化，同时保持 `loadOperationState(at:)` 继续基于当前 execution worktree 的 gitdir marker 检测 merge / rebase / cherry-pick。
+  3. `WorkspaceGitViewModel` 已拆分 mutation/read 状态：新增 `activeMutation`、`mutationErrorMessage`、`isMutatingOperations`、`mutationRevision` 与 success token，避免 mutation busy/error 污染普通读取链路，并防止 execution context 变化后的 stale write-back。
+  4. 已修复 code quality review 指出的两个 blocker：`discard` 现在正确处理 staged tracked / staged added / staged rename；mutation 完成回写已增加 revision + context guard。
+  5. 已同步更新 `AGENTS.md`，明确 Git mode 模块结构、仓库级读模型 vs worktree 级执行面、以及 Git mode 不进入 restore snapshot。
+- 直接原因：
+  1. Task 4 完成后，Git 面板仍缺少远端同步与 ongoing operation 处理，无法覆盖用户日常 Git 主链的最后一段。
+  2. 同时，review 发现 staged discard 与 mutation stale write-back 两个高风险缺口，若不修复会直接导致错误行为或状态污染。
+- 设计层诱因：
+  1. Git mutation 如果只按 executionPath 串行，会让 sibling worktree 在同一 root repository 下并发修改 refs/objects，天然存在冲突风险。
+  2. ViewModel 的 mutation 若没有类似 read task 的 revision/context guard，就容易在 execution worktree / active workspace 变化后把旧结果回写到当前 UI。
+  3. 本轮通过 `NativeGitRepositoryService` 的 repo 级串行化与 `WorkspaceGitViewModel.mutationRevision` 收口了这两个诱因，未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. `NativeGitRepositoryService` 统一负责 Git 查询、mutation、interaction-required 错误映射与 repo 级串行化。
+  2. `WorkspaceGitViewModel` 只承接 runtime 状态、搜索 debounce、selected execution worktree、mutation/read 状态与刷新接线。
+  3. `WorkspaceGitOperationsView` / `WorkspaceGitChangesView` / `WorkspaceGitBranchesView` 统一展示 `mutationErrorMessage`，而 root view 负责展示 section read error。
+- 长期建议：
+  1. 当前交互类错误映射仍主要是 stderr 启发式匹配；后续若 Git 版本或 hooks/auth 文案变化，建议继续补 editor / signing / auth / conflict continue 的定向回归测试。
+  2. `WorkspaceGitViewModel.refreshAfterMutation(...)` 目前采取“大而全”的刷新策略；后续若 Git 面板继续扩展，可逐步细化为按 mutation kind 的局部失效刷新，降低“动作成功但刷新失败”的耦合噪音。
+  3. Git mode 不进入 restore snapshot 的边界已落地到 AGENTS 与实现，但后续可再补一条专门的自动化回归测试，防止有人把 Git UI 状态误带入恢复链路。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter NativeGitRepositoryServiceTests` → 初次失败，因缺少 `fetch / pull / push / abortOperation`、interaction-required 映射与 discard staged 语义覆盖。
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitViewModelTests` → 初次失败，因缺少 operations mutation client、mutation state 拆分与 stale write-back 防护。
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitRootViewTests` → 初次失败，因 `WorkspaceGitOperationsView.swift` 缺失与 root view 未路由到 operations 真实视图。
+  - 绿灯：`swift test --package-path macos --filter NativeGitRepositoryServiceTests` → 22 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitViewModelTests` → 13 tests，0 failures。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitRootViewTests` → 9 tests，0 failures。
+  - 回归：`swift test --package-path macos --filter WorkspaceShellViewGitModeTests` → 6 tests，0 failures。
+  - 全量：`swift test --package-path macos` → 358 tests，5 skipped，0 failures。
+  - 构建：`swift build --package-path macos` → exit 0。
+  - 质量：`git diff --check` → exit 0。
+  - 规格复审（subagent）：无 blocker。
+  - 代码质量复审（subagent）：此前两个 blocker 已修复；仅余交互类错误映射覆盖面与 fixture `XCTSkip` 等非阻断改进项。
 
 - [x] 盘点当前 staged / unstaged / untracked 变更范围
 - [x] 阅读关键 diff 与新增文件，记录潜在风险
@@ -2171,6 +3641,146 @@
   - 推送结果：`git push -u origin fix/issue-42-ghostty-open-url` → 远端分支创建成功并建立 tracking
   - PR：`gh pr create --base main --head fix/issue-42-ghostty-open-url ...` → 返回 `https://github.com/zxcvbnmzsedr/devhaven/pull/43`
 
+## 2026-03-24 规格文档只读评审
+- [ ] 阅读规格文档并提取 MVP / 边界 / 衔接 / 约束要点
+- [ ] 对照现有代码接口核验衔接是否清楚
+- [ ] 汇总结论、关键问题与可选优化建议
+
+## 2026-03-24 Task 1 Git Foundation（实现 worker）
+
+- [x] 盘点现有 Git 相关模型/服务与测试夹具，明确新 foundation 的边界
+- [x] 先编写 `NativeGitRepositoryServiceTests` 失败用例，覆盖 log/refs/status/gitdir/operation state 等要求
+- [x] 运行 `swift test --package-path macos --filter NativeGitRepositoryServiceTests`，确认红灯
+- [x] 实现 `WorkspaceGitModels`、`NativeGitCommandRunner`、`NativeGitParsers`、`NativeGitRepositoryService` 最小可行代码
+- [x] 再次运行 `swift test --package-path macos --filter NativeGitRepositoryServiceTests`，确认绿灯
+- [x] 补充必要回归验证并在 Review 记录证据与风险
+
+
+## Review（2026-03-24 Task 1 Git Foundation 实现 worker）
+
+- 结果：
+  1. 已完成 Git Foundation 查询主链最小实现：统一命令执行、解析层与仓库只读查询服务已落地。
+  2. `NativeGitRepositoryServiceTests` 已绿灯，覆盖 log graph、refs、commit detail+diff、status porcelain v2、worktree gitdir 解析、detached HEAD、默认 300 条上限。
+- 直接原因：
+  1. 初始红灯的核心问题是 `git log --graph` 前缀与 payload 字段分割不一致，导致 log 解析为空。
+  2. `for-each-ref` 输出分隔策略与解析器不一致，导致 refs/tags 为空。
+  3. commit detail 需要兼容现有测试口径（`files`/`diff`、`loadLogSnapshot`、`resolveGitDir`）。
+- 设计层诱因：
+  1. Git foundation 目前属于新接入层，命令格式与解析协议还未完全收口为单一约定。
+  2. 未发现明显系统设计缺陷；主要是“命令 format 与 parser 协议”在首版实现中存在对齐缺口。
+- 当前修复方案：
+  1. `NativeGitCommandRunner` 统一 `/usr/bin/git` 执行与错误映射；
+  2. `NativeGitParsers` 收口 graph log / status v2 / refs / remotes / name-status / gitdir 解析；
+  3. `NativeGitRepositoryService` 提供 refs/log/logSnapshot/commit detail/diff/changes/remotes/ahead-behind/operation state/gitdir 查询；
+  4. `WorkspaceGitModels` 补齐 Git foundation 查询模型并兼容当前测试字段。
+- 长期改进建议：
+  1. 下一步可把 refs/log/detail 的 CLI format 常量集中管理，避免字符串漂移。
+  2. 后续可补 parser 单元测试，降低集成测试定位成本。
+- 验证证据：
+  - `swift test --package-path macos --filter NativeGitRepositoryServiceTests`
+  - 结果：6 tests，0 failures（执行时长约 45.8s）。
+
+## 2026-03-24 Task 1 Git Foundation 严重问题修复（runner pipe drain + porcelain v2 空格路径）
+
+- [x] 复现 code review 指出的两类问题，并补失败测试（大输出 drain、带空格/rename 路径解析）
+- [x] 修复 `NativeGitCommandRunner` 的 stdout/stderr 并发消费，消除大输出阻塞风险
+- [x] 修复 `NativeGitParsers.parseStatusPorcelainV2` 的 ordinary/rename/unmerged 路径提取与 quoted 路径解码
+- [x] 运行 `swift test --package-path macos --filter NativeGitRepositoryServiceTests` 并确认绿灯
+
+## Review（2026-03-24 Task 1 Git Foundation 严重问题修复）
+
+- 结果：
+  1. 已修复 `NativeGitCommandRunner` 仅在进程退出后读取 pipe 的阻塞风险，改为运行期持续 drain stdout/stderr；大输出场景不再超时误杀。
+  2. 已修复 porcelain v2 路径解析对空格/quoted 路径不健壮的问题，`ordinary/rename/unmerged` 均改为限定 split 次数保留完整路径段，并增强 quoted escape 解码。
+  3. 已新增回归测试覆盖：`testGitCommandRunnerDrainsLargeStdoutWithoutTimeout`、`testLoadChangesSnapshotParsesPathsWithSpacesAndRename`。
+- 直接原因：
+  1. runner 旧实现 `waitUntilExit` 后再统一 `readDataToEndOfFile`，在输出超过 pipe buffer 时，子进程可能因写阻塞无法退出。
+  2. status parser 旧实现直接按空格无上限 split，导致带空格路径被拆碎；rename 行也会误拆 path/originalPath。
+- 设计层诱因：
+  1. Git foundation 首版偏“命令可用性”，对 IO 背压和路径编码边界覆盖不足。
+  2. 未发现明显系统设计缺陷；属于 parser/runner 层的边界稳健性缺口。
+- 当前修复方案：
+  1. runner 使用 readabilityHandler 在进程运行期持续追加 stdout/stderr，进程结束后再收尾 drain。
+  2. parser 对 ordinary/rename/unmerged 改为 `maxSplits` 保留路径段，quoted 路径增加 `\\`/`\"`/`\n`/`\t`/`\r`/octal 解码。
+- 验证证据：
+  - `swift test --package-path macos --filter NativeGitRepositoryServiceTests`
+  - 结果：8 tests，0 failures（约 47.9s）。
+
+## 2026-03-24 workspace 打开项目快捷键在终端焦点下无效排查
+
+- [x] 读取 Ghostty 键盘事件/菜单分发代码，确认快捷键在终端焦点下的实际路由
+- [x] 复现并锁定 root cause：是菜单未尝试还是 focused action 为 nil
+- [x] 先补失败测试，覆盖终端聚焦时应用菜单快捷键仍能命中菜单命令
+- [x] 实施最小修复并回归 workspace 打开项目快捷键
+- [x] 运行定向验证并在 Review 记录直接原因、设计诱因、修复方案与证据
+
+
+## 2026-03-24 workspace 打开项目快捷键与弹窗焦点调整
+
+- [x] 阅读 AGENTS / 相关记忆 / 最近提交，确认现有 workspace 打开项目入口、设置页与焦点实现位置
+- [x] 确认“设计页面”配置范围与默认快捷键语义（默认 Command+K）
+- [x] 给出最小实现方案并等待用户确认
+- [x] 先补失败测试，覆盖快捷键配置持久化、命令入口与弹窗默认焦点
+- [x] 实现快捷键配置、菜单/命令接线与弹窗焦点修复
+- [x] 运行定向验证并在本文件追加 Review（直接原因、设计层诱因、修复方案、长期建议、证据）
+
+- [x] 盘点当前 staged / unstaged / untracked 变更范围
+- [x] 阅读关键 diff 与新增文件，记录潜在风险
+- [x] 输出按优先级排序的 review findings
+- [x] 在 tasks/todo.md 追加本次 review 结论与证据
+
+- [x] 收集 GitHub workflow 失败 run 的日志与错误位置
+
+- [x] 根据日志定位直接原因与是否存在设计层诱因
+
+- [x] 先补充能覆盖该失败场景的测试/验证，再实施最小修复
+
+- [x] 运行本地验证并更新 tasks/todo.md Review
+
+- [x] 核对当前本地/远端 3.0.0 与 v3.0.0 tag 状态
+- [x] 删除错误的 3.0.0 tag，创建并推送正确的 v3.0.0 tag
+- [x] 验证远端 v3.0.0 指向正确提交，并记录 lessons / review
+
+- [x] 定位工作区左侧侧边栏宽度无法拖拽的问题与根因
+- [x] 先补充能稳定复现该问题的测试或验证手段
+- [x] 实施最小修复并更新相关注释/文档（如需要）
+- [x] 运行验证并在本文件追加 Review 证据
+- [x] 设计侧边栏宽度持久化方案并确认写入位置
+- [x] 先补充失败测试，约束侧边栏宽度能从设置读取并写回
+- [x] 实现侧边栏宽度持久化到设置
+- [x] 运行验证并追加新的 Review 证据
+
+- [x] 核对 notify worktree 已提交变更与未提交残留，确定本次合并范围
+- [x] 在 main 合并 notify 分支并处理必要冲突
+- [x] 运行必要验证并确认工作区状态
+- [x] 提交合并结果并记录 Review 证据
+- [x] 覆盖 v3.0.0 tag 指向新提交并验证结果
+
+- [x] 核对本地/远端 v3.0.0 当前指向，确认需要强制覆盖远端 tag
+- [x] 强制推送本地 v3.0.0 到 origin
+- [x] 复核远端 v3.0.0 已指向当前 merge commit，并记录 Review 证据
+
+- [x] 核对本地 main 与 origin/main 指向，确认推送前基线
+- [x] 推送本地 main 到 origin/main
+- [x] 复核远端 main 已指向当前 HEAD，并记录 Review 证据
+
+- [x] 收集最新失败 GitHub Action run 的编号、触发时间、失败 job 与原始日志
+- [x] 对照 workflow 配置与近期提交定位直接原因
+- [x] 判断是否存在设计层诱因，并给出修复建议与验证方案
+
+- [x] 为 release workflow 补回归测试，约束 draft release 清理不再依赖不支持的 gh json 字段
+- [x] 以最小改动修复 .github/workflows/release.yml 的 draft release 清理逻辑
+- [x] 运行定向验证并回填本次 GitHub Action 故障 Review
+
+- [x] 整理 release workflow 修复改动并完成提交前校验
+- [x] 提交并推送 release workflow 修复到 origin/main
+- [x] 用 workflow_dispatch 触发 release(tag=v3.0.0)
+- [ ] 复核新 run 结论、失败点是否消失以及 release 产物状态
+
+- [x] 收集 arm64 Swift test 失败明细并定位是代码回归还是测试脆弱性
+- [x] 以最小改动修复两条 AppKit 时序脆弱测试
+- [ ] 跑本地定向测试与完整 swift test 验证后重新触发 release workflow
+
 ## Review（2026-03-24 workspace 打开项目快捷键与弹窗焦点调整）
 
 - 结果：
@@ -2582,3 +4192,1224 @@ exec bash -lc '''echo ok''''` → `zsh:1: command not found: password=WwS6P6AzfK
   - 合并动作：`git merge --autostash --no-ff focus` → 成功生成 merge commit，随后手工解决 `tasks/todo.md` 的 autostash 冲突；`git merge --no-ff feature/38` → 进入冲突解析，最终保留两边语义后继续完成合并。
   - 全量回归：`swift test --package-path macos` → 344 tests，5 skipped，0 failures。
   - 差异校验：`git diff --check` → 无输出。
+## 2026-03-25 当前代码变更评审
+
+- [x] 读取相关技能与仓库约束，明确本次评审流程
+- [x] 收集 staged / unstaged / untracked 文件清单与 diff 范围
+- [x] 按文件审查实现与潜在风险，整理优先级
+- [x] 在 todo.md 追加评审 Review，记录结论与证据
+
+## Review（2026-03-25 当前代码变更评审）
+
+- 结果：
+  1. 已完成对当前 staged / unstaged / untracked 变更的审查，重点覆盖 Workspace Git mode 新增的 service / ViewModel / SwiftUI 视图主链。
+  2. 发现 3 个需要优先处理的问题：linked worktree 下 Branches 当前分支真相源错误、Changes 视图遗漏 conflicted 文件、Git 错误分类依赖英文 locale。
+  3. 其余 `.superpowers/` 运行时产物与计划文档改动未纳入功能性问题优先级。
+- 直接原因：
+  1. Branches section 读取 refs 时固定走 root repository path，且 execution worktree 切换时不会 refresh `.branches`。
+  2. `WorkspaceGitWorkingTreeSnapshot.conflicted` 只在 parser / model 层存在，App 视图层没有消费。
+  3. `NativeGitRepositoryService` 的 empty-repo / interaction-required 判定依赖英文 stderr 文案，但 runner 没有固定 Git locale。
+- 设计层诱因：
+  1. Git 面板虽声明为“仓库级读模型 + worktree 级执行面”，但 Branches 中“当前分支”这种 execution-scoped 语义仍复用了 repository-scoped refs 结果，属于状态源边界混用。
+  2. 未发现新的阻断性系统设计缺陷；另外两个问题主要是 UI 覆盖遗漏和 CLI 错误归类稳健性不足。
+- 验证证据：
+  - `git status --short`
+  - `git diff --stat`
+  - `git ls-files --others --exclude-standard`
+  - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceGitViewModelTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 50 tests，0 failures
+  - linked worktree 复现：在 root / linked worktree 分别执行 `git for-each-ref --format='%(HEAD) %(refname:short)' refs/heads`，可观察到 `%(HEAD)` 会随当前 worktree 改变；因此 Branches 若固定读取 root repository path，会把当前分支标记到错误 worktree 上
+
+
+## 2026-03-25 启动快捷方式导致电脑卡顿排查（只调查，不改代码）
+
+- [x] 梳理“启动快捷方式”可能对应的启动入口、脚本与资源准备链路
+- [x] 收集启动阶段可能的高开销点：日志订阅、vendor 准备、Swift 编译/运行、通知/监控初始化
+- [x] 如可复现，记录启动时的进程/系统行为证据（命令输出、日志、耗时）
+- [x] 判断直接原因、是否存在设计层诱因，并给出不改代码前提下的规避建议
+
+## Review（2026-03-25 启动快捷方式导致电脑卡顿排查）
+
+- 结果：
+  1. 当前机器上确实存在 `bash ./dev` 启动链路（`ps -p 30502 -o pid,ppid,pcpu,pmem,etime,command`），其子进程包含 `log stream --style compact --level debug ...`（pid 30529）与调试态 `macos/.build/arm64-apple-macosx/debug/DevHavenApp`（pid 30530）。
+  2. `./dev` 的 vendor 校验本身几乎不耗时：Ghostty 校验约 `0.01s`，Sparkle 校验约 `0.00s`，不是卡顿主因。
+  3. 真正的重活在 `swift run` 背后的调试构建：使用独立 scratch path 复现冷启动构建，`swift build --package-path macos --scratch-path /tmp/devhaven-cold-build -c debug` 耗时 `13.92s real / 45.22s user / 4.69s sys`，最大常驻内存约 `620MB`。
+  4. `./dev` 还会默认附带 unified log 实时订阅；最近 10 分钟同 predicate 下共有 `765` 行日志，其中 `757` 行来自 `DevHavenNative`，`711` 行来自 `GhosttySurfaceLifecycle`，消息类型里 `restore-responder` 单独就有 `362` 次。实时把这些 debug 日志持续刷到终端，会增加额外的 I/O 与渲染负担。
+  5. 当前系统里还同时运行着正式安装版 `/Applications/DevHaven.app/Contents/MacOS/DevHavenApp`（pid 15572），说明“快捷方式 -> ./dev”与正式 `.app` 可能并存，等于同时维持两套 App/终端/Agent 进程，进一步放大资源占用。
+- 直接原因：
+  1. 你当前使用的启动快捷方式命中了开发态入口 `./dev`，而不是直接打开已构建的 `.app`。
+  2. `./dev` 会把“校验 vendor + 打开 debug unified log + `swift run` 调试构建并启动”绑成一条链路；其中真正导致机器明显变卡的是调试构建与实时日志流，而不是 App 内部业务初始化。
+- 设计层诱因：
+  1. 项目把 `./dev` 设计成“开发便捷入口”，适合研发态排障，但它同时承担了构建、日志、运行三种职责；一旦被当成日常启动快捷方式使用，就会把开发期成本带到日常启动路径里。
+  2. 当前还允许 `./dev` 调试实例与 `/Applications/DevHaven.app` 并存运行，因此即使正式版已开着，再触发快捷方式仍会额外拉起一套调试实例。未发现明显业务架构缺陷，但启动入口职责边界容易被误用。
+- 当前结论：
+  1. 卡顿主因不是 `load()` 自动扫描 Git 仓库或恢复快照；源码里 `NativeAppViewModel.load()` 只读本地 snapshot，并不会在启动时自动跑 `refreshProjectCatalog()` 或 `refreshGitStatistics()`。
+  2. 从日志里看，workspace surface 启动本身常见为个位数到十几毫秒（如 `surface-finish ... durationMs=6/10/11`），和冷调试构建的十几秒量级不在一个层面。
+- 不改代码前提下的规避建议：
+  1. 把启动快捷方式改成直接打开 `/Applications/DevHaven.app`（或你 release 打包出的 `.app`），不要指向仓库里的 `./dev`。
+  2. 如果你确实要走开发态入口，优先用 `./dev --no-log`；至少也改成 `./dev --logs app`，不要默认订阅 `Ghostty` 全量 debug 日志。
+  3. 不要在正式版已运行时再触发 `./dev`；先退出已有的 `bash ./dev`、`log stream` 与调试态 `macos/.build/.../DevHavenApp`，避免双实例并存。
+  4. 若只是偶发卡顿，通常会集中在冷构建阶段；首次启动后再次热启动时，本地增量构建只测到约 `0.36s`，明显轻得多。
+- 验证证据：
+  - `./dev` 脚本内容：会顺序执行 `setup-ghostty-framework.sh --ensure-worktree-vendor`、`setup-sparkle-framework.sh --ensure-worktree-vendor`、`log stream --style compact --level debug ...`、`swift run --package-path macos DevHavenApp`。
+  - `ps -axo ... | egrep 'DevHavenApp|log stream --style compact --level debug|swift run --package-path macos DevHavenApp'`：同时看到正式版、调试版和 `log stream`。
+  - vendor 校验耗时：Ghostty `0.01s`；Sparkle `0.00s`。
+  - 热构建耗时：`swift build --package-path macos -c debug` -> `0.36s real`。
+  - 冷构建耗时：`swift build --package-path macos --scratch-path /tmp/devhaven-cold-build -c debug` -> `13.92s real / 45.22s user / 620MB RSS`。
+  - 日志量统计：`/usr/bin/log show --last 10m --style compact --predicate 'subsystem == "DevHavenNative" || subsystem == "com.mitchellh.ghostty"'` -> `765` 行，其中 `GhosttySurfaceLifecycle` `711` 行，`restore-responder` `362` 次。
+
+## Review（2026-03-25 标准 IDEA Log 1:1 实现）
+
+- 结果：
+  1. 已将 `Git -> 日志 (.log)` 从旧的 dashboard / sidebar / raw diff 布局切换为标准 IDEA Log 主链：顶部 filter toolbar、中间 log table、下方 changes/details pane 与独立 diff preview。
+  2. 已新增 `WorkspaceGitLogViewModel`，把 `.log` 的 filter debounce、commit 选择、文件选择、详情与文件级 diff 联动从根 `WorkspaceGitViewModel` 中拆出，形成独立运行时真相源。
+  3. 已在 `NativeGitRepositoryService` 增加 `loadLogAuthors(...)` 与 `loadDiffForCommitFile(...)`，补齐作者候选与文件级 diff 读取能力。
+  4. 已更新 `WorkspaceGitRootView` 的 section 路由：`.log` 走 `WorkspaceGitIdeaLogView`，非 `.log` section 仍保留原有 `Changes / Branches / Operations` 路径。
+  5. 已同步更新 `AGENTS.md`，记录标准 IDEA Log 新文件、旧 sidebar 退居非 `.log` section、以及 `WorkspaceGitLogViewModel` 的职责边界。
+- 直接原因：
+  1. 旧的 `.log` 页面基于 Git MVP 的 dashboard 架构搭建，核心是 sidebar + 列表 + 详情页；这和标准 IDEA Log 的 toolbar + table + bottom pane 架构根本不同。
+  2. 旧实现没有文件级 diff 与作者候选主链，只能依赖整提交 raw patch 和当前快照临时推导，无法真正复刻标准 IDEA Log 行为。
+- 设计层诱因：
+  1. 根因不是单个样式偏差，而是 `.log` 缺少独立状态层，导致过滤、选择、详情与 diff 预览都混在 `WorkspaceGitViewModel` / App 视图临时状态里。
+  2. MVP 阶段把 refs tree 放在左栏、把 raw diff 塞在详情区，本质上更像 Git dashboard，而不是标准 IDEA Log。
+  3. 本轮通过 `WorkspaceGitLogViewModel + WorkspaceGitIdeaLog*` 视图树收口主链后，未发现新的阻断性系统设计缺陷。
+- 当前方案：
+  1. Core：新增 `WorkspaceGitLogFilterModels.swift`、`WorkspaceGitLogTableModels.swift`、`WorkspaceGitLogViewModel.swift`；扩展 `WorkspaceGitViewModel.Client` 与 `NativeGitRepositoryService`。
+  2. App：新增 `WorkspaceGitIdeaLogView.swift`、`WorkspaceGitIdeaLogToolbarView.swift`、`WorkspaceGitIdeaLogTableView.swift`、`WorkspaceGitIdeaLogBottomPaneView.swift`、`WorkspaceGitIdeaLogChangesView.swift`、`WorkspaceGitIdeaLogDetailsView.swift`、`WorkspaceGitIdeaLogDiffPreviewView.swift`，并删除旧 `WorkspaceGitLogView.swift` / `WorkspaceGitCommitDetailView.swift` / `WorkspaceGitDiffView.swift`。
+  3. Routing：`WorkspaceGitRootView` 现在仅在非 `.log` section 挂载旧 sidebar / toolbar；标准 IDEA Log 不再复用 `WorkspaceGitSidebarView`。
+- 长期建议：
+  1. 当前 log table 已使用 SwiftUI `Table`，但行级焦点/键盘导航/列宽持久化仍未完全对齐 JetBrains Swing 实现；如果继续做高保真，可继续补 table selection / column order persistence。
+  2. 当前 current-branch highlight 仍基于 decorations 语义推断，而不是完整的 containing-branch 条件缓存；若继续深挖 1:1，可再评估更精确的 branch containment 读取链路。
+  3. 当前仅 `.log` 对标标准 IDEA Log；若后续继续对标 IDE Git 工具窗口，下一阶段应评估 `Changes / Branches / Operations` 的结构统一与共享 pane 行为。
+- 验证证据：
+  - 红灯（Core）：`swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceGitLogViewModelTests|WorkspaceGitViewModelTests'` → 初次失败，报缺少 `WorkspaceGitLogViewModel`、`WorkspaceGitViewModel.logViewModel`、`loadLogAuthors`、`loadDiffForCommitFile`。
+  - 红灯（App）：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 初次失败，报缺少 `WorkspaceGitIdeaLogView.swift` 等新文件与 `.log` 路由契约不满足。
+  - 定向：`swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceGitLogViewModelTests|WorkspaceGitViewModelTests|WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceShellViewGitModeTests'` → 61 tests，0 failures。
+  - 全量：`swift test --package-path macos` → 373 tests，5 skipped，0 failures。
+  - 构建：`swift build --package-path macos` → exit 0。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 提交图线连线算法重新对齐 IDEA
+
+- [x] 对照当前 `WorkspaceGitCommitGraphCoreBuilder` 与 IDEA `PrintElementGeneratorImpl` / painter 实现，定位“线和线直接连接”错误根因
+- [x] 为该错误补最小复现测试，并先验证红灯
+- [x] 依据 IDEA 语义最小修正提交图 visible edge 生成算法
+- [x] 运行定向测试 / 必要构建验证，并在 Review 记录直接原因、设计层诱因、修复方案与长期建议
+
+
+## Review（2026-03-25 提交图线连线算法重新对齐 IDEA）
+
+- 结果：
+  1. 已重新对照 IntelliJ `PrintElementGeneratorImpl`、`GraphElementComparatorByLayoutIndex` 与 `EdgesInRowGenerator`，确认之前真正偏离 IDEA 的不是 painter 连线端点，而是 **row 上哪些 edge 应该被当作可见 graph element**。
+  2. `WorkspaceGitCommitGraphCoreBuilder.buildRowElements(...)` 现在只会在 `childRow + 1 ..< parentRow` 的中间行挂载 carried edge；attachment row 不再凭空出现独立 edge lane。
+  3. 已新增 `testBuildVisibleModelShowsCarriedEdgeOnlyOnIntermediateRowsLikeIdeaEdgesInRowGenerator`，先红后绿锁定该契约；同时把推荐宽度断言更新为“只反映真实可见 lane，不被 phantom edge 虚增”。
+- 直接原因：
+  1. 当前实现把每条 edge 都加入了 `childRow..<parentRow` 的所有 row element，等于把 child attachment row 也错误当成了 IDEA 的 carried edge row。
+  2. 这会让 merge commit 所在行出现并不存在的独立 edge lane，导致 `currentLaneCommitHashes` 混入 `m->a2 / m->b1` 这类 phantom edge，也让推荐宽度和 line-to-line 连接参考列一起偏掉。
+- 设计层诱因：
+  1. 现有 graph core 用 `edge span 覆盖了哪些 row` 近似替代了 IDEA `EdgesInRowGenerator` 的“该 row 当前真正可见哪些 edge element”，把 **存在于区间内** 和 **在该 row 作为可见元素参与排序** 两层语义混在了一起。
+  2. 未发现新的阻断性系统设计缺陷；这次问题主要是 graph core 在 row-local visible element 语义上过度简化。
+- 当前方案：
+  1. Builder：`buildRowElements(...)` 改为仅在中间 row 添加 `.edge(edge.id)`，对齐 IDEA `EdgesInRowGenerator` 的 attachment 语义。
+  2. Tests：新增“attachment row 不应出现 carried edge lane”的红灯测试，并把推荐宽度测试改成只验证真实可见 lane 宽度。
+- 长期建议：
+  1. 若继续追 1:1，可把当前 `buildRowElements + downEdgeElements` 再抽成显式的 `edgesInRow` 计算层，避免以后再次把 span 生命周期误当成 row-local visible element 生命周期。
+  2. 后续若补 terminal edge / arrow / long-edge clipping，也应继续先对照 IDEA 的 `EdgesInRowGenerator + isEdgeVisibleInRow(...)`，不要只盯 painter。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitCommitGraphCoreTests/testBuildVisibleModelShowsCarriedEdgeOnlyOnIntermediateRowsLikeIdeaEdgesInRowGenerator` → 初次失败，实际值为 `["m", "m->a2", "m->b1"]`，证明 attachment row 被错误塞入 phantom edge。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphCoreTests|WorkspaceGitLogViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 29 tests，0 failures。
+  - 构建：`swift build --package-path macos` → exit 0。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 提交图双向 print element 重新对齐 IDEA
+
+- [x] 结合最新截图与 IDEA `PrintElementGeneratorImpl`，确认当前问题是否来自 row 内缺失 `UP/DOWN` 双向 print element
+- [x] 先补红灯测试，约束非首行 row 必须能同时产出 up/down segment
+- [x] 最小修改 graph core，按 row-local visible element 生成双向 edge print elements
+- [x] 跑定向测试 / 构建验证，并在 Review 记录直接原因、设计层诱因、修复方案与证据
+
+
+## Review（2026-03-25 提交图双向 print element 重新对齐 IDEA）
+
+- 结果：
+  1. 结合你新发的截图再次对照 IntelliJ `PrintElementGeneratorImpl` 后，已确认剩余问题不只是 carried edge row 选择错误，而是 **当前 graph core 仍只输出 `.down` segment，没有像 IDEA 那样在同一 row 内同时输出 `.up/.down` print elements**。
+  2. `WorkspaceGitCommitGraphCoreBuilder` 现已改为按 row-local visible element 生成双向 segment：节点 row 会为自身邻接 edge 输出 up/down，carried edge row 也会为同一 edge 同时输出 up/down。
+  3. 新增 `testBuildVisibleModelEmitsUpAndDownSegmentsOnNonTopNodeRowLikeIdeaPrintElements`，先红后绿锁定“非首行节点必须在当前 row 同时持有向上/向下连接 segment”的契约。
+- 直接原因：
+  1. 之前的实现虽然已经改成 current/other row position，但仍把每个 row 的 edge print elements 简化成了单向 `.down` 输出。
+  2. 这和 IDEA `getPrintElements(row)` 的真实语义不一致：IDEA 会在当前 row 同时生成向上和向下的 segment，让“来自上一行的线”和“去往下一行的线”在同一 row 内直接接上。
+- 设计层诱因：
+  1. 现有 core 虽然已经引入了 `direction` 枚举，但 builder 仍沿用了“上一行负责画到我、我只负责画到下一行”的半模型，等于把 IDEA row-local print element 语义又简化回了半边链路。
+  2. 未发现新的阻断性系统设计缺陷；这次主要是 graph core 对 `PrintElementGeneratorImpl` 的 direction 语义实现不完整。
+- 当前方案：
+  1. Builder：新增基于 row-local visible element 的 `visibleEdgeElements(...)`，对 node row 和 carried edge row 都输出 `.up/.down` segment。
+  2. Tests：补一条非首行节点 row 的红灯测试，确保节点在当前 row 内同时持有 incoming/outgoing 连接。
+- 长期建议：
+  1. 若继续追 1:1，下一步应继续把 `hasArrow / terminal edge / long-edge visibility` 也一起拉齐到 `PrintElementGeneratorImpl`，不要只停在 direction 这一层。
+  2. 如果后续还出现截图层面的“看起来还是没接好”，优先检查当前 row 生成的 print element 集合是否完整，而不是直接回去调 Canvas 几何。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitCommitGraphCoreTests/testBuildVisibleModelEmitsUpAndDownSegmentsOnNonTopNodeRowLikeIdeaPrintElements` → 初次失败，报非首行节点 row 缺少 `.up` segment。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphCoreTests|WorkspaceGitLogViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 30 tests，0 failures。
+  - 构建：`swift build --package-path macos` → exit 0。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 提交图 painter 视口裁切对齐 IDEA
+
+- [x] 对照 IDEA `SimpleGraphCellPainter`，确认当前 SwiftUI renderer 是否因跨两整行绘制导致同一 segment 被相邻 row 重复画出
+- [x] 先补 App 红灯测试，约束 graph renderer 必须按当前 row 视口裁切 print element，而不是整段 center-to-center 直连两整行
+- [x] 最小修改 `WorkspaceGitCommitGraphView`，改为 row-local clipped painter 语义
+- [x] 跑定向测试 / 构建验证，并在 Review 记录直接原因、设计层诱因、修复方案与证据
+
+
+## Review（2026-03-25 提交图 painter 视口裁切对齐 IDEA）
+
+- 结果：
+  1. 继续对照 IntelliJ `SimpleGraphCellPainter` 后，已确认当前 SwiftUI renderer 还有一层关键偏差：**每个 row 的 Canvas 之前直接跨两整行绘制 center-to-center segment**，这会让相邻 row 的 `.up/.down` print elements 把同一段线重复整段画出来。
+  2. `WorkspaceGitCommitGraphView` 现已改成更接近 IDEA 的 row-local clipped painter：Canvas 只保留当前 row 高度 + 少量 overdraw，edge 会先计算 `visibleEndpoint(...)`，再只绘制当前 row 视口内应该出现的那一段。
+  3. 已补 `testIdeaLogGraphRendererClipsEachPrintElementToCurrentRowViewportLikeIdeaPainter`，先红后绿锁定“不要跨两整行整段直连”的契约。
+- 直接原因：
+  1. 上一轮虽然补齐了 `.up/.down` 双向 print elements，但 renderer 还在把每个 print element 从当前 row center 直接画到相邻 row center，并通过跨两行的大 Canvas 承载。
+  2. 这和 IDEA 的 painter 行为不同：IDEA 是 row-local paint + viewport clipping，同一条逻辑边由相邻两行各自画出自己视口内的可见部分，而不是每行都把整段重画一遍。
+- 设计层诱因：
+  1. 之前为了消除 seam，我把“overdraw”放大成了“跨两整行完整绘制”，这在单向 `.down` 时代还勉强可用，但一旦对齐到 IDEA 的双向 print element，就会把重复绘制问题放大。
+  2. 未发现新的阻断性系统设计缺陷；问题主要是 renderer 没有真正采用 row-local painter 语义。
+- 当前方案：
+  1. App：`WorkspaceGitCommitGraphView` 改为单行 viewport + `visibleEndpoint(...)` 裁切，显式 `.clipped()`，仅保留必要 overdraw。
+  2. Tests：新增 App 红灯测试，约束 renderer 必须先算当前 row 可见 endpoint，且不能继续使用“跨两整行 Canvas”的旧方式。
+- 长期建议：
+  1. 若继续追 1:1，下一步可以继续把 `lineStyle / hasArrow / terminal edge / nodeType` 也往 `SimpleGraphCellPainter` 语义补齐，这样就不是“像 IDEA”，而是更接近真正的移植。
+  2. 这类 commit graph 问题以后要优先分三层排查：`visible print elements 是否完整`、`painter 是否 row-local`、`像素/裁切是否平滑`，不要把三层问题混在一起看。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests/testIdeaLogGraphRendererClipsEachPrintElementToCurrentRowViewportLikeIdeaPainter` → 初次失败，提示缺少 `visibleEndpoint` 且仍在使用跨两整行 Canvas。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitCommitGraphCoreTests|WorkspaceGitLogViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests'` → 31 tests，0 failures。
+  - 构建：`swift build --package-path macos` → exit 0。
+  - 质量：`git diff --check` → exit 0。
+
+
+## 2026-03-25 Git 面板滚动卡顿排查与修复
+
+- [x] 梳理标准 IDEA Log table 滚动热路径，确认卡顿直接原因与是否存在设计层诱因
+- [x] 先补回归测试，约束 graphVisibleModel / graph 宽度不再在渲染热路径重复重建
+- [x] 以最小改动修复 Git 面板滚动热点，并同步处理明显的 cell 级重复计算
+- [x] 跑定向验证与质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Git 面板滚动卡顿排查与修复）
+
+- 结果：
+  1. 已确认滚动卡顿的主热点在标准 IDEA Log table 的 graph 数据派生链路，而不是 AppKit `Table` 本身。
+  2. `WorkspaceGitLogViewModel` 现在会在 `logSnapshot` 刷新时一次性构建并缓存 `graphVisibleModel / tableRows / preferredGraphWidth`，不再在滚动期间反复整表重算 graph。
+  3. `WorkspaceGitIdeaLogTableView` 现在会在 `body` 顶层先读取一次 `graphWidth`，每个 row cell 不再直接回读 `viewModel.preferredGraphWidth`；同时把日期 formatter 改成静态复用，去掉明显的 cell 级重复对象创建。
+- 直接原因：
+  1. 之前 `WorkspaceGitLogViewModel.graphVisibleModel` 是计算属性，每次读取都会重新执行 `WorkspaceGitCommitGraphBuilder.buildVisibleModel(commits:)`。
+  2. `WorkspaceGitIdeaLogTableView` 又在 row cell 内多次读取 `viewModel.preferredGraphWidth`，等于在滚动 / 复用 cell 时不断触发整份 commit graph 重建，造成明显掉帧。
+- 设计层诱因：
+  1. Git log 的“读模型真相源”和“渲染期派生数据”没有分层缓存，导致本应在 snapshot 更新时计算一次的 graph 派生结果，被错误暴露成了 view 热路径里的即时计算属性。
+  2. 另外，table row 闭包直接依赖整个 viewModel 的派生计算，也放大了滚动时的更新成本。
+- 当前方案：
+  1. Core：为 `WorkspaceGitLogViewModel` 增加一次性 graph builder 注入与缓存字段，在 snapshot 更新时同步刷新 `graphVisibleModel / tableRows / preferredGraphWidth`。
+  2. App：`WorkspaceGitIdeaLogTableView` 在 `body` 顶层捕获 `tableRows / graphWidth`，row cell 只消费局部常量；日期 formatter 改为静态实例。
+- 长期建议：
+  1. 若后续 Git log 数据量继续上升，可继续把 decoration badge、current-branch highlight 这类纯展示派生值也下沉到 snapshot/update 阶段，避免继续在 row body 做字符串拆分。
+  2. 后续若再出现“滚动卡”，优先检查 `@Observable` view model 是否把 O(n) 或 O(graph) 派生逻辑暴露成了计算属性，而不是先怀疑 `Table` 或 `Canvas` 本身。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitLogViewModelTests/testGraphVisibleModelIsNotRebuiltForRepeatedTableReads|WorkspaceGitIdeaLogViewTests/testIdeaLogTableCapturesGraphWidthOutsidePerRowCellClosure'` → 初次失败，提示 `WorkspaceGitLogViewModel` 还没有 `graphVisibleModelBuilder` 注入点，且 table 还未把 graphWidth 提前捕获。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceGitLogViewModelTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests|WorkspaceGitViewModelTests'` → 43 tests，0 failures。
+  - 质量：`git diff --check` → 先发现 `tasks/todo.md` EOF 空行；修正后应为 exit 0。
+
+## 2026-03-25 Git Log Table cell inset 补偿修复
+
+- [ ] 复现并确认残余高度来自 Table cell inset，而不是 graph rowHeight 再次不足
+- [ ] 先补 App 红灯测试，锁定 subject cell inset 补偿契约
+- [ ] 实施最小修复并验证
+- [ ] 跑定向验证、质量检查，并在本文件追加 Review
+
+## 2026-03-25 Workspace 外围 Chrome 布局重构
+
+- [x] 写 App 红灯测试，锁定“项目列表外置 + Workspace 外围 chrome + 左右边框按钮区”结构契约
+- [x] 以最小改动拆分 Workspace 根布局，新增外层项目导航容器与 Workspace chrome 容器
+- [x] 调整模式切换与外围按钮分布，保持 Terminal/Git 主链与弹窗/信号接线不回归
+- [x] 同步更新 AGENTS.md，说明新的 Workspace 根布局与模块职责
+- [x] 跑定向验证、完整测试与质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Workspace 外围 Chrome 布局重构）
+
+- 结果：
+  1. 已把 Workspace 拆成“左侧项目导航 + 右侧独立 chrome 工作区”两层，项目列表不再直接挂在 `WorkspaceShellView` 里。
+  2. 新增 `WorkspaceRootView` 负责 split 与导航宽度持久化，`WorkspaceProjectSidebarHostView` 负责 project picker / worktree 对话框，`WorkspaceChromeContainerView` 负责顶部轻量栏与左右 rail。
+  3. `WorkspaceShellView` 已收敛为中央内容区，只保留 Terminal/Git 切换后的内容编排、focused search action、pane 快照与 agent signal 接线。
+  4. `WorkspaceModeSwitcherView` 现在支持横向/纵向两种布局，左侧 chrome rail 使用纵向模式切换；顶部没有引入新的 Git toolbar，右侧则放了系统终端 / 仪表盘 / 设置等辅助入口。
+- 关键实现说明：
+  1. 这次不是修表层 padding，而是把“项目导航属于哪一层”和“Workspace chrome 的真相源在哪里”重新收口。
+  2. 为避免一次性把 Git/terminal 业务按钮全部迁到外围壳，第一版只迁移模式切换，并保留 Git 内部 toolbar 在各自内容区闭环。
+  3. `AppRootView` 继续负责主页/Workspace 可见性切换，但 Workspace 主体已改为挂载 `WorkspaceRootView`。
+- 长期建议：
+  1. 如果后续继续向 IDEA 靠拢，可再逐步把更多 workspace 级通用动作沉到 chrome rail，而不是继续堆回中央内容区。
+  2. 若后续要加入可折叠项目导航，应继续以 `WorkspaceRootView` 作为唯一布局真相源，不要把折叠状态重新分散到 `WorkspaceShellView` 或 sidebar 子视图。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 初次失败，提示缺少 `WorkspaceRootView.swift` / `WorkspaceChromeContainerView.swift`，且 `WorkspaceShellView` 仍然持有 split 与 mode switcher。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 14 tests，0 failures。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceRootViewTests|WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceSidebarLayoutPolicyTests|WorkspaceTerminalCommandsTests|AppRootContentVisibilityPolicyTests|ProjectDetailPanelCloseActionTests|WorkspaceProjectListViewTests'` → 28 tests，0 failures。
+  - 完整：`swift test --package-path macos` → 394 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace Chrome 顶部与右侧内容收缩
+
+- [x] 先补 App 红灯测试，锁定 Workspace chrome 不再渲染 topBar / rightRail，只保留左侧 rail
+- [x] 以最小改动收缩 `WorkspaceChromeContainerView`，删除顶部与右侧内容并清理无用 helper
+- [x] 同步更新 AGENTS.md，说明 chrome 容器的新职责边界
+- [x] 跑定向验证、质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Workspace Chrome 顶部与右侧内容收缩）
+
+- 结果：
+  1. `WorkspaceChromeContainerView` 已从“三边 chrome”收缩为“左侧 rail + 中央内容区”的极简结构。
+  2. 顶部 `topBar` 和右侧 `rightRail` 已删除，相关 project identity / 设置 / 仪表盘 / 系统终端入口也一并从 chrome 容器里移除。
+  3. 外围壳、圆角边框、左侧模式切换 rail 与中央内容区包裹关系保持不变。
+- 直接原因：
+  1. 用户确认当前顶部和最右侧内容都是噪音，不希望在这一版 chrome 中继续占位。
+  2. 之前的 chrome 容器承载了过多“先占位再说”的内容，导致结构虽然出来了，但视觉上不够收敛。
+- 设计层诱因：
+  1. 第一版为了快速建立外围壳，把顶部和右侧都塞入了占位性内容，但这部分没有成为稳定交互主链。
+  2. 未发现新的系统设计缺陷；问题主要是 chrome 容器职责比当前产品需求更宽。
+- 当前方案：
+  1. 仅保留 `leftRail` 与中央 `content()`，删除 `topBar` / `rightRail`。
+  2. 同步删掉不再需要的 project identity / status chip / rail button helper。
+  3. 更新 `AGENTS.md`，将 `WorkspaceChromeContainerView` 职责改为“左侧模式 rail + 中央内容包裹”。
+- 长期建议：
+  1. 后续若要再补功能按钮，优先先确认是否真的属于稳定 chrome 主链，再决定是否回到顶部或右侧，而不要重新引入“临时占位按钮”。
+  2. 如果下一轮还要继续做视觉收敛，可以再评估左侧 rail 宽度、边框留白和内容区 padding，而不是先加回功能块。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceChromeContainerViewTests` → 初次失败，提示仍然存在 `topBar` / `rightRail`，且还保留 `activeWorkspaceProject`、`revealSettings`、`revealDashboard`、`openWorkspaceInTerminal`。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceChromeContainerViewTests` → 3 tests，0 failures。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceRootViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'` → 14 tests，0 failures。
+  - 完整：`swift test --package-path macos` → 394 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace 无外边距与细 rail 收敛
+
+- [x] 先补 App 红灯测试，锁定 Workspace chrome 去掉外边距、left rail 收窄到 IDEA 风格、纵向模式切换改为纯图标
+- [x] 以最小改动收敛 `WorkspaceChromeContainerView` 和 `WorkspaceModeSwitcherView` 的布局尺寸与样式
+- [x] 跑定向验证、完整测试与质量检查，并在本文件追加 Review
+
+## Review（2026-03-25 Workspace 无外边距与细 rail 收敛）
+
+- 结果：
+  1. `WorkspaceChromeContainerView` 已移除最外层 `.padding(10)`，工作区壳不再有外围留白。
+  2. 左侧 rail 已从 84pt 收窄到 48pt，并收紧了 rail 内部 padding / spacing，视觉上更接近 IDEA 的细工具栏。
+  3. `WorkspaceModeSwitcherView` 的纵向样式已改为纯图标：不再显示“终端 / Git”文字，按钮尺寸收敛到 32x32。
+- 直接原因：
+  1. 用户明确要求“不要有边距”，且当前 left rail 过宽、纵向按钮过大，不像 IDEA。
+  2. 上一版纵向模式切换仍沿用了带文字的大卡片按钮，导致左 rail 占宽和视觉重量都偏大。
+- 设计层诱因：
+  1. 上一轮虽然先做出了外围壳，但 rail 的视觉规格没有独立收口，仍直接复用了较重的按钮样式。
+  2. 未发现新的系统设计缺陷；问题集中在 App 层 chrome metrics 仍偏占位式，没有收敛到最终 UI 密度。
+- 当前方案：
+  1. `WorkspaceChromeContainerView` 删除外层 padding，left rail 改为 48pt 宽、较轻背景。
+  2. `WorkspaceModeSwitcherView` 在 `axis == .vertical` 时切换到 icon-only 样式，按钮尺寸 32x32，保留选中态。
+  3. `AGENTS.md` 已补充“不再给 Workspace chrome 外围额外 padding”“不要把 rail 回退成带大标签的大卡片工具栏”的约束。
+- 长期建议：
+  1. 如果继续抠细节，下一步应把 rail 图标的 selected/hover/pressed 态与 IDEA 再对齐，而不是重新加回文字标签。
+  2. 若后续再调 chrome，应把 rail 宽度、图标尺寸、内容区边框留白收口为一组显式 metrics，避免未来被局部 view 各自拉宽。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests'` → 初次失败，提示仍存在 `.padding(10)`、left rail 仍是旧宽度，纵向模式切换仍保留 `multilineTextAlignment` 与 `caption2` 文字样式。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests'` → 11 tests，0 failures。
+  - 定向：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceShellViewTests'` → 16 tests，0 failures。
+  - 完整：`swift test --package-path macos` → 396 tests，5 skipped，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 分析现有改动并执行 git commit
+
+- [x] 检查工作区状态、确认受影响文件与现有任务记录
+- [x] 梳理本轮改动主题并确定提交范围
+- [x] 运行新鲜验证并记录证据
+- [x] 完成 git add / git commit，并追加 Review
+
+## Review（2026-03-25 分析现有改动并执行 git commit）
+
+- 结果：
+  1. 已确认本轮工作区改动主线是 **Workspace 架构重组**：把项目导航外提到 `WorkspaceRootView / WorkspaceProjectSidebarHostView`，把右侧工作区收口为 `WorkspaceChromeContainerView + WorkspaceShellView`。
+  2. 已确认 Git 不再走 `Terminal / Git` 一级主模式，而是通过 `workspaceToolWindowState + workspaceFocusedArea` 作为 bottom tool window 运行时真相源。
+  3. 已确认 `WorkspaceModeSwitcherView.swift` 已删除，Git 入口改为 `WorkspaceChromeContainerView` 内的左侧 stripe，`WorkspaceShellView` 只保留 terminal 主区与 bottom tool window content host。
+  4. 已将当前改动以 `refactor(workspace): separate chrome shell and git tool window` 完成提交。
+- 直接原因：
+  1. 现有改动集中在修正 Workspace 的层级与状态建模：旧实现把项目导航、Workspace chrome、Terminal/Git 一级模式切换都堆在 `WorkspaceShellView`，职责过重且语义已过时。
+  2. Git 面板虽然已经朝 IDEA 风格演进，但“内容停靠底部”和“入口位于 stripe”此前被混成一处，导致入口层级不稳定。
+- 设计层诱因：
+  1. 旧的 `workspacePrimaryMode` 同时承担布局切换、焦点守门与 Git 上下文准备，属于状态职责混叠。
+  2. 项目导航与工作区 chrome 边界不清，使得 `WorkspaceShellView` 长期承担了不该放在中央内容区的外层 UI 责任。
+  3. 本轮提交已针对这些诱因完成重构；未发现新的明显系统设计缺陷。
+- 当前修复方案：
+  1. App 层新增 `WorkspaceRootView`、`WorkspaceProjectSidebarHostView`、`WorkspaceChromeContainerView`，把“项目导航 | 右侧 chrome 工作区”层级显式拆开。
+  2. Core 层以 `WorkspaceToolWindowKind / WorkspaceToolWindowState / WorkspaceFocusedArea` 替代旧的 `WorkspacePrimaryMode`。
+  3. `WorkspaceShellView` 改为 terminal 主区 + bottom tool window host，Git 入口迁到 chrome stripe；相关测试、设计文档、`AGENTS.md` 与 lessons/todo 已同步更新。
+- 长期建议：
+  1. 当前 stripe 仍只接入 `.git`，后续若继续扩展 tool window，建议改成基于 `WorkspaceToolWindowKind.allCases` 的统一渲染，而不是继续点状硬编码。
+  2. `workspaceToolWindowState.height` 已存在，但当前提交尚未引入完整拖拽高度调节 UI；下一轮若继续贴近 IDEA，可优先补齐可视化 resize 交互。
+  3. `tasks/todo.md` 已出现下一轮“IDEA Git 左右侧区域 1:1 复刻设计”占位任务，建议在新任务中独立推进，避免继续把设计探索与当前重构提交混在一起。
+- 验证证据：
+  - `swift test --package-path macos` → 397 tests，5 skipped，0 failures。
+  - `git diff --cached --check` → exit 0。
+  - `git commit -m "refactor(workspace): separate chrome shell and git tool window"` → 提交成功。
+
+
+## 2026-03-25 IDEA Git 左右侧区域 1:1 复刻设计
+
+- [x] 探索当前 DevHaven Git log 布局、相关测试、既有任务记录与最近提交
+- [x] 向用户确认这轮要优先对齐的范围与成功标准（已确认为 `.log` section 的左侧 branches panel 与右侧 details/changes/diff 联动区）
+- [x] 向用户确认左侧 branches panel 需按 IDEA 方式支持可展开 / 可收起（已确认为 A 方案）
+- [x] 提出 2-3 个可行方案并给出推荐（已推荐“外壳先对齐 IDEA MainFrame”方案）
+- [x] 输出分段设计并等待用户确认（用户授权直接推进，无需逐段确认）
+- [x] 设计确认后写入 docs/plans/2026-03-25-idea-git-side-panels-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 IDEA Git 左右侧区域 1:1 复刻实现
+
+- [x] Task 1：补红灯测试，锁定 `.log` 左侧 branches panel 与右侧 detail panes 契约
+- [x] Task 2：实现左侧可展开 / 可收起 branches panel，并收口 toolbar 职责
+- [x] Task 3：收紧右侧 changes / details / diff 面板结构与展示
+- [x] Task 4：更新 AGENTS.md / docs / tasks，并完成验证与 Review
+
+
+## Review（2026-03-25 IDEA Git 左右侧区域 1:1 复刻实现）
+
+- 结果：
+  1. `.log` 左侧已新增独立 `WorkspaceGitIdeaLogBranchesPanelView`，支持 **可展开 / 可收起**、搜索、本地 / 远端 / 标签分组与 revision filter 选择。
+  2. `WorkspaceGitIdeaLogView` 已改成 `左侧 control strip + 可选 branches panel + 右侧 main content` 结构，中间 commit table / graph 主链保持不变。
+  3. `WorkspaceGitIdeaLogToolbarView` 已移除旧的 branch filter menu，只保留 search / author / date / path / details / diff preview / refresh，branch filter 主入口已收口到左侧 panel。
+  4. `WorkspaceGitIdeaLogChangesView`、`WorkspaceGitIdeaLogDetailsView`、`WorkspaceGitIdeaLogDiffPreviewView` 已收紧为更接近 IDEA 的 pane header + 紧凑内容分区结构；右侧仍沿用现有 commit -> file -> diff 联动主链。
+  5. 已同步更新 `AGENTS.md`、设计文档与实现计划，补齐 `.log` 左右侧职责边界。
+- 直接原因：
+  1. 之前 `.log` 重点放在中间 log table / graph 1:1，对左侧 branches dashboard panel 只做了“顶部 branch menu”降级替代，导致视觉和交互都与 IDEA 偏差很大。
+  2. 右侧 details / changes / diff 虽然数据已通，但仍保留较重的自定义面板样式，缺少 IDEA 那种 pane header + metadata sections 的密度与层级。
+- 设计层诱因：
+  1. 前几轮标准 IDEA Log 实现优先解决了 graph、table、bottom pane 数据主链，左右两侧被保留为 MVP 形态，职责分布因此失衡。
+  2. branch filter 入口之前被放在 toolbar，导致“左侧结构缺失”被一个菜单临时顶替；这不是数据能力缺失，而是 App 层容器职责没有完全对齐 IDEA MainFrame。
+  3. 当前未发现新的明显系统设计缺陷；本轮主要是把 `.log` 左右侧容器和职责重新收口到更合理的位置。
+- 当前方案：
+  1. App：新增 `WorkspaceGitIdeaLogBranchesPanelView.swift`，专职承接 `.log` 左侧分支树搜索、分组与 revision filter 选择。
+  2. App：`WorkspaceGitIdeaLogView.swift` 引入 branches control strip 与可选左侧 panel，`.log` 外壳不再只有 toolbar + table/bottom pane。
+  3. App：`WorkspaceGitIdeaLogToolbarView.swift` 删除 branch filter menu，把顶部职责收敛到 text/author/date/path 过滤与 preview controls。
+  4. App：`WorkspaceGitIdeaLogChangesView.swift`、`WorkspaceGitIdeaLogDetailsView.swift`、`WorkspaceGitIdeaLogDiffPreviewView.swift` 改为更紧凑的 pane header / metadata / preview container 结构。
+  5. 文档：`AGENTS.md`、`docs/plans/2026-03-25-idea-git-side-panels-design.md`、`docs/plans/2026-03-25-idea-git-side-panels.md` 已同步更新。
+- 长期建议：
+  1. 如果继续向 IntelliJ 的 branch dashboard 靠拢，下一轮可补“按选择过滤 / 导航模式切换”“更多 branch actions”“收藏/分组”等行为，而不是继续堆样式细节。
+  2. 右侧 details pane 当前已对齐到更紧凑的信息架构，但 refs 仍来自 decorations 字符串拆分；若后续要进一步 1:1，可考虑在 Core 层提供结构化 refs 展示模型。
+  3. branches panel 的展开态和宽度目前是 `.log` 视图局部状态；若用户后续明确要求跨会话记忆，再单独评估是否值得持久化，不要提前把运行时 UI 状态塞进 restore snapshot。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，明确提示缺少 `WorkspaceGitIdeaLogBranchesPanelView.swift`、`branchesControlStrip`、旧 `branchFilterMenu` 未移除，以及右侧 pane 仍缺少新的 header / section 结构。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 14 tests，0 failures。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests'` → 21 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Git 左右侧区域视觉抛光（二轮）设计
+
+- [x] 复盘上一轮 `.log` 左右侧实现、当前源码与 IDEA 参考实现
+- [x] 在不再打断用户的前提下收敛本轮抛光范围（左侧 filter 标题/分组信息、右侧 refs/changes 信息密度）
+- [x] 产出本轮设计并落盘到 docs/plans/2026-03-25-idea-git-side-panels-polish-design.md
+- [x] 产出实现计划并落盘到 docs/plans/2026-03-25-idea-git-side-panels-polish.md
+
+## 2026-03-25 IDEA Git 左右侧区域视觉抛光（二轮）实现
+
+- [x] Task 1：补红灯测试，锁定 branches header、changes 路径层级与 refs badge 契约
+- [x] Task 2：抛光左侧 branches panel 的标题与分组信息密度
+- [x] Task 3：抛光 changes/details 的路径与 refs 展示语义
+- [x] Task 4：更新文档、验证并回填 Review
+
+
+## Review（2026-03-25 IDEA Git 左右侧区域视觉抛光：二轮）
+
+- 结果：
+  1. `WorkspaceGitIdeaLogBranchesPanelView` 的 header 已从原始 `refs/...` 字符串切换为友好 `selectedRevisionTitle`，本地 / 远端 / 标签分组也补齐了计数信息。
+  2. `WorkspaceGitIdeaLogChangesView` 已改为更接近 IDE 的“文件名主标题 + 路径/rename 次信息”结构，不再把完整路径整条塞进主文本。
+  3. `WorkspaceGitIdeaLogDetailsView` 已把 decorations 拆成 branch/HEAD 与 tag 两类 badge，并使用不同样式，Refs 语义比上一轮更接近 IDEA `ReferencesPanel`。
+  4. 已同步更新 AGENTS.md、二轮设计与实现计划，并把验证证据回填到 `tasks/todo.md`。
+- 直接原因：
+  1. 上一轮已经把左右两侧结构搭对了，但细节仍停留在“能用”的 MVP 级别：左侧 header 直接透出 raw ref path，右侧 changes/details 仍缺少 IDE 常见的信息分层。
+  2. 这些差距不会阻断功能，却会显著影响观感与扫描效率，因此适合用纯 App 层抛光解决。
+- 设计层诱因：
+  1. 前一轮的重点是先把 `.log` 左右两侧容器位置与职责纠正回来，而不是一次性把所有信息密度细节做到位。
+  2. 当前 refs 在 Core 层仍是 decorations 文本，App 层只能做轻量解析；因此本轮选择“语义抛光，不扩底层协议”，避免过早改动读取模型。
+  3. 未发现新的明显系统设计缺陷；本轮仍属于 App 层表现语义收敛。
+- 当前方案：
+  1. 左侧：新增 `selectedRevisionTitle` 与 `groupHeader(title:count:)`，统一 revision 标题与分组计数展示。
+  2. Changes：新增 `primaryFileName(for:)` 与 `secondaryPathSubtitle(for:)`，把文件名与父路径/rename 来源拆层显示。
+  3. Details：新增 `branchReferenceItems`、`tagReferenceItems`、`ReferenceBadgeStyle` 与 `referenceBadge(...)`，区分 branch/HEAD 与 tag 的 badge 语义。
+  4. 文档：已同步更新 `AGENTS.md`、`docs/plans/2026-03-25-idea-git-side-panels-polish-design.md`、`docs/plans/2026-03-25-idea-git-side-panels-polish.md`。
+- 长期建议：
+  1. 如果继续往 IntelliJ `Branches Dashboard` 靠拢，下一轮优先考虑的是 branch actions / selection mode，而不是继续堆 header 文案细节。
+  2. 如果要把 refs badge 做到更高保真，建议后续在 Core 层提供结构化 refs 模型，而不是长期依赖 decorations 字符串解析。
+  3. Changes browser 目前仍是线性列表；若后续追求更像 IDEA，可再评估目录树分组、批量展开/折叠与 richer status 图标体系。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，明确指向缺少 `selectedRevisionTitle`、`groupHeader`、`primaryFileName`、`secondaryPathSubtitle`、`branchReferenceItems`、`tagReferenceItems` 与 `referenceBadge` 等新契约。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 17 tests，0 failures。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests'` → 24 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Workspace Tool Window 高度拖拽修复
+
+- [x] 排查 tool window 高度无法拖拽的现状、现有状态模型与相关测试
+- [x] 补红灯测试，锁定 bottom tool window 必须通过可拖拽 split 接入 `updateWorkspaceToolWindowHeight(...)`
+- [x] 以最小改动修复 `WorkspaceShellView` 的高度拖拽主链
+- [x] 更新任务记录并完成验证 / Review
+
+
+## Review（2026-03-25 Workspace Tool Window 高度拖拽修复）
+
+- 结果：
+  1. `WorkspaceShellView` 已不再用固定 `.frame(height: workspaceToolWindowState.height)` 直接挂底部 tool window，而是改为 `WorkspaceSplitView(direction: .vertical, ...)` 承接 terminal 主区与 bottom tool window。
+  2. bottom tool window 的拖拽会实时调用 `NativeAppViewModel.updateWorkspaceToolWindowHeight(...)`，高度真相源重新被真正消费。
+  3. 双击分隔线时会把高度重置到 `WorkspaceToolWindowState.defaultHeight`，与现有 split 组件的 equalize 语义保持一致。
+  4. 已同步更新 `WorkspaceShellViewGitModeTests`、`AGENTS.md` 与本任务记录。
+- 直接原因：
+  1. `NativeAppViewModel` 和 `WorkspaceToolWindowState` 早已有 `height / lastExpandedHeight / updateWorkspaceToolWindowHeight(...)` 运行时模型，但 `WorkspaceShellView` 只是把底部 tool window 包在固定 `.frame(height: ...)` 里展示。
+  2. 也就是说，**高度状态存在，但没有任何拖拽 UI 或 split 组件把用户操作接回这个状态**，所以表现上就是“不能拖动改高度”。
+- 设计层诱因：
+  1. 之前实现 bottom tool window 时，先完成了“terminal 主区 + 底部面板”的结构切换，但把“高度可拖拽”留成了后续事项，导致状态模型和 UI 宿主职责断开。
+  2. 仓库里已经有可复用的 `WorkspaceSplitView` 与 `updateWorkspaceToolWindowHeight(...)`，问题不是缺少能力，而是 `WorkspaceShellView` 没把两者接起来。
+  3. 当前未发现新的明显系统设计缺陷；本轮属于把既有状态模型与现有 split 组件重新接线。
+- 当前修复方案：
+  1. 在 `WorkspaceShellView` 中，当 bottom tool window 可见时改为走 `WorkspaceSplitView(direction: .vertical, ...)`。
+  2. 通过 `toolWindowSplitRatio(totalHeight:)` 把 runtime height 真相源换算成 split ratio。
+  3. 通过 `toolWindowHeight(for:totalHeight:)` 把拖拽 ratio 反算成高度，并写回 `updateWorkspaceToolWindowHeight(...)`。
+  4. 保留 tool window 空态路由、focused area 行为与 stripe 入口逻辑不变，只修高度拖拽主链。
+- 长期建议：
+  1. 当前 `WorkspaceToolWindowState.height` 的最小值在 ViewModel 层是 160，但极小窗口下 UI 仍会按可用高度自适应压缩；若后续继续细抠体验，可考虑把“最小 terminal 高度 / 最小 tool window 高度”收口成显式 layout policy。
+  2. 如果未来增加第二个 bottom tool window，继续复用当前这套 `height <-> split ratio` 换算，不要再回到某个具体 tool window 自己维护局部拖拽状态。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceShellViewGitModeTests` → 初次失败，明确指出缺少 `WorkspaceSplitView(direction: .vertical)`、`updateWorkspaceToolWindowHeight(...)`、`toolWindowSplitRatio(...)`，且仍存在固定 `.frame(height: CGFloat(viewModel.workspaceToolWindowState.height))`。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceShellViewGitModeTests` → 6 tests，0 failures。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 13 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Log 右侧信息栏回归与错误底部面板删除
+
+- [x] 对照用户截图、现有 `.log` 布局与相关测试，确认偏差属于主信息架构错误而非单一控件样式问题
+- [x] 补红灯测试，锁定 `.log` 应为 `左侧 branches | 中间 log table | 右侧信息栏`，并删除底部 changes/details/diff preview 结构
+- [x] 以最小改动重构 `.log` 主容器与 toolbar，接回右侧信息栏
+- [x] 同步更新 AGENTS.md / docs / tasks，并完成验证与 Review
+
+
+## Review（2026-03-25 IDEA Log 右侧信息栏回归与错误底部面板删除）
+
+- 结果：
+  1. `.log` 主结构已从错误的“底部 changes/details/diff preview”改为更接近 IDEA 截图的 `左侧 branches | 中间 log table | 最右侧信息栏`。
+  2. 已新增 `WorkspaceGitIdeaLogRightSidebarView.swift`，在右侧用纵向 split 承接 `WorkspaceGitIdeaLogChangesView` 与 `WorkspaceGitIdeaLogDetailsView`。
+  3. `WorkspaceGitIdeaLogToolbarView` 已移除旧的 details / diff preview toggle；toolbar 现在只负责过滤与刷新。
+  4. `WorkspaceGitIdeaLogBottomPaneView.swift` 与 `WorkspaceGitIdeaLogDiffPreviewView.swift` 已从源码中删除，避免错误布局继续作为遗留实现存在。
+  5. 已同步更新 `AGENTS.md`、设计 / 实现计划与任务记录。
+- 直接原因：
+  1. 之前 `.log` 的右侧信息架构判断错了，把 `changes / details / diff preview` 误建模成“表格下方的底部 pane”，而用户截图明确表明这些信息应当收口在最右侧信息栏。
+  2. 这不是单个组件样式问题，而是主布局层级理解错误，导致即使 changes/details 内容能显示，整体仍然和 IDEA 偏差很大。
+- 设计层诱因：
+  1. 早期实现沿用了“bottom pane + diff preview”这套假设，并逐步在这个错误壳子上打磨细节，因此越做越偏。
+  2. 当前右侧缺失并不是数据没打通，而是 `WorkspaceGitIdeaLogView` 容器职责错误；`changes` 和 `details` 组件本身可以复用，但必须挂到正确的右侧 sidebar 上。
+  3. 当前未发现新的明显系统设计缺陷；本轮核心是纠正 `.log` 主布局真相源。
+- 当前方案：
+  1. 新增 `WorkspaceGitIdeaLogRightSidebarView.swift`，负责右侧信息栏的纵向 split。
+  2. 重构 `WorkspaceGitIdeaLogView.swift`，将 `.log` 主链改成 `table + right sidebar`，移除旧 bottom pane / diff preview 路由。
+  3. 更新 `WorkspaceGitIdeaLogToolbarView.swift`，删除 details / diff preview 开关，只保留 author/date/path/search/filter 与刷新。
+  4. 删除 `WorkspaceGitIdeaLogBottomPaneView.swift` 与 `WorkspaceGitIdeaLogDiffPreviewView.swift` 两个错误的遗留壳层文件。
+- 长期建议：
+  1. 右侧 sidebar 目前已经回到正确位置，后续若继续对齐 IDEA，可进一步抠 changes tree 的目录层级与 commit details 的信息密度，而不是再回到底部 pane 思路。
+  2. `WorkspaceGitLogViewModel` 当前仍保留旧的 `displayOptions` 与 file diff 加载链路；若后续确认右侧不再需要独立 diff preview，可以评估清理这些已经失去 UI 宿主的状态与读取逻辑。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，明确指出缺少 `WorkspaceGitIdeaLogRightSidebarView`、toolbar 仍保留 `toggleDetails/toggleDiffPreview`，且 `.log` 主链仍引用 `WorkspaceGitIdeaLogBottomPaneView` / `WorkspaceGitIdeaLogDiffPreviewView`。
+  - 绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 17 tests，0 failures。
+  - 定向验证：`swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests'` → 24 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 汇总 IDEA Git Log 对齐改动并提交
+
+- [x] 汇总当前工作区改动范围与验证证据
+- [x] 选择提交说明并执行 git add / git commit
+- [x] 在本文件追加提交 Review 与提交哈希
+
+
+## Review（2026-03-25 汇总 IDEA Git Log 对齐改动并提交）
+
+- 提交说明：`feat(git): align idea log layout and tool window resize`
+- 提交哈希：当前 HEAD（本次提交经 amend 后以 `git rev-parse --short HEAD` 为准）
+- 提交范围：
+  1. 标准 IDEA Log 左侧 branches panel、右侧信息栏与相关抛光；
+  2. 删除错误的底部 changes/details/diff preview 主链；
+  3. 修复 workspace bottom tool window 高度可拖拽；
+  4. 同步更新 AGENTS.md、设计文档与任务记录。
+- 提交前验证证据：
+  - `swift test --package-path macos --filter 'WorkspaceGitIdeaLogViewTests|WorkspaceGitRootViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 37 tests，0 failures。
+  - `git diff --check` → exit 0。
+- 结果：提交成功，当前本地提交已更新为当前 HEAD。
+
+## 2026-03-25 IDEA Git 布局 1:1 复刻设计（新一轮）
+
+- [x] 探索当前 DevHaven Git Log 布局、既有设计文档、最近提交与 IntelliJ 参考源码
+- [x] 向用户确认“1:1 复刻”的优先级边界（已确认为结构和交互最重要，视觉细节可后续补抠）
+- [x] 提出 2-3 个可行方案并给出推荐（已基于 IntelliJ MainFrame / BranchesInGitLog 结构给出推荐方案）
+- [x] 输出分段设计并等待用户确认
+- [x] 设计确认后写入 docs/plans/2026-03-25-idea-git-layout-1to1-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 IDEA Git 布局 1:1 复刻实现
+
+- [x] Task 1：先补红灯测试，锁定 Git / Log / Console 顶层结构与 IDEA Log MainFrame 归属
+- [x] Task 2：实现 Git 工具窗顶层 tab strip 与 Console 占位路由
+- [x] Task 3：重排 IDEA Log 外壳为 branches stripe + panel + MainFrame
+- [x] Task 4：更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 IDEA Git 布局 1:1 复刻实现）
+
+- 结果：
+  1. 已在 `WorkspaceGitRootView` 顶部补齐 IntelliJ 风格的 `Git / Log / Console` 顶层 tab strip。
+  2. `Log` 顶层 tab 现在继续挂载标准 IDEA Log，但结构已改为 `branches stripe + branches panel + MainFrame`，其中 toolbar 收口到 MainFrame 左列，而不是整页最顶层通栏。
+  3. `Git` 顶层 tab 继续复用现有 `changes / branches / operations` 主链，但二级 toolbar 已去掉 `.log` 入口与旧 log filter，只保留 section 切换与刷新。
+  4. 新增 `WorkspaceGitConsoleView` 作为 Console 顶层占位视图，先对齐 IDEA 根级结构，不引入新的 Git Console 后端。
+  5. 已同步更新 `AGENTS.md`、设计文档与实现计划文档。
+- 直接原因：
+  1. 当前 DevHaven 之前只复刻到了 `.log` 内部的左右侧结构，但根级 Git 工具窗仍缺少 IDEA 截图里最显眼的 `Git / Log / Console` 顶层层级。
+  2. 同时 `.log` 的 toolbar 仍挂在整页最上方，而 IntelliJ `MainFrame` 的真实结构是“toolbar 只属于左侧 table 列”。
+- 设计层诱因：
+  1. 之前把“Git 根级工具窗结构”和“`.log` 内部结构”分开推进，导致 `.log` 内部越来越像 IDEA，但根级仍保留旧 section-driven 心智。
+  2. toolbar 的归属也被过度简化成“整个 `.log` 页面的 header”，而不是 MainFrame 左列的一部分。
+  3. 当前未发现新的明显系统设计缺陷；本轮主要是把根层级与 MainFrame 归属重新拉回正确位置。
+- 当前修复方案：
+  1. `WorkspaceGitRootView` 新增 App-only 顶层 tab 状态，负责 `Git / Log / Console` 根级切换。
+  2. `WorkspaceGitToolbarView` 改为只服务 `Git` 顶层 tab 下的 `changes / branches / operations`。
+  3. `WorkspaceGitIdeaLogView` 重排为 `branchesControlStrip + branchesPanel + mainFrameContent`，并新增 `mainFramePrimaryColumn` 收口 toolbar + error banner + table。
+  4. 新增 `WorkspaceGitConsoleView` 占位视图，并更新 `AGENTS.md` 记录新的目录职责。
+- 长期建议：
+  1. 当前 `Console` 仍是结构占位；后续若继续对齐 IDEA，可再评估真实 Git command console 数据链路。
+  2. 顶层 tab strip 当前优先锁结构和交互，视觉上仍可继续抠 padding、hover、选中下划线和字体节奏。
+  3. branches stripe 当前仍是轻量 chevron/icon 版本；后续若继续做 1:1，可再参考 IntelliJ 的 `ExpandStripeButton` 做更接近的折叠态视觉。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 初次失败，命中“缺少顶层 Git / Log / Console tab strip”和“toolbar 仍在页面顶层”断言。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 22 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 39 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Git 布局验收纠偏（二轮）
+
+- [x] 复查用户指出的两处偏差（左上 Git 不应可点；Changes 应为树形结构）并对照 IntelliJ 参考实现定位根因
+- [x] 向用户确认“Changes 区域需要对齐的具体小操作”范围（已确认为结构优先：树形容器 + 顶部小操作布局/入口先对齐）
+- [x] 提出 2-3 个修正方案并给出推荐（推荐先做标题不可点 + tree changes browser + toolbar 布局到位）
+- [x] 输出修正版设计并等待用户确认
+- [x] 设计确认后写入 docs/plans/2026-03-25-idea-git-layout-acceptance-polish-design.md
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 IDEA Git 布局验收纠偏（二轮）实现
+
+- [x] Task 1：先补红灯测试，锁定 Git 标题不可点与 Changes tree browser 结构
+- [x] Task 2：把 Git 顶部从按钮改成标题，并保留 Log / Console 次级入口
+- [x] Task 3：把 Changes 改成 tree changes browser，并补齐顶部 toolbar 布局
+- [x] Task 4：跑验证、必要时更新 AGENTS.md，并回填 Review
+
+## Review（2026-03-25 IDEA Git 布局验收纠偏（二轮）实现）
+
+- 结果：
+  1. 已把 `WorkspaceGitRootView` 顶部从“`Git / Log / Console` 三个等权按钮”收敛为“`Git` 不可点击标题 + `Log / Console` 次级入口”。
+  2. 为避免进入 `Log / Console` 后无法回到 Git 主内容，当前实现允许再次点击已选中的 `Log` 或 `Console` 返回 Git 主内容；这是本轮在“Git 标题不可点击”约束下的最小回跳方案。
+  3. `WorkspaceGitIdeaLogChangesView` 已从扁平 `List(detail.files)` 改为带目录节点的 tree changes browser，文件节点继续复用现有主文件名 / 次路径 / status 展示 helper。
+  4. `Changes` 顶部已补齐一排结构优先的 toolbar 小操作入口，当前先对齐布局和入口位置，具体动作后续再逐项补齐。
+  5. 已同步更新 `AGENTS.md`、设计/实现文档与任务记录，并把本轮经验写入 `tasks/lessons.md`。
+- 直接原因：
+  1. 上一轮把根级 `Git` 错建成了可点击等权 tab，偏离了 IDEA 的“工具窗标题 + 次级内容入口”心智。
+  2. 同时 `Changes` 仍停留在扁平文件列表，没有体现 IDEA changes browser 的树形容器与 toolbar 结构。
+- 设计层诱因：
+  1. 之前的实现过度优先了“能切内容”，把 Git 根部标题误建成导航入口，而没有先锁定 IDEA 工具窗标题与内容 tab 的层级差异。
+  2. 右侧 `Changes` 也被简化成“文件列表视图”，缺少 changes browser 作为独立子系统的容器心智。
+  3. 当前未发现新的明显系统设计缺陷；这轮主要是在已有 Log 主链之上把根层级与 changes browser 容器重新拉回正确方向。
+- 当前修复方案：
+  1. `WorkspaceGitRootView` 引入 `gitToolWindowTitle`，移除 `topTabButton(.git)`，只保留 `Log / Console` 次级入口。
+  2. `WorkspaceGitIdeaLogChangesView` 新增 `changesBrowserToolbar` 与 `toolbarButton(...)` helper。
+  3. `WorkspaceGitIdeaLogChangesView` 新增 `ChangeTreeNode / ChangeTreeBuilder`，把提交文件按目录层级构造成树。
+  4. 文件节点仍保留 `primaryFileName / secondaryPathSubtitle / icon / color` 等已有 helper，避免在结构修正时顺带重写文件文案逻辑。
+- 长期建议：
+  1. 当前 `Log / Console` 的“再次点击返回 Git”是为满足不可点击标题约束而做的最小回跳策略；后续若继续做 1:1，可再结合 IDEA 实际 tab 行为决定是否改成更接近原生 content tabs 的模型。
+  2. 当前 changes toolbar 仅对齐布局和入口；后续可按用户下一轮验收逐个接通真实动作。
+  3. 当前 tree changes browser 以目录层级为第一阶段结构；若后续要继续贴近 IDEA merge commit 体验，可再引入 parent / group 节点语义。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 初次失败，命中“Git 仍是按钮”和“Changes 仍是扁平列表/缺少 toolbar”断言。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests'` → 23 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 40 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Git Changes tree 展开/折叠控制设计
+
+- [x] 复查当前 Changes tree 结构与用户新增反馈，定位缺少全局展开/折叠入口
+- [x] 向用户确认展开/折叠控制的目标形态（已确认为 Changes 顶部 toolbar 的全局展开 / 全局折叠）
+- [x] 提出可行方案并给出推荐（推荐先做 toolbar 级全局展开 / 全局折叠，不在目录节点旁新增局部按钮）
+- [x] 输出修正版设计并等待用户确认
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 IDEA Git Changes tree 展开/折叠控制实现
+
+- [x] Task 1：先补红灯测试，锁定 toolbar 级展开全部 / 折叠全部控制
+- [x] Task 2：为 Changes tree 引入统一展开状态与全局控制 helper
+- [x] Task 3：跑验证并回填 Review
+
+## Review（2026-03-25 IDEA Git Changes tree 展开/折叠控制实现）
+
+- 结果：
+  1. 已为 `WorkspaceGitIdeaLogChangesView` 增加 `expandedDirectoryIDs`，作为当前 changes browser 的统一目录展开状态真相源。
+  2. `Changes` 顶部 toolbar 现已新增“展开全部 / 折叠全部”入口，并能真正控制当前目录树的整体展开与收起。
+  3. 主体树渲染已从无法程序化控制的 `OutlineGroup` 切换到显式递归 `DisclosureGroup`。
+  4. 当新的 commit detail 加载完成时，当前目录树会默认展开，避免用户首次进入树浏览器还要逐层手动点开。
+- 直接原因：
+  1. 上一轮虽然把 `Changes` 区域改成了 tree browser，但仍缺少 browser 级的全局展开/折叠控制，用户仍然会觉得它不像完整的 changes browser。
+  2. 根因在于当时使用了 `OutlineGroup` 快速搭树，它适合静态树展示，但不适合这轮需要的程序化 expand/collapse 控制。
+- 设计层诱因：
+  1. 在第一阶段只优先把“树结构”做出来时，遗漏了树浏览器的另一半心智：**树控制入口**。
+  2. 这说明对 browser 类 UI，不能只补内容层级，还要同步检查是否缺失常见的全局控制能力。
+  3. 当前未发现新的明显系统设计缺陷；本轮主要是把 changes browser 从“有树”补到“可控的树”。
+- 当前修复方案：
+  1. 新增 `expandedDirectoryIDs` 与 `lastExpandedTreeSignature`。
+  2. 新增 `expandAllDirectories` / `collapseAllDirectories` / `allDirectoryIDs` / `syncExpandedDirectoriesIfNeeded` helper。
+  3. 把目录节点渲染改为 `DisclosureGroup(isExpanded: expansionBinding(...))`。
+  4. 在 toolbar 中补入“展开全部 / 折叠全部”按钮，同时保留其它结构优先的小操作入口。
+- 长期建议：
+  1. 当前全局展开/折叠满足 browser 级控制需求；后续若继续对齐 IDEA，可再评估是否要补“记住单个目录展开态”的更细粒度体验。
+  2. 当前其它 toolbar 图标仍主要是结构占位，后续可按验收继续逐项接通真实行为。
+  3. 若后续继续增强 merge commit changes browser，可在现有 `expandedDirectoryIDs` 基础上扩展 parent/group 级节点控制，而不必重写整棵树。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，命中“缺少 expandedDirectoryIDs / expandAllDirectories / collapseAllDirectories / DisclosureGroup”断言。
+  - 定向绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 20 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 41 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 IDEA Git Changes tree 展开/折叠图标纠偏
+
+- [x] Task 1：先补红灯测试，锁定“展开全部 / 折叠全部”与具体 icon 的正确映射
+- [x] Task 2：修正 Changes toolbar 中展开/折叠按钮的 symbol 映射
+- [x] Task 3：跑定向验证、质量检查，并回填 Review / lessons
+
+## Review（2026-03-25 IDEA Git Changes tree 展开/折叠图标纠偏）
+
+- 结果：
+  1. 已把 `WorkspaceGitIdeaLogChangesView` 中“展开全部 / 折叠全部”两个 toolbar icon 的映射纠正回来。
+  2. 已新增 `WorkspaceGitIdeaLogViewTests.testIdeaLogChangesViewMapsExpandCollapseIconsToCorrectSemanticDirection()`，锁定“展开全部 = 向外发散 icon；折叠全部 = 向中心收拢 icon”的源码映射。
+  3. 当前 Changes tree 的全局展开 / 折叠行为本身未变，只修正了按钮语义与视觉提示的一致性。
+- 直接原因：
+  1. 上一轮实现时把 `arrow.down.forward.and.arrow.up.backward` 和 `arrow.up.left.and.arrow.down.right` 的视觉语义看反了。
+  2. 实际渲染后，前者是**向中心收拢**，后者才是**从中心向外发散**，因此“展开全部 / 折叠全部”标题与图标发生了反绑。
+- 设计层诱因：
+  1. 这次 toolbar 使用的是 icon-only 入口，如果没有额外校验，很容易仅凭 symbol 名称脑补方向语义。
+  2. 同时之前的测试只锁定“有展开/折叠入口”，没有继续锁定“入口标题与 icon 语义一致”，所以这个错误能通过前一轮验证。
+  3. 未发现明显系统设计缺陷；本轮主要是补齐 icon-only 交互里缺失的语义校验。
+- 当前修复方案：
+  1. 交换 `WorkspaceGitIdeaLogChangesView` 中“展开全部 / 折叠全部”两个 `systemImage` 的映射。
+  2. 新增 source-based 测试，明确约束正确的 title -> symbol 对应关系。
+- 长期建议：
+  1. 对 icon-only toolbar，后续每次补新入口时都应同时锁定“标题 / 行为 / symbol”三者映射，而不只测“按钮存在”。
+  2. 遇到 SF Symbols 这类名字容易误导方向语义的符号，优先做一次实际渲染确认，不要只凭名称判断。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 初次失败，命中“展开全部 / 折叠全部”icon 映射断言。
+  - 定向绿灯：`swift test --package-path macos --filter WorkspaceGitIdeaLogViewTests` → 21 tests，0 failures。
+  - 扩大验证：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceGitIdeaLogViewTests|WorkspaceGitLogViewModelTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceChromeContainerViewTests'` → 42 tests，0 failures。
+  - 质量：`git diff --check` → exit 0。
+
+## 2026-03-25 Commit 工具窗入口位置细化设计
+
+- [x] 探索当前 Commit 按钮、左侧 stripe 与 Commit 面板实现、相关测试及最近变更
+- [x] 向用户确认 Commit 应按 IDEA 语义改为左侧独立 tool window（已确认为 A：真正对齐 IDEA）
+- [x] 提出 2-3 个入口/停靠布局方案并给出推荐（已确认采用 A：Commit 左侧独立 tool window）
+- [x] 输出细化设计并等待用户确认
+- [x] 设计确认后再进入实现计划
+
+## 2026-03-25 Commit 左侧独立 Tool Window 实现（按 IDEA 语义）
+
+- [x] Task 1：补红灯测试，锁定 Commit 为左侧独立 tool window、Git 仍为底部 tool window 的状态与布局契约
+- [x] Task 2：拆分 workspace tool window 运行时状态为 side/bottom 两套模型与焦点语义
+- [x] Task 3：改造 WorkspaceChromeContainerView，引入 Commit side host 与可拖拽宽度
+- [x] Task 4：收窄 WorkspaceShellView 为 terminal + bottom Git，迁移 Commit 挂载
+- [x] Task 5：更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 Commit 左侧独立 Tool Window 实现）
+
+- 结果：
+  1. `Commit` 已从 `WorkspaceShellView` 的底部工具窗路由中拆出，改为 `WorkspaceCommitSideToolWindowHostView -> WorkspaceCommitRootView` 的左侧独立 tool window 主链，对齐 IDEA 的 `Commit@left / Git@bottom` 语义。
+  2. `WorkspaceChromeContainerView` 已从 `stripe | 主内容区` 升级为 `stripe | Commit 侧边工具窗（可选） | 主内容区`，并通过横向 `WorkspaceSplitView` 支持侧边宽度拖拽。
+  3. `WorkspaceShellView` 已收窄为 terminal 主区 + Git 专属 bottom tool window host，不再承载 Commit 底部路由；底部点击焦点也改为 `.bottomToolWindow(.git)`。
+  4. `WorkspaceGitModels` / `NativeAppViewModel` 已把单一 `workspaceToolWindowState` 拆分为 `workspaceSideToolWindowState` 与 `workspaceBottomToolWindowState`，并把 `workspaceFocusedArea` 升级为 `terminal / sideToolWindow / bottomToolWindow` 三态。
+  5. `AGENTS.md` 已同步更新：补充 `WorkspaceCommitSideToolWindowHostView.swift` 条目，并把 Workspace chrome / Shell / ViewModel 的职责改写为“Commit 左侧独立、Git 底部保留”的新架构。
+- 关键理由：
+  1. IntelliJ Community 源码已明确把 `Commit` 注册为 `anchor="left"`，而 `Version Control` 注册为 `anchor="bottom"`；继续把 Commit 塞在底部只是“按钮像 IDEA”，语义仍然不对。
+  2. 现有 `workspaceToolWindowState` 只能表达“一个底部工具窗”，无法同时稳定表达“左侧 Commit + 底部 Git”并存场景，因此必须先拆状态模型，再迁挂载位置。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitViewModelTests'`（41 tests, 28 failures；核心失败包括缺少 `WorkspaceCommitSideToolWindowHostView.swift`、Chrome 未挂 side host、Shell 仍保留 commit bottom route、Core 仍只有单一 tool window state）。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitViewModelTests|WorkspaceCommitViewModelTests'`（51 tests, 0 failures）。
+  - 扩大回归：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceCommitRootViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceRootViewTests|WorkspaceTerminalCommandsTests|WorkspaceGitViewModelTests|WorkspaceCommitViewModelTests'`（60 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Commit 工具窗移除 Diff Preview
+
+- [x] Task 1：补红灯测试，锁定 Commit 根容器不再挂载 Diff Preview 分区
+- [x] Task 2：以最小改动移除 Commit 左侧工具窗中的 Diff Preview 布局接线
+- [x] Task 3：同步更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 Commit 工具窗移除 Diff Preview）
+
+- 结果：
+  1. `WorkspaceCommitRootView` 已从 `changes browser | diff preview | commit panel` 三分区改为 `changes browser | commit panel` 双分区，Commit 左侧独立工具窗中不再展示 Diff Preview。
+  2. 本轮采取最少修改原则：仅移除 Commit 根容器里的 Diff Preview 布局接线，保留 `WorkspaceCommitDiffPreviewView` 及相关 diff 状态模型/服务文件，避免扩散到 Core 执行链路。
+  3. `AGENTS.md` 已同步更新，明确 Commit 根容器当前是双分区布局，`WorkspaceCommitDiffPreviewView` 文件保留但默认不再挂载。
+- 关键理由：
+  1. 用户明确要求“先删除 Diff Preview”，当前最稳妥的实现是先删掉可见布局，而不是立刻连同 diff 数据读取链路一起大范围移除。
+  2. 这样既能立即收敛 UI，又保留后续按需恢复 preview 的余地，符合最少修改原则。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（5 tests, 1 failure；失败点为 `WorkspaceCommitRootView` 仍包含 `WorkspaceCommitDiffPreviewView(`）。
+  - 定向绿灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（5 tests, 0 failures）。
+  - 相关回归：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（28 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Commit 侧边工具窗层级纠偏（应位于底部 tools 面板上方）
+
+- [x] Task 1：补红灯测试，锁定 Commit 侧边工具窗只能出现在 terminal 上半区，不得与底部 Git tools 面板并列贯穿全高
+- [x] Task 2：以最小改动重排 Workspace 布局，让 Commit side host 挂到 bottom tool window 上方区域
+- [x] Task 3：同步更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 Commit 侧边工具窗层级纠偏）
+
+- 结果：
+  1. `WorkspaceChromeContainerView` 已移除 Commit side host 的直接挂载，恢复为只负责 `左侧 stripe | 主内容区` 的 chrome 壳层。
+  2. `WorkspaceShellView` 已把 Commit 侧边工具窗下沉到顶部区域：当前结构是 `顶部（Commit side panel 可选 | terminal） + 底部 Git tools panel`，因此 Commit 侧边面板现在位于底部 tools 面板上方，而不是整块落在左边。
+  3. Commit 侧边宽度拖拽责任也已从 Chrome 容器迁移到 Shell 顶部区域，避免再把“壳层布局”和“工作区内部业务布局”混在一起。
+  4. `AGENTS.md` 已同步更新为新的真实层级：Chrome 只负责 stripe，Shell 承担“顶部 Commit side panel + terminal / 底部 Git tools panel”布局。
+- 关键理由：
+  1. 直接原因是 Commit side host 放在 `WorkspaceChromeContainerView`，导致它天然位于整个 Shell 左边，于是视觉上就会落到底部 Git tools 面板左侧。
+  2. 设计层诱因是把“Workspace 外围 chrome 壳层”与“Workspace 内部内容层级”混在了一层；Commit side panel 虽然是左侧工具窗，但它相对的是 terminal 主区，不是整个包含底部 tools 的 Shell 全高。
+  3. 本轮修正后，未发现新的明显系统设计缺陷。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（19 tests, 6 failures；核心失败为 Chrome 仍挂 side host、Shell 顶部区域未承接 Commit）。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（19 tests, 0 failures）。
+  - 相关回归：`swift test --package-path macos --filter 'WorkspaceChromeContainerViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（36 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Commit 内容区对齐 IDEA（内容 / 分组 / 样式 / 按钮）
+
+- [x] Task 1：对照截图与 intellij-community 源码，锁定 Commit 内容区的结构差异与真实挂载组件
+- [x] Task 2：补红灯测试，锁定 Changes 分组、toolbar 按钮、message 区与 actions 的源码契约
+- [x] Task 3：按最小改动重构 Commit 内容区，尽量复刻 IDEA 的内容结构与控件层级
+- [x] Task 4：同步更新 AGENTS.md、跑验证并回填 Review
+
+## Review（2026-03-25 Commit 内容区对齐 IDEA：内容 / 分组 / 样式 / 按钮）
+
+- 结果：
+  1. `WorkspaceCommitChangesBrowserView` 已从圆角卡片流改成更接近 IDEA 的 browser 结构：顶部 icon toolbar、`Changes N files` 分组头、总 inclusion 开关、扁平文件行、`文件名主标题 + 路径次信息 + 紧凑状态 badge`。
+  2. `WorkspaceCommitPanelView` 已从“message + options 表单堆叠”改成更接近 IDEA 的提交区：顶部 `Commit` 标题、`Amend` 开关、大的 `Commit Message` 输入框、`Commit / Commit and Push...` 动作，以及齿轮弹层承接 `Sign-off / Author` 选项。
+  3. `WorkspaceCommitViewModel` 已补齐 `toggleAllInclusion()`、`includedChangeCount`、`areAllChangesIncluded` 等聚合语义，使 Changes 分组头可以像 IDEA 一样驱动“全部纳入 / 全部清空”。
+  4. 本轮未新增新的架构边界或文件职责变化，`AGENTS.md` 现有关于 Commit root / changes browser / panel 的职责描述仍然成立，因此未额外改写文档条目。
+- 关键理由：
+  1. 直接原因是当前 Commit 内容区沿用了 DevHaven 早期的“卡片列表 + options 表单”心智，和 IntelliJ `ChangesViewCommitPanel / NonModalCommitPanel / CommitActionsPanel` 的内容组织明显不一致。
+  2. 设计层诱因是之前先打通了 Commit 工作流与独立 tool window 语义，但没有继续把 **内容层级** 对齐到 IDEA：changes browser 仍像业务卡片区，commit panel 仍像设置表单，而不是提交工作台。
+  3. 本轮修正后，未发现新的明显系统设计缺陷。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（编译失败；核心报错为 `WorkspaceCommitViewModel` 缺少 `toggleAllInclusion()`，证明新契约尚未落地）。
+  - 定向绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitViewModelTests'`（16 tests, 0 failures）。
+  - 相关回归：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（30 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-25 Workspace 焦点恢复触发 SwiftUI 崩溃排查
+
+- [x] 基于崩溃栈与相关源码定位直接原因，确认是否存在设计层诱因
+- [x] 先补失败测试，覆盖“恢复 terminal responder 不应在当前 SwiftUI 更新栈内同步抢焦点”
+- [x] 实施最小修复，并保持 focused pane 仍能在下一轮主线程安全取回 responder
+- [x] 运行定向验证并在本文件追加 Review（直接原因、设计层诱因、修复方案、长期建议、证据）
+
+## Review（2026-03-25 Workspace 焦点恢复触发 SwiftUI 崩溃排查）
+
+- 结果：
+  1. 已定位并修复这次 3.1.0 的意外退出：`WorkspaceHostView.surfaceModel(for:)` 在 SwiftUI `body` 更新栈里同步调用 `GhosttySurfaceHostModel.restoreWindowResponderIfNeeded()`，进而立刻 `window.makeFirstResponder(ownedSurfaceView)`。
+  2. 当此时 AppKit 正在结束一个 `NSTextField` / 输入法会话（你的崩溃栈里是搜狗输入法 deactive 链路）时，这个同步抢 responder 会把 `NSTextInputContext deactivate -> textDidEndEditing -> SwiftUI transaction update` 重新嵌套回当前 AttributeGraph 更新，最终触发 `AG::precondition_failure` 并 `SIGABRT`。
+  3. 现在 responder 恢复改为 **延后一拍的主线程任务**：只在确实需要时调度一次，离开当前 SwiftUI/AppKit 更新栈后再执行真正的 `makeFirstResponder`；若 pane 已失焦、surface 释放或恢复已在路上，会自动取消/跳过。
+- 直接原因：
+  1. 崩溃栈主线程清楚显示：`WorkspaceHostView.surfaceModel(for:) -> GhosttySurfaceHostModel.restoreWindowResponderIfNeeded() -> NSWindow._realMakeFirstResponder -> NSTextView resignFirstResponder -> NSTextField textDidEndEditing -> SwiftUI/AttributeGraph abort`。
+  2. 也就是说，触发崩溃的不是 Ghostty renderer 本身，而是 **在 SwiftUI 视图计算期间同步修改 AppKit firstResponder**。
+- 设计层诱因：
+  1. `surfaceModel(for:)` 名义上是“拿 pane 对应 model”的纯查询入口，但实际上夹带了 responder 修复这种命令式副作用；这让 View builder 期间混入了窗口焦点变更。
+  2. `restoreWindowResponderIfNeeded()` 之前默认同步执行 `makeFirstResponder`，没有区分“当前正在 SwiftUI/AppKit 更新栈内”与“安全的下一轮主线程时机”。
+  3. 这是典型的 **pure model lookup 与 imperative UI side effect 职责混杂**。未发现更大的系统设计缺陷，但这一处职责边界此前不够清晰。
+- 当前修复方案：
+  1. 给 `GhosttySurfaceHostModel` 增加 `pendingWindowResponderRestoreTask`，把 responder 恢复改为延后一拍执行，避免在当前 SwiftUI transaction / AppKit 文本输入结束栈内同步抢焦点。
+  2. 恢复前先同步判断：pane 仍是逻辑焦点、window 仍存在、surface 仍未拥有 responder、且当前没有同类恢复任务在途；不满足则记录 diagnostics 并跳过。
+  3. 当 pane 失焦、surface 释放或进程退出时，主动取消挂起的 responder restore，避免旧 pane 的晚到任务再去操作新窗口状态。
+  4. 回归测试 `GhosttySurfaceHostTests.testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` 先红后绿，约束“不能同步抢焦点，但必须随后安全夺回 terminal responder”。
+- 长期改进建议：
+  1. 后续应继续把 `WorkspaceHostView.surfaceModel(for:)` 收敛为**纯数据/依赖解析**入口，任何窗口焦点、第一响应者、弹窗展示之类命令式动作都尽量迁到显式 lifecycle hook（如 attach/onChange/task）或专用 coordinator。
+  2. 对 AppKit `firstResponder` 这类会牵动输入法、文本编辑与 SwiftUI transaction 的动作，默认都应假设“同步调用是高风险操作”；若来源于 View 计算链路，优先延后到下一轮主线程。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter GhosttySurfaceHostTests/testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` → 失败，断言“恢复 responder 不应在当前 SwiftUI/AppKit 更新栈内同步抢焦点”未成立。
+  - 绿灯：`swift test --package-path macos --filter GhosttySurfaceHostTests/testRestoreWindowResponderDefersFocusedPaneReclaimOutsideCurrentUpdatePass` → 1 test，0 failures。
+  - 相关回归：`swift test --package-path macos --filter 'GhosttySurfaceHostTests|GhosttySurfaceLifecycleLoggingIntegrationTests|GhosttySurfaceRepresentableUpdatePolicyTests|WorkspaceSurfaceActivityPolicyTests'` → 22 tests，5 skipped，0 failures。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+
+
+## 2026-03-26 Commit browser 缺少 Unversioned Files 分组
+
+- [x] Task 1：排查 untracked/unversioned 在 Git 快照、Commit snapshot 与 Commit browser 中的实际流向
+- [x] Task 2：补红灯测试，锁定 Commit browser 必须单独展示 `Unversioned Files` 分组
+- [x] Task 3：按最小改动修复 Changes/Unversioned 分组渲染，并保持现有 IDEA 风格结构
+- [x] Task 4：跑定向与相关回归测试，回填 Review
+
+## Review（2026-03-26 Commit browser 补齐 Unversioned Files 分组）
+
+- 结果：
+  1. 已确认数据链路本身没有丢：`NativeGitParsers.parseStatusPorcelainV2` 会把 `? ` 记录解析到 `snapshot.untracked`，`WorkspaceCommitChangesSnapshot.fromGitWorkingTree(...)` 也会继续把它映射成 `.untracked` 组。
+  2. 真正缺口在 `WorkspaceCommitChangesBrowserView`：我上轮把所有变更统一平铺进单一 `Changes` 分组，导致 IDEA 里的 `Unversioned Files` 分组语义在 UI 层丢失。
+  3. 现在 Commit browser 已改为双分组渲染：`Changes` 承接 versioned changes，`Unversioned Files` 承接 `.untracked` changes，并且两个分组都保留各自的 header、计数与 section inclusion 开关。
+- 直接原因：
+  1. UI 层把 `snapshot.changes` 直接作为一个扁平数组渲染，没有继续按 `group == .untracked` 拆出独立分组。
+- 设计层诱因：
+  1. 上一轮把 Commit 内容区对齐到 IDEA 时，重点放在 toolbar / badge / message / actions 的视觉结构，没有继续对齐 **Changes browser 的分组语义**，于是把“数据已区分、UI 未分组”这一层漏掉了。
+  2. 目前未发现新的明显系统设计缺陷；这是浏览器分组语义未完全收敛的问题，不是底层 Git 快照设计错误。
+- 当前修复方案：
+  1. `WorkspaceCommitChangesBrowserView` 现在先按 `.untracked` / 非 `.untracked` 拆成 `unversionedChanges` 与 `versionedChanges`。
+  2. 通过通用 `section(title:changes:)` + `groupHeader(title:changes:)` 渲染多分组头，分别展示 `Changes` 和 `Unversioned Files`。
+  3. 每个 section 的勾选状态与“全选/清空”按钮都按该分组内文件独立计算，而不是错误复用全局 header。
+- 长期建议：
+  1. 如果后续继续逼近 IDEA，可把 conflicted / staged / unstaged 的显示策略也收口成显式 browser section policy，而不是继续在 View 内用轻量 filter 规则散着写。
+  2. 现在 section header 文案仍是简单的 `N files`，后续若要更像 IDEA，可把单复数、空分组折叠态与展开控制一起补齐。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（6 tests, 3 failures；核心失败为 source 中缺少 `unversionedChanges`、`"Unversioned Files"` 与独立分组头）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（31 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 Commit browser 行内对齐收敛到 IDEA 单行 renderer
+
+- [x] Task 1：对照 IntelliJ `ChangesBrowserFileNode / ChangesBrowserFilePathNode / appendParentPath`，确认当前两行布局与 IDEA 单行 renderer 的差异
+- [x] Task 2：补红灯测试，锁定 Commit browser 行必须改为“文件名 + 父路径同一行”对齐渲染
+- [x] Task 3：按最小改动把 Commit browser 行从 `VStack` 改为 inline 单行结构
+- [x] Task 4：跑定向与相关回归测试，回填 Review
+
+## Review（2026-03-26 Commit browser 行内对齐收敛到 IDEA 单行 renderer）
+
+- 结果：
+  1. 已对照 IntelliJ `ChangesBrowserFileNode` / `ChangesBrowserFilePathNode` / `ChangesBrowserNode.appendParentPath(...)` 确认：IDEA 的 changes browser 行是**单行 renderer**，文件名与父路径在同一个 cell 中连续 append，而不是上下两行堆叠。
+  2. `WorkspaceCommitChangesBrowserView` 现已把每行标题从 `VStack` 双行结构改成 `inlineTitleRow(...)` 单行结构：文件名在前、父路径灰字紧跟其后，并按同一 baseline 对齐。
+  3. 行高与纵向 padding 也一起收窄，避免路径另起一行后造成每个 row 高低不一致、视觉上“对不齐”。
+- 直接原因：
+  1. 上一版 Commit browser 使用了 `VStack(alignment: .leading, spacing: 2)`，把文件名和路径拆成两行，因此和 IDEA 的单行 renderer 视觉差异非常明显。
+- 设计层诱因：
+  1. 之前对齐 IDEA 时只收敛了 section / toolbar / actions，没有继续收敛到 **cell renderer 级别**；而这类浏览器 UI 的“像不像”往往正取决于单个 row 的文本拼接方式。
+  2. 目前未发现新的明显系统设计缺陷；这是 row renderer 结构未收口的问题。
+- 当前修复方案：
+  1. 新增 `inlineTitleRow(_:)`，使用 `HStack(alignment: .firstTextBaseline, spacing: 0)` 以单行方式渲染 `文件名 + 父路径`。
+  2. 父路径改成灰字 inline 追加，直接模拟 IDEA `appendParentPath(...)` 的展示语义。
+  3. 保留现有 Commit browser 的 section / inclusion / badge 逻辑，只收敛 row title 结构，避免扩散。
+- 长期建议：
+  1. 如果后续继续往 IDEA 靠，可以把 row 里的状态 badge 再继续收敛成更接近 IDEA 的 icon/text renderer，而不是长期停留在 SwiftUI badge 盒子。
+  2. 当前路径和文件名都用 monospaced 字体，如果后续要进一步做视觉保真，可以再对照 IDEA 统一调整到更接近 tree renderer 的字体策略。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（7 tests, 4 failures；核心失败为缺少 `inlineTitleRow(change)`、缺少 `HStack(alignment: .firstTextBaseline, spacing: 0)`，且源码仍包含 `VStack(alignment: .leading, spacing: 2)`）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（32 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 Commit browser 文件图标对齐 IDEA 文件类型渲染
+
+- [x] Task 1：对照 IntelliJ `ChangesBrowserNodeRenderer.setIcon(...)`，确认当前问号并非文件图标而是错误的状态 badge 入口
+- [x] Task 2：补红灯测试，锁定 Commit browser 必须显示真实文件图标而不是问号 badge
+- [x] Task 3：按最小改动接入 macOS 文件类型图标，并把状态语义迁移到文件名字色
+- [x] Task 4：跑定向与相关回归测试，回填 Review
+
+## Review（2026-03-26 Commit browser 文件图标对齐 IDEA 文件类型渲染）
+
+- 结果：
+  1. 已对照 IntelliJ `ChangesBrowserNodeRenderer.setIcon(...)` / `ChangesBrowserFileNode.render(...)` 确认：IDEA 文件列表左侧渲染的是真实文件图标，来源是 `FilePathIconProvider` 或 `VcsUtil.getIcon(project, filePath)`，不是状态问号。
+  2. 当前 DevHaven 的问号根因已经移除：`WorkspaceCommitChangesBrowserView` 不再用 `statusBadgeText(for:)` 充当“图标列”，而是改成 `Image(nsImage: fileIcon(for: change))`。
+  3. 文件图标现在通过 macOS `NSWorkspace.shared.icon(forFile:)` 按文件路径/类型获取，因此会根据 `.swift`、`.md` 等文件类型渲染真实文件图标。
+  4. 状态语义没有丢，而是迁移到了 `fileNameColor(for: change)`，更接近 IDEA “文件图标 + 状态色文件名”的表达方式。
+- 直接原因：
+  1. 上一版 Commit browser 把状态 badge 摆在文件图标列的位置，且 `.unknown` 会直接显示 `?`，于是用户看到的整列就像“文件图标全是问号”。
+- 设计层诱因：
+  1. 之前把“状态表达”和“文件图标表达”混成了一列，这在浏览器 UI 里是职责错位：IDEA 的 renderer 明确区分 `icon` 与 `file status color`，而不是用状态文本去冒充图标。
+  2. 当前未发现新的明显系统设计缺陷；这是 renderer 职责收口不清的问题。
+- 当前修复方案：
+  1. `WorkspaceCommitChangesBrowserView` 接入 `AppKit`，新增 `fileIcon(for:)`，通过 `NSWorkspace.shared.icon(forFile:)` 获取文件图标。
+  2. 每行图标列改为 `Image(nsImage: fileIcon(for: change))`，固定 16x16。
+  3. 删除旧的 `statusBadgeText/statusBadgeForegroundColor/statusBadgeBackgroundColor` 路径，避免再次退回问号 badge。
+  4. 新增 `fileNameColor(for:)`，把 added / modified / deleted / renamed / unmerged 等状态语义迁移到文件名颜色。
+- 长期建议：
+  1. 目前图标来源直接走 `NSWorkspace`；如果后续还要继续逼近 IDEA，可考虑加轻量缓存，减少长列表反复向系统取图标的开销。
+  2. 当前 deleted / nonexistent 文件也走同一套路径图标解析；如果后续发现删除文件的图标退化，再专门补“按扩展名 fallback”的小分支即可，不要现在过度工程。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（8 tests, 4 failures；核心失败为缺少 `Image(nsImage: fileIcon(for: change))`、缺少 `NSWorkspace.shared.icon(forFile:)`，且源码仍包含 `Text(statusBadgeText(for: change))`）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（33 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 Commit browser 颜色语义改为 Changes 蓝色 / Unversioned Files 红色
+
+- [x] Task 1：确认当前 `fileNameColor(for:)` 仍按 status 分色，和用户要求的按 group 分色不一致
+- [x] Task 2：补红灯测试，锁定 versioned=蓝色、untracked=红色、selected=高亮 的颜色契约
+- [x] Task 3：按最小改动把文件名字色从 status 映射切换为 group 映射
+- [x] Task 4：跑定向与相关回归测试，回填 Review
+
+## Review（2026-03-26 Commit browser 颜色语义改为 Changes 蓝色 / Unversioned Files 红色）
+
+- 结果：
+  1. `WorkspaceCommitChangesBrowserView.fileNameColor(for:)` 已从“按 status 分色”切换为“按 group 分色”。
+  2. 当前规则已经收敛为：
+     - `Changes`（所有非 `.untracked`）→ `NativeTheme.accent`，也就是蓝色
+     - `Unversioned Files`（`.untracked`）→ `NativeTheme.danger`，也就是红色
+     - 当前选中项仍优先走 `NativeTheme.textPrimary`，避免选中态被组色覆盖
+- 直接原因：
+  1. 上一版 `fileNameColor(for:)` 仍按 `change.status` 做 success / accent / danger / warning 的细粒度映射，和你明确要求的“按分组着色”不一致。
+- 设计层诱因：
+  1. 之前把颜色语义继续绑定在文件状态层，而不是当前 Commit browser 已经成型的 section/group 心智层，导致用户想要“Changes 一眼全蓝、Unversioned 一眼全红”时，现有实现天然不满足。
+  2. 当前未发现新的明显系统设计缺陷；这是颜色语义层级不对的问题，不是数据模型错误。
+- 当前修复方案：
+  1. 保留现有图标、分组、inline 行结构不动。
+  2. 仅把 `fileNameColor(for:)` 的 switch 从 `change.status` 改为 `change.group`。
+  3. 通过 `case .untracked -> danger / default -> accent` 实现最小收敛。
+- 长期建议：
+  1. 如果后续继续往 IDEA 靠，可以再把 section header 的标题色、count 色以及选中行背景一起做成按 group 联动的完整视觉语义，而不是只改文件名。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter WorkspaceCommitRootViewTests`（9 tests, 2 failures；核心失败为源码仍按 `switch change.status` 着色，缺少 `switch change.group` 与 `.untracked` 分支）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceChromeContainerViewTests|WorkspaceCommitViewModelTests'`（34 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 切换项目时 Git 面板不自动刷新
+
+- [x] 梳理项目切换与 Git tool window 刷新主链，定位直接原因与设计诱因
+- [x] 先补失败测试，锁定“切换 active project/worktree 后可见 Git 面板必须刷新上下文与内容”契约
+- [x] 以最小改动修复项目切换后的 Git 面板自动刷新行为
+- [x] 运行定向验证并在 Review 记录证据、根因、修复方案与长期建议
+
+## Review（2026-03-26 切换项目时 Git 面板不自动刷新）
+
+- 结果：
+  1. `WorkspaceGitRootView` 新增对 `viewModel.repositoryContext.repositoryPath` 的监听；当 active project 切到另一个 root repository 时，会先把顶层 `Git / Log / Console` UI 状态同步到新 `section`，再刷新当前可见内容。
+  2. 新增 `WorkspaceGitRootViewTests.testWorkspaceGitRootViewRefreshesVisibleContentWhenRepositoryContextChanges`，锁定“切换仓库上下文时必须主动刷新 Git 面板”的契约，避免后续回归。
+- 直接原因：
+  1. Git 面板内容刷新只挂在 `WorkspaceGitRootView.onAppear`。切换项目时，这个底部 panel 通常不会真正 disappear/appear，因此不会重新触发 `refreshVisibleContent()`。
+  2. `WorkspaceGitRootView` 还持有 `selectedTopLevelTab` 等 `@State`，当绑定到新的 `WorkspaceGitViewModel` 时，如果不显式同步，就可能继续沿用旧仓库的顶层 tab 语义。
+- 设计层诱因：
+  1. 当前 Git panel 的“可见内容刷新时机”被绑在 View 生命周期 `onAppear`，但“切换 active project”其实属于**上下文变化**，不是 View 生命周期变化；两者被混用后，导致面板在同一挂载实例内切换仓库时漏刷。
+  2. 顶层 tab 是 View 层本地状态，而 repository/section 是 ViewModel 状态；项目切换时没有显式桥接这两份状态。
+  3. 未发现明显系统设计缺陷；本次问题主要是刷新触发点遗漏在 View 边界层。
+- 当前修复方案：
+  1. 在 `WorkspaceGitRootView` 中新增 `.onChange(of: viewModel.repositoryContext.repositoryPath)`。
+  2. 在该回调里先执行 `syncTopLevelTab(with: viewModel.section)`，确保切换到新仓库时顶层 tab 语义和新 ViewModel 保持一致。
+  3. 随后执行 `refreshVisibleContent()`，让当前可见的 Git / Log 内容立即刷新，而不是等待用户再点一次。
+- 长期建议：
+  1. 如果后续 Git panel 继续扩展更多“当前可见子页”，建议把“可见页类型”从 `WorkspaceGitRootView` 的本地 `@State` 收到可测试的运行时状态层，减少 View 层局部状态与 ViewModel 状态脱节。
+  2. 对这类“上下文切换但视图不重建”的面板，后续新增功能时要优先检查：刷新触发点是否绑定到了真正的上下文真相源，而不是只绑 `onAppear`。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests/testWorkspaceGitRootViewRefreshesVisibleContentWhenRepositoryContextChanges'`（1 test, 1 failure，新增契约在修复前失败）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests/testWorkspaceGitRootViewRefreshesVisibleContentWhenRepositoryContextChanges'`（1 test, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceGitRootViewTests|WorkspaceShellViewGitModeTests|WorkspaceShellViewTests|WorkspaceGitViewModelTests|WorkspaceGitLogViewModelTests'`（44 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 切换项目时 Commit 面板不自动展示变更文件
+
+- [x] 梳理项目切换与 Commit tool window 刷新主链，定位直接原因与设计诱因
+- [x] 先补失败测试，锁定“切换 active project/worktree 后可见 Commit 面板必须自动刷新变更快照”契约
+- [x] 以最小改动修复项目切换后的 Commit 面板自动刷新行为
+- [x] 运行定向验证并在 Review 记录证据、根因、修复方案与长期建议
+
+## Review（2026-03-26 切换项目时 Commit 面板不自动展示变更文件）
+
+- 结果：
+  1. `WorkspaceCommitViewModel.updateRepositoryContext(...)` 现在在 repository/execution path 变化时会主动刷新变更快照，因此切换项目或 worktree 后，Commit 面板无需手动刷新也会展示新上下文下的文件列表。
+  2. 刷新前会取消旧的 diff preview task 并递增 `diffPreviewRevision`，避免旧项目的 diff 异步结果回写到新项目。
+  3. 新增 `WorkspaceCommitViewModelTests.testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges`，锁定“切换上下文时必须自动重读 changes snapshot”的契约。
+- 直接原因：
+  1. `NativeAppViewModel.prepareActiveWorkspaceCommitViewModel()` 在项目切换时会复用已缓存的 `WorkspaceCommitViewModel`，并调用 `updateRepositoryContext(...)`。
+  2. 但 `WorkspaceCommitViewModel.updateRepositoryContext(...)` 之前只更新 `repositoryContext` 字段，没有调用 `refreshChangesSnapshot()`，所以 `changesSnapshot`、`includedPaths` 和 branch 信息都会停留在旧项目，直到用户手动刷新。
+- 设计层诱因：
+  1. Commit 面板把“进入面板首次加载”放在 `WorkspaceCommitRootView.onAppear`，但“切换 active project/worktree”本质上是 **上下文变化**，不是 View 生命周期变化。
+  2. 由于 Commit ViewModel 是按 root project 缓存复用的，context update 成了常态路径；如果这条路径不自带刷新，UI 就会天然陈旧。
+  3. 未发现明显系统设计缺陷；本次问题主要是 `updateRepositoryContext` 作为上下文切换入口却没有承担刷新职责。
+- 当前修复方案：
+  1. 在 `WorkspaceCommitViewModel.updateRepositoryContext(...)` 中比较旧新 `repositoryPath / executionPath`。
+  2. 只有在上下文真实变化时，才取消旧 diff task、递增 revision，并立即执行 `refreshChangesSnapshot()`。
+  3. 未改变 Commit 面板的 `onAppear` 初次加载逻辑；本轮只补齐“缓存 ViewModel 的上下文切换刷新”缺口。
+- 长期建议：
+  1. 对这种会被 `NativeAppViewModel` 缓存并跨项目复用的业务 ViewModel，今后新增 `updateRepositoryContext(...)` / `updateExecutionContext(...)` 入口时，应默认检查：是否需要同步刷新主快照、是否需要取消旧异步任务。
+  2. 对所有“用户看见的是同一块 panel，但背后上下文已切换”的工具窗，优先把刷新责任落在 ViewModel context update 路径，而不是只依赖 `onAppear`。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests/testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges'`（1 test, 4 assertions failed；修复前只读取旧 executionPath，快照未刷新）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests/testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges'`（1 test, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（36 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+
+## 2026-03-26 Commit 面板在工作区变更后仍需手动刷新
+
+- [x] 重新确认用户反馈，区分“项目切换”与“同一面板内工作区内容变化”两类触发条件
+- [x] 梳理 Commit 面板自动刷新主链，定位为什么只能靠手动刷新按钮更新文件列表
+- [x] 先补红灯测试，锁定“面板可见期间自动刷新 + 自动刷新不覆盖现有 inclusion 选择”契约
+- [x] 以最小改动修复可见期间自动刷新，并跑定向验证
+
+## Review（2026-03-26 Commit 面板在工作区变更后仍需手动刷新）
+
+- 结果：
+  1. `WorkspaceCommitRootView` 现在在可见期间通过 timer 自动触发 `refreshChangesSnapshot()`，因此工作区文件发生变化后，Commit 面板不再只能依赖手动刷新按钮更新。
+  2. `WorkspaceCommitViewModel.refreshChangesSnapshot(...)` 现在支持保留用户对现有文件的 inclusion 选择，仅对新增文件采用默认 inclusion，并在 snapshot 未变化时直接短路，避免定时刷新每秒都重置选择或重复重载 diff。
+  3. `WorkspaceCommitViewModel.updateRepositoryContext(...)` 在真正切换仓库/执行路径时，会显式按“新上下文”清空旧 selection/snapshot，再重新读取，避免把同一路径名的旧状态错误带到新项目。
+- 直接原因：
+  1. `WorkspaceCommitRootView` 之前只有 `onAppear` 首次刷新和 toolbar 手动刷新按钮，没有任何“面板可见期间自动刷新”的机制。
+  2. 因此在同一项目内通过 terminal / 外部操作改动工作区时，Commit 面板根本不会自动读新的 changes snapshot。
+  3. 上一轮只修了 `updateRepositoryContext(...)` 的项目切换路径，但这条路径并不会覆盖“同一面板保持挂载、工作区内容变化”的主场景，所以用户体感仍然是“修复无效”。
+- 设计层诱因：
+  1. 我上一轮过早把“必须手动刷新才出现文件”收窄成了“项目切换时没刷新”，没有先把触发条件区分为 **上下文切换** 与 **同一上下文内容变化**。
+  2. Commit 面板的刷新职责此前过度依赖 View 生命周期 `onAppear`；但工作区变更是运行时数据变化，不会天然伴随 View 重建。
+  3. 若直接给当前实现加轮询，又会因为旧的 `refreshChangesSnapshot()` 每次都重置 inclusion/default selection 而引入新回归；因此根因不只是“缺少自动刷新”，还包括“刷新语义不具备可轮询性”。
+  4. 未发现明显系统设计缺陷；主要问题仍是刷新触发点和刷新语义没有成对设计。
+- 当前修复方案：
+  1. App 层：`WorkspaceCommitRootView` 增加自动刷新 timer，并在 `.onReceive(...)` 中调用 `viewModel.refreshChangesSnapshot()`。
+  2. Core 层：`WorkspaceCommitViewModel.refreshChangesSnapshot(preservingUserState:)` 在同上下文轮询时保留已有 inclusion，仅对新增文件采用默认 inclusion；当 snapshot 完全没变化时直接返回。
+  3. Core 层：`updateRepositoryContext(...)` 走 `preservingUserState: false` 的重载路径，显式清空旧项目状态，再加载新上下文。
+- 长期建议：
+  1. 以后凡是用户描述“某个面板必须手动刷新才更新”，先明确区分：到底是**上下文切换漏刷新**，还是**同一上下文的数据变化漏刷新**，不要在没有证据时提前收窄到其中一种。
+  2. 对会长期挂载在 Workspace 中的工具窗，如果计划引入自动刷新，必须同时设计“刷新是否保留用户局部编辑状态 / 选择状态”，否则自动刷新本身就会成为新的 bug。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests/testWorkspaceCommitRootViewAutoRefreshesSnapshotWhileVisible|WorkspaceCommitViewModelTests/testRefreshChangesSnapshotPreservesExistingInclusionAndSeedsDefaultsForNewChanges'`（2 tests, 3 failures；修复前既没有自动刷新 timer，也会在 refresh 时覆盖已有 inclusion 选择）。
+  - 绿灯：`swift test --package-path macos --filter 'WorkspaceCommitRootViewTests/testWorkspaceCommitRootViewAutoRefreshesSnapshotWhileVisible|WorkspaceCommitViewModelTests/testRefreshChangesSnapshotPreservesExistingInclusionAndSeedsDefaultsForNewChanges|WorkspaceCommitViewModelTests/testUpdateRepositoryContextRefreshesChangesSnapshotWhenExecutionPathChanges'`（3 tests, 0 failures）。
+  - 回归：`swift test --package-path macos --filter 'WorkspaceCommitViewModelTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceShellViewTests|WorkspaceShellViewGitModeTests'`（38 tests, 0 failures）。
+  - 质量：`git diff --check`（exit 0）。
+
+## 2026-03-26 IDEA Diff 逻辑复刻（executing-plans）
+
+- [x] Task 1：锁定 Diff Session 与 Pane Metadata 基础契约（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 2：锁定 processor 的 current difference 与跨文件导航（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 3：为 processor 输出统一 viewer descriptor 与 pane header metadata（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 4：锁定顶部 navigation bar 与 pane header 结构（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 5：拆分 patch / two-side / merge viewer 子组件（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 6：统一 commit / git log 入口为 request chain session（红灯测试 -> 最小实现 -> 绿灯）
+- [x] Task 7：同步 AGENTS.md / tasks 文档并跑定向回归、回归闸门与 `git diff --check`
+
+## Review（2026-03-26 IDEA Diff 逻辑复刻）
+
+- 结果：
+  1. Core 已新增 `WorkspaceDiffSessionModels.swift` 与 `WorkspaceDiffPaneMetadataModels.swift`，把 request chain、navigator state、difference anchor、pane metadata、viewer descriptor 从旧 diff 文档模型中拆出。
+  2. `WorkspaceDiffTabViewModel` 已升级为 session 级 processor：支持 `openSession(...)`、current difference 选中、previous/next difference、跨文件切换、viewer descriptor 与 pane metadata 输出。
+  3. App 层已新增 `WorkspaceDiffNavigationBarView`、`WorkspaceDiffPaneHeaderView`、`WorkspaceDiffPatchViewerView`、`WorkspaceDiffTwoSideViewerView`、`WorkspaceDiffMergeViewerView`，`WorkspaceDiffTabView` 收窄为壳层分发。
+  4. Commit 单实例 preview 与 Git Log 文件 diff 入口都已统一接到 request chain：Commit 复用 `commit-preview|<executionPath>` identity，Git Log 复用当前 selected commit detail 生成链式 session。
+  5. `WorkspaceTextEditorView` 现在显式承接 `WorkspaceTextEditorScrollRequestKind`，selected difference 驱动的滚动请求不再只是“revision + lineTargets”的隐式语义。
+- 直接原因：
+  1. 旧版 runtime diff tab 仍然以“单 source 文档加载器 + 视图层局部状态”为主，缺少 request chain、current difference、pane metadata 三个稳定真相源。
+  2. Commit preview 与 Git Log 历史 diff 都是“文件级打开”，无法像 IDEA 一样在同一 diff session 中跨文件导航。
+- 设计层诱因：
+  1. 之前 `WorkspaceDiffModels.swift` 同时承载 runtime tab、文档、交互态，session 与 metadata 没有边界，导致 processor 能力无法稳定下沉到 Core。
+  2. 之前 `WorkspaceDiffTabView` 自己拼 toolbar/subtitle/header，并直接持有 compare / merge side rail 选中态，导致 UI 结构与 processor 真相源分裂。
+  3. 之前 Commit / Git Log 的 diff 打开入口各自只知道“当前文件”，不知道“当前文件在整组 changes 里的位置”；这就是跨文件 navigation 缺失的根因。
+  4. 本轮已把这些职责分别收口到 session models、processor 与 viewer 子组件；**未发现新的明显系统设计缺陷**。
+- 当前修复方案：
+  1. Core：新增 session / metadata 模型，给 diff tab 引入 `WorkspaceDiffRequestChain`、`WorkspaceDiffDifferenceAnchor`、`WorkspaceDiffViewerDescriptor`。
+  2. Processor：`WorkspaceDiffTabViewModel` 按 request chain 驱动 active item 与 difference selection，并在 compare / merge / patch 三类文档上统一输出 navigator state 与 pane descriptors。
+  3. App：diff tab 改为 `navigation bar + viewer dispatch` 架构，pane header、patch viewer、two-side viewer、merge viewer 各自承担明确边界。
+  4. 入口：Commit preview 现在从 `changesSnapshot` 构造 request chain，Git Log 现在从 `selectedCommitDetail.files` 构造 request chain，保持原有打开入口不变但内部语义升级为 session。
+- 长期改进建议：
+  1. 后续若继续对齐 IDEA，可把 patch viewer 也进一步升级为完整 pane header + selected hunk navigation 语义，而不只停留在文本渲染层。
+  2. 当前 Git Log request chain 仍依赖 active `selectedCommitDetail`；如果后续需要从更多入口直达 session，建议把 commit detail 摘要显式下沉为 open request 的标准输入。
+  3. 当前 request chain 仍挂在 runtime tab state 内存态；若未来需要更强的调试能力，可以补充更明确的 diagnostics，而不是回退到 view 层临时状态。
+- 验证证据：
+  - Task 1 红灯：`swift test --package-path macos --filter 'WorkspaceDiffSessionModelsTests|WorkspaceDiffPaneMetadataModelsTests'`（编译失败，缺少 `WorkspaceDiffRequestChain` / `WorkspaceDiffPaneMetadata` 等类型）。
+  - Task 1 绿灯：同命令通过（3 tests, 0 failures）。
+  - Task 2 红灯：`swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests|WorkspaceDiffNavigationTests'`（缺少 `openSession`、`selectedDifferenceAnchor`、`sessionState`、previous/next difference API）。
+  - Task 2 绿灯：同命令通过（23 tests, 0 failures）。
+  - Task 3 绿灯：`swift test --package-path macos --filter 'WorkspaceDiffTabViewModelTests'`（24 tests, 0 failures）。
+  - Task 4 绿灯：`swift test --package-path macos --filter 'WorkspaceDiffNavigationBarViewTests|WorkspaceDiffPaneHeaderViewTests|WorkspaceDiffTabViewTests'`（13 tests, 0 failures）。
+  - Task 5 绿灯：`swift test --package-path macos --filter 'WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests'`（10 tests, 0 failures）。
+  - Task 6 定向验证：`swift test --package-path macos --filter 'NativeAppViewModelWorkspaceDiffTabTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitIdeaLogViewTests'`（49 tests, 0 failures）。
+  - 定向回归：`swift test --package-path macos --filter 'WorkspaceDiffSessionModelsTests|WorkspaceDiffPaneMetadataModelsTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffNavigationTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffNavigationBarViewTests|WorkspaceDiffPaneHeaderViewTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitIdeaLogViewTests'`（91 tests, 0 failures）。
+  - 回归闸门：`swift test --package-path macos --filter 'NativeGitRepositoryServiceTests|WorkspaceDiffTabViewModelTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests|WorkspaceTextEditorViewTests|WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitIdeaLogViewTests'`（119 tests, 0 failures）。
+  - 质量闸门：`git diff --check`（exit 0）。
+## 2026-03-26 提交并推送 Codex 展示态窗口缓存改动
+
+- [x] 审阅当前工作区变更，确认提交范围覆盖代码 / 文档 / 任务记录
+- [x] 运行 fresh 验证命令，确认当前改动可安全提交
+- [x] 生成提交摘要并执行 git commit
+- [x] 推送当前分支到远端
+- [x] 在本文件追加 Review，记录提交结果与验证证据
+
+
+## Review（2026-03-26 提交并推送 Codex 展示态窗口缓存改动）
+
+- 结果：
+  1. 已将 Codex 展示态窗口缓存相关代码、测试、设计文档与任务记录提交为 `a15e75e`（`Use cached Codex display snapshots`）。
+  2. 已将当前 `main` 推送到 `origin/main`，远端从 `e74db62` 前进到 `a15e75e`。
+- 验证证据：
+  - `git diff --check` → 无输出。
+  - `swift build --package-path macos` → `Build complete!`。
+  - `swift test --package-path macos` → 最近一次全量重跑为 `347 tests, 5 skipped, 0 failures`。
+  - `swift test --package-path macos --filter WorkspaceRunManagerTests/testStartSupportsMultilineCommandsWithAssignmentsBeforeInnerExec` → 单测重跑通过；用于核对首次全量测试里该用例的一次性断言失败是否可复现。
+  - `git push origin main` → `e74db62..a15e75e  main -> main`。
+
+## 2026-03-26 Codex 展示态增量滑动窗口设计
+
+- [x] 探查当前 Codex 展示态刷新链路、Ghostty bridge 回调能力与相关模块边界
+- [x] 与用户确认设计目标边界：只服务 Codex 展示态，不抽象成通用 terminal 文本缓存
+- [x] 给出 2~3 种可选方案、权衡取舍并推荐“增量滑动窗口”方向
+- [x] 分段确认设计细节（模块落点、数据流、容错与验证）
+- [x] 设计确认后，写入 `docs/plans/` 设计文档并登记后续实施计划
+
+## 2026-03-26 Codex 展示态增量滑动窗口实现
+
+- [x] 先补 failing tests，锁定 snapshot 输入、HostModel 窗口缓存与 WorkspaceShellView 新接线
+- [x] 以最小改动实现 runtime/bridge/host 的内容失效脉冲与 Codex 小窗口缓存
+- [x] 用 snapshot provider 替换 WorkspaceShellView 的 currentVisibleText 读取，并收口 tracking 开关
+- [x] 更新 AGENTS.md 与本文件 Review，记录新边界、直接原因、设计诱因与验证证据
+- [x] 运行定向测试与构建验证，确认修复闭环
+
+## Review（2026-03-26 Codex 展示态增量滑动窗口实现）
+
+- 结果：
+  1. Codex 展示态 fallback 已从“WorkspaceShellView 定时读 `currentVisibleText()`”改为“Ghostty host 维护 pane 级 `CodexAgentDisplaySnapshot` 最近文本窗口 + 最近活动时间”。
+  2. `WorkspaceShellView` 现在仍可保留轻量刷新入口，但刷新阶段只读取内存中的 cached snapshot；Codex 展示态闭环不再直接触发整屏 `ghostty_surface_read_text(...)`。
+  3. `GhosttyRuntime.tick()` 之后会向活跃 surface 广播内容失效脉冲，`GhosttySurfaceHostModel` 仅在 Codex tracking 开启时 debounce 更新最近文本窗口；pane 移除/退出/关闭 tracking 时会取消 pending task 并清空缓存。
+- 直接原因：
+  1. 旧实现把 `GhosttySurfaceHostModel.currentVisibleText()` 接到了 `WorkspaceShellView.refreshCodexDisplayStates()` 的固定定时刷新链路上。
+  2. 这会让 sidebar 展示态修正在后台长期触发 `debugVisibleText()` / `ghostty_surface_read_text(...)` 与多轮字符串处理，长时间运行后持续制造 `MALLOC_SMALL` 压力。
+- 设计层诱因：
+  1. Codex 展示态 fallback 原本只是 UI 修正语义，但实现上跨层依赖了终端全文 readback，把昂贵调试式读取放进了常驻刷新路径。
+  2. 这属于“展示态纠偏依赖重型数据源”的职责错配：UI 只想知道 running / waiting，却每次都反向拉 pane 全文。
+- 当前修复方案：
+  1. 新增 `CodexAgentDisplaySnapshot`，只保留 pane 级最近文本窗口与最近活动时间。
+  2. `GhosttyRuntime` / `GhosttySurfaceBridge` / `GhosttySurfaceHostModel` 新增内容失效脉冲与 host 侧 debounce 缓存更新；`WorkspaceShellView` 改读 `codexDisplaySnapshot()`，并按当前 `codexDisplayCandidates()` 同步 tracking 开关。
+  3. `CodexAgentDisplayStateRefresher` 现改为消费 snapshot，而不是直接消费全文字符串。
+- 长期改进建议：
+  1. 后续若 Ghostty Swift 层能拿到更细的文本增量/活动回调，应继续把 host 侧 debounce readback 收缩成真正的增量窗口更新，进一步减少 readback 次数。
+  2. 如果 signal / notify 主链继续增强，可继续减少甚至删除文本 heuristic fallback，让最近文本窗口只保留为最后兜底手段。
+- 验证证据：
+  - 红灯：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests'` → 失败，缺少 `CodexAgentDisplaySnapshot` 与 host tracking 接口。
+  - 绿灯：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests'` → 15 tests，0 failures。
+  - 定向回归：`swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostModelSnapshotTests|WorkspaceShellViewTests|WorkspaceAgentStatusAccessoryTests|NativeAppViewModelWorkspaceEntryTests'` → 51 tests，0 failures。
+  - 构建验证：`swift build --package-path macos` → Build complete。
+  - 差异校验：`git diff --check` → 无输出。
+
+
+## 2026-03-26 DevHaven.app 异常内存占用排查
+
+- [x] 记录当前运行中的 DevHaven 进程与内存异常现象，建立排查证据基线
+- [x] 收集 footprint / heap / sample 等运行时证据，确认主要占用类别与热点线程
+- [x] 对照仓库代码定位直接原因，并判断是否存在设计层诱因
+- [x] 在本文件追加 Review，记录结论、证据、长期建议与必要后续动作
+
+## Review（2026-03-26 DevHaven.app 异常内存占用排查）
+
+- 结果：
+  1. 当前 `/Applications/DevHaven.app` 主进程 `DevHavenApp`（PID `27999`）已运行约 `14:49:21`，`top` / `footprint` 一致显示内存 footprint 约 `32.8 GB`，属于明显异常。
+  2. `footprint 27999` 显示主要占用为 `MALLOC_SMALL 31 GB`，其次是 `IOSurface 857 MB`、`IOAccelerator 536 MB`；这更像是**大量小块堆分配长期累积**，而不是单个巨型缓冲区。
+  3. 运行时采样 `sample 27999 5 1` 命中一条非常明确的 App 侧周期路径：`WorkspaceShellView.refreshCodexDisplayStates()` → `CodexAgentDisplayStateRefresher.presentationOverrides(...)` → `GhosttySurfaceHostModel.currentVisibleText()` → `GhosttyTerminalSurfaceView.debugVisibleText()` → `terminal.formatter.PageFormatter.formatWithState`。
+  4. 结合当前进程下存在 `6` 条 DevHaven 内嵌 Codex wrapper 会话，以及 `WorkspaceShellView` 中固定 `1` 秒一次的 `codexDisplayRefreshTimer`，可以高置信度判断：**内存压力主要来自“为了修正 Codex running/waiting 展示态而对多个 pane 周期性轮询终端可见文本”这条链路。**
+- 直接原因：
+  1. `WorkspaceShellView` 从 2026-03-22 的 Agent 状态感知特性开始，引入了 `Timer.publish(every: 1, on: .main, in: .common)`，每秒都会触发 `refreshCodexDisplayStates()`。
+  2. 这个刷新逻辑会对所有 `codexDisplayCandidates()` 调用 `currentVisibleText()`；后者不是轻量状态查询，而是通过 `GhosttyTerminalSurfaceView.debugVisibleText()` 走 `ghostty_surface_read_text(...)`，把终端当前可见文本重新格式化并桥接成新的 Swift `String`。
+  3. 之后同一批文本又会在 `currentVisibleText()`、`normalizedVisibleText()`、`CodexAgentDisplayHeuristics.displayState(for:)` 中多次 `trimmingCharacters(...)`、`String.contains(...)`、整串比较，并被 `Observation.lastVisibleText` 再保存一份；这会持续制造大量短生命周期小对象/字符串分配。
+  4. `sample` 已直接证明当前在线进程确实在走这条路径，而 `footprint` 的 `MALLOC_SMALL 31 GB` 也与“高频小对象 / 字符串分配累积”高度一致。
+- 设计层诱因：
+  1. **展示态修正逻辑跨层依赖了终端 UI 文本读回。** 按 AGENTS 约束，Codex 主链本应以 `wrapper signal + official notify` 为主，终端可见文本只作 fallback；但当前 fallback 的实现方式是全量文本轮询，成本过高。
+  2. `debugVisibleText()` 从命名和实现上都更像调试/诊断接口，却被接入了常驻 1 秒轮询的生产路径；这把本应偶发的“整屏文本序列化”变成了长期后台任务。
+  3. 刷新范围也偏大：`codexDisplayCandidates()` 面向所有打开项目里的 Codex pane，而不只是当前可见/当前聚焦 pane，所以隐藏 pane 也会持续参与文本读回。
+  4. 因此，存在明显系统设计诱因：**为了修正 sidebar 展示语义，把昂贵的 terminal 可见文本读取放进了全局定时器。**
+- 当前处置建议：
+  1. 临时止血：先关闭不需要的 Codex pane / 项目，或重启 DevHaven 释放已经累积的内存；只要没有活跃的 Codex 展示态候选，这条 1 秒轮询链路的压力就会显著下降。
+  2. 真正修复时，优先收口为“只有 signal 不足以判定时才做最小范围 fallback”，并尽量只看当前活动 pane，而不是所有已加载 pane。
+  3. 如果仍需要 fallback，建议改成**更便宜的最小信息提取**（例如有限前缀/末行/增量活动标记），不要每秒做整屏文本 readback + 多次全串 trim/contains。
+- 长期改进建议：
+  1. 优先把 Codex waiting/running 的判断继续收敛到 signal / notify 主链，避免把终端内容分析当作长期真相源。
+  2. 若必须保留 heuristic fallback，应增加硬边界：仅活动 pane、仅短时间窗口、仅必要状态、仅一次字符串归一化，避免重复复制同一份大文本。
+  3. 给这条展示态刷新链路补性能 / 内存回归测试或至少 profiling 基线，防止类似“UI 语义修正引入后台轮询”再次悄悄进主线。
+- 验证证据：
+  - `top -l 1 -pid 27999 -stats pid,command,mem,cpu,time,threads` → `DevHavenApp 32G~33G`。
+  - `footprint 27999` → `Footprint: 32 GB`，其中 `MALLOC_SMALL 31 GB`。
+  - `sample 27999 5 1 -mayDie` → 主线程周期性命中 `WorkspaceShellView.refreshCodexDisplayStates()`、`CodexAgentDisplayStateRefresher.presentationOverrides(...)`、`GhosttySurfaceHostModel.currentVisibleText()`、`GhosttyTerminalSurfaceView.debugVisibleText()`、`terminal.formatter.PageFormatter.formatWithState`。
+  - `ps -axo pid,args | grep '/Applications/DevHaven.app/.../AgentResources/bin/codex'` → 当前共有 `6` 条 DevHaven 内嵌 Codex wrapper 会话，与该轮询路径的候选 pane 数量级相符。

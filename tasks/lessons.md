@@ -12,6 +12,14 @@
 - 对“关闭主窗口前先提醒”这类行为，不要挂在原始 `keyDown` / shortcut monitor 上做半路拦截；更稳的挂点是 `windowShouldClose` 这类真实窗口生命周期回调。否则取消后很容易出现窗口已部分进入 close 流程、界面被隐藏但逻辑上并未真正关闭的半状态。
 - 在单主窗口 + 内部 workspace/tab/pane 的产品里，`⌘W` 的第一语义不应直接映射到 `NSWindow` close；应先把它建模成“内部层级关闭动作”，按浮层 -> pane -> tab -> 退出 workspace -> 主页关窗 的顺序决策。否则看起来像“只是想关当前内容”，实际却直接打到最外层窗口，用户心智会持续错位。
 - `⌘Q` 这类 App 级退出命令不要复用 window close 逻辑；更稳的做法是单独建一个 app-level quit guard 状态机，既能覆盖菜单与快捷键的同一入口，又能把“第一次提示、第二次确认、超时重置”收成纯状态转移并单测。
+- 对齐 IDEA 的 tool window stripe 时，不能简单理解成“整个窗口最左外缘放一列按钮”。如果产品本身还有独立的**项目导航栏**，更准确的层级往往是：`[项目导航] | [workspace stripe | 主内容区]`，也就是 stripe 属于**主工作区壳**，不是全窗口最外层导航。
+- 当用户要“像 IDEA 的 bottom tool window”时，不能把“**工具窗内容停靠在底部**”误等同于“**工具窗入口按钮也放在底部**”。IDEA 的常见心智是：**内容面板在底部，入口按钮在窗口边缘的 tool window stripe**；这两层职责必须分开建模。
+- 当用户明确要求“像 IDEA 的 bottom tool window”且进一步指出应直接采用通用 Tool Window 框架时，不要停留在“先做 Git 专用底部面板”的最小补丁思路；应优先评估并接受 **通用底部工具窗口能力** 作为本轮正确抽象，再让 Git 作为首个接入者。
+- 对齐 IDEA graph 时，真正决定“线和线是不是直接接上”的关键不是 row 边界 overdraw，而是 **print element 记录的是 current row position 与 adjacent row position**。如果模型只有 top/middle/bottom anchor，renderer 天然会退化成边界拼接。
+- 对 IDE log graph 这类图谱，**几何正确 ≠ 看起来正确**。如果 color 语义没有进入结构化 print element，App 层只能整张图统一 accent，最后就会出现“lane 拓扑已经对了，但还是没有 IDEA 味道”的情况。
+- 对这种“视觉上像断线”的 Canvas/表格问题，根因未必在 graph core，也可能在 **row 边界裁切 + 半像素未对齐**。如果每一行都是独立画布，就必须显式处理 overdraw 和 pixel alignment，否则模型再对，成像也会很丑。
+- 当用户指出“问题已经不是 renderer，而是图谱底层形态不对”时，不能继续在活动 lane 或单行拼线层面打补丁；要及时提升到 **permanent layout index + row-local visible elements** 这一层，否则 merge 迁入/迁出、长边穿行这类形态永远只会看起来像“偶然画对了”。
+- 只把 commit graph 从 `Text(graphPrefix)` 换成 `Canvas` 还不够；如果 graph 仍只画在比 table row 更小的内容盒高度里，纵向 lane 视觉上依然会断。对这类“跨行连续”的 IDE 图谱，除了 renderer 本身，还要把 **统一 rowHeight 真相源 + table row 高度约束** 一起纳入设计和测试。
 
 ## 历史记录（notify 分支）
 
