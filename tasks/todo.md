@@ -1,5 +1,47 @@
 # Todo
 
+## 2026-03-27 修复 Workspace 终端右键菜单不可用
+
+- [x] 对照 Supacode 的 `GhosttySurfaceView`，确认 DevHaven 当前右键事件链路缺失 `menu(for:)` 与 copy/paste selector bridge
+- [x] 做最小修复：让终端右键在 Ghostty 未消费时 fallback 到 AppKit contextual menu，并兼容 `control + left click`
+- [x] 补 source-based 回归测试，锁定 capture-aware menu 与 `copy/paste/selectAll -> Ghostty binding action` 契约
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 修复 Workspace 终端右键菜单不可用）
+
+- 结果：
+  1. `GhosttyTerminalSurfaceView.rightMouseDown/rightMouseUp` 不再无条件把右键事件吞进 Ghostty，而是先尝试调用 `ghostty_surface_mouse_button(..., GHOSTTY_MOUSE_RIGHT, ...)`。
+  2. 当 Ghostty / TUI 程序没有消费该右键事件时，视图会 fallback 到 `super.rightMouseDown/rightMouseUp`，把 contextual menu 链路还给 AppKit。
+  3. `GhosttyTerminalSurfaceView` 新增 `menu(for:)`，在 `ghostty_surface_mouse_captured(surface) == false` 时提供原生菜单，并同时支持 macOS 常见的 `control + left click`。
+  4. 菜单动作已桥接到 Ghostty binding action：
+     - `Copy` -> `copy_to_clipboard`
+     - `Paste` -> `paste_from_clipboard`
+     - `Select All` -> `select_all`
+- 直接原因：
+  1. DevHaven 之前的 `rightMouseDown/rightMouseUp` 直接调用 `sendMouseButton(...)`，没有任何 `super` fallback。
+  2. 同一个 `GhosttySurfaceView.swift` 里也没有 `menu(for:)`，因此 AppKit 从未获得弹出上下文菜单的机会。
+  3. 即使后续想补菜单，原文件也没有 `copy(_:) / paste(_:) / selectAll(_:)` 到 Ghostty binding action 的标准 selector bridge。
+- 设计诱因：
+  1. 当前实现把“终端右键输入”简化成了统一鼠标事件透传，但终端宿主在 macOS 上还需要补一层 AppKit contextual menu 语义。
+  2. 右键不能简单做成“永远弹菜单”，因为 `vim/tmux/less` 等 TUI 可能开启 mouse capture；这时右键仍应优先交给终端程序。
+  3. Supacode 已验证正确边界应是“Ghostty capture-aware fallback”，而不是纯 AppKit 菜单或纯 terminal 透传二选一。
+- 当前修复方案：
+  1. AppKit/Ghostty bridge：在 `macos/Sources/DevHavenApp/Ghostty/GhosttySurfaceView.swift` 中为右键按下/抬起补上 capture-aware fallback。
+  2. AppKit/Ghostty bridge：新增 `menu(for:)` 与最小菜单项（`Copy / Paste / Select All`），并通过 `contextMenuItem(...)` 把 target 固定到当前 terminal view。
+  3. Tests：新增 `macos/Tests/DevHavenAppTests/GhosttySurfaceContextMenuTests.swift`，锁定右键 fallback、mouse capture guard、`control + left click` 与 selector bridge 契约。
+- 长期建议：
+  1. 后续若继续补全终端右键体验（例如 `Paste Selection`、Split、Reset Terminal），应继续沿用同一条 capture-aware `menu(for:)` 主链，不要再回退到各处零散 `NSMenu` 注入。
+  2. 任何 Ghostty/AppKit 输入兼容问题，都应先区分“事件是否被 terminal capture”与“宿主是否需要补原生交互语义”这两层，不要只在 wrapper 层做无条件透传。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'GhosttySurfaceContextMenuTests|GhosttySurfaceMenuShortcutRoutingPolicyTests'`
+    - `8 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` -> exit 0
+
 ## 2026-03-27 修复 Git Log 打开 merge commit 文件 Diff 时落入「无法解析 Diff」
 
 - [x] 复核截图对应现象与 `WorkspaceDiffPatchParser` 契约，确认当前失败不是加载超时，而是 merge commit 文件 diff 返回了 combined diff（`diff --cc` / `@@@`）

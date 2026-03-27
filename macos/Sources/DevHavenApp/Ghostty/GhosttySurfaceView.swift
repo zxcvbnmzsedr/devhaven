@@ -271,11 +271,54 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     override func rightMouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        sendMouseButton(event, state: GHOSTTY_MOUSE_PRESS)
+        guard let surface else {
+            super.rightMouseDown(with: event)
+            return
+        }
+        if ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, event.ghosttyMods) {
+            sendMousePosition(event)
+            return
+        }
+        super.rightMouseDown(with: event)
     }
 
     override func rightMouseUp(with event: NSEvent) {
-        sendMouseButton(event, state: GHOSTTY_MOUSE_RELEASE)
+        guard let surface else {
+            super.rightMouseUp(with: event)
+            return
+        }
+        if ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, event.ghosttyMods) {
+            sendMousePosition(event)
+            return
+        }
+        super.rightMouseUp(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        switch event.type {
+        case .rightMouseDown:
+            break
+        case .leftMouseDown:
+            guard event.modifierFlags.contains(.control) else { return nil }
+            guard let surface else { return nil }
+            guard !ghostty_surface_mouse_captured(surface) else { return nil }
+            _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, event.ghosttyMods)
+        default:
+            return nil
+        }
+
+        guard let surface else { return nil }
+        guard !ghostty_surface_mouse_captured(surface) else { return nil }
+        window?.makeFirstResponder(self)
+
+        let menu = NSMenu()
+        if ghostty_surface_has_selection(surface) {
+            menu.addItem(contextMenuItem(title: "Copy", action: #selector(copy(_:))))
+        }
+        menu.addItem(contextMenuItem(title: "Paste", action: #selector(paste(_:))))
+        menu.addItem(.separator())
+        menu.addItem(contextMenuItem(title: "Select All", action: #selector(selectAll(_:))))
+        return menu
     }
 
     override func otherMouseDown(with event: NSEvent) {
@@ -492,6 +535,22 @@ final class GhosttyTerminalSurfaceView: NSView {
         default:
             break
         }
+    }
+
+    @IBAction func copy(_ sender: Any?) {
+        performBindingAction("copy_to_clipboard")
+    }
+
+    @IBAction func paste(_ sender: Any?) {
+        performBindingAction("paste_from_clipboard")
+    }
+
+    @IBAction func pasteSelection(_ sender: Any?) {
+        performBindingAction("paste_from_selection")
+    }
+
+    @IBAction override func selectAll(_ sender: Any?) {
+        performBindingAction("select_all")
     }
 
     func hasMarkedText() -> Bool {
@@ -856,6 +915,12 @@ final class GhosttyTerminalSurfaceView: NSView {
             return ghostty_surface_key_is_binding(surface, keyEvent, &flags)
         }
         return isBinding ? flags : nil
+    }
+
+    private func contextMenuItem(title: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
     }
 
     private func equivalentKey(for event: NSEvent) -> String? {
