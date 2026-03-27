@@ -1,5 +1,29 @@
 # Todo
 
+## 2026-03-27 版本升级到 v3.1.1
+
+- [x] 确认正式版本基线为 `v3.1.0`，不把 `nightly` / `stable-appcast` 当作发布比较范围
+- [x] 更新版本号到 `3.1.1` 及对应 build number
+- [x] 同步 `README.md` / `README_cn.md` 版本徽章，并运行必要校验
+
+## Review（2026-03-27 版本升级到 v3.1.1）
+
+- 结果：
+  1. 已将原生发布真相源从 `3.1.0 / 3010000` 升级到 `3.1.1 / 3010100`。
+  2. 已同步更新 `README.md` 与 `README_cn.md` 首页版本徽章，避免仓库展示版本落后于 `AppMetadata.json`。
+- 直接原因：
+  1. 当前仓库正式版 tag 已到 `v3.1.0`，本轮目标是推进到下一个 patch release `v3.1.1`。
+  2. 发布比较基线必须继续使用最近 semver tag，而不是 `nightly` 或 `stable-appcast` 这类别名 tag。
+- 当前处理方案：
+  1. 更新 `macos/Resources/AppMetadata.json` 中的 `version=3.1.1`、`buildNumber=3010100`；
+  2. 更新 `README.md` 与 `README_cn.md` 首页版本徽章到 `3.1.1`；
+  3. 继续沿用 `AppMetadata.json` 作为版本真相源。
+- 验证证据：
+  - `python3` 解析 `macos/Resources/AppMetadata.json` → `version=3.1.1`，`buildNumber=3010100`
+  - `rg -n 'version-3\.1\.1' README.md README_cn.md` → 两个 README 的版本徽章均命中
+  - `swift build --package-path macos` → `Build complete! (2.69s)`，exit 0
+  - `git diff --check` → exit 0
+
 ## 2026-03-27 修复父工程刷新误杀运行中 worktree 会话
 
 - [x] 复核 `refreshProjectWorktrees(...) -> buildSyncedWorktrees(...) -> persistProjects(...) -> alignSelectionAfterReload()` 与 `refreshProjectCatalog() -> applyProjects(...) -> alignSelectionAfterReload()` 链路，确认 session 被裁掉的根因是“刷新后 child worktree 暂时缺失就直接 removeAll”
