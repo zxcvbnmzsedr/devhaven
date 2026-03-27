@@ -1,5 +1,135 @@
 # Todo
 
+## 2026-03-27 修复 Diff「查看模式」切换无效
+
+- [x] 排查 `WorkspaceDiffNavigationBarView -> WorkspaceDiffTabView` viewer mode 链路，确认 compare/merge 分支未真正消费切换结果
+- [x] 做最小修复：compare 支持切到 unified viewer；merge 隐藏不支持的 unified 切换
+- [x] 同步调整顶部操作区，仅在 side-by-side 编辑态展示保存 / merge action 按钮
+- [x] 更新 source-based 测试与 Review
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 修复 Diff「查看模式」切换无效）
+
+- 结果：
+  1. `WorkspaceDiffNavigationBarView` 不再无条件展示固定的两档 segmented control，而是按当前文档支持的 viewer modes 渲染。
+  2. `WorkspaceDiffTabView` 现在会真正消费 viewer mode：
+     - `patch`：继续支持 `side-by-side / unified`
+     - `compare`：`side-by-side` 走现有 compare editor；`unified` 改走统一的 patch-style viewer
+     - `merge`：当前只保留 `side-by-side`，不再继续暴露无效的 unified 开关
+  3. Compare 切到 unified 后不再停留在原 two-side editor，因此“并排/统一切换无效”的问题已收口。
+  4. 只对 side-by-side 编辑器有意义的操作（保存、merge accept 按钮）已限制在 side-by-side 模式展示，避免 unified 呈现下继续出现误导性按钮。
+- 直接原因：
+  1. 顶栏 `Picker` 的值确实会写到 `viewModel.documentState.viewerMode`，但 `WorkspaceDiffTabView` 里的 compare / merge 分支始终直接路由到固定子视图，没有使用该值做任何分发。
+  2. 因此用户切换“并排/统一”时，运行时状态变了，实际 UI 却没有变，看起来就是开关失效。
+- 设计诱因：
+  1. 首轮 diff tab viewer 落地时，`viewerMode` 主要只在 patch viewer 上接通；后来 compare / merge viewer 接入了统一导航壳，但没有把 viewer mode 能力一并补齐。
+  2. merge 本身是 3/4-pane 编辑器，当前模型也没有自然的 unified merge viewer 描述，因此保留统一开关只会继续制造伪功能。
+- 当前修复方案：
+  1. App/UI：`WorkspaceDiffNavigationBarView` 新增 `availableViewerModes`，由上层显式传入当前文档支持的模式集合。
+  2. App/UI：`WorkspaceDiffTabView` 新增 `effectiveViewerMode / availableViewerModes`，compare 在 unified 下路由到 `WorkspaceDiffPatchViewerView`，merge 强制收口为 side-by-side。
+  3. App/UI：新增 `unifiedPatchDocument(for: compareDocument)`，把 compare blocks 转成统一 patch-style 文档，供 unified viewer 使用。
+- 长期建议：
+  1. 当前 compare unified 是基于现有 compare blocks 合成的 patch-style 视图，已满足“切换真实生效”；如果后续继续追 IDEA 级 fidelity，可以再把 unified compare 也升级成更完整的 editor/selection 语义，而不是只做只读 viewer。
+  2. merge 若未来也要支持 unified，需要先明确产品语义：到底是 `base -> result` 的 unified diff，还是 conflict-oriented 的专用统一视图；在此之前不应继续暴露一个假的 segmented option。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'WorkspaceDiffNavigationBarViewTests|WorkspaceDiffTabViewTests'`
+    - `12 tests, 0 failures`
+    - `swift test --package-path macos --filter WorkspaceDiffTabViewModelTests/testUpdateViewerModeDoesNotDropLoadedDocument`
+    - `1 test, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 Diff 导航条图标化 + 移除 compare「Diff Blocks」栏
+
+- [x] 定位 compare viewer 里的 `Diff Blocks` 侧栏与顶部 Previous/Next Difference 按钮实现
+- [x] 做最小 SwiftUI 改动：移除 compare `Diff Blocks` 栏，保留 overview gutter
+- [x] 将 Previous / Next Difference 文案按钮改成图标按钮，并补 accessibility / help 文案
+- [x] 更新对应 source-based 测试与 Review
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 Diff 导航条图标化 + 移除 compare「Diff Blocks」栏）
+
+- 结果：
+  1. `WorkspaceDiffTwoSideViewerView` 已移除 compare 侧的 `Diff Blocks` 整栏，不再展示左侧块列表与对应标题。
+  2. compare viewer 保留 `compareOverviewGutter`，因此块级定位能力仍然存在；点击 overview marker 仍会同步当前选中块并滚动到对应位置。
+  3. `WorkspaceDiffNavigationBarView` 已把 `Previous Difference / Next Difference` 从文案按钮改成图标按钮，分别使用 `chevron.up / chevron.down`。
+  4. 为避免图标按钮语义退化，仍保留了 `.accessibilityLabel(...)` 与 `.help(...)` 的英文语义文案。
+- 直接原因：
+  1. 用户明确表示 compare viewer 左侧 `Diff Blocks` 栏“用不着”，因此需要直接删掉这层 UI。
+  2. 用户同时要求把顶部 Previous / Next Difference 入口改成更紧凑的图标形态。
+- 设计诱因：
+  1. compare viewer 当前同时存在左侧 block 栏和 overview gutter，两层导航 affordance 有冗余；这次按用户要求删掉更重的那一层。
+  2. 顶部导航按钮此前直接使用长文本，在当前 diff 顶栏密度下占位偏大，不够紧凑。
+- 当前修复方案：
+  1. App/UI：从 `WorkspaceDiffTwoSideViewerView` 的根 `HStack` 中移除 `compareBlocksSidebar`，保留 `compareOverviewGutter + editors` 布局。
+  2. App/UI：把 diff navigation bar 的前后跳转入口切成 icon-only `Button`，并补 accessibility/help 语义。
+  3. Tests：同步调整 `WorkspaceDiffNavigationBarViewTests` 与 `WorkspaceDiffTabViewTests` 的 source-based 断言。
+- 长期建议：
+  1. 当前 compare 侧栏移除后，块级 stage/revert/unstage 入口也一并不再显示；如果后续用户仍希望保留这些动作但不要独立侧栏，可以再讨论把动作收口到更轻量的 hover/toolbar/context menu 方案。
+  2. 若后续 merge viewer 也出现类似冗余反馈，可以同样评估是否仅保留 overview gutter，而不是默认保留左侧冲突块栏。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'WorkspaceDiffNavigationBarViewTests|WorkspaceDiffTabViewTests'`
+    - `9 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 修复 `./dev` 启动失败（working tree diff live client / Commit side tool window 签名断裂）
+
+- [x] 复现 `./dev --no-log` 启动失败，记录首个编译错误与后续阻塞链路
+- [x] 为 `NativeGitRepositoryService` 补齐 working tree diff live client 依赖的文件读取 / patch mutation helper
+- [x] 为新增 Git helper 补定向测试，覆盖 head/index/local/conflict/patch mutation 场景
+- [x] 修复 `WorkspaceCommitSideToolWindowHostView -> WorkspaceCommitRootView -> WorkspaceCommitChangesBrowserView` 的闭包签名断裂
+- [x] 修复 `./dev --dry-run` 的 bash 兼容问题
+- [x] 运行构建 / 定向测试 / 启动烟测 / `git diff --check`
+
+## Review（2026-03-27 修复 `./dev` 启动失败）
+
+- 结果：
+  1. `./dev --no-log` 现在能完成 SwiftPM 构建并进入 App 运行态，不再在编译阶段直接失败。
+  2. `NativeGitRepositoryService` 已补齐 `loadHeadFileContent`、`loadIndexFileContent`、`loadConflictFileContents`、`loadLocalFileContent`、`saveLocalFileContent`、`stagePatch`、`unstagePatch`，使 `WorkspaceDiffTabViewModel.Client.live(...)` 的 working tree compare / merge 主链重新可编译、可运行。
+  3. `WorkspaceCommitSideToolWindowHostView`、`WorkspaceCommitRootView`、`WorkspaceCommitChangesBrowserView` 现在统一使用“单击同步已打开 preview / 双击打开或聚焦 preview”的闭包签名，不再卡在 host 与 root/browser API 脱节。
+  4. `dev` 的 dry-run 分支已改成 bash 可执行的数组拆分写法，`./dev --dry-run` 不再报 `bad substitution`。
+- 直接原因：
+  1. `WorkspaceDiffTabViewModel.Client.live(...)` 在 2026-03-26 diff 架构升级后，开始调用一组并不存在于 `NativeGitRepositoryService` 的 working tree helper，导致 `./dev` 首次编译直接失败。
+  2. 修掉第一层后，`WorkspaceCommitSideToolWindowHostView` 仍在按“sync/open preview 双闭包”调用 `WorkspaceCommitRootView`，但 `WorkspaceCommitRootView` / `WorkspaceCommitChangesBrowserView` 还停留在旧的单 `onOpenDiff` 签名，形成第二层编译断裂。
+  3. `dev` 脚本的 dry-run 分支误用了 zsh 的 `${=command}` 语法，在 bash shebang 下天然不可执行。
+- 设计诱因：
+  1. Diff Viewer 主链从 patch preview 升级到 working tree compare/merge 后，live client 与 Git service 的 API 演进没有同提交闭环，导致 ViewModel 先引用、Storage 层后补的断层。
+  2. Commit side tool window 迁移到“单实例 preview”后，host 层已切到新语义，但 root/browser 仍保留旧入口，说明这条 UI 子链路没有被一次性联动收口。
+  3. `dev` 的 dry-run 分支缺少最基本的 bash 执行验证。
+- 当前修复方案：
+  1. Core/Storage：补齐 working tree compare/merge 所需的 Git 文件读取与 patch mutation helper，并通过临时 patch 文件 + `git apply --cached [--reverse] --unidiff-zero --recount` 实现块级 stage/unstage。
+  2. App/Commit：把 root/browser 统一切到 `onSyncDiffPreviewIfNeeded` + `onOpenDiffPreview` 双闭包，使单击/双击 preview 语义与 host 对齐。
+  3. Script：dry-run 改用 bash `read -r -a` 数组拆分，不再依赖 zsh-only 扩展。
+- 长期建议：
+  1. `WorkspaceDiffTabViewModel.Client.live(...)` 新增依赖时，优先让 `NativeGitRepositoryServiceTests` 或 compile-only smoke 覆盖这组 live wiring，避免再出现“ViewModel 先接线、Service API 缺失”的低级断裂。
+  2. Commit side tool window 这类三层 View 传参链，后续改 preview/open 语义时最好补一条 source-based 或 compile-level contract test，锁定 host/root/browser 的闭包签名。
+  3. `dev` 建议保留一个超轻量 smoke（至少 `./dev --dry-run`），专门守住脚本层 bash 兼容性。
+- 验证证据：
+  - 红灯（复现）：
+    - `./dev --dry-run` → `./dev: line 112: ${=command}: bad substitution`
+    - `./dev --no-log` → 首次编译失败于 `WorkspaceDiffTabViewModel.swift`，报 `NativeGitRepositoryService` 缺少 `saveLocalFileContent / stagePatch / unstagePatch / loadHeadFileContent / loadIndexFileContent / loadConflictFileContents / loadLocalFileContent`
+    - 修掉第一层后，继续失败于 `WorkspaceCommitSideToolWindowHostView.swift` 与 `WorkspaceCommitRootView` 闭包签名不匹配
+  - 绿灯（定向测试）：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests/(testLoadHeadIndexAndLocalFileContentsReflectWorkingTreeState|testLoadConflictFileContentsReturnsBaseOursTheirsAndResult|testStageAndUnstagePatchOnlyMutateIndex)'`
+    - `3 tests, 0 failures`
+  - 绿灯（构建）：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 绿灯（脚本/启动烟测）：
+    - `./dev --dry-run` → 正常打印 vendor/log/run 命令
+    - `./dev --no-log` → `Build of product 'DevHavenApp' complete!`，随后进程保持运行，手动 `Ctrl-C` 退出
+  - 质量：
+    - `git diff --check` → exit 0
+
 ## 2026-03-26 复刻 IDEA Diff 逻辑（brainstorming）
 
 - [x] 探查当前 DevHaven diff 架构、既有设计文档、测试边界与近期提交，明确现状

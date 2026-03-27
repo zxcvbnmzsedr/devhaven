@@ -225,6 +225,68 @@ public struct NativeGitRepositoryService: Sendable {
         return untrackedResult.stdout
     }
 
+    public func loadHeadFileContent(at repositoryPath: String, filePath: String) throws -> String {
+        let normalizedPath = normalizeFilePath(filePath)
+        guard !normalizedPath.isEmpty else {
+            return ""
+        }
+        return try loadGitObjectText(
+            arguments: ["show", "HEAD:\(normalizedPath)"],
+            at: repositoryPath,
+            emptyOnMissing: true
+        )
+    }
+
+    public func loadIndexFileContent(at repositoryPath: String, filePath: String) throws -> String {
+        try loadIndexStageFileContent(stage: 0, at: repositoryPath, filePath: filePath)
+    }
+
+    public func loadConflictFileContents(at repositoryPath: String, filePath: String) throws -> WorkspaceDiffConflictFileContents {
+        WorkspaceDiffConflictFileContents(
+            base: try loadIndexStageFileContent(stage: 1, at: repositoryPath, filePath: filePath),
+            ours: try loadIndexStageFileContent(stage: 2, at: repositoryPath, filePath: filePath),
+            theirs: try loadIndexStageFileContent(stage: 3, at: repositoryPath, filePath: filePath),
+            result: try loadLocalFileContent(at: repositoryPath, filePath: filePath)
+        )
+    }
+
+    public func loadLocalFileContent(at repositoryPath: String, filePath: String) throws -> String {
+        let fileURL = fileURL(at: repositoryPath, filePath: filePath)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return ""
+        }
+        let data = try Data(contentsOf: fileURL)
+        return String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+    }
+
+    public func saveLocalFileContent(at repositoryPath: String, filePath: String, content: String) throws {
+        let fileURL = fileURL(at: repositoryPath, filePath: filePath)
+        try withMutationLock(at: repositoryPath) {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: nil
+            )
+            try content.write(to: fileURL, atomically: true, encoding: .utf8)
+        }
+    }
+
+    public func stagePatch(at repositoryPath: String, patch: String) throws {
+        try applyPatchMutation(
+            patch,
+            arguments: ["apply", "--cached", "--unidiff-zero", "--whitespace=nowarn", "--recount"],
+            at: repositoryPath
+        )
+    }
+
+    public func unstagePatch(at repositoryPath: String, patch: String) throws {
+        try applyPatchMutation(
+            patch,
+            arguments: ["apply", "--cached", "--reverse", "--unidiff-zero", "--whitespace=nowarn", "--recount"],
+            at: repositoryPath
+        )
+    }
+
     public func loadChanges(at repositoryPath: String) throws -> WorkspaceGitWorkingTreeSnapshot {
         let result = try runner.runAllowingFailure(
             arguments: ["status", "--porcelain=v2", "--branch"],
@@ -632,6 +694,77 @@ public struct NativeGitRepositoryService: Sendable {
             )
         }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func loadIndexStageFileContent(stage: Int, at repositoryPath: String, filePath: String) throws -> String {
+        let normalizedPath = normalizeFilePath(filePath)
+        guard !normalizedPath.isEmpty else {
+            return ""
+        }
+        return try loadGitObjectText(
+            arguments: ["show", ":\(stage):\(normalizedPath)"],
+            at: repositoryPath,
+            emptyOnMissing: true
+        )
+    }
+
+    private func loadGitObjectText(
+        arguments: [String],
+        at repositoryPath: String,
+        emptyOnMissing: Bool
+    ) throws -> String {
+        let result = try runner.runAllowingFailure(arguments: arguments, at: repositoryPath, timeout: 30)
+        if result.isSuccess {
+            return result.stdout
+        }
+        if emptyOnMissing, isMissingObjectFailure(result) {
+            return ""
+        }
+        throw WorkspaceGitCommandError.commandFailed(
+            command: result.command.joined(separator: " "),
+            message: result.errorMessage
+        )
+    }
+
+    private func applyPatchMutation(
+        _ patch: String,
+        arguments: [String],
+        at repositoryPath: String
+    ) throws {
+        guard !patch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        try withMutationLock(at: repositoryPath) {
+            let patchURL = FileManager.default.temporaryDirectory
+                .appending(path: "devhaven-git-patch-\(UUID().uuidString).patch")
+            let payload = patch.hasSuffix("\n") ? patch : patch + "\n"
+            try payload.write(to: patchURL, atomically: true, encoding: .utf8)
+            defer {
+                try? FileManager.default.removeItem(at: patchURL)
+            }
+            try runMutationLocked(arguments: arguments + [patchURL.path], at: repositoryPath)
+        }
+    }
+
+    private func fileURL(at repositoryPath: String, filePath: String) -> URL {
+        URL(fileURLWithPath: repositoryPath, isDirectory: true)
+            .appending(path: normalizeFilePath(filePath))
+            .standardizedFileURL
+    }
+
+    private func normalizeFilePath(_ filePath: String) -> String {
+        filePath.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func isMissingObjectFailure(_ result: NativeGitCommandRunner.Result) -> Bool {
+        let message = result.errorMessage.lowercased()
+        return message.contains("exists on disk, but not in")
+            || message.contains("does not exist in")
+            || message.contains("not in the index")
+            || message.contains("not at stage")
+            || message.contains("unknown revision or path not in the working tree")
+            || message.contains("bad revision")
     }
 
     private var nonInteractiveEnvironment: [String: String] {

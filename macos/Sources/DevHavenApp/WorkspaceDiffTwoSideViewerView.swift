@@ -13,7 +13,6 @@ struct WorkspaceDiffTwoSideViewerView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            compareBlocksSidebar
             compareOverviewGutter
 
             HSplitView {
@@ -40,79 +39,6 @@ struct WorkspaceDiffTwoSideViewerView: View {
         }
         .onChange(of: selectedDifference) { _, newValue in
             syncSelection(with: newValue)
-        }
-    }
-
-    private var compareBlocksSidebar: some View {
-        VStack(spacing: 0) {
-            Text("Diff Blocks")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(NativeTheme.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(NativeTheme.surface)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(document.blocks) { block in
-                        let isSelected = selectedCompareBlockID == block.id
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(block.summary)
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(NativeTheme.textPrimary)
-                            HStack(spacing: 8) {
-                                if document.mode == .unstaged || document.mode == .untracked {
-                                    Button("暂存此块") {
-                                        selectedCompareBlockID = block.id
-                                        scrollCompareBlockIntoView(block, kind: .manual)
-                                        try? viewModel.applyCompareBlockAction(.stage, blockID: block.id)
-                                    }
-                                    .buttonStyle(.borderless)
-
-                                    if document.mode == .unstaged, document.rightPane.isEditable {
-                                        Button("回退此块") {
-                                            selectedCompareBlockID = block.id
-                                            scrollCompareBlockIntoView(block, kind: .manual)
-                                            try? viewModel.applyCompareBlockAction(.revert, blockID: block.id)
-                                        }
-                                        .buttonStyle(.borderless)
-                                    }
-                                } else if document.mode == .staged {
-                                    Button("撤销暂存此块") {
-                                        selectedCompareBlockID = block.id
-                                        scrollCompareBlockIntoView(block, kind: .manual)
-                                        try? viewModel.applyCompareBlockAction(.unstage, blockID: block.id)
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(isSelected ? NativeTheme.accent.opacity(0.12) : NativeTheme.surface)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(
-                                    isSelected ? NativeTheme.accent.opacity(0.9) : NativeTheme.border.opacity(0.65),
-                                    lineWidth: 1
-                                )
-                        }
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            selectedCompareBlockID = block.id
-                            scrollCompareBlockIntoView(block, kind: .manual)
-                        }
-                    }
-                }
-                .padding(10)
-            }
-        }
-        .frame(width: 220)
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(NativeTheme.border.opacity(0.8))
-                .frame(width: 1)
         }
     }
 

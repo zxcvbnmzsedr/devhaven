@@ -4,6 +4,7 @@ import DevHavenCore
 struct WorkspaceDiffNavigationBarView<TrailingContent: View>: View {
     let navigatorState: WorkspaceDiffNavigatorState
     @Binding var viewerMode: WorkspaceDiffViewerMode
+    let availableViewerModes: [WorkspaceDiffViewerMode]
     let onRefresh: () -> Void
     let onPreviousDifference: () -> Void
     let onNextDifference: () -> Void
@@ -12,6 +13,7 @@ struct WorkspaceDiffNavigationBarView<TrailingContent: View>: View {
     init(
         navigatorState: WorkspaceDiffNavigatorState,
         viewerMode: Binding<WorkspaceDiffViewerMode>,
+        availableViewerModes: [WorkspaceDiffViewerMode] = [.sideBySide, .unified],
         onRefresh: @escaping () -> Void,
         onPreviousDifference: @escaping () -> Void,
         onNextDifference: @escaping () -> Void,
@@ -19,6 +21,7 @@ struct WorkspaceDiffNavigationBarView<TrailingContent: View>: View {
     ) {
         self.navigatorState = navigatorState
         self._viewerMode = viewerMode
+        self.availableViewerModes = availableViewerModes
         self.onRefresh = onRefresh
         self.onPreviousDifference = onPreviousDifference
         self.onNextDifference = onNextDifference
@@ -27,13 +30,23 @@ struct WorkspaceDiffNavigationBarView<TrailingContent: View>: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Button("Previous Difference", action: onPreviousDifference)
-                .buttonStyle(.borderless)
-                .disabled(!navigatorState.canGoPrevious)
+            Button(action: onPreviousDifference) {
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Previous Difference")
+            .help("Previous Difference")
+            .disabled(!navigatorState.canGoPrevious)
 
-            Button("Next Difference", action: onNextDifference)
-                .buttonStyle(.borderless)
-                .disabled(!navigatorState.canGoNext)
+            Button(action: onNextDifference) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel("Next Difference")
+            .help("Next Difference")
+            .disabled(!navigatorState.canGoNext)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(navigatorState.currentDifferenceIndex)/\(navigatorState.totalDifferences)")
@@ -46,12 +59,18 @@ struct WorkspaceDiffNavigationBarView<TrailingContent: View>: View {
 
             Spacer(minLength: 0)
 
-            Picker("查看模式", selection: $viewerMode) {
-                Text("并排").tag(WorkspaceDiffViewerMode.sideBySide)
-                Text("统一").tag(WorkspaceDiffViewerMode.unified)
+            if availableViewerModes.count > 1 {
+                Picker("查看模式", selection: $viewerMode) {
+                    if availableViewerModes.contains(.sideBySide) {
+                        Text("并排").tag(WorkspaceDiffViewerMode.sideBySide)
+                    }
+                    if availableViewerModes.contains(.unified) {
+                        Text("统一").tag(WorkspaceDiffViewerMode.unified)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 180)
 
             trailingContent()
 

@@ -38,21 +38,39 @@ final class WorkspaceDiffTabViewTests: XCTestCase {
         XCTAssertTrue(mergeSource.contains("applyMergeAction"), "merge viewer 应提供 ours/theirs/both 等结果区动作")
     }
 
+    func testDiffTabViewRoutesCompareUnifiedModeThroughPatchViewer() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("if effectiveViewerMode == .unified"), "Diff 标签页应根据有效 viewer mode 决定 compare 文档是否切到 unified 呈现")
+        XCTAssertTrue(source.contains("unifiedPatchDocument(for: compareDocument)"), "compare 文档切到统一模式时应生成 unified patch document")
+        XCTAssertTrue(source.contains("viewerMode: .unified"), "compare unified 路由到 patch viewer 时应显式以 unified 模式渲染")
+    }
+
+    func testDiffTabViewKeepsMergeInSideBySideAndHidesUnsupportedUnifiedToggle() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(source.contains("case .loaded(.merge):"), "Diff 标签页应显式识别 merge 文档的 viewer mode 支持边界")
+        XCTAssertTrue(source.contains("return [.sideBySide]"), "merge 文档当前只应暴露 side-by-side 模式，避免继续显示无效 unified 开关")
+        XCTAssertTrue(source.contains("get: { effectiveViewerMode }"), "顶栏 picker 应消费有效 viewer mode，而不是无条件绑定底层 runtime 值")
+    }
+
     func testDiffTabViewProvidesBlockLevelCompareAndMergeActionSections() throws {
         let twoSideSource = try String(contentsOf: twoSideViewerFileURL(), encoding: .utf8)
         let mergeSource = try String(contentsOf: mergeViewerFileURL(), encoding: .utf8)
 
-        XCTAssertTrue(twoSideSource.contains("compareBlocksSidebar"), "compare editor 应存在独立的 side rail，承接 hunk 级动作")
+        XCTAssertFalse(twoSideSource.contains("compareBlocksSidebar"), "用户已明确不要 Diff Blocks 栏，compare editor 不应继续保留独立 side rail")
+        XCTAssertFalse(twoSideSource.contains("Text(\"Diff Blocks\")"), "compare editor 不应继续显示 Diff Blocks 栏标题")
         XCTAssertTrue(mergeSource.contains("mergeConflictSidebar"), "merge editor 应存在独立的 side rail，承接块级 accept 动作")
         XCTAssertTrue(twoSideSource.contains("document.blocks"), "compare editor 应消费 compare blocks，而不是只渲染纯文本 pane")
         XCTAssertTrue(mergeSource.contains("document.conflictBlocks"), "merge editor 应消费 conflict blocks，而不是只有整文件按钮")
     }
 
-    func testDiffTabViewAllowsUntrackedBlocksToUseStageAction() throws {
+    func testDiffTabViewKeepsCompareOverviewGutterAfterRemovingDiffBlocksSidebar() throws {
         let source = try String(contentsOf: twoSideViewerFileURL(), encoding: .utf8)
 
-        XCTAssertTrue(source.contains("document.mode == .untracked"), "Diff 视图应显式识别 untracked compare 模式")
-        XCTAssertTrue(source.contains("Button(\"暂存此块\")"), "untracked compare 也应复用 block 级暂存动作入口")
+        XCTAssertTrue(source.contains("compareOverviewGutter"), "删除 Diff Blocks 栏后，compare overview gutter 仍应保留")
+        XCTAssertTrue(source.contains("blockOverviewMarker("), "删除侧栏后仍应通过 overview marker 承接块定位")
+        XCTAssertFalse(source.contains("Button(\"暂存此块\")"), "删除 Diff Blocks 栏后，不应继续保留 compare 侧栏里的块级按钮")
     }
 
     func testTwoSideAndMergeViewerKeepSideRailAndOverviewSyncedWithCurrentDifference() throws {

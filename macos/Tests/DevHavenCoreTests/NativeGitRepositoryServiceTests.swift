@@ -500,6 +500,90 @@ final class NativeGitRepositoryServiceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: repositoryURL.appending(path: "NEW.txt").path))
     }
 
+    func testLoadHeadIndexAndLocalFileContentsReflectWorkingTreeState() throws {
+        let fixture = try GitRepositoryFixture()
+        let repositoryURL = try fixture.createRepository(named: "git-working-tree-contents")
+        try "hello\nstaged\n".write(
+            to: repositoryURL.appending(path: "README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try fixture.run(["git", "add", "README.md"], at: repositoryURL)
+        try "hello\nstaged\nlocal\n".write(
+            to: repositoryURL.appending(path: "README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let service = NativeGitRepositoryService()
+
+        XCTAssertEqual(try service.loadHeadFileContent(at: repositoryURL.path(), filePath: "README.md"), "hello\n")
+        XCTAssertEqual(try service.loadIndexFileContent(at: repositoryURL.path(), filePath: "README.md"), "hello\nstaged\n")
+        XCTAssertEqual(try service.loadLocalFileContent(at: repositoryURL.path(), filePath: "README.md"), "hello\nstaged\nlocal\n")
+    }
+
+    func testLoadConflictFileContentsReturnsBaseOursTheirsAndResult() throws {
+        let fixture = try GitRepositoryFixture()
+        let repositoryURL = try fixture.createRepository(named: "git-conflict-contents")
+        try fixture.run(["git", "checkout", "-b", "feature/conflict"], at: repositoryURL)
+        _ = try fixture.createCommit(
+            in: repositoryURL,
+            message: "feat: feature readme",
+            fileName: "README.md",
+            content: "hello\nfeature\n"
+        )
+        try fixture.run(["git", "checkout", "main"], at: repositoryURL)
+        _ = try fixture.createCommit(
+            in: repositoryURL,
+            message: "feat: main readme",
+            fileName: "README.md",
+            content: "hello\nmain\n"
+        )
+
+        let runner = NativeGitCommandRunner()
+        let mergeResult = try runner.runAllowingFailure(arguments: ["merge", "feature/conflict"], at: repositoryURL.path())
+        XCTAssertFalse(mergeResult.isSuccess)
+
+        let service = NativeGitRepositoryService()
+        let contents = try service.loadConflictFileContents(at: repositoryURL.path(), filePath: "README.md")
+
+        XCTAssertEqual(contents.base, "hello\n")
+        XCTAssertEqual(contents.ours, "hello\nmain\n")
+        XCTAssertEqual(contents.theirs, "hello\nfeature\n")
+        XCTAssertTrue(contents.result.contains("<<<<<<<"))
+        XCTAssertTrue(contents.result.contains("main"))
+        XCTAssertTrue(contents.result.contains("feature"))
+    }
+
+    func testStageAndUnstagePatchOnlyMutateIndex() throws {
+        let fixture = try GitRepositoryFixture()
+        let repositoryURL = try fixture.createRepository(named: "git-stage-patch")
+        try "hello\none\ntwo\n".write(
+            to: repositoryURL.appending(path: "README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let patch = """
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,0 +2,1 @@
++one
+"""
+
+        let service = NativeGitRepositoryService()
+        try service.stagePatch(at: repositoryURL.path(), patch: patch)
+
+        XCTAssertEqual(try service.loadIndexFileContent(at: repositoryURL.path(), filePath: "README.md"), "hello\none\n")
+        XCTAssertEqual(try service.loadLocalFileContent(at: repositoryURL.path(), filePath: "README.md"), "hello\none\ntwo\n")
+
+        try service.unstagePatch(at: repositoryURL.path(), patch: patch)
+
+        XCTAssertEqual(try service.loadIndexFileContent(at: repositoryURL.path(), filePath: "README.md"), "hello\n")
+        XCTAssertEqual(try service.loadLocalFileContent(at: repositoryURL.path(), filePath: "README.md"), "hello\none\ntwo\n")
+    }
+
     func testDiscardMutationRevertsStagedRename() throws {
         let fixture = try GitRepositoryFixture()
         let repositoryURL = try fixture.createRepository(named: "git-discard-staged-rename")
