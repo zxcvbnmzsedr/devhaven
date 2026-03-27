@@ -1731,9 +1731,11 @@ public final class NativeAppViewModel {
             throw NativeWorktreeError.invalidProject("项目不存在或已移除")
         }
         var projects = snapshot.projects
+        let preservedOpenedWorktrees = openedChildWorktrees(for: rootProjectPath, in: projects)
         projects[projectIndex].worktrees = buildSyncedWorktrees(
             existingWorktrees: projects[projectIndex].worktrees,
-            gitWorktrees: gitWorktrees
+            gitWorktrees: gitWorktrees,
+            preservedLiveWorktrees: preservedOpenedWorktrees
         )
         try persistProjects(projects)
         refreshCurrentBranch(for: rootProjectPath)
@@ -2077,7 +2079,14 @@ public final class NativeAppViewModel {
         let rebuiltProjects = try await Task.detached(priority: .userInitiated) {
             try await refresher(refreshRequest)
         }.value
-        applyProjects(rebuiltProjects)
+        let mergedProjects = mergeProjectsPreservingOpenedChildWorktrees(
+            rebuiltProjects,
+            existingProjects: existingProjects
+        )
+        if mergedProjects != rebuiltProjects {
+            try store.updateProjects(mergedProjects)
+        }
+        applyProjects(mergedProjects)
         errorMessage = nil
     }
 
@@ -2288,10 +2297,20 @@ public final class NativeAppViewModel {
     }
 
     private func alignSelectionAfterReload() {
-        let rootProjectPaths = Set(snapshot.projects.map(\.path))
+        let rootProjectPaths = Set(snapshot.projects.map { normalizePathForCompare($0.path) })
         openWorkspaceSessions.removeAll { session in
             if session.isQuickTerminal { return false }
-            return !rootProjectPaths.contains(session.rootProjectPath) || resolveDisplayProject(for: session.projectPath, rootProjectPath: session.rootProjectPath) == nil
+            let normalizedRootProjectPath = normalizePathForCompare(session.rootProjectPath)
+            guard rootProjectPaths.contains(normalizedRootProjectPath) else {
+                return true
+            }
+            if normalizePathForCompare(session.projectPath) == normalizedRootProjectPath {
+                return false
+            }
+            if resolveDisplayProject(for: session.projectPath, rootProjectPath: session.rootProjectPath) != nil {
+                return false
+            }
+            return !shouldPreserveOpenedChildWorktreeSessionDuringReload(session, rootProjectPaths: rootProjectPaths)
         }
         syncAttentionStateWithOpenSessions()
         if let activeWorkspaceProjectPath, !openWorkspaceProjectPaths.contains(activeWorkspaceProjectPath) {
@@ -2315,6 +2334,81 @@ public final class NativeAppViewModel {
             return
         }
         scheduleSelectedProjectDocumentRefresh()
+    }
+
+    private func openedChildWorktrees(
+        for rootProjectPath: String,
+        in projects: [Project]? = nil
+    ) -> [ProjectWorktree] {
+        let sourceProjects = projects ?? snapshot.projects
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard let rootProject = sourceProjects.first(where: {
+            normalizePathForCompare($0.path) == normalizedRootProjectPath
+        }) else {
+            return []
+        }
+
+        let openedChildPaths = Set(
+            openWorkspaceSessions.compactMap { session -> String? in
+                guard !session.isQuickTerminal,
+                      normalizePathForCompare(session.rootProjectPath) == normalizedRootProjectPath,
+                      normalizePathForCompare(session.projectPath) != normalizedRootProjectPath
+                else {
+                    return nil
+                }
+                return normalizePathForCompare(session.projectPath)
+            }
+        )
+        guard !openedChildPaths.isEmpty else {
+            return []
+        }
+
+        return rootProject.worktrees.filter { worktree in
+            openedChildPaths.contains(normalizePathForCompare(worktree.path))
+        }
+    }
+
+    private func mergeProjectsPreservingOpenedChildWorktrees(
+        _ rebuiltProjects: [Project],
+        existingProjects: [Project]
+    ) -> [Project] {
+        guard !rebuiltProjects.isEmpty else {
+            return rebuiltProjects
+        }
+
+        return rebuiltProjects.map { project in
+            let preservedOpenedWorktrees = openedChildWorktrees(
+                for: project.path,
+                in: existingProjects
+            )
+            guard !preservedOpenedWorktrees.isEmpty else {
+                return project
+            }
+
+            var mergedProject = project
+            for worktree in preservedOpenedWorktrees where !mergedProject.worktrees.contains(where: {
+                normalizePathForCompare($0.path) == normalizePathForCompare(worktree.path)
+            }) {
+                mergedProject.worktrees.append(worktree)
+            }
+            mergedProject.worktrees.sort { $0.path < $1.path }
+            return mergedProject
+        }
+    }
+
+    private func shouldPreserveOpenedChildWorktreeSessionDuringReload(
+        _ session: OpenWorkspaceSessionState,
+        rootProjectPaths: Set<String>
+    ) -> Bool {
+        guard !session.isQuickTerminal else {
+            return false
+        }
+        let normalizedRootProjectPath = normalizePathForCompare(session.rootProjectPath)
+        let normalizedProjectPath = normalizePathForCompare(session.projectPath)
+        guard normalizedProjectPath != normalizedRootProjectPath else {
+            return false
+        }
+        return rootProjectPaths.contains(normalizedRootProjectPath)
     }
 
     private func scheduleSelectedProjectDocumentRefresh() {
@@ -4124,10 +4218,14 @@ private func buildWorktreeVirtualProject(sourceProject: Project, worktree: Proje
     )
 }
 
-private func buildSyncedWorktrees(existingWorktrees: [ProjectWorktree], gitWorktrees: [NativeGitWorktree]) -> [ProjectWorktree] {
+private func buildSyncedWorktrees(
+    existingWorktrees: [ProjectWorktree],
+    gitWorktrees: [NativeGitWorktree],
+    preservedLiveWorktrees: [ProjectWorktree] = []
+) -> [ProjectWorktree] {
     let existingByPath = Dictionary(uniqueKeysWithValues: existingWorktrees.map { (normalizePathForCompare($0.path), $0) })
     let now = swiftDateFromDate(Date())
-    return gitWorktrees
+    var mergedWorktrees = gitWorktrees
         .map { item -> ProjectWorktree in
             let existing = existingByPath[normalizePathForCompare(item.path)]
             return ProjectWorktree(
@@ -4146,7 +4244,12 @@ private func buildSyncedWorktrees(existingWorktrees: [ProjectWorktree], gitWorkt
                 updatedAt: existing?.updatedAt
             )
         }
-        .sorted { $0.path < $1.path }
+    for worktree in preservedLiveWorktrees where !mergedWorktrees.contains(where: {
+        normalizePathForCompare($0.path) == normalizePathForCompare(worktree.path)
+    }) {
+        mergedWorktrees.append(worktree)
+    }
+    return mergedWorktrees.sorted { $0.path < $1.path }
 }
 
 private func swiftDateFromDate(_ date: Date) -> SwiftDate {

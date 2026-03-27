@@ -804,6 +804,59 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         )
     }
 
+    func testWorkspaceSidebarProjectionStateMatchesExistingGroupsAndAvailableProjects() throws {
+        let viewModel = makeViewModel()
+        let project = makeProject(path: "/tmp/devhaven-root")
+        let extraProject = makeProject(name: "Extra", path: "/tmp/devhaven-extra")
+        viewModel.snapshot.projects = [project, extraProject]
+        viewModel.enterWorkspace(project.path)
+
+        let projection = viewModel.workspaceSidebarProjectionState()
+
+        XCTAssertEqual(projection.groups, viewModel.workspaceSidebarGroups)
+        XCTAssertEqual(projection.availableProjects, viewModel.availableWorkspaceProjects)
+    }
+
+    func testWorkspaceSidebarProjectionRevisionIncrementsWhenAgentStateChanges() throws {
+        let viewModel = makeViewModel()
+        let worktree = makeWorktree(path: "/tmp/devhaven-sidebar-revision", branch: "feature/sidebar-revision")
+        let project = makeProject(worktrees: [worktree])
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let controller = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+        let pane = try XCTUnwrap(controller.selectedPane)
+        let tabID = try XCTUnwrap(controller.selectedTab?.id)
+        let initialRevision = viewModel.workspaceSidebarProjectionRevision
+
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: worktree.path,
+                workspaceId: controller.workspaceId,
+                tabId: tabID,
+                paneId: pane.id,
+                surfaceId: pane.request.surfaceId,
+                terminalSessionId: pane.request.terminalSessionId,
+                agentKind: .codex,
+                sessionId: "codex-session-sidebar-revision",
+                pid: 88,
+                state: .running,
+                summary: "Running",
+                detail: nil,
+                updatedAt: Date(timeIntervalSince1970: 400)
+            )
+        )
+
+        XCTAssertGreaterThan(
+            viewModel.workspaceSidebarProjectionRevision,
+            initialRevision,
+            "agent state 变化后，sidebar projection revision 应递增，供宿主视图触发一次性投影同步"
+        )
+    }
+
     func testWorkspaceAgentSignalIsIgnoredAfterWorktreeCloses() throws {
         let viewModel = makeViewModel()
         let worktree = makeWorktree(path: "/tmp/devhaven-agent-closed", branch: "feature/closed")
@@ -853,13 +906,109 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
         viewModel.snapshot.projects = [project]
         viewModel.enterWorkspace(project.path)
         viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+        let openedController = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
 
         try await viewModel.deleteWorkspaceWorktree(worktree.path, from: project.path)
 
         XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path])
+        XCTAssertNil(viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path }))
+        XCTAssertFalse(viewModel.openWorkspaceProjects.contains(where: { $0.path == worktree.path }))
         XCTAssertTrue(viewModel.workspaceSidebarGroups.first?.worktrees.isEmpty ?? false)
         XCTAssertEqual(service.removedRequests.first?.worktreePath, worktree.path)
         XCTAssertTrue(service.removedRequests.first?.shouldDeleteBranch == true)
+        XCTAssertFalse(
+            viewModel.openWorkspaceSessions.contains(where: { $0.controller === openedController }),
+            "显式删除仍应真正关闭 live worktree session，而不是只从 sidebar 隐藏"
+        )
+    }
+
+    func testRefreshProjectWorktreesPreservesOpenedMissingWorktreeSession() async throws {
+        let service = TestWorktreeService()
+        service.listWorktreesResult = []
+        let worktree = makeWorktree(
+            path: "/tmp/devhaven-feature",
+            branch: "feature/protected",
+            status: "ready",
+            initStep: "ready"
+        )
+        let project = makeProject(path: "/tmp/devhaven", worktrees: [worktree])
+        let viewModel = makeViewModel(worktreeService: service)
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let openedController = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+
+        try await viewModel.refreshProjectWorktrees(project.path)
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path, worktree.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, worktree.path)
+        XCTAssertIdentical(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller,
+            openedController
+        )
+        XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.worktrees.map(\.path), [worktree.path])
+        XCTAssertEqual(viewModel.snapshot.projects.first?.worktrees.map(\.path), [worktree.path])
+    }
+
+    func testRefreshProjectCatalogPreservesOpenedMissingWorktreeSession() async throws {
+        let worktree = makeWorktree(
+            path: "/tmp/devhaven-feature",
+            branch: "feature/catalog",
+            status: "ready",
+            initStep: "ready"
+        )
+        let project = makeProject(path: "/tmp/devhaven", worktrees: [worktree])
+        let rebuiltProject = makeProject(path: project.path, worktrees: [])
+        let viewModel = makeViewModel(
+            projectCatalogRefresher: { _ in
+                [rebuiltProject]
+            }
+        )
+        viewModel.snapshot.projects = [project]
+        viewModel.snapshot.appState.directProjectPaths = [project.path]
+        viewModel.enterWorkspace(project.path)
+        viewModel.openWorkspaceWorktree(worktree.path, from: project.path)
+
+        let openedController = try XCTUnwrap(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller
+        )
+
+        try await viewModel.refreshProjectCatalog()
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path, worktree.path])
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, worktree.path)
+        XCTAssertIdentical(
+            viewModel.openWorkspaceSessions.first(where: { $0.projectPath == worktree.path })?.controller,
+            openedController
+        )
+        XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.worktrees.map(\.path), [worktree.path])
+        XCTAssertEqual(viewModel.snapshot.projects.first?.worktrees.map(\.path), [worktree.path])
+    }
+
+    func testRefreshProjectWorktreesRemovesMissingClosedWorktree() async throws {
+        let service = TestWorktreeService()
+        service.listWorktreesResult = []
+        let worktree = makeWorktree(
+            path: "/tmp/devhaven-closed",
+            branch: "feature/closed",
+            status: "ready",
+            initStep: "ready"
+        )
+        let project = makeProject(path: "/tmp/devhaven", worktrees: [worktree])
+        let viewModel = makeViewModel(worktreeService: service)
+        viewModel.snapshot.projects = [project]
+        viewModel.enterWorkspace(project.path)
+
+        try await viewModel.refreshProjectWorktrees(project.path)
+
+        XCTAssertEqual(viewModel.openWorkspaceProjectPaths, [project.path])
+        XCTAssertTrue(viewModel.workspaceSidebarGroups.first?.worktrees.isEmpty ?? false)
+        XCTAssertTrue(viewModel.snapshot.projects.first?.worktrees.isEmpty ?? false)
     }
 
     func testRefreshProjectWorktreesMergesGitStateIntoTrackedItems() async throws {
@@ -896,6 +1045,7 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
     private func makeViewModel(
         diagnostics: WorkspaceLaunchDiagnostics = .shared,
         terminalCommandRunner: @escaping @Sendable (String, [String]) throws -> Void = { _, _ in },
+        projectCatalogRefresher: (@Sendable (ProjectCatalogRefreshRequest) async throws -> [Project])? = nil,
         worktreeService: any NativeWorktreeServicing = NativeGitWorktreeService()
     ) -> NativeAppViewModel {
         NativeAppViewModel(
@@ -903,6 +1053,7 @@ final class NativeAppViewModelWorkspaceEntryTests: XCTestCase {
             projectDocumentLoader: { _ in ProjectDocumentSnapshot(notes: nil, todoItems: [], readmeFallback: nil) },
             gitDailyCollector: { _, _ in [] },
             gitDailyCollectorAsync: { _, _, _ in [] },
+            projectCatalogRefresher: projectCatalogRefresher,
             workspaceLaunchDiagnostics: diagnostics,
             terminalCommandRunner: terminalCommandRunner,
             worktreeService: worktreeService

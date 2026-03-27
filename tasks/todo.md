@@ -1,5 +1,160 @@
 # Todo
 
+## 2026-03-27 修复父工程刷新误杀运行中 worktree 会话
+
+- [x] 复核 `refreshProjectWorktrees(...) -> buildSyncedWorktrees(...) -> persistProjects(...) -> alignSelectionAfterReload()` 与 `refreshProjectCatalog() -> applyProjects(...) -> alignSelectionAfterReload()` 链路，确认 session 被裁掉的根因是“刷新后 child worktree 暂时缺失就直接 removeAll”
+- [x] 在 `NativeAppViewModel` 增加 live child worktree 保留 helper，让 worktree 刷新与全局项目刷新都先合并当前仍打开的 child worktree，再更新 `snapshot.projects`
+- [x] 收紧 `alignSelectionAfterReload()` 的 prune 条件：root 还在时，不再因 child worktree 暂时缺失就自动移除已打开会话
+- [x] 补 `NativeAppViewModelWorkspaceEntryTests` 回归用例，覆盖 worktree 刷新保护、全局刷新保护、关闭态缺失 worktree 正常移除，以及显式删除仍会真正关闭会话
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 修复父工程刷新误杀运行中 worktree 会话）
+
+- 结果：
+  1. `NativeAppViewModel.refreshProjectWorktrees(...)` 现在会先收集当前 root project 下仍处于打开状态的 child worktree，再把它们作为 `preservedLiveWorktrees` 合并回 `buildSyncedWorktrees(...)` 结果。
+  2. `NativeAppViewModel.refreshProjectCatalog()` 现在会在 background refresher 返回后，把 rebuilt root project 与当前 live child worktree 再做一次 merge；若 merge 后结果不同，还会把合并后的 `projects` 重新写回 store，避免下一次 `load()` 又把 child worktree 刷掉。
+  3. `alignSelectionAfterReload()` 不再把“root 仍存在但 child worktree 暂时无法从 snapshot resolve”的 live session 直接裁掉；只有 root project 真正消失时，才会自动回收整组 workspace session。
+  4. `buildSyncedWorktrees(...)` 仍以 `git worktree list` 为主，但现在支持补回当前仍打开、却未出现在本轮 Git 列表里的 child worktree，保留其 `id / status / init* / created / updatedAt` 等已有状态。
+- 直接原因：
+  1. 之前父工程 refresh 后，只要 `snapshot.projects[root].worktrees` 里暂时缺少某个 child worktree，`resolveDisplayProject(...)` 就会返回 `nil`。
+  2. `alignSelectionAfterReload()` 随后会把这个 child session 从 `openWorkspaceSessions` 中移除，Ghostty workspace 跟着释放，正在运行的命令也就意外退出。
+- 当前修复方案：
+  1. Core/ViewModel：用 `openedChildWorktrees(...)` / `mergeProjectsPreservingOpenedChildWorktrees(...)` 把“刷新项目模型”和“销毁 live worktree session”彻底解耦。
+  2. Core/ViewModel：把 reload prune 规则改成“root 不在才自动关闭；child 缺失但仍打开则保留”。
+  3. Tests：新增 3 个回归测试，并增强原有 `deleteWorkspaceWorktree` 用例，锁定“刷新保护”和“显式删除仍可关闭”的边界。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter NativeAppViewModelWorkspaceEntryTests`
+    - `37 tests, 0 failures`
+    - `swift test --package-path macos --filter RefreshProjectCatalog`
+    - `6 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 收口 Git diff 滚动同步回环与 tab 级重渲染
+
+- [x] 复核 `WorkspaceDiffTabView` / `WorkspaceTextEditorView` 静态代码，确认滚动同步状态目前放在 tab 级 `@State`，且 `boundsDidChange` 会高频回写共享 scroll state
+- [x] 做最小修复：把 compare/merge 的 scroll sync/request state 下沉到 viewer 层，避免滚动时整块 diff tab 容器重渲染
+- [x] 在 `WorkspaceTextEditorView` 增加程序化滚动目标位置短路与回声抑制，避免左右 editor 同步回环
+- [x] 增加本地滚动状态写频率阈值，避免每个像素的 `boundsDidChange` 都触发一次 SwiftUI 状态写入
+- [x] 运行 diff/viewer 定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 收口 Git diff 滚动同步回环与 tab 级重渲染）
+
+- 结果：
+  1. `WorkspaceDiffTabView` 不再持有 `editorScrollSyncState / editorScrollRequestState` 两个 tab 级 `@State`；它们已下沉到 `WorkspaceDiffTwoSideViewerView` 与 `WorkspaceDiffMergeViewerView` 的更窄作用域。
+  2. 这样在 compare / merge editor 滚动时，不会再把整个 diff tab（含 navigation bar / content state routing）按滚动频率打脏；更新范围被限制在当前 viewer。
+  3. `WorkspaceTextEditorView.Coordinator.applySyncedScrollIfNeeded()` 现在会先比较当前 `clipView.bounds.origin.y` 与目标 `targetY`；若已足够接近，则直接短路，不再重复 `scroll(to:)`。
+  4. `WorkspaceTextEditorView.Coordinator` 新增 `lastProgrammaticScrollOriginY / lastProgrammaticScrollRevision`，用来吞掉程序化同步滚动触发的 `boundsDidChange` 回声，避免左右 editor 互相写回 scroll state。
+  5. 本地滚动事件的状态写回也加了 `localScrollEmissionThreshold`，避免每个像素的滚动都生成一次新的 `WorkspaceTextEditorScrollSyncState` revision。
+- 直接原因：
+  1. 原实现里每个 editor 的 `boundsDidChange` 都会直接写共享 `scrollSyncState`，而该状态挂在 `WorkspaceDiffTabView` 顶层 `@State` 上。
+  2. 这会让整块 diff tab 在滚动过程中不断重渲染；同时对侧 editor 又会在 `updateNSView` 中执行程序化 `scroll(to:)`，形成同步回环和额外的 AppKit/SwiftUI 更新负担。
+- 当前修复方案：
+  1. App/UI：把滚动同步状态缩到 viewer 层，降低 SwiftUI 重渲染范围。
+  2. AppKit bridge：为程序化同步滚动增加目标位置短路与回声抑制，减少无效 `scroll(to:)` 和双向 ping-pong。
+  3. AppKit bridge：为本地滚动回写加阈值，降低 `boundsDidChange -> SwiftUI state write` 的频率。
+- 仍需运行时确认：
+  1. 这轮是基于静态代码和定向测试收口主嫌疑链；实际 CPU 下降幅度仍需你重编译安装后，在真实 Git diff 页面滚动复测。
+  2. 若复测后仍有明显卡顿，下一步要继续看 `renderer.generic.Renderer(renderer.Metal).updateFrame` 与大文档高亮/文本布局成本。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'WorkspaceTextEditorViewTests|WorkspaceDiffTabViewTests|WorkspaceHostViewTests|WorkspaceDiffNavigationBarViewTests|WorkspaceDiffTabViewModelTests|WorkspaceDiffNavigationTests'`
+    - `46 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 Sidebar 改成 projection store，减少 body 中的 group 现算
+
+- [x] 复核 post-fix sample，确认 `WorkspaceShellView` 1 秒轮询主链已切断，但 `workspaceSidebarGroups.getter` 仍进入主线程 SwiftUI/AttributeGraph 更新栈
+- [x] 引入 `WorkspaceSidebarProjectionStore`，让 `WorkspaceProjectSidebarHostView` 改为消费投影后的 `groups / availableProjects`
+- [x] 在 `NativeAppViewModel` 增加 `workspaceSidebarProjectionRevision`，只在 sidebar 相关输入变化时递增，供宿主视图按 revision 同步一次投影
+- [x] 新增 `workspaceSidebarProjectionState()`，把 sidebar group 与可打开项目列表收口成单个投影快照
+- [x] 补测试并运行定向验证、构建与 `git diff --check`
+
+## Review（2026-03-27 Sidebar 改成 projection store，减少 body 中的 group 现算）
+
+- 结果：
+  1. `WorkspaceProjectSidebarHostView` 不再在 body 中直接读取 `viewModel.workspaceSidebarGroups` / `viewModel.availableWorkspaceProjects`，而是改为持有 `WorkspaceSidebarProjectionStore`。
+  2. `WorkspaceSidebarProjectionStore` 只在 `viewModel.workspaceSidebarProjectionRevision` 变化时，从 `viewModel.workspaceSidebarProjectionState()` 同步一次投影结果；若投影结果未变化，则不会重新发布。
+  3. `NativeAppViewModel` 现在会在以下 sidebar 输入变化时递增 `workspaceSidebarProjectionRevision`：
+     - `snapshot`
+     - `openWorkspaceSessions`
+     - `activeWorkspaceProjectPath`
+     - `attentionStateByProjectPath`
+     - `agentDisplayOverridesByProjectPath`
+     - `currentBranchByProjectPath`
+  4. 这样 `WorkspaceProjectSidebarHostView` 的主渲染链路只观察一个轻量 revision，而不是在每次 SwiftUI body 更新时重新触发整个 `workspaceSidebarGroups` getter。
+- 直接原因：
+  1. 第一阶段切掉 timer 后，sample 里 `workspaceSidebarGroups.getter` 仍然出现在 `WorkspaceShellView` / `WorkspaceHostView` 关联的主线程更新栈里。
+  2. 根因不再是轮询本身，而是 sidebar 仍然依赖 body 中的大 getter 现算，只要 workspace 容器被打脏，就会重新做 group 聚合、notification/agent 解析与 worktree 排序。
+- 当前修复方案：
+  1. App/UI：新增 `WorkspaceSidebarProjectionStore.swift`，把 sidebar 列表输入收口成独立投影 store。
+  2. Core/ViewModel：新增 `WorkspaceSidebarProjectionState` 与 `workspaceSidebarProjectionRevision` / `workspaceSidebarProjectionState()`，把 sidebar 宿主从“大 getter 即时求值”切成“revision 驱动的一次性同步”。
+  3. Tests：新增 `WorkspaceProjectSidebarHostViewTests` source-based 契约，并补 `NativeAppViewModelWorkspaceEntryTests` 验证投影状态和 revision 递增。
+- 仍未做的后续收口：
+  1. `WorkspaceProjectListView / ProjectGroupView` 仍是普通 SwiftUI 视图，后续若 sample 仍显示 row 内部比较/布局有成本，可以再拆成更细的 row-local observable state。
+  2. Ghostty renderer / surface redraw 仍在 sample 中有一定占比；如果重装验证后 CPU 还在 20%~40%，下一步应继续对 `renderer.generic.Renderer(renderer.Metal).updateFrame` 与不可见 pane redraw 做排查。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'WorkspaceProjectSidebarHostViewTests|WorkspaceShellViewTests|WorkspaceRootViewTests|NativeAppViewModelWorkspaceEntryTests|NativeAppViewModelWorkspaceRunTests'`
+    - `53 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 切断 Workspace Codex 展示态 1 秒轮询主链
+
+- [x] 复核 `/Applications/DevHaven.app/Contents/MacOS/DevHavenApp` 高 CPU sample，确认主线程热点落在 `WorkspaceShellView.refreshCodexDisplayStates()` -> SwiftUI/Observation invalidation / layout 链路
+- [x] 做第一阶段大改：删除 `WorkspaceShellView` 内的 1 秒 timer 轮询，引入事件驱动 `CodexAgentPresentationCoordinator`
+- [x] 让 `GhosttySurfaceHostModel` 暴露 pane 级 snapshot observer，只在 snapshot 真正变化时向 coordinator 推送更新，并在 tracking 关闭/surface 释放时显式清空
+- [x] 为 `replaceWorkspaceAgentDisplayOverrides(...)` 增加 no-op / 过滤护栏，避免 fallback override 无变化时继续打脏大 ViewModel
+- [x] 顺手把 `WorkspaceHostView` 的 run toolbar 读取收口到一次性 `workspaceRunToolbarState(...)`，避免 body 中重复现算运行配置
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 切断 Workspace Codex 展示态 1 秒轮询主链）
+
+- 结果：
+  1. `WorkspaceShellView` 不再持有 `Timer.publish(every: 1, ...)` 和 `codexDisplayRefreshState`，Codex 展示态改为通过 `CodexAgentPresentationCoordinator` 事件驱动同步。
+  2. `CodexAgentPresentationCoordinator` 现在负责：
+     - 从 `NativeAppViewModel.codexDisplayCandidates()` 得到当前被 signal 标记为 `running/waiting` 的 Codex pane
+     - 按 project/pane 级别开启/关闭 `GhosttySurfaceHostModel` 的 Codex snapshot tracking
+     - 订阅 pane 级 snapshot 变化，并用 `CodexAgentDisplayStateRefresher.presentationOverrides(...)` 计算最终 override
+     - 仅在 override 真正变化时回写 `NativeAppViewModel.replaceWorkspaceAgentDisplayOverrides(...)`
+  3. `GhosttySurfaceHostModel` 新增 snapshot observer 能力；同一份 snapshot 不会重复通知，tracking 关闭、surface release、process exit 时都会显式发出 `nil` 清空事件，避免 coordinator 继续消费陈旧文本窗口。
+  4. `NativeAppViewModel.replaceWorkspaceAgentDisplayOverrides(...)` 改成先按有效 pane 过滤、再做 equality short-circuit；同样，`pruneWorkspaceAgentDisplayOverrides()` 也不会在结果未变化时重复写 observable state。
+  5. `WorkspaceHostView` 顶部 run toolbar 改为一次性读取 `workspaceRunToolbarState(for:)`，避免在同一轮 body 里重复调用 `availableWorkspaceRunConfigurations(...)` / `selectedWorkspaceRunConfiguration(...)`。
+- 直接原因：
+  1. 之前 `WorkspaceShellView` 每秒主线程轮询一次 Codex fallback，并把结果写回 `@State` + `NativeAppViewModel`。
+  2. 这会把 `WorkspaceShellView`、sidebar group、run toolbar 等一整片 SwiftUI 视图一起打脏，sample 中已能看到 `WorkspaceShellView`、`workspaceSidebarGroups`、`WorkspaceHostView`、`availableWorkspaceRunConfigurations` 等符号进入主线程更新栈。
+- 当前修复方案：
+  1. App/UI：引入 `CodexAgentPresentationCoordinator`，把“谁在追踪 snapshot、何时重算 override、何时回写”从 `WorkspaceShellView.body` 中抽离。
+  2. Ghostty host：通过 observer 把 pane 级 snapshot 主动推给 coordinator，而不是让 view 层每秒 pull。
+  3. Core/ViewModel：给 override replace/prune 加 no-op guard，并把 run toolbar 汇总成单个 state。
+- 仍未做的后续大改：
+  1. sidebar 仍然由 `workspaceSidebarGroups` getter 现算，尚未拆成真正的 row projection store。
+  2. agent raw state / notification / task status 仍然共存在 `WorkspaceAttentionState` 中，尚未继续拆域。
+  3. 这轮先切最重的 CPU 主链；若后续 sample 仍显示 sidebar/host body 有明显成本，再继续推进 projection store。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'CodexAgentDisplayStateRefresherTests|GhosttySurfaceHostTests|WorkspaceShellViewTests|WorkspaceHostViewRunConsoleTests|NativeAppViewModelWorkspaceRunTests'`
+    - `34 tests, 0 failures, 5 skipped(smoke)`
+    - `swift test --package-path macos --filter 'NativeAppViewModelWorkspaceEntryTests/(testWorkspaceCodexDisplayOverridePrefersWaitingOverRunningSignal|testWorkspaceCodexDisplayOverrideFallsBackToSignalAfterClear|testCodexDisplayCandidatesIncludeWaitingSignals|testWorkspaceWorktreeAgentStateDoesNotBubbleToRootProjectCard)'`
+    - `4 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
 ## 2026-03-27 修复 Workspace 终端右键菜单不可用
 
 - [x] 对照 Supacode 的 `GhosttySurfaceView`，确认 DevHaven 当前右键事件链路缺失 `menu(for:)` 与 copy/paste selector bridge
