@@ -155,7 +155,7 @@ public struct NativeGitRepositoryService: Sendable {
             return ""
         }
         let result = try runner.runAllowingFailure(
-            arguments: ["show", "--patch", "--format=", "--no-color", commitHash, "--", normalizedPath],
+            arguments: ["show", "-m", "--first-parent", "--patch", "--format=", "--no-color", commitHash, "--", normalizedPath],
             at: repositoryPath,
             timeout: 30
         )

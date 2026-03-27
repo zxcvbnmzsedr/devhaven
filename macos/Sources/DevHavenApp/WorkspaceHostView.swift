@@ -253,6 +253,7 @@ struct WorkspaceHostView: View {
         case let .diff(diffTabID):
             if let diffViewModel = viewModel.workspaceDiffTabViewModel(for: project.path, tabID: diffTabID) {
                 WorkspaceDiffTabView(viewModel: diffViewModel)
+                    .id(diffTabID)
                     .contentShape(Rectangle())
                     .simultaneousGesture(
                         TapGesture().onEnded {

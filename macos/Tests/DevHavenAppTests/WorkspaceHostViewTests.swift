@@ -14,6 +14,7 @@ final class WorkspaceHostViewTests: XCTestCase {
 
         XCTAssertTrue(source.contains("case let .diff(diffTabID)"), "WorkspaceHostView 应显式识别 diff tab 选中分支")
         XCTAssertTrue(source.contains("WorkspaceDiffTabView(viewModel:"), "WorkspaceHostView 在 diff tab 选中时应真正挂载 WorkspaceDiffTabView")
+        XCTAssertTrue(source.contains(".id(diffTabID)"), "切换不同 diff tab 时，WorkspaceHostView 应给 Diff 视图独立 identity，避免第二个标签页停留在 idle/loading spinner")
         XCTAssertFalse(source.contains("ForEach(workspace.tabs)"), "WorkspaceHostView 不应继续把 terminal tabs 当作唯一顶层内容来源")
     }
 

@@ -1,5 +1,121 @@
 # Todo
 
+## 2026-03-27 修复 Git Log 打开 merge commit 文件 Diff 时落入「无法解析 Diff」
+
+- [x] 复核截图对应现象与 `WorkspaceDiffPatchParser` 契约，确认当前失败不是加载超时，而是 merge commit 文件 diff 返回了 combined diff（`diff --cc` / `@@@`）
+- [x] 做最小修复：让 Git Log 文件级 diff 在 merge commit 下改走 first-parent patch 形态，保持现有 parser / viewer framework 不变
+- [x] 补 Git service 回归测试，锁定 merge commit 文件 diff 产物必须是标准 unified patch、可被 parser 正常解析
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 修复 Git Log 打开 merge commit 文件 Diff 时落入「无法解析 Diff」）
+
+- 结果：
+  1. `NativeGitRepositoryService.loadDiffForCommitFile(...)` 现在改为使用：
+     - `git show -m --first-parent --patch --format= --no-color <commit> -- <file>`
+  2. 因此对于 merge commit，文件级 diff 不再返回 combined diff（`diff --cc` / `@@@`），而是返回 **相对第一父提交的标准 unified patch**。
+  3. `WorkspaceDiffPatchParser` 无需扩展 combined diff 支持，现有 patch/two-side/unified viewer 就能继续正常消费 Git Log 打开的文件 diff。
+- 直接原因：
+  1. Git Log 打开文件 diff 时，底层走的是 `loadDiffForCommitFile(...)`。
+  2. 之前该方法在 merge commit 上执行默认 `git show --patch ...`，Git 会产出 combined diff。
+  3. 现有 `WorkspaceDiffPatchParser` 只支持常规 unified hunk（`@@`、`+/-/ ` 行），不支持 combined diff 的 `diff --cc` / `@@@` 格式，因此 UI 会落到“无法预览 Diff / 无法解析 Diff”。
+- 设计诱因：
+  1. 当前 runtime diff viewer 是围绕 **两侧 compare / patch / merge editor** 设计的，默认语义就是“单文件相对一个基线”的 diff。
+  2. Git Log 打开的 pane metadata 也一直只使用 `parentHashes.first` 作为 `Before` revision，这说明当前产品语义本来就是 **merge commit 相对第一父**，不是 combined multi-parent diff。
+  3. 所以问题不在 parser 太弱，而在 Git service 给了和当前 viewer 语义不匹配的 diff 形态。
+- 当前修复方案：
+  1. Core/Storage：仅调整 `loadDiffForCommitFile(...)` 的 Git 命令，让 merge commit 文件 diff 固定走 `-m --first-parent`。
+  2. Tests：新增 merge commit 回归测试，显式锁定：
+     - 输出包含 `diff --git`
+     - 不再包含 `diff --cc`
+     - hunk header 使用 `@@` 而不是 `@@@`
+     - `WorkspaceDiffPatchParser.parse(...)` 结果为 `.text`
+- 长期建议：
+  1. 如果未来真要支持 combined multi-parent diff，就应该单独设计 viewer / pane metadata / 导航语义，而不是把 `diff --cc` 硬塞给当前 unified patch parser。
+  2. Git service 凡是给现有 diff framework 喂数据时，都要优先保证输出和当前 viewer 语义一致；不要把“Git CLI 默认输出”直接当成 UI 真相源。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests/(testLoadDiffForCommitFileReturnsOnlySelectedFilePatch|testLoadDiffForCommitFileOnMergeCommitUsesFirstParentPatchFormat)|WorkspaceHostViewTests|WorkspaceDiffTabViewTests|WorkspaceGitIdeaLogViewTests|NativeAppViewModelWorkspaceDiffTabTests'`
+    - `49 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 修复多 Diff 标签页切换后一直停留在「正在加载 Diff」
+
+- [x] 复核 `WorkspaceHostView -> WorkspaceDiffTabView` 切换链路，确认问题只在“多个 diff tab 之间切换”时出现
+- [x] 定位根因：`WorkspaceDiffTabView` 只在首次 `onAppear` 时触发 idle->refresh，而 `WorkspaceHostView` 未给不同 diff tab 独立 view identity
+- [x] 做最小修复：让 `WorkspaceHostView` 按 `diffTabID` 重建 `WorkspaceDiffTabView`
+- [x] 补 source-based 回归测试，锁定 diff tab 独立 identity 契约
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 修复多 Diff 标签页切换后一直停留在「正在加载 Diff」）
+
+- 结果：
+  1. `WorkspaceHostView` 现在在挂载 `WorkspaceDiffTabView` 时显式加上 `.id(diffTabID)`。
+  2. 因此从一个 diff tab 切到另一个 diff tab 时，SwiftUI 会按 tab id 重新建立对应 diff 视图实例，`WorkspaceDiffTabView.onAppear` 会为新标签页的 idle 文档重新触发 `refresh()`。
+  3. 之前“第二个/第三个 diff tab 一直显示 `正在加载 Diff…`”的卡住现象，按这条修复已经被正面收口。
+- 直接原因：
+  1. `WorkspaceDiffTabView` 当前只在 `.onAppear` 时对 idle 文档执行 `viewModel.refresh()`。
+  2. `WorkspaceHostView` 切换不同 diff tab 时，之前只是同类型 View 间切换绑定对象，没有给不同 diff tab 独立 identity。
+  3. 结果是 SwiftUI 可能复用同一个 `WorkspaceDiffTabView` 外壳；新的 diff tab 对应 `WorkspaceDiffTabViewModel.documentState.loadState` 仍是 `.idle`，但 `.onAppear` 不会重新触发，于是界面就会一直停留在“加载中”占位。
+- 设计诱因：
+  1. 顶部 presented tabs 虽然已经把 terminal / diff 统一到了同一条 tab bar，但 diff 内容区仍然缺少“每个 diff tab 一份独立 SwiftUI view identity”的明确声明。
+  2. `WorkspaceDiffTabView` 里还持有 `editorScrollSyncState` / `editorScrollRequestState` 这类 `@State`，本来也更适合跟随 diff tab id 一起隔离，而不是在不同 diff tab 间复用。
+- 当前修复方案：
+  1. App/UI：在 `WorkspaceHostView.workspacePresentedContent(...)` 的 diff 分支中，为 `WorkspaceDiffTabView(viewModel: diffViewModel)` 补上 `.id(diffTabID)`。
+  2. Tests：更新 `WorkspaceHostViewTests`，显式锁定“diff tab 选中分支必须按 `diffTabID` 提供独立 identity”的 source-based 契约。
+- 长期建议：
+  1. 以后凡是把不同 runtime document 复用到同一个 SwiftUI 容器类型里时，都先检查是否需要显式 `.id(...)`，否则很容易出现“状态对象换了，但生命周期钩子没重跑”的假加载/假空态问题。
+  2. 如果后续 diff tab 还要承载更多 tab-local UI 状态（例如滚动位置、折叠态、临时选择），建议继续把“按 tab id 隔离 view identity”当成默认前提，而不是事后补洞。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'WorkspaceHostViewTests|WorkspaceCommitRootViewTests|WorkspaceGitIdeaLogViewTests|NativeAppViewModelWorkspaceDiffTabTests|WorkspaceDiffTabViewTests'`
+    - `58 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
+## 2026-03-27 收口 Commit / Git Diff 打开语义不统一
+
+- [x] 复核 Commit side tool window、Commit changes browser、Git Log changes browser 与现有 source-based 测试，确认“不统一”集中在 App 层动作命名与契约表达
+- [x] 做最小修复：保持 Commit 单实例 preview 行为不变，但把 Commit root/browser 的动作命名收口到统一 diff 语义
+- [x] 更新定向 source-based 测试，明确“Commit 宿主保留 single preview identity，Commit root/browser 与 Git Log 一样暴露统一 diff action”
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 收口 Commit / Git Diff 打开语义不统一）
+
+- 结果：
+  1. `WorkspaceCommitRootView` 与 `WorkspaceCommitChangesBrowserView` 不再继续把 App 层动作命名成 `...Preview...`，而是统一为 `onSyncDiffIfNeeded` / `onOpenDiff`。
+  2. `WorkspaceCommitSideToolWindowHostView` 仍然保留 `syncActiveWorkspaceCommitDiffPreviewIfNeeded(...)` / `openActiveWorkspaceCommitDiffPreview(...)` 这条单实例 preview 主链，因此 **Commit 不会回退成“一文件一个 diff 标签页”**。
+  3. `WorkspaceCommitRootViewTests` 已同步改成和实际产品边界一致：root/browser 暴露统一 diff action，host 继续持有 single preview identity 与 request chain 构造职责。
+- 直接原因：
+  1. Git Log 路径已经在 App 层使用 `onOpenDiff` 这类统一语义。
+  2. Commit 路径虽然底层同样已经进入 runtime diff tab，但 root/browser 仍保留 `onOpenDiffPreview` / `onSyncDiffPreviewIfNeeded` 这类旧命名。
+  3. 因此 source-based 契约一部分按“统一 diff action”写，一部分按“preview 心智”写，导致测试与代码语义分裂。
+- 设计诱因：
+  1. Commit 路径的确有一个和 Git Log 不同的产品约束：它必须复用当前 execution worktree 下的单实例 preview，而不是每个文件新开 tab。
+  2. 但这个差异应当只停留在 **host / ViewModel identity 策略**，不应继续泄漏到 root/browser 这一层的动作命名上。
+- 当前修复方案：
+  1. App/UI：把 `WorkspaceCommitRootView` 与 `WorkspaceCommitChangesBrowserView` 的闭包命名统一为 `onSyncDiffIfNeeded` / `onOpenDiff`。
+  2. App/UI：`WorkspaceCommitSideToolWindowHostView` 只调整 helper 命名为 `syncCommitDiffIfNeeded` / `openCommitDiff`，底层仍调用 single-preview API。
+  3. Tests：更新 `WorkspaceCommitRootViewTests`，显式锁定“root/browser 统一 diff action + host 保留 single preview identity”的双层契约。
+- 长期建议：
+  1. 后续凡是出现“Commit 与 Git Log 行为不同”的场景，先区分这是 **UI action 命名层** 还是 **identity / session 策略层** 的差异，不要把两层混在同一个命名里。
+  2. 对这类 source-based 契约，优先让 root/browser 测“统一交互语义”，让 host/ViewModel 测“底层特殊策略”，避免再出现两份测试分别把不同层的结论写死。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'WorkspaceCommitRootViewTests|WorkspaceCommitSideToolWindowHostViewTests|WorkspaceGitIdeaLogViewTests|NativeAppViewModelWorkspaceDiffTabTests'`
+    - `49 tests, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
 ## 2026-03-27 修复 Unversioned Files 把目录当成文件项展示
 
 - [x] 复核 Git status 与 Commit snapshot 链路，确认 Unversioned Files 中的目录项来自 `git status --porcelain=v2` 默认 untracked 折叠行为

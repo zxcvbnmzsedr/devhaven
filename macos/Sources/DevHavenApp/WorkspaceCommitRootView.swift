@@ -3,8 +3,8 @@ import DevHavenCore
 
 struct WorkspaceCommitRootView: View {
     @Bindable var viewModel: WorkspaceCommitViewModel
-    let onSyncDiffPreviewIfNeeded: (WorkspaceCommitChange) -> Void
-    let onOpenDiffPreview: (WorkspaceCommitChange) -> Void
+    let onSyncDiffIfNeeded: (WorkspaceCommitChange) -> Void
+    let onOpenDiff: (WorkspaceCommitChange) -> Void
     @State private var topAreaRatio: Double = 0.7
     private let autoRefreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -17,8 +17,8 @@ struct WorkspaceCommitRootView: View {
         ) {
             WorkspaceCommitChangesBrowserView(
                 viewModel: viewModel,
-                onSyncDiffPreviewIfNeeded: onSyncDiffPreviewIfNeeded,
-                onOpenDiffPreview: onOpenDiffPreview
+                onSyncDiffIfNeeded: onSyncDiffIfNeeded,
+                onOpenDiff: onOpenDiff
             )
         } trailing: {
             WorkspaceCommitPanelView(viewModel: viewModel)

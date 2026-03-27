@@ -103,16 +103,19 @@ final class WorkspaceCommitRootViewTests: XCTestCase {
         XCTAssertTrue(source.contains("case .failed"), "Commit Panel 应显式处理 failed execution state")
     }
 
-    func testWorkspaceCommitChangesBrowserDoubleClickRoutesThroughUnifiedWorkspaceDiffOpenPath() throws {
+    func testWorkspaceCommitChangesBrowserDoubleClickUsesUnifiedDiffActionsWhileHostKeepsSinglePreviewIdentity() throws {
         let hostSource = try String(contentsOf: commitHostSourceFileURL(), encoding: .utf8)
         let rootSource = try String(contentsOf: sourceFileURL(), encoding: .utf8)
         let changesSource = try String(contentsOf: changesBrowserSourceFileURL(), encoding: .utf8)
 
-        XCTAssertTrue(hostSource.contains("openActiveWorkspaceDiffTab("), "Commit 双击打开应统一收口到 NativeAppViewModel 的 active workspace diff 打开入口")
-        XCTAssertTrue(hostSource.contains(".workingTreeChange("), "Commit 双击打开时应构造 working-tree diff source")
+        XCTAssertTrue(hostSource.contains("syncActiveWorkspaceCommitDiffPreviewIfNeeded("), "Commit 宿主应继续复用单实例 preview 的同步入口，避免单击每次都新建 diff tab")
+        XCTAssertTrue(hostSource.contains("openActiveWorkspaceCommitDiffPreview("), "Commit 宿主应继续通过单实例 preview 入口打开或聚焦 diff")
+        XCTAssertTrue(hostSource.contains("allChanges: commitViewModel.changesSnapshot?.changes"), "Commit 宿主应把当前 snapshot 传给 diff 打开链路，以构造 request chain")
+        XCTAssertTrue(rootSource.contains("onSyncDiffIfNeeded:"), "WorkspaceCommitRootView 应把统一 diff 同步闭包向 changes browser 传递")
         XCTAssertTrue(rootSource.contains("onOpenDiff:"), "WorkspaceCommitRootView 应把统一 open diff 闭包向 changes browser 传递")
         XCTAssertTrue(changesSource.contains(".onTapGesture(count: 2)"), "Commit changes browser 文件行应支持双击打开独立 diff 标签页")
-        XCTAssertTrue(changesSource.contains("onOpenDiff(change)"), "Commit changes browser 双击后应调用统一 open diff 闭包，而不是继续停留在 preview 心智里")
+        XCTAssertTrue(changesSource.contains("onSyncDiffIfNeeded(change)"), "Commit changes browser 单击后应调用统一 diff 同步闭包，而不是继续暴露 preview 命名")
+        XCTAssertTrue(changesSource.contains("onOpenDiff(change)"), "Commit changes browser 双击后应调用统一 open diff 闭包，而不是继续停留在 preview 命名心智里")
     }
 
     private func sourceFileURL() -> URL {

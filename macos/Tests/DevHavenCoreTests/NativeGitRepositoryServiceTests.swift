@@ -374,6 +374,59 @@ final class NativeGitRepositoryServiceTests: XCTestCase {
         XCTAssertTrue(fileDiff.contains("+readme-updated"))
     }
 
+    func testLoadDiffForCommitFileOnMergeCommitUsesFirstParentPatchFormat() throws {
+        let fixture = try GitRepositoryFixture()
+        let repositoryURL = try fixture.createRepository(named: "git-merge-file-diff")
+
+        try "base-top\nshared-middle\nbase-bottom\n".write(
+            to: repositoryURL.appending(path: "README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try fixture.run(["git", "add", "README.md"], at: repositoryURL)
+        try fixture.run(["git", "commit", "-m", "base: two-line readme"], at: repositoryURL, environment: fixture.gitIdentityEnvironment())
+
+        try fixture.run(["git", "checkout", "-b", "feature/diff"], at: repositoryURL)
+        try "feature-top\nshared-middle\nbase-bottom\n".write(
+            to: repositoryURL.appending(path: "README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try fixture.run(["git", "add", "README.md"], at: repositoryURL)
+        try fixture.run(["git", "commit", "-m", "feat: update first line"], at: repositoryURL, environment: fixture.gitIdentityEnvironment())
+
+        try fixture.run(["git", "checkout", "main"], at: repositoryURL)
+        try "base-top\nshared-middle\nmain-bottom\n".write(
+            to: repositoryURL.appending(path: "README.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try fixture.run(["git", "add", "README.md"], at: repositoryURL)
+        try fixture.run(["git", "commit", "-m", "fix: update second line"], at: repositoryURL, environment: fixture.gitIdentityEnvironment())
+
+        try fixture.run(
+            ["git", "merge", "--no-ff", "feature/diff", "-m", "Merge branch 'feature/diff'"],
+            at: repositoryURL,
+            environment: fixture.gitIdentityEnvironment()
+        )
+        let mergeCommitHash = try fixture.gitOutput(["git", "rev-parse", "HEAD"], at: repositoryURL)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let service = NativeGitRepositoryService()
+        let fileDiff = try service.loadDiffForCommitFile(
+            at: repositoryURL.path(),
+            commitHash: mergeCommitHash,
+            filePath: "README.md"
+        )
+        let parsed = WorkspaceDiffPatchParser.parse(fileDiff)
+
+        XCTAssertTrue(fileDiff.contains("diff --git a/README.md b/README.md"))
+        XCTAssertFalse(fileDiff.contains("diff --cc README.md"))
+        XCTAssertTrue(fileDiff.contains("@@ "))
+        XCTAssertFalse(fileDiff.contains("@@@"))
+        XCTAssertEqual(parsed.kind, .text)
+    }
+
     func testLoadChangesSnapshotParsesPathsWithSpacesAndRename() throws {
         let fixture = try GitRepositoryFixture()
         let repositoryURL = try fixture.createRepository(named: "git-space-paths")

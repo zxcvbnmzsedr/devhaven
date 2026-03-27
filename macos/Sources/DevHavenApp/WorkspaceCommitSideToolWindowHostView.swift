@@ -31,11 +31,11 @@ struct WorkspaceCommitSideToolWindowHostView: View {
         } else if let commitViewModel = viewModel.activeWorkspaceCommitViewModel {
             WorkspaceCommitRootView(
                 viewModel: commitViewModel,
-                onSyncDiffPreviewIfNeeded: { change in
-                    syncCommitDiffPreviewIfNeeded(commitViewModel: commitViewModel, change: change)
+                onSyncDiffIfNeeded: { change in
+                    syncCommitDiffIfNeeded(commitViewModel: commitViewModel, change: change)
                 },
-                onOpenDiffPreview: { change in
-                    openCommitDiffPreview(commitViewModel: commitViewModel, change: change)
+                onOpenDiff: { change in
+                    openCommitDiff(commitViewModel: commitViewModel, change: change)
                 }
             )
         } else {
@@ -54,7 +54,7 @@ struct WorkspaceCommitSideToolWindowHostView: View {
         return viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activePath })?.isQuickTerminal ?? false
     }
 
-    private func syncCommitDiffPreviewIfNeeded(
+    private func syncCommitDiffIfNeeded(
         commitViewModel: WorkspaceCommitViewModel,
         change: WorkspaceCommitChange
     ) {
@@ -70,7 +70,7 @@ struct WorkspaceCommitSideToolWindowHostView: View {
         )
     }
 
-    private func openCommitDiffPreview(
+    private func openCommitDiff(
         commitViewModel: WorkspaceCommitViewModel,
         change: WorkspaceCommitChange
     ) {

@@ -4,8 +4,8 @@ import DevHavenCore
 
 struct WorkspaceCommitChangesBrowserView: View {
     @Bindable var viewModel: WorkspaceCommitViewModel
-    let onSyncDiffPreviewIfNeeded: (WorkspaceCommitChange) -> Void
-    let onOpenDiffPreview: (WorkspaceCommitChange) -> Void
+    let onSyncDiffIfNeeded: (WorkspaceCommitChange) -> Void
+    let onOpenDiff: (WorkspaceCommitChange) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -164,7 +164,7 @@ struct WorkspaceCommitChangesBrowserView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             viewModel.selectChange(change.path)
-            onSyncDiffPreviewIfNeeded(change)
+            onSyncDiffIfNeeded(change)
         }
         .onTapGesture(count: 2) {
             openChangeDiff(change)
@@ -173,7 +173,7 @@ struct WorkspaceCommitChangesBrowserView: View {
 
     private func openChangeDiff(_ change: WorkspaceCommitChange) {
         viewModel.selectChange(change.path)
-        onOpenDiffPreview(change)
+        onOpenDiff(change)
     }
 
     private func inlineTitleRow(_ change: WorkspaceCommitChange) -> some View {
