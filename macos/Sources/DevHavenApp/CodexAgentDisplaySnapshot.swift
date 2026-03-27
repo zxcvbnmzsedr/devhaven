@@ -13,6 +13,7 @@ struct CodexAgentDisplaySnapshot: Equatable, Sendable {
 
     static func capture(
         from visibleText: String?,
+        previous: CodexAgentDisplaySnapshot? = nil,
         now: Date = Date(),
         windowLimit: Int = Self.windowLimit
     ) -> CodexAgentDisplaySnapshot? {
@@ -24,9 +25,12 @@ struct CodexAgentDisplaySnapshot: Equatable, Sendable {
             return nil
         }
         let recentTextWindow = String(trimmedText.suffix(windowLimit))
+        let lastActivityAt = previous?.recentTextWindow == recentTextWindow
+            ? (previous?.lastActivityAt ?? now)
+            : now
         return CodexAgentDisplaySnapshot(
             recentTextWindow: recentTextWindow,
-            lastActivityAt: now
+            lastActivityAt: lastActivityAt
         )
     }
 }

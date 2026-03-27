@@ -457,6 +457,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
         }
         let nextSnapshot = CodexAgentDisplaySnapshot.capture(
             from: visibleText,
+            previous: cachedCodexDisplaySnapshot,
             now: now,
             windowLimit: Self.codexDisplaySnapshotWindowLimit
         )

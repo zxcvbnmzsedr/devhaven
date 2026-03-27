@@ -7,6 +7,12 @@ enum CodexAgentDisplayStateRefresher {
         fileprivate var observationsByPaneKey: [PaneKey: Observation] = [:]
     }
 
+    struct EvaluationResult: Equatable {
+        var runtimeState: RuntimeState
+        var overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
+        var nextRefreshDeadline: Date?
+    }
+
     fileprivate struct PaneKey: Hashable {
         let projectPath: String
         let paneID: String
@@ -17,7 +23,7 @@ enum CodexAgentDisplayStateRefresher {
         var lastActivityAt: Date
     }
 
-    private static let recentActivityWindow: TimeInterval = 2
+    static let recentActivityWindow: TimeInterval = 2
 
     static func refresh(
         viewModel: NativeAppViewModel,
@@ -25,31 +31,32 @@ enum CodexAgentDisplayStateRefresher {
         now: Date = Date(),
         snapshotProvider: (_ projectPath: String, _ paneID: String) -> CodexAgentDisplaySnapshot?
     ) -> RuntimeState {
-        var mutableRuntimeState = runtimeState
-        let overridesByProjectPath = presentationOverrides(
+        let evaluation = evaluate(
             for: viewModel.codexDisplayCandidates(),
-            runtimeState: &mutableRuntimeState,
+            runtimeState: runtimeState,
             now: now,
             snapshotProvider: snapshotProvider
         )
-        viewModel.replaceWorkspaceAgentDisplayOverrides(overridesByProjectPath)
-        return mutableRuntimeState
+        viewModel.replaceWorkspaceAgentDisplayOverrides(evaluation.overridesByProjectPath)
+        return evaluation.runtimeState
     }
 
-    static func presentationOverrides(
+    static func evaluate(
         for candidates: [WorkspaceAgentDisplayCandidate],
-        runtimeState: inout RuntimeState,
+        runtimeState: RuntimeState,
         now: Date = Date(),
         snapshotProvider: (_ projectPath: String, _ paneID: String) -> CodexAgentDisplaySnapshot?
-    ) -> [String: [String: WorkspaceAgentPresentationOverride]] {
+    ) -> EvaluationResult {
+        var mutableRuntimeState = runtimeState
         let validPaneKeys = Set(
             candidates.map { PaneKey(projectPath: $0.projectPath, paneID: $0.paneID) }
         )
-        runtimeState.observationsByPaneKey = runtimeState.observationsByPaneKey.filter {
+        mutableRuntimeState.observationsByPaneKey = mutableRuntimeState.observationsByPaneKey.filter {
             validPaneKeys.contains($0.key)
         }
 
         var overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]] = [:]
+        var nextRefreshDeadline: Date?
 
         for candidate in candidates {
             guard let snapshot = snapshotProvider(candidate.projectPath, candidate.paneID),
@@ -59,7 +66,7 @@ enum CodexAgentDisplayStateRefresher {
             }
 
             let paneKey = PaneKey(projectPath: candidate.projectPath, paneID: candidate.paneID)
-            var observation = runtimeState.observationsByPaneKey[paneKey]
+            var observation = mutableRuntimeState.observationsByPaneKey[paneKey]
                 ?? Observation(
                     lastRecentTextWindow: recentTextWindow,
                     lastActivityAt: snapshot.lastActivityAt
@@ -70,30 +77,58 @@ enum CodexAgentDisplayStateRefresher {
                 observation.lastRecentTextWindow = recentTextWindow
                 observation.lastActivityAt = snapshot.lastActivityAt
             }
-            runtimeState.observationsByPaneKey[paneKey] = observation
+            mutableRuntimeState.observationsByPaneKey[paneKey] = observation
 
             let displayState = CodexAgentDisplayHeuristics.displayState(for: recentTextWindow)
-            let isRecentlyActive = now.timeIntervalSince(snapshot.lastActivityAt) < recentActivityWindow
+            let refreshDeadline = snapshot.lastActivityAt.addingTimeInterval(recentActivityWindow)
+            let isRecentlyActive = now < refreshDeadline
 
             switch candidate.signalState {
             case .waiting:
-                guard displayState == .running || (displayState != .waiting && isRecentlyActive) else {
-                    continue
+                if displayState == .running {
+                    overridesByProjectPath[candidate.projectPath, default: [:]][candidate.paneID] =
+                        WorkspaceAgentPresentationOverride(state: .running, summary: nil)
+                } else if displayState != .waiting, isRecentlyActive {
+                    overridesByProjectPath[candidate.projectPath, default: [:]][candidate.paneID] =
+                        WorkspaceAgentPresentationOverride(state: .running, summary: nil)
+                    nextRefreshDeadline = earliestDeadline(nextRefreshDeadline, refreshDeadline)
                 }
-                overridesByProjectPath[candidate.projectPath, default: [:]][candidate.paneID] =
-                    WorkspaceAgentPresentationOverride(state: .running, summary: nil)
             case .running:
-                guard displayState == .waiting, !isRecentlyActive else {
+                guard displayState == .waiting else {
                     continue
                 }
-                overridesByProjectPath[candidate.projectPath, default: [:]][candidate.paneID] =
-                    WorkspaceAgentPresentationOverride(state: .waiting, summary: nil)
+                if isRecentlyActive {
+                    nextRefreshDeadline = earliestDeadline(nextRefreshDeadline, refreshDeadline)
+                } else {
+                    overridesByProjectPath[candidate.projectPath, default: [:]][candidate.paneID] =
+                        WorkspaceAgentPresentationOverride(state: .waiting, summary: nil)
+                }
             default:
                 continue
             }
         }
 
-        return overridesByProjectPath
+        return EvaluationResult(
+            runtimeState: mutableRuntimeState,
+            overridesByProjectPath: overridesByProjectPath,
+            nextRefreshDeadline: nextRefreshDeadline
+        )
+    }
+
+    static func presentationOverrides(
+        for candidates: [WorkspaceAgentDisplayCandidate],
+        runtimeState: inout RuntimeState,
+        now: Date = Date(),
+        snapshotProvider: (_ projectPath: String, _ paneID: String) -> CodexAgentDisplaySnapshot?
+    ) -> [String: [String: WorkspaceAgentPresentationOverride]] {
+        let evaluation = evaluate(
+            for: candidates,
+            runtimeState: runtimeState,
+            now: now,
+            snapshotProvider: snapshotProvider
+        )
+        runtimeState = evaluation.runtimeState
+        return evaluation.overridesByProjectPath
     }
 
     private static func normalizedVisibleText(_ visibleText: String?) -> String? {
@@ -105,5 +140,12 @@ enum CodexAgentDisplayStateRefresher {
             return nil
         }
         return trimmedText
+    }
+
+    private static func earliestDeadline(_ lhs: Date?, _ rhs: Date) -> Date {
+        guard let lhs else {
+            return rhs
+        }
+        return min(lhs, rhs)
     }
 }

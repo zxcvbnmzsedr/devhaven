@@ -5,6 +5,9 @@ import DevHavenCore
 @MainActor
 final class WorkspaceTerminalSessionStore: ObservableObject {
     private var modelsByPaneID: [String: GhosttySurfaceHostModel] = [:]
+    private var trackedCodexPaneIDs: Set<String> = []
+
+    var onModelCreated: ((String, GhosttySurfaceHostModel) -> Void)?
 
     var modelCount: Int {
         modelsByPaneID.count
@@ -40,7 +43,9 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
             onMoveTab: onMoveTab,
             onSplitAction: onSplitAction
         )
+        model.setCodexDisplayTrackingEnabled(trackedCodexPaneIDs.contains(pane.id))
         modelsByPaneID[pane.id] = model
+        onModelCreated?(pane.id, model)
         return model
     }
 
@@ -57,6 +62,7 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
     }
 
     func syncCodexDisplayTracking(_ trackedPaneIDs: Set<String>) {
+        trackedCodexPaneIDs = trackedPaneIDs
         for (paneID, model) in modelsByPaneID {
             model.setCodexDisplayTrackingEnabled(trackedPaneIDs.contains(paneID))
         }
@@ -81,6 +87,7 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
 @MainActor
 final class WorkspaceTerminalStoreRegistry: ObservableObject {
     private var storesByProjectPath: [String: WorkspaceTerminalSessionStore] = [:]
+    private var codexDisplayModelCreatedObserver: ((String, String, GhosttySurfaceHostModel) -> Void)?
 
     var storeCount: Int {
         storesByProjectPath.count
@@ -91,6 +98,7 @@ final class WorkspaceTerminalStoreRegistry: ObservableObject {
             return existing
         }
         let store = WorkspaceTerminalSessionStore()
+        wireCodexDisplayObserver(for: store, projectPath: projectPath)
         storesByProjectPath[projectPath] = store
         return store
     }
@@ -125,6 +133,24 @@ final class WorkspaceTerminalStoreRegistry: ObservableObject {
     ) {
         for (projectPath, store) in storesByProjectPath {
             store.syncCodexDisplayTracking(trackedPaneIDsByProjectPath[projectPath] ?? [])
+        }
+    }
+
+    func setCodexDisplayModelCreatedObserver(
+        _ observer: ((String, String, GhosttySurfaceHostModel) -> Void)?
+    ) {
+        codexDisplayModelCreatedObserver = observer
+        for (projectPath, store) in storesByProjectPath {
+            wireCodexDisplayObserver(for: store, projectPath: projectPath)
+        }
+    }
+
+    private func wireCodexDisplayObserver(
+        for store: WorkspaceTerminalSessionStore,
+        projectPath: String
+    ) {
+        store.onModelCreated = { [weak self] paneID, model in
+            self?.codexDisplayModelCreatedObserver?(projectPath, paneID, model)
         }
     }
 }
