@@ -139,6 +139,43 @@ public final class LegacyCompatStore {
         }
     }
 
+    public func updateProjectsNotesSummary(_ summariesByPath: [String: String?]) throws {
+        guard !summariesByPath.isEmpty else {
+            return
+        }
+
+        var document = try loadProjectsDocument()
+        let normalizedSummaries = Dictionary(uniqueKeysWithValues: summariesByPath.map {
+            (normalizeLegacyStorePathForCompare($0.key), $0.value)
+        })
+        var didMutate = false
+
+        for index in document.root.indices {
+            guard var project = document.root[index] as? [String: Any],
+                  let path = project["path"] as? String
+            else {
+                continue
+            }
+            let normalizedPath = normalizeLegacyStorePathForCompare(path)
+            guard normalizedSummaries.keys.contains(normalizedPath) else {
+                continue
+            }
+
+            switch normalizedSummaries[normalizedPath] ?? nil {
+            case let summary?:
+                project["notes_summary"] = summary
+            case nil:
+                project["notes_summary"] = NSNull()
+            }
+            document.root[index] = project
+            didMutate = true
+        }
+
+        if didMutate {
+            try saveProjectsDocument(document)
+        }
+    }
+
     public func updateProjects(_ projects: [Project]) throws {
         let data = try encoder.encode(projects)
         let object = try JSONSerialization.jsonObject(with: data)
@@ -237,6 +274,14 @@ public final class LegacyCompatStore {
     private var projectsFileURL: URL {
         appDataDirectoryURL.appending(path: "projects.json")
     }
+}
+
+private func normalizeLegacyStorePathForCompare(_ path: String) -> String {
+    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return ""
+    }
+    return URL(fileURLWithPath: trimmed).standardizedFileURL.path
 }
 
 private struct AppStateDocument {

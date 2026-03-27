@@ -88,6 +88,44 @@ final class MainContentViewTests: XCTestCase {
         )
     }
 
+    func testCardViewRendersProjectNotesSummaryWithTwoLineLimit() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(
+                """
+                if let notesSummary = project.notesSummary {
+                                Text(notesSummary)
+                                    .font(.caption)
+                                    .foregroundStyle(NativeTheme.textPrimary.opacity(0.82))
+                                    .lineLimit(2)
+                """
+            ),
+            "卡片视图应在项目路径下渲染备注摘要，并限制为最多两行"
+        )
+    }
+
+    func testListViewRendersProjectNotesSummaryWithoutReplacingGitSummaryColumn() throws {
+        let source = try String(contentsOf: sourceFileURL(), encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(
+                """
+                if let notesSummary = project.notesSummary {
+                                    Text(notesSummary)
+                                        .font(.caption)
+                                        .foregroundStyle(NativeTheme.textPrimary.opacity(0.82))
+                                        .lineLimit(1)
+                """
+            ),
+            "列表视图应在名称/路径区域补一行备注摘要"
+        )
+        XCTAssertTrue(
+            source.contains("Text(project.isGitRepository ? (project.gitLastCommitMessage ?? \"暂无提交摘要\") : \"--\")"),
+            "列表右侧 Git 摘要列应继续保留，不要被备注摘要替换"
+        )
+    }
+
     private func sourceFileURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

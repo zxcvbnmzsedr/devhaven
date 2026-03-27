@@ -254,6 +254,235 @@ final class NativeAppViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.notesDraft, "原生详情备注\n")
     }
 
+    func testRefreshProjectCatalogExtractsNotesSummaryFromFirstMeaningfulMarkdownLine() async throws {
+        let fixture = try TestFixture()
+        let rootURL = fixture.homeURL.appending(path: "Workspace")
+        let alphaURL = rootURL.appending(path: "Alpha")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+        try "\n> \n# Alpha overview\n- 第二行不应进入摘要\n".write(
+            to: alphaURL.appending(path: "PROJECT_NOTES.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(rootURL.path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+
+        try await viewModel.refreshProjectCatalog()
+
+        XCTAssertEqual(viewModel.snapshot.projects.map(\.notesSummary), ["Alpha overview"])
+        let persistedProjects = try fixture.readJSONArray(named: "projects.json")
+        let project = try XCTUnwrap(persistedProjects.first as? [String: Any])
+        XCTAssertEqual(project["notes_summary"] as? String, "Alpha overview")
+    }
+
+    func testSaveNotesUpdatesProjectNotesSummaryImmediatelyAndClearsItWhenEmpty() throws {
+        let fixture = try TestFixture()
+        let alphaURL = fixture.homeURL.appending(path: "Projects/Alpha")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(fixture.homeURL.appending(path: "Projects").path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects(
+            """
+            [
+              {
+                "id": "alpha",
+                "name": "Alpha",
+                "path": "\(alphaURL.path())",
+                "tags": [],
+                "runConfigurations": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "a",
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "notes_summary": null,
+                "created": 795000000,
+                "checked": 795000111
+              }
+            ]
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+        waitUntil(timeout: 2) { !viewModel.isProjectDocumentLoading }
+
+        viewModel.notesDraft = "# 立即展示的备注\n第二行"
+        viewModel.saveNotes()
+
+        XCTAssertEqual(viewModel.selectedProject?.notesSummary, "立即展示的备注")
+        var persistedProjects = try fixture.readJSONArray(named: "projects.json")
+        var project = try XCTUnwrap(persistedProjects.first as? [String: Any])
+        XCTAssertEqual(project["notes_summary"] as? String, "立即展示的备注")
+
+        viewModel.notesDraft = ""
+        viewModel.saveNotes()
+
+        XCTAssertNil(viewModel.selectedProject?.notesSummary)
+        persistedProjects = try fixture.readJSONArray(named: "projects.json")
+        project = try XCTUnwrap(persistedProjects.first as? [String: Any])
+        XCTAssertTrue(project["notes_summary"] is NSNull)
+    }
+
+    func testLoadBackfillsMissingPersistedNotesSummaryFromProjectNotesFile() throws {
+        let fixture = try TestFixture()
+        let alphaURL = fixture.homeURL.appending(path: "Projects/Alpha")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+        try "Legacy summary\nMore details\n".write(
+            to: alphaURL.appending(path: "PROJECT_NOTES.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": ["\(fixture.homeURL.appending(path: "Projects").path())"],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+        try fixture.writeProjects(
+            """
+            [
+              {
+                "id": "alpha",
+                "name": "Alpha",
+                "path": "\(alphaURL.path())",
+                "tags": [],
+                "runConfigurations": [],
+                "worktrees": [],
+                "mtime": 795000000,
+                "size": 1,
+                "checksum": "a",
+                "git_commits": 0,
+                "git_last_commit": 0,
+                "git_last_commit_message": null,
+                "git_daily": null,
+                "created": 795000000,
+                "checked": 795000111
+              }
+            ]
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+
+        waitUntil(timeout: 2) { viewModel.snapshot.projects.first?.notesSummary == "Legacy summary" }
+
+        XCTAssertEqual(viewModel.snapshot.projects.first?.notesSummary, "Legacy summary")
+        let persistedProjects = try fixture.readJSONArray(named: "projects.json")
+        let project = try XCTUnwrap(persistedProjects.first as? [String: Any])
+        XCTAssertEqual(project["notes_summary"] as? String, "Legacy summary")
+    }
+
+    func testAddDirectProjectsPersistsImportedProjectNotesSummary() async throws {
+        let fixture = try TestFixture()
+        let alphaURL = fixture.homeURL.appending(path: "Imported/Alpha")
+        try FileManager.default.createDirectory(at: alphaURL, withIntermediateDirectories: true)
+        try "- [x] imported summary\n".write(
+            to: alphaURL.appending(path: "PROJECT_NOTES.md"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        try fixture.writeAppState(
+            """
+            {
+              "version": 4,
+              "tags": [],
+              "directories": [],
+              "directProjectPaths": [],
+              "recycleBin": [],
+              "favoriteProjectPaths": [],
+              "settings": {
+                "projectListViewMode": "card",
+                "terminalUseWebglRenderer": true,
+                "terminalTheme": "DevHaven Dark",
+                "gitIdentities": [],
+                "viteDevPort": 1420,
+                "webEnabled": true,
+                "webBindHost": "0.0.0.0",
+                "webBindPort": 3210
+              }
+            }
+            """
+        )
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: fixture.homeURL))
+        viewModel.load()
+
+        try await viewModel.addDirectProjects([alphaURL.path()])
+
+        XCTAssertEqual(viewModel.snapshot.projects.map(\.notesSummary), ["imported summary"])
+        let persistedProjects = try fixture.readJSONArray(named: "projects.json")
+        let project = try XCTUnwrap(persistedProjects.first as? [String: Any])
+        XCTAssertEqual(project["notes_summary"] as? String, "imported summary")
+    }
+
     func testDirectoryAndTagFiltersNarrowProjectsLikeMainView() throws {
         let fixture = try TestFixture()
         let rootA = fixture.homeURL.appending(path: "Workspace/A")

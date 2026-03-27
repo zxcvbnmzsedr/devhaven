@@ -531,8 +531,10 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
     public var gitLastCommit: SwiftDate
     public var gitLastCommitMessage: String?
     public var gitDaily: String?
+    public var notesSummary: String?
     public var created: SwiftDate
     public var checked: SwiftDate
+    var hasPersistedNotesSummary: Bool
 
     public init(
         id: String,
@@ -549,8 +551,10 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         gitLastCommit: SwiftDate,
         gitLastCommitMessage: String? = nil,
         gitDaily: String? = nil,
+        notesSummary: String? = nil,
         created: SwiftDate,
-        checked: SwiftDate
+        checked: SwiftDate,
+        hasPersistedNotesSummary: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -566,8 +570,10 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         self.gitLastCommit = gitLastCommit
         self.gitLastCommitMessage = gitLastCommitMessage
         self.gitDaily = gitDaily
+        self.notesSummary = notesSummary
         self.created = created
         self.checked = checked
+        self.hasPersistedNotesSummary = hasPersistedNotesSummary
     }
 
     enum CodingKeys: String, CodingKey {
@@ -585,6 +591,7 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         case gitLastCommit = "git_last_commit"
         case gitLastCommitMessage = "git_last_commit_message"
         case gitDaily = "git_daily"
+        case notesSummary = "notes_summary"
         case created
         case checked
     }
@@ -623,8 +630,51 @@ public struct Project: Codable, Equatable, Sendable, Identifiable {
         self.gitLastCommit = decodedGitLastCommit
         self.gitLastCommitMessage = decodedGitLastCommitMessage
         self.gitDaily = decodedGitDaily
+        self.notesSummary = try container.decodeIfPresent(String.self, forKey: .notesSummary)
         self.created = try container.decodeIfPresent(SwiftDate.self, forKey: .created) ?? .zero
         self.checked = try container.decodeIfPresent(SwiftDate.self, forKey: .checked) ?? .zero
+        self.hasPersistedNotesSummary = container.contains(.notesSummary)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(path, forKey: .path)
+        try container.encode(tags, forKey: .tags)
+        try container.encode(runConfigurations, forKey: .runConfigurations)
+        try container.encode(worktrees, forKey: .worktrees)
+        try container.encode(mtime, forKey: .mtime)
+        try container.encode(size, forKey: .size)
+        try container.encode(checksum, forKey: .checksum)
+        try container.encode(isGitRepository, forKey: .isGitRepository)
+        try container.encode(gitCommits, forKey: .gitCommits)
+        try container.encode(gitLastCommit, forKey: .gitLastCommit)
+        try container.encodeIfPresent(gitLastCommitMessage, forKey: .gitLastCommitMessage)
+        try container.encodeIfPresent(gitDaily, forKey: .gitDaily)
+        try container.encode(notesSummary, forKey: .notesSummary)
+        try container.encode(created, forKey: .created)
+        try container.encode(checked, forKey: .checked)
+    }
+
+    public static func == (lhs: Project, rhs: Project) -> Bool {
+        lhs.id == rhs.id &&
+            lhs.name == rhs.name &&
+            lhs.path == rhs.path &&
+            lhs.tags == rhs.tags &&
+            lhs.runConfigurations == rhs.runConfigurations &&
+            lhs.worktrees == rhs.worktrees &&
+            lhs.mtime == rhs.mtime &&
+            lhs.size == rhs.size &&
+            lhs.checksum == rhs.checksum &&
+            lhs.isGitRepository == rhs.isGitRepository &&
+            lhs.gitCommits == rhs.gitCommits &&
+            lhs.gitLastCommit == rhs.gitLastCommit &&
+            lhs.gitLastCommitMessage == rhs.gitLastCommitMessage &&
+            lhs.gitDaily == rhs.gitDaily &&
+            lhs.notesSummary == rhs.notesSummary &&
+            lhs.created == rhs.created &&
+            lhs.checked == rhs.checked
     }
 }
 
@@ -658,10 +708,51 @@ extension Project {
             checksum: "",
             gitCommits: 0,
             gitLastCommit: 0,
+            notesSummary: nil,
             created: 0,
             checked: 0
         )
     }
+}
+
+func projectNotesSummary(from notes: String?) -> String? {
+    guard let notes else {
+        return nil
+    }
+
+    for line in notes.components(separatedBy: .newlines) {
+        if let summary = normalizedProjectNotesSummaryLine(line) {
+            return summary
+        }
+    }
+    return nil
+}
+
+private func normalizedProjectNotesSummaryLine(_ rawLine: String) -> String? {
+    var candidate = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !candidate.isEmpty else {
+        return nil
+    }
+
+    while true {
+        let stripped = candidate
+            .replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"^>+\s*"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"^[-*+]\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"^\[[ xX]\]\s*"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if stripped == candidate {
+            break
+        }
+        candidate = stripped
+        guard !candidate.isEmpty else {
+            return nil
+        }
+    }
+
+    let collapsed = candidate.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    return collapsed.isEmpty ? nil : collapsed
 }
 
 public struct ProjectDocumentSnapshot: Equatable, Sendable {

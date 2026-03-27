@@ -26,6 +26,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let workspaceRestoreCoordinator: WorkspaceRestoreCoordinator
     @ObservationIgnored private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider?
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var projectNotesSummaryBackfillTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
     @ObservationIgnored private var isAgentSignalObservationStarted = false
 
@@ -83,22 +84,47 @@ public final class NativeAppViewModel {
         public var id: String { projectPath }
     }
 
-    public var snapshot: NativeAppSnapshot
+    public var snapshot: NativeAppSnapshot {
+        didSet {
+            noteWorkspaceSidebarProjectionMutation(from: oldValue, to: snapshot)
+        }
+    }
     public var selectedProjectPath: String?
-    public var openWorkspaceSessions: [OpenWorkspaceSessionState]
-    public var activeWorkspaceProjectPath: String?
+    public var openWorkspaceSessions: [OpenWorkspaceSessionState] {
+        didSet {
+            noteWorkspaceSidebarProjectionMutation(from: oldValue, to: openWorkspaceSessions)
+        }
+    }
+    public var activeWorkspaceProjectPath: String? {
+        didSet {
+            noteWorkspaceSidebarProjectionMutation(from: oldValue, to: activeWorkspaceProjectPath)
+        }
+    }
     public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
     public var workspaceBottomToolWindowState: WorkspaceBottomToolWindowState
     public var workspaceFocusedArea: WorkspaceFocusedArea
     private var workspaceDiffTabsByProjectPath: [String: [WorkspaceDiffTabState]]
     private var workspaceSelectedPresentedTabByProjectPath: [String: WorkspacePresentedTabSelection]
-    private var attentionStateByProjectPath: [String: WorkspaceAttentionState]
-    private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
+    private var attentionStateByProjectPath: [String: WorkspaceAttentionState] {
+        didSet {
+            noteWorkspaceSidebarProjectionMutation(from: oldValue, to: attentionStateByProjectPath)
+        }
+    }
+    private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]] {
+        didSet {
+            noteWorkspaceSidebarProjectionMutation(from: oldValue, to: agentDisplayOverridesByProjectPath)
+        }
+    }
     private var workspaceRunConsoleStateByProjectPath: [String: WorkspaceRunConsoleState]
-    private var currentBranchByProjectPath: [String: String]
+    private var currentBranchByProjectPath: [String: String] {
+        didSet {
+            noteWorkspaceSidebarProjectionMutation(from: oldValue, to: currentBranchByProjectPath)
+        }
+    }
     private var workspaceCommitViewModels: [String: WorkspaceCommitViewModel]
     private var workspaceGitViewModels: [String: WorkspaceGitViewModel]
     private var workspaceDiffTabViewModels: [String: WorkspaceDiffTabViewModel]
+    public private(set) var workspaceSidebarProjectionRevision: Int
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
     public var selectedTag: String?
@@ -177,6 +203,7 @@ public final class NativeAppViewModel {
         self.workspaceCommitViewModels = [:]
         self.workspaceGitViewModels = [:]
         self.workspaceDiffTabViewModels = [:]
+        self.workspaceSidebarProjectionRevision = 0
         self.searchQuery = ""
         self.selectedDirectory = .all
         self.selectedTag = nil
@@ -329,6 +356,13 @@ public final class NativeAppViewModel {
         return groups
     }
 
+    public func workspaceSidebarProjectionState() -> WorkspaceSidebarProjectionState {
+        WorkspaceSidebarProjectionState(
+            groups: workspaceSidebarGroups,
+            availableProjects: availableWorkspaceProjects
+        )
+    }
+
     func workspaceAttentionState(for projectPath: String) -> WorkspaceAttentionState? {
         attentionStateByProjectPath[projectPath]
     }
@@ -338,36 +372,39 @@ public final class NativeAppViewModel {
     }
 
     public func availableWorkspaceRunConfigurations(in projectPath: String? = nil) -> [WorkspaceRunConfiguration] {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              let session = openWorkspaceSessions.first(where: { $0.projectPath == projectPath }),
-              let project = resolveDisplayProject(for: projectPath)
-        else {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
             return []
         }
-
-        return project.runConfigurations.map {
-            makeProjectRunConfiguration(
-                configuration: $0,
-                projectPath: projectPath,
-                rootProjectPath: session.rootProjectPath
-            )
-        }
+        return resolvedWorkspaceRunConfigurations(for: projectPath)
     }
 
     public func selectedWorkspaceRunConfiguration(in projectPath: String? = nil) -> WorkspaceRunConfiguration? {
         guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
             return nil
         }
-        let configurations = availableWorkspaceRunConfigurations(in: projectPath)
-        guard !configurations.isEmpty else {
-            return nil
+        return resolvedSelectedWorkspaceRunConfiguration(for: projectPath)
+    }
+
+    public func workspaceRunToolbarState(for projectPath: String? = nil) -> WorkspaceRunToolbarState {
+        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
+            return WorkspaceRunToolbarState()
         }
-        let state = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
-        if let selectedConfigurationID = state.selectedConfigurationID,
-           let selected = configurations.first(where: { $0.id == selectedConfigurationID }) {
-            return selected
-        }
-        return configurations.first
+
+        let configurations = resolvedWorkspaceRunConfigurations(for: projectPath)
+        let consoleState = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
+        let selectedConfiguration = resolvedSelectedWorkspaceRunConfiguration(
+            for: projectPath,
+            configurations: configurations
+        )
+
+        return WorkspaceRunToolbarState(
+            configurations: configurations,
+            selectedConfigurationID: consoleState.selectedConfigurationID ?? selectedConfiguration?.id,
+            canRun: selectedConfiguration?.canRun ?? false,
+            canStop: consoleState.selectedSession?.state.isActive ?? false,
+            hasSessions: !consoleState.sessions.isEmpty,
+            isLogsVisible: consoleState.isVisible
+        )
     }
 
     public func selectWorkspaceRunConfiguration(_ configurationID: String, in projectPath: String? = nil) {
@@ -695,8 +732,11 @@ public final class NativeAppViewModel {
     public func replaceWorkspaceAgentDisplayOverrides(
         _ overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     ) {
-        agentDisplayOverridesByProjectPath = overridesByProjectPath
-        pruneWorkspaceAgentDisplayOverrides()
+        let filteredOverrides = filteredWorkspaceAgentDisplayOverrides(overridesByProjectPath)
+        guard agentDisplayOverridesByProjectPath != filteredOverrides else {
+            return
+        }
+        agentDisplayOverridesByProjectPath = filteredOverrides
     }
 
     public func markWorkspaceNotificationsRead(projectPath: String, paneID: String) {
@@ -976,6 +1016,8 @@ public final class NativeAppViewModel {
         }
 
         do {
+            projectNotesSummaryBackfillTask?.cancel()
+            projectNotesSummaryBackfillTask = nil
             projectDocumentCache.removeAll()
             let shouldApplyWorkspaceRestore = !hasLoadedInitialData && openWorkspaceSessions.isEmpty
             snapshot = try store.loadSnapshot()
@@ -984,6 +1026,7 @@ public final class NativeAppViewModel {
                 applyWorkspaceRestoreSnapshotIfAvailable()
             }
             scheduleSelectedProjectDocumentRefresh()
+            scheduleProjectNotesSummaryBackfillIfNeeded()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2133,12 +2176,14 @@ public final class NativeAppViewModel {
         do {
             let value = notesDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notesDraft
             try store.writeNotes(value, for: project.path)
+            let notesSummary = projectNotesSummary(from: value)
             let document = ProjectDocumentSnapshot(
                 notes: value,
                 todoItems: todoItems,
                 readmeFallback: readmeFallback
             )
             projectDocumentCache[project.path] = document
+            try persistProjectNotesSummary(notesSummary, for: project.path)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2328,6 +2373,90 @@ public final class NativeAppViewModel {
                 self.clearDisplayedProjectDocument(preserveTodoDraft: true)
             }
         }
+    }
+
+    private func scheduleProjectNotesSummaryBackfillIfNeeded() {
+        projectNotesSummaryBackfillTask?.cancel()
+        projectNotesSummaryBackfillTask = nil
+
+        let missingPaths = snapshot.projects
+            .filter { !$0.hasPersistedNotesSummary }
+            .map(\.path)
+        guard !missingPaths.isEmpty else {
+            return
+        }
+
+        let backgroundTask = Task.detached(priority: .utility) {
+            missingPaths.map { (path: $0, notesSummary: loadProjectNotesSummary(at: $0)) }
+        }
+
+        projectNotesSummaryBackfillTask = Task { @MainActor [weak self] in
+            let resolvedSummaries = await withTaskCancellationHandler(operation: {
+                await backgroundTask.value
+            }, onCancel: {
+                backgroundTask.cancel()
+            })
+            guard !Task.isCancelled, let self else {
+                return
+            }
+
+            self.projectNotesSummaryBackfillTask = nil
+            try? self.applyBackfilledProjectNotesSummaries(resolvedSummaries)
+        }
+    }
+
+    private func applyBackfilledProjectNotesSummaries(
+        _ resolvedSummaries: [(path: String, notesSummary: String?)]
+    ) throws {
+        guard !resolvedSummaries.isEmpty else {
+            return
+        }
+
+        let summaryByPath = Dictionary(uniqueKeysWithValues: resolvedSummaries.map { ($0.path, $0.notesSummary) })
+        let normalizedSummaryPaths = Set(summaryByPath.keys.map(normalizePathForCompare))
+        var nextProjects = snapshot.projects
+        var didMutate = false
+
+        for index in nextProjects.indices {
+            guard !nextProjects[index].hasPersistedNotesSummary else {
+                continue
+            }
+            let projectPath = nextProjects[index].path
+            guard normalizedSummaryPaths.contains(normalizePathForCompare(projectPath)) else {
+                continue
+            }
+            nextProjects[index].notesSummary = summaryByPath[projectPath] ?? nil
+            nextProjects[index].hasPersistedNotesSummary = true
+            didMutate = true
+        }
+
+        guard didMutate else {
+            return
+        }
+        try store.updateProjectsNotesSummary(summaryByPath)
+        applyProjects(nextProjects)
+    }
+
+    private func persistProjectNotesSummary(_ notesSummary: String?, for projectPath: String) throws {
+        let normalizedPath = normalizePathForCompare(projectPath)
+        guard !normalizedPath.isEmpty else {
+            return
+        }
+        guard let projectIndex = snapshot.projects.firstIndex(where: {
+            normalizePathForCompare($0.path) == normalizedPath
+        }) else {
+            return
+        }
+
+        var nextProjects = snapshot.projects
+        guard nextProjects[projectIndex].notesSummary != notesSummary || !nextProjects[projectIndex].hasPersistedNotesSummary else {
+            return
+        }
+
+        nextProjects[projectIndex].notesSummary = notesSummary
+        nextProjects[projectIndex].hasPersistedNotesSummary = true
+        try store.updateProjectsNotesSummary([nextProjects[projectIndex].path: notesSummary])
+        applyProjects(nextProjects)
     }
 
     private func clearDisplayedProjectDocument(preserveTodoDraft: Bool) {
@@ -3351,12 +3480,22 @@ public final class NativeAppViewModel {
     }
 
     private func pruneWorkspaceAgentDisplayOverrides() {
+        let filteredOverrides = filteredWorkspaceAgentDisplayOverrides(agentDisplayOverridesByProjectPath)
+        guard agentDisplayOverridesByProjectPath != filteredOverrides else {
+            return
+        }
+        agentDisplayOverridesByProjectPath = filteredOverrides
+    }
+
+    private func filteredWorkspaceAgentDisplayOverrides(
+        _ overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
+    ) -> [String: [String: WorkspaceAgentPresentationOverride]] {
         let validPaneIDsByProjectPath = Dictionary(
             grouping: codexDisplayCandidates(),
             by: \.projectPath
         ).mapValues { Set($0.map(\.paneID)) }
 
-        agentDisplayOverridesByProjectPath = agentDisplayOverridesByProjectPath.reduce(into: [:]) { result, entry in
+        return overridesByProjectPath.reduce(into: [:]) { result, entry in
             guard let validPaneIDs = validPaneIDsByProjectPath[entry.key] else {
                 return
             }
@@ -3366,6 +3505,48 @@ public final class NativeAppViewModel {
             }
             result[entry.key] = filteredOverrides
         }
+    }
+
+    private func noteWorkspaceSidebarProjectionMutation<T: Equatable>(
+        from oldValue: T,
+        to newValue: T
+    ) {
+        guard oldValue != newValue else {
+            return
+        }
+        workspaceSidebarProjectionRevision &+= 1
+    }
+
+    private func resolvedWorkspaceRunConfigurations(for projectPath: String) -> [WorkspaceRunConfiguration] {
+        guard let session = openWorkspaceSessions.first(where: { $0.projectPath == projectPath }),
+              let project = resolveDisplayProject(for: projectPath)
+        else {
+            return []
+        }
+
+        return project.runConfigurations.map {
+            makeProjectRunConfiguration(
+                configuration: $0,
+                projectPath: projectPath,
+                rootProjectPath: session.rootProjectPath
+            )
+        }
+    }
+
+    private func resolvedSelectedWorkspaceRunConfiguration(
+        for projectPath: String,
+        configurations: [WorkspaceRunConfiguration]? = nil
+    ) -> WorkspaceRunConfiguration? {
+        let resolvedConfigurations = configurations ?? resolvedWorkspaceRunConfigurations(for: projectPath)
+        guard !resolvedConfigurations.isEmpty else {
+            return nil
+        }
+        let state = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
+        if let selectedConfigurationID = state.selectedConfigurationID,
+           let selected = resolvedConfigurations.first(where: { $0.id == selectedConfigurationID }) {
+            return selected
+        }
+        return resolvedConfigurations.first
     }
 
     private func resolveDisplayProject(for path: String, rootProjectPath: String? = nil) -> Project? {
@@ -3639,6 +3820,16 @@ public struct ProjectCatalogRefreshRequest: Sendable {
 
 private let maxProjectDiscoveryDepth = 6
 
+private func loadProjectNotesSummary(at projectPath: String) -> String? {
+    let notesURL = URL(fileURLWithPath: projectPath, isDirectory: true).appending(path: "PROJECT_NOTES.md")
+    guard FileManager.default.fileExists(atPath: notesURL.path),
+          let content = try? String(contentsOf: notesURL, encoding: .utf8)
+    else {
+        return nil
+    }
+    return projectNotesSummary(from: content)
+}
+
 private func rebuildProjectCatalogSnapshot(_ request: ProjectCatalogRefreshRequest) async throws -> [Project] {
     let discoveredPaths = discoverProjects(in: request.directories)
     let nextPaths = normalizePathList(discoveredPaths + request.directProjectPaths)
@@ -3737,6 +3928,7 @@ private func createProject(path: String, existingByPath: [String: Project]) -> P
     let size = Int64(resourceValues.fileSize ?? 0)
     let checksum = "\(Int(modificationDate.timeIntervalSince1970))_\(size)"
     let isGitRepository = isGitRepo(projectURL)
+    let notesSummary = loadProjectNotesSummary(at: normalizedPath)
 
     if let existing = existingByPath[normalizedPath] {
         return Project(
@@ -3754,8 +3946,10 @@ private func createProject(path: String, existingByPath: [String: Project]) -> P
             gitLastCommit: existing.gitLastCommit,
             gitLastCommitMessage: existing.gitLastCommitMessage,
             gitDaily: existing.gitDaily,
+            notesSummary: notesSummary,
             created: existing.created,
-            checked: swiftDateFromDate(now)
+            checked: swiftDateFromDate(now),
+            hasPersistedNotesSummary: true
         )
     }
 
@@ -3774,8 +3968,10 @@ private func createProject(path: String, existingByPath: [String: Project]) -> P
         gitLastCommit: .zero,
         gitLastCommitMessage: nil,
         gitDaily: nil,
+        notesSummary: notesSummary,
         created: swiftDateFromDate(now),
-        checked: swiftDateFromDate(now)
+        checked: swiftDateFromDate(now),
+        hasPersistedNotesSummary: true
     )
 }
 
@@ -3921,8 +4117,10 @@ private func buildWorktreeVirtualProject(sourceProject: Project, worktree: Proje
         gitLastCommit: sourceProject.gitLastCommit,
         gitLastCommitMessage: sourceProject.gitLastCommitMessage,
         gitDaily: sourceProject.gitDaily,
+        notesSummary: sourceProject.notesSummary,
         created: worktree.created,
-        checked: now
+        checked: now,
+        hasPersistedNotesSummary: sourceProject.hasPersistedNotesSummary
     )
 }
 

@@ -168,6 +168,13 @@ struct MainContentView: View {
                 .foregroundStyle(NativeTheme.textSecondary)
                 .lineLimit(1)
 
+            if let notesSummary = project.notesSummary {
+                Text(notesSummary)
+                    .font(.caption)
+                    .foregroundStyle(NativeTheme.textPrimary.opacity(0.82))
+                    .lineLimit(2)
+            }
+
             HStack {
                 Label(dateString(project.mtime), systemImage: "calendar")
                     .font(.caption)
@@ -222,6 +229,12 @@ struct MainContentView: View {
                     .font(.caption)
                     .foregroundStyle(NativeTheme.textSecondary)
                     .lineLimit(1)
+                if let notesSummary = project.notesSummary {
+                    Text(notesSummary)
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textPrimary.opacity(0.82))
+                        .lineLimit(1)
+                }
             }
             Spacer()
             Text(project.isGitRepository ? (project.gitLastCommitMessage ?? "暂无提交摘要") : "--")
