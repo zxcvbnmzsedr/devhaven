@@ -229,18 +229,26 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
 public struct WorkspaceSidebarProjectionState: Equatable, Sendable {
     public var groups: [WorkspaceSidebarProjectGroup]
     public var availableProjects: [Project]
+    public var workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection]
+    public var workspaceAlignmentProjectOptions: [Project]
 
     public init(
         groups: [WorkspaceSidebarProjectGroup] = [],
-        availableProjects: [Project] = []
+        availableProjects: [Project] = [],
+        workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection] = [],
+        workspaceAlignmentProjectOptions: [Project] = []
     ) {
         self.groups = groups
         self.availableProjects = availableProjects
+        self.workspaceAlignmentGroups = workspaceAlignmentGroups
+        self.workspaceAlignmentProjectOptions = workspaceAlignmentProjectOptions
     }
 
     public static func == (lhs: WorkspaceSidebarProjectionState, rhs: WorkspaceSidebarProjectionState) -> Bool {
         lhs.groups == rhs.groups &&
-            lhs.availableProjects == rhs.availableProjects
+            lhs.availableProjects == rhs.availableProjects &&
+            lhs.workspaceAlignmentGroups == rhs.workspaceAlignmentGroups &&
+            lhs.workspaceAlignmentProjectOptions == rhs.workspaceAlignmentProjectOptions
     }
 }
 

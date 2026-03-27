@@ -81,6 +81,13 @@ public final class LegacyCompatStore {
         try saveAppStateDocument(document)
     }
 
+    public func updateWorkspaceAlignmentGroups(_ groups: [WorkspaceAlignmentGroupDefinition]) throws {
+        var document = try loadAppStateDocument()
+        document.root["workspaceAlignmentGroups"] = try makeJSONArray(from: groups)
+        document.root["version"] = 5
+        try saveAppStateDocument(document)
+    }
+
     public func loadProjectDocument(at projectPath: String) throws -> ProjectDocumentSnapshot {
         let projectURL = URL(fileURLWithPath: projectPath, isDirectory: true)
         let notes = try readOptionalFile(at: projectURL.appending(path: "PROJECT_NOTES.md"))
@@ -261,6 +268,15 @@ public final class LegacyCompatStore {
             throw LegacyCompatStoreError.invalidJSONObject(appStateFileURL)
         }
         return dictionary
+    }
+
+    private func makeJSONArray<T: Encodable>(from value: T) throws -> [Any] {
+        let data = try encoder.encode(value)
+        let object = try JSONSerialization.jsonObject(with: data)
+        guard let array = object as? [Any] else {
+            throw LegacyCompatStoreError.invalidJSONArray(appStateFileURL)
+        }
+        return array
     }
 
     private var appDataDirectoryURL: URL {

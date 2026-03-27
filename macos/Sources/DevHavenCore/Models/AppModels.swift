@@ -286,15 +286,17 @@ public struct AppStateFile: Codable, Equatable, Sendable {
     public var directProjectPaths: [String]
     public var recycleBin: [String]
     public var favoriteProjectPaths: [String]
+    public var workspaceAlignmentGroups: [WorkspaceAlignmentGroupDefinition]
     public var settings: AppSettings
 
     public init(
-        version: Int = 4,
+        version: Int = 5,
         tags: [TagData] = [],
         directories: [String] = [],
         directProjectPaths: [String] = [],
         recycleBin: [String] = [],
         favoriteProjectPaths: [String] = [],
+        workspaceAlignmentGroups: [WorkspaceAlignmentGroupDefinition] = [],
         settings: AppSettings = .init()
     ) {
         self.version = version
@@ -303,6 +305,7 @@ public struct AppStateFile: Codable, Equatable, Sendable {
         self.directProjectPaths = directProjectPaths
         self.recycleBin = recycleBin
         self.favoriteProjectPaths = favoriteProjectPaths
+        self.workspaceAlignmentGroups = workspaceAlignmentGroups
         self.settings = settings
     }
 
@@ -313,17 +316,19 @@ public struct AppStateFile: Codable, Equatable, Sendable {
         case directProjectPaths
         case recycleBin
         case favoriteProjectPaths
+        case workspaceAlignmentGroups
         case settings
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 4
+        self.version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 5
         self.tags = try container.decodeIfPresent([TagData].self, forKey: .tags) ?? []
         self.directories = try container.decodeIfPresent([String].self, forKey: .directories) ?? []
         self.directProjectPaths = try container.decodeIfPresent([String].self, forKey: .directProjectPaths) ?? []
         self.recycleBin = try container.decodeIfPresent([String].self, forKey: .recycleBin) ?? []
         self.favoriteProjectPaths = try container.decodeIfPresent([String].self, forKey: .favoriteProjectPaths) ?? []
+        self.workspaceAlignmentGroups = try container.decodeIfPresent([WorkspaceAlignmentGroupDefinition].self, forKey: .workspaceAlignmentGroups) ?? []
         self.settings = try container.decodeIfPresent(AppSettings.self, forKey: .settings) ?? .init()
     }
 }
