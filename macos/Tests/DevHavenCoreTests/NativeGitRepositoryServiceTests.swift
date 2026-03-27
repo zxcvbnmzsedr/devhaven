@@ -67,6 +67,32 @@ final class NativeGitRepositoryServiceTests: XCTestCase {
         XCTAssertEqual(snapshot.behindCount, 0)
     }
 
+    func testLoadChangesSnapshotExpandsUntrackedDirectoriesIntoFilesAndSkipsEmptyDirectories() throws {
+        let fixture = try GitRepositoryFixture()
+        let repositoryURL = try fixture.createRepository(named: "git-untracked-directory")
+
+        try FileManager.default.createDirectory(
+            at: repositoryURL.appending(path: "empty-dir", directoryHint: .isDirectory),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: repositoryURL.appending(path: "filled-dir", directoryHint: .isDirectory),
+            withIntermediateDirectories: true
+        )
+        try "nested\n".write(
+            to: repositoryURL.appending(path: "filled-dir/file.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let service = NativeGitRepositoryService()
+        let snapshot = try service.loadChanges(at: repositoryURL.path())
+
+        XCTAssertEqual(snapshot.untracked.map(\.path), ["filled-dir/file.txt"])
+        XCTAssertFalse(snapshot.untracked.contains(where: { $0.path == "empty-dir/" || $0.path == "empty-dir" }))
+        XCTAssertFalse(snapshot.untracked.contains(where: { $0.path == "filled-dir/" }))
+    }
+
     func testResolveGitDirSupportsLinkedWorktreeGitFile() throws {
         let fixture = try GitRepositoryFixture()
         let repositoryURL = try fixture.createRepository(named: "git-worktree")

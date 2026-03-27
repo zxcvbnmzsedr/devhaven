@@ -289,7 +289,7 @@ public struct NativeGitRepositoryService: Sendable {
 
     public func loadChanges(at repositoryPath: String) throws -> WorkspaceGitWorkingTreeSnapshot {
         let result = try runner.runAllowingFailure(
-            arguments: ["status", "--porcelain=v2", "--branch"],
+            arguments: ["status", "--porcelain=v2", "--branch", "--untracked-files=all"],
             at: repositoryPath
         )
         guard result.isSuccess else {

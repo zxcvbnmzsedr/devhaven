@@ -1,5 +1,46 @@
 # Todo
 
+## 2026-03-27 修复 Unversioned Files 把目录当成文件项展示
+
+- [x] 复核 Git status 与 Commit snapshot 链路，确认 Unversioned Files 中的目录项来自 `git status --porcelain=v2` 默认 untracked 折叠行为
+- [x] 做最小修复：让 Git working tree snapshot 展开 untracked 目录为真实文件路径，而不是 `dir/` 条目
+- [x] 补定向测试，锁定“非空目录展开为文件、空目录不出现”的契约
+- [x] 运行定向测试、构建与 `git diff --check`
+
+## Review（2026-03-27 修复 Unversioned Files 把目录当成文件项展示）
+
+- 结果：
+  1. `NativeGitRepositoryService.loadChanges(...)` 现在改为使用 `git status --porcelain=v2 --branch --untracked-files=all`。
+  2. 因此 `Unversioned Files` 拿到的将是 **真实未跟踪文件路径**，不再是 Git 默认折叠出来的 `filled-dir/` 这类目录条目。
+  3. 空文件夹本来就不应进入 Git 变更快照；修复后这点也被测试显式锁住，不会再被误展示成 Unversioned Files 项。
+- 直接原因：
+  1. 之前 `loadChanges(...)` 用的是默认 `git status --porcelain=v2 --branch`。
+  2. 在这个模式下，Git 会把“包含未跟踪文件的目录”折叠成单条 `dir/` 记录。
+  3. Commit browser 当前又是扁平列表，不是树形 children 视图，所以折叠目录会被直接显示成一个像“空文件夹”的 leaf row，造成语义错误。
+- 设计诱因：
+  1. Commit browser 的当前设计是假设上游给到的是文件级变更列表；一旦 Git service 传来目录级 untracked 折叠项，UI 就只能把它当普通文件行显示。
+  2. 这不是 browser 独立渲染问题，而是 Git snapshot 粒度和 UI 展示粒度不匹配。
+- 当前修复方案：
+  1. Core/Storage：把 `loadChanges(...)` 切到 `--untracked-files=all`，从源头把 untracked 目录展开成文件路径。
+  2. Tests：新增 `testLoadChangesSnapshotExpandsUntrackedDirectoriesIntoFilesAndSkipsEmptyDirectories`，锁定：
+     - 非空目录 → 返回真实文件路径
+     - 空目录 → 不出现在 `untracked`
+     - 不再返回 `filled-dir/` 这类目录项
+- 长期建议：
+  1. 如果后续 Commit browser 想进一步对齐 IDEA 的树结构，可以再在 UI 层做目录节点聚合；但前提也应是上游先提供文件级真实条目，而不是目录折叠项。
+  2. Git 查询层凡是直接喂给 UI 列表的数据，都应优先避免“为了 CLI 简洁而折叠”的输出模式，否则 UI 很容易被迫展示错误语义。
+- 验证证据：
+  - 定向测试：
+    - `swift test --package-path macos --filter 'NativeGitRepositoryServiceTests/(testLoadChangesSnapshotSeparatesStagedUnstagedAndUntracked|testLoadChangesSnapshotExpandsUntrackedDirectoriesIntoFilesAndSkipsEmptyDirectories)'`
+    - `2 tests, 0 failures`
+    - `swift test --package-path macos --filter NativeGitCommitWorkflowServiceTests/testLoadChangesSnapshotBuildsCommitChangesWithDefaultInclusion`
+    - `1 test, 0 failures`
+  - 构建：
+    - `swift build --package-path macos`
+    - `Build complete!`
+  - 质量：
+    - `git diff --check` → exit 0
+
 ## 2026-03-27 修复 Diff「查看模式」切换无效
 
 - [x] 排查 `WorkspaceDiffNavigationBarView -> WorkspaceDiffTabView` viewer mode 链路，确认 compare/merge 分支未真正消费切换结果
