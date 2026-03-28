@@ -8,6 +8,7 @@ struct WorkspaceSplitTreeView: View {
     let tab: WorkspaceTabState
     let isTabSelected: Bool
     let surfaceModelForPane: (WorkspacePaneState) -> GhosttySurfaceHostModel
+    let surfaceActivityForPane: (WorkspacePaneState) -> WorkspaceSurfaceActivity
     let onFocusPane: (String) -> Void
     let onClosePane: (String) -> Void
     let onSplitPane: (String, WorkspacePaneSplitDirection) -> Void
@@ -75,6 +76,7 @@ struct WorkspaceSplitTreeView: View {
         WorkspaceTerminalPaneView(
             pane: pane,
             model: surfaceModelForPane(pane),
+            surfaceActivity: surfaceActivityForPane(pane),
             isFocused: isTabSelected && tab.focusedPaneId == pane.id,
             isZoomed: isZoomed,
             onFocusPane: onFocusPane,

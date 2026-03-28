@@ -53,12 +53,18 @@ final class GhosttySurfaceBridge {
             guard let title = string(from: action.action.set_title.title) else {
                 return true
             }
+            guard state.title != title else {
+                return true
+            }
             state.title = title
             onTitleChange?(title)
             return true
 
         case GHOSTTY_ACTION_PWD:
             guard let path = string(from: action.action.pwd.pwd) else {
+                return true
+            }
+            guard state.pwd != path else {
                 return true
             }
             state.pwd = path
@@ -75,6 +81,9 @@ final class GhosttySurfaceBridge {
 
         case GHOSTTY_ACTION_RENDERER_HEALTH:
             let healthy = action.action.renderer_health == GHOSTTY_RENDERER_HEALTH_OK
+            guard state.rendererHealthy != healthy else {
+                return true
+            }
             state.rendererHealthy = healthy
             onRendererHealthChange?(healthy)
             return true
@@ -118,6 +127,9 @@ final class GhosttySurfaceBridge {
 
         case GHOSTTY_ACTION_CONFIG_CHANGE:
             let appearance = GhosttySurfaceAppearance(config: action.action.config_change.config)
+            guard state.appearance != appearance else {
+                return true
+            }
             state.appearance = appearance
             onAppearanceChange?(appearance)
             return true
@@ -127,6 +139,9 @@ final class GhosttySurfaceBridge {
                 backgroundColorChange: action.action.color_change,
                 fallback: state.appearance
             )
+            guard state.appearance != appearance else {
+                return true
+            }
             state.appearance = appearance
             onAppearanceChange?(appearance)
             return true

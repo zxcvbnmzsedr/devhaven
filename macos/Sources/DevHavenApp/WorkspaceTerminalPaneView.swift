@@ -5,6 +5,7 @@ import DevHavenCore
 struct WorkspaceTerminalPaneView: View {
     let pane: WorkspacePaneState
     let model: GhosttySurfaceHostModel
+    let surfaceActivity: WorkspaceSurfaceActivity
     let isFocused: Bool
     let isZoomed: Bool
     let onFocusPane: (String) -> Void
@@ -45,6 +46,12 @@ struct WorkspaceTerminalPaneView: View {
                             .stroke(isFocused ? NativeTheme.accent.opacity(0.8) : Color.clear, lineWidth: 2)
                     )
             }
+        }
+        .onAppear {
+            syncSurfaceActivity()
+        }
+        .onChange(of: surfaceActivity) { _, _ in
+            syncSurfaceActivity()
         }
     }
 
@@ -96,6 +103,16 @@ struct WorkspaceTerminalPaneView: View {
         }
         .buttonStyle(.plain)
         .help(title)
+    }
+
+    private func syncSurfaceActivity() {
+        model.syncSurfaceActivity(
+            isVisible: surfaceActivity.isVisible,
+            isFocused: surfaceActivity.isFocused
+        )
+        if surfaceActivity.isFocused {
+            model.restoreWindowResponderIfNeeded()
+        }
     }
 
     private func handleSplitAction(_ action: GhosttySplitAction) -> Bool {

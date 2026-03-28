@@ -530,17 +530,41 @@ final class GhosttySurfaceHostModel: ObservableObject {
 
         let bridge = GhosttySurfaceBridge()
         bridge.onTitleChange = { [weak self] title in
-            self?.surfaceTitle = title
-            self?.onTabTitleChange?(title)
+            guard let self else {
+                return
+            }
+            guard self.surfaceTitle != title else {
+                return
+            }
+            self.surfaceTitle = title
+            self.onTabTitleChange?(title)
         }
         bridge.onWorkingDirectoryChange = { [weak self] path in
-            self?.surfaceWorkingDirectory = path
+            guard let self else {
+                return
+            }
+            guard self.surfaceWorkingDirectory != path else {
+                return
+            }
+            self.surfaceWorkingDirectory = path
         }
         bridge.onRendererHealthChange = { [weak self] healthy in
-            self?.rendererHealthy = healthy
+            guard let self else {
+                return
+            }
+            guard self.rendererHealthy != healthy else {
+                return
+            }
+            self.rendererHealthy = healthy
         }
         bridge.onAppearanceChange = { [weak self] appearance in
-            self?.appearance = appearance
+            guard let self else {
+                return
+            }
+            guard self.appearance != appearance else {
+                return
+            }
+            self.appearance = appearance
         }
         bridge.onDesktopNotification = { [weak self] title, body in
             self?.onNotificationEvent?(title, body)
@@ -550,6 +574,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
                 return
             }
             let resolvedStatus = self.mapTaskStatus(status)
+            guard self.taskStatus != resolvedStatus else {
+                return
+            }
             self.taskStatus = resolvedStatus
             self.onTaskStatusChange?(resolvedStatus)
         }

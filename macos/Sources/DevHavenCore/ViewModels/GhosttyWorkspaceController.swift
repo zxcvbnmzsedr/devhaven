@@ -152,7 +152,12 @@ public final class GhosttyWorkspaceController {
     }
 
     public func updateTitle(for tabID: String, title: String) {
+        let previousTitle = projection.tabs.first(where: { $0.id == tabID })?.title
         projection.updateTitle(for: tabID, title: title)
+        let nextTitle = projection.tabs.first(where: { $0.id == tabID })?.title
+        guard previousTitle != nextTitle else {
+            return
+        }
         onChange?()
     }
 
