@@ -39,7 +39,11 @@ struct WorkspaceProjectSidebarHostView: View {
     @State private var worktreeDialogProjectPath: String?
     @State private var pendingDeleteRequest: WorktreeDeleteRequest?
     @State private var alignmentEditorContext: WorkspaceAlignmentEditorContext?
+    @State private var alignmentEditorIsSubmitting = false
+    @State private var alignmentEditorErrorMessage: String?
     @State private var alignmentAddProjectsContext: WorkspaceAlignmentAddProjectsContext?
+    @State private var alignmentAddProjectsIsSubmitting = false
+    @State private var alignmentAddProjectsErrorMessage: String?
     @State private var pendingDeleteWorkspaceAlignment: WorkspaceAlignmentDeleteRequest?
 
     private var worktreeDialogProject: Project? {
@@ -110,6 +114,13 @@ struct WorkspaceProjectSidebarHostView: View {
             onRequestCreateWorkspaceAlignment: { projectPath in
                 presentCreateWorkspaceAlignmentSheet(prefilledProjectPath: projectPath)
             },
+            onOpenWorkspaceAlignment: { workspaceID in
+                do {
+                    try viewModel.enterWorkspaceAlignmentGroup(workspaceID)
+                } catch {
+                    viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            },
             onRequestEditWorkspaceAlignment: presentEditWorkspaceAlignmentSheet,
             onRequestAddProjectsToWorkspaceAlignment: presentAddProjectsSheet,
             onRequestRecheckWorkspaceAlignment: { workspaceID in
@@ -154,7 +165,20 @@ struct WorkspaceProjectSidebarHostView: View {
             onAddProjectToWorkspaceAlignment: { projectPath, workspaceID in
                 Task {
                     do {
-                        try await viewModel.addProjects([projectPath], toWorkspaceAlignmentGroup: workspaceID, applyRules: true)
+                        let template = workspaceAlignmentInitialAddTemplate(for: workspaceID)
+                        let entry = WorkspaceAlignmentMemberFormEntry(
+                            projectPath: projectPath,
+                            alias: workspaceAlignmentDefaultAlias(for: projectPath),
+                            targetBranch: template?.targetBranch ?? "",
+                            baseBranchMode: template?.baseBranchMode ?? .autoDetect,
+                            specifiedBaseBranch: template?.specifiedBaseBranch ?? ""
+                        )
+                        try await viewModel.addWorkspaceAlignmentMembers(
+                            [workspaceAlignmentMemberDefinition(from: entry)],
+                            memberAliases: workspaceAlignmentMemberAliases(from: [entry]),
+                            toWorkspaceAlignmentGroup: workspaceID,
+                            applyRules: true
+                        )
                     } catch {
                         viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                     }
@@ -223,10 +247,12 @@ struct WorkspaceProjectSidebarHostView: View {
                 mode: context.mode,
                 availableProjects: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions,
                 initialData: context.initialData,
+                errorMessage: alignmentEditorErrorMessage,
+                isSubmitting: alignmentEditorIsSubmitting,
                 onSubmit: { formData in
                     submitWorkspaceAlignmentEditor(context: context, formData: formData)
                 },
-                onClose: { alignmentEditorContext = nil }
+                onClose: dismissAlignmentEditor
             )
             .preferredColorScheme(.dark)
         }
@@ -236,10 +262,13 @@ struct WorkspaceProjectSidebarHostView: View {
                 availableProjects: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions.filter {
                     !context.excludedProjectPaths.contains($0.path)
                 },
-                onSubmit: { selectedPaths, applyRules in
-                    submitAddProjects(to: context.workspaceID, selectedPaths: selectedPaths, applyRules: applyRules)
+                initialMemberTemplate: workspaceAlignmentInitialAddTemplate(for: context.workspaceID),
+                errorMessage: alignmentAddProjectsErrorMessage,
+                isSubmitting: alignmentAddProjectsIsSubmitting,
+                onSubmit: { members, applyRules in
+                    submitAddProjects(to: context.workspaceID, members: members, applyRules: applyRules)
                 },
-                onClose: { alignmentAddProjectsContext = nil }
+                onClose: dismissAlignmentAddProjects
             )
             .preferredColorScheme(.dark)
         }
@@ -313,6 +342,8 @@ struct WorkspaceProjectSidebarHostView: View {
     }
 
     private func presentCreateWorkspaceAlignmentSheet(prefilledProjectPath: String?) {
+        alignmentEditorIsSubmitting = false
+        alignmentEditorErrorMessage = nil
         var selectedProjectPaths = Set<String>()
         if let prefilledProjectPath {
             selectedProjectPaths.insert(prefilledProjectPath)
@@ -323,10 +354,16 @@ struct WorkspaceProjectSidebarHostView: View {
             mode: .create,
             initialData: WorkspaceAlignmentEditorFormData(
                 name: "",
-                targetBranch: "",
-                baseBranchMode: .autoDetect,
-                specifiedBaseBranch: "",
-                selectedProjectPaths: selectedProjectPaths,
+                members: selectedProjectPaths
+                    .map { projectPath in
+                        WorkspaceAlignmentMemberFormEntry(
+                            projectPath: projectPath,
+                            alias: workspaceAlignmentDefaultAlias(for: projectPath),
+                            targetBranch: "",
+                            baseBranchMode: .autoDetect,
+                            specifiedBaseBranch: ""
+                        )
+                    },
                 applyRulesAfterSave: prefilledProjectPath != nil
             )
         )
@@ -336,16 +373,23 @@ struct WorkspaceProjectSidebarHostView: View {
         guard let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }) else {
             return
         }
+        alignmentEditorIsSubmitting = false
+        alignmentEditorErrorMessage = nil
         alignmentEditorContext = WorkspaceAlignmentEditorContext(
             id: group.id,
             title: "编辑工作区",
-            mode: .edit(currentProjectPaths: group.definition.projectPaths),
+            mode: .edit,
             initialData: WorkspaceAlignmentEditorFormData(
                 name: group.definition.name,
-                targetBranch: group.definition.targetBranch,
-                baseBranchMode: group.definition.baseBranchMode,
-                specifiedBaseBranch: group.definition.specifiedBaseBranch ?? "",
-                selectedProjectPaths: Set(group.definition.projectPaths),
+                members: group.definition.effectiveMembers.map { member in
+                    WorkspaceAlignmentMemberFormEntry(
+                        projectPath: member.projectPath,
+                        alias: group.definition.memberAliases[member.projectPath] ?? workspaceAlignmentDefaultAlias(for: member.projectPath),
+                        targetBranch: member.targetBranch,
+                        baseBranchMode: member.baseBranchMode,
+                        specifiedBaseBranch: member.specifiedBaseBranch ?? ""
+                    )
+                },
                 applyRulesAfterSave: false
             )
         )
@@ -355,6 +399,8 @@ struct WorkspaceProjectSidebarHostView: View {
         guard let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }) else {
             return
         }
+        alignmentAddProjectsIsSubmitting = false
+        alignmentAddProjectsErrorMessage = nil
         alignmentAddProjectsContext = WorkspaceAlignmentAddProjectsContext(
             id: group.id,
             workspaceID: group.id,
@@ -363,61 +409,74 @@ struct WorkspaceProjectSidebarHostView: View {
         )
     }
 
+    private func dismissAlignmentEditor() {
+        alignmentEditorContext = nil
+        alignmentEditorIsSubmitting = false
+        alignmentEditorErrorMessage = nil
+    }
+
+    private func dismissAlignmentAddProjects() {
+        alignmentAddProjectsContext = nil
+        alignmentAddProjectsIsSubmitting = false
+        alignmentAddProjectsErrorMessage = nil
+    }
+
     private func submitWorkspaceAlignmentEditor(
         context: WorkspaceAlignmentEditorContext,
         formData: WorkspaceAlignmentEditorFormData
     ) {
-        let shouldDismissImmediately = formData.applyRulesAfterSave
-        if shouldDismissImmediately {
-            alignmentEditorContext = nil
-        }
+        alignmentEditorIsSubmitting = true
+        alignmentEditorErrorMessage = nil
         Task {
             do {
                 switch context.mode {
                 case .create:
                     try await viewModel.createWorkspaceAlignmentGroup(
                         name: formData.name,
-                        targetBranch: formData.targetBranch,
-                        baseBranchMode: formData.baseBranchMode,
-                        specifiedBaseBranch: formData.specifiedBaseBranch,
-                        projectPaths: Array(formData.selectedProjectPaths),
+                        members: formData.members.map(workspaceAlignmentMemberDefinition(from:)),
+                        memberAliases: workspaceAlignmentMemberAliases(from: formData.members),
                         applyRules: formData.applyRulesAfterSave
                     )
                 case .edit:
                     try await viewModel.updateWorkspaceAlignmentGroup(
                         id: context.id,
                         name: formData.name,
-                        targetBranch: formData.targetBranch,
-                        baseBranchMode: formData.baseBranchMode,
-                        specifiedBaseBranch: formData.specifiedBaseBranch,
+                        members: formData.members.map(workspaceAlignmentMemberDefinition(from:)),
+                        memberAliases: workspaceAlignmentMemberAliases(from: formData.members),
                         applyRules: formData.applyRulesAfterSave
                     )
                 }
-                if !shouldDismissImmediately {
-                    alignmentEditorContext = nil
-                }
+                dismissAlignmentEditor()
             } catch {
-                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                alignmentEditorIsSubmitting = false
+                alignmentEditorErrorMessage = message
+                viewModel.errorMessage = message
             }
         }
     }
 
     private func submitAddProjects(
         to workspaceID: String,
-        selectedPaths: Set<String>,
+        members: [WorkspaceAlignmentMemberFormEntry],
         applyRules: Bool
     ) {
-        if applyRules {
-            alignmentAddProjectsContext = nil
-        }
+        alignmentAddProjectsIsSubmitting = true
+        alignmentAddProjectsErrorMessage = nil
         Task {
             do {
-                try await viewModel.addProjects(Array(selectedPaths), toWorkspaceAlignmentGroup: workspaceID, applyRules: applyRules)
-                if !applyRules {
-                    alignmentAddProjectsContext = nil
-                }
+                try await viewModel.addWorkspaceAlignmentMembers(
+                    members.map(workspaceAlignmentMemberDefinition(from:)),
+                    memberAliases: workspaceAlignmentMemberAliases(from: members),
+                    toWorkspaceAlignmentGroup: workspaceID,
+                    applyRules: applyRules
+                )
+                dismissAlignmentAddProjects()
             } catch {
-                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                alignmentAddProjectsIsSubmitting = false
+                alignmentAddProjectsErrorMessage = message
+                viewModel.errorMessage = message
             }
         }
     }
@@ -430,5 +489,46 @@ struct WorkspaceProjectSidebarHostView: View {
                 viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+
+    private func workspaceAlignmentProjectName(for path: String) -> String {
+        sidebarProjectionStore.projection.workspaceAlignmentProjectOptions
+            .first(where: { $0.path == path })?.name
+        ?? URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    private func workspaceAlignmentDefaultAlias(for path: String) -> String {
+        sanitizeWorkspaceAlias(workspaceAlignmentProjectName(for: path))
+    }
+
+    private func workspaceAlignmentMemberDefinition(
+        from entry: WorkspaceAlignmentMemberFormEntry
+    ) -> WorkspaceAlignmentMemberDefinition {
+        WorkspaceAlignmentMemberDefinition(
+            projectPath: entry.projectPath,
+            targetBranch: entry.targetBranch,
+            baseBranchMode: entry.baseBranchMode,
+            specifiedBaseBranch: entry.specifiedBaseBranch
+        )
+    }
+
+    private func workspaceAlignmentMemberAliases(
+        from members: [WorkspaceAlignmentMemberFormEntry]
+    ) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: members.map { ($0.projectPath, sanitizeWorkspaceAlias($0.alias)) })
+    }
+
+    private func workspaceAlignmentInitialAddTemplate(for workspaceID: String) -> WorkspaceAlignmentMemberFormEntry? {
+        guard let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }),
+              let firstMember = group.definition.effectiveMembers.first else {
+            return nil
+        }
+        return WorkspaceAlignmentMemberFormEntry(
+            projectPath: "",
+            alias: "",
+            targetBranch: firstMember.targetBranch,
+            baseBranchMode: firstMember.baseBranchMode,
+            specifiedBaseBranch: firstMember.specifiedBaseBranch ?? ""
+        )
     }
 }

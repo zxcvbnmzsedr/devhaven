@@ -61,4 +61,34 @@ final class WorkspaceAlignmentModelsTests: XCTestCase {
         XCTAssertEqual(member.openTarget, .worktree(rootProjectPath: "/tmp/root", worktreePath: "/tmp/root-feature"))
         XCTAssertEqual(member.openTarget.path, "/tmp/root-feature")
     }
+
+    func testGroupDefinitionDecodesLegacyPayloadWithoutNewFields() throws {
+        let json = """
+        {
+          "id": "FA99B08E-F7AC-4B9D-B006-A32991162DC5",
+          "name": "test",
+          "targetBranch": "test123",
+          "baseBranchMode": "auto_detect",
+          "projectPaths": [
+            "/Users/example/A",
+            "/Users/example/B"
+          ],
+          "createdAt": 796300488.18898,
+          "updatedAt": 796301693.158217
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(
+            WorkspaceAlignmentGroupDefinition.self,
+            from: Data(json.utf8)
+        )
+
+        XCTAssertEqual(decoded.id, "FA99B08E-F7AC-4B9D-B006-A32991162DC5")
+        XCTAssertEqual(decoded.name, "test")
+        XCTAssertEqual(decoded.targetBranch, "test123")
+        XCTAssertEqual(decoded.baseBranchMode, .autoDetect)
+        XCTAssertEqual(decoded.projectPaths, ["/Users/example/A", "/Users/example/B"])
+        XCTAssertNil(decoded.rootDirectoryName)
+        XCTAssertEqual(decoded.memberAliases, [:])
+    }
 }

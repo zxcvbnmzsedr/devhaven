@@ -17,6 +17,7 @@ struct WorkspaceProjectListView: View {
     let onFocusNotification: (WorkspaceTerminalNotification) -> Void
     let onCloseProject: (String) -> Void
     let onRequestCreateWorkspaceAlignment: (String?) -> Void
+    let onOpenWorkspaceAlignment: (String) -> Void
     let onRequestEditWorkspaceAlignment: (String) -> Void
     let onRequestAddProjectsToWorkspaceAlignment: (String) -> Void
     let onRequestRecheckWorkspaceAlignment: (String) -> Void
@@ -55,6 +56,7 @@ struct WorkspaceProjectListView: View {
                     WorkspaceAlignmentSectionView(
                         groups: workspaceAlignmentGroups,
                         onRequestCreateWorkspace: { onRequestCreateWorkspaceAlignment(nil) },
+                        onOpenWorkspace: onOpenWorkspaceAlignment,
                         onRequestEditWorkspace: onRequestEditWorkspaceAlignment,
                         onRequestAddProjects: onRequestAddProjectsToWorkspaceAlignment,
                         onRequestRecheck: onRequestRecheckWorkspaceAlignment,
@@ -136,7 +138,7 @@ private struct ProjectGroupView: View {
             .buttonStyle(.plain)
             .onHover { isHovering = $0 }
             .contextMenu {
-                if !group.rootProject.isQuickTerminal {
+                if !group.rootProject.isTransientWorkspaceProject {
                     Button("基于当前项目新建工作区…") {
                         onRequestCreateWorkspaceAlignmentFromProject(group.rootProject.path)
                     }
@@ -185,7 +187,7 @@ private struct ProjectGroupView: View {
                         .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
                         .lineLimit(1)
                 }
-                if let branch = group.currentBranch, !group.rootProject.isQuickTerminal {
+                if let branch = group.currentBranch, !group.rootProject.isTransientWorkspaceProject {
                     Text(branch)
                         .font(.caption2.monospaced())
                         .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
@@ -219,7 +221,7 @@ private struct ProjectGroupView: View {
                 groupStatusAccessory
 
                 HStack(spacing: 4) {
-                    if !group.rootProject.isQuickTerminal {
+                    if !group.rootProject.isTransientWorkspaceProject {
                         iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
                             onRefreshWorktrees(group.rootProject.path)
                         }

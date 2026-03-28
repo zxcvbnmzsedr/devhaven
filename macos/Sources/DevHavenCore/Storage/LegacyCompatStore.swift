@@ -43,6 +43,11 @@ public final class LegacyCompatStore {
             .appending(path: "run-logs", directoryHint: .isDirectory)
     }
 
+    public var workspaceRootsDirectoryURL: URL {
+        appDataDirectoryURL
+            .appending(path: "workspaces", directoryHint: .isDirectory)
+    }
+
     public func loadSnapshot() throws -> NativeAppSnapshot {
         let appStateDocument = try loadAppStateDocument()
         let projects = try loadProjects()

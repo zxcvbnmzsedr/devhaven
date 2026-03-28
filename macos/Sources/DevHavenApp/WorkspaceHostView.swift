@@ -128,17 +128,21 @@ struct WorkspaceHostView: View {
                         }
                     }
                 )
-                actionButton(
-                    title: "查看详情",
-                    systemImage: "sidebar.right",
-                    action: {
-                        viewModel.selectProject(project.path)
-                    }
-                )
+                if !project.isTransientWorkspaceProject {
+                    actionButton(
+                        title: "查看详情",
+                        systemImage: "sidebar.right",
+                        action: {
+                            viewModel.selectProject(project.path)
+                        }
+                    )
+                }
                 statChip(
-                    title: project.gitCommits > 0
-                        ? "\(project.gitCommits) 次提交"
-                        : (project.isGitRepository ? "Git 项目" : "非 Git 项目"),
+                    title: project.isWorkspaceRoot
+                        ? "工作区根目录"
+                        : project.gitCommits > 0
+                            ? "\(project.gitCommits) 次提交"
+                            : (project.isGitRepository ? "Git 项目" : "非 Git 项目"),
                     systemImage: "point.3.connected.trianglepath.dotted"
                 )
                 statChip(

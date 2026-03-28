@@ -83,9 +83,13 @@ struct WorkspaceShellView: View {
     private var terminalModeContent: some View {
         ZStack {
             ForEach(viewModel.openWorkspaceSessions) { session in
-                let project: Project? = session.isQuickTerminal
-                    ? .quickTerminal(at: session.projectPath)
-                    : viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath })
+                let project: Project? = if let workspaceRootContext = session.workspaceRootContext {
+                    .workspaceRoot(name: workspaceRootContext.workspaceName, path: session.projectPath)
+                } else if session.isQuickTerminal {
+                    .quickTerminal(at: session.projectPath)
+                } else {
+                    viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath })
+                }
                 if let project {
                     WorkspaceHostView(
                         viewModel: viewModel,

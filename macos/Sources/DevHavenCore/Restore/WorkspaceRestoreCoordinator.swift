@@ -89,7 +89,8 @@ final class WorkspaceRestoreCoordinator {
         let sessionSnapshots = sessions.map { session in
             var snapshot = session.controller.makeRestoreSnapshot(
                 rootProjectPath: session.rootProjectPath,
-                isQuickTerminal: session.isQuickTerminal
+                isQuickTerminal: session.isQuickTerminal,
+                workspaceRootContext: session.workspaceRootContext
             )
             snapshot.tabs = snapshot.tabs.map { tab in
                 var tab = tab

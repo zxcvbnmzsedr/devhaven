@@ -5,6 +5,36 @@ public enum WorkspaceAlignmentBaseBranchMode: String, Codable, Equatable, Sendab
     case specified
 }
 
+public struct WorkspaceAlignmentMemberDefinition: Codable, Equatable, Sendable, Identifiable {
+    public var projectPath: String
+    public var targetBranch: String
+    public var baseBranchMode: WorkspaceAlignmentBaseBranchMode
+    public var specifiedBaseBranch: String?
+
+    public init(
+        projectPath: String,
+        targetBranch: String,
+        baseBranchMode: WorkspaceAlignmentBaseBranchMode = .autoDetect,
+        specifiedBaseBranch: String? = nil
+    ) {
+        self.projectPath = projectPath
+        self.targetBranch = targetBranch
+        self.baseBranchMode = baseBranchMode
+        self.specifiedBaseBranch = specifiedBaseBranch
+    }
+
+    public var id: String { projectPath }
+
+    public func sanitized() -> WorkspaceAlignmentMemberDefinition {
+        var copy = self
+        copy.projectPath = normalizeWorkspaceAlignmentPath(copy.projectPath)
+        copy.targetBranch = copy.targetBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let specified = copy.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines)
+        copy.specifiedBaseBranch = (specified?.isEmpty == false) ? specified : nil
+        return copy
+    }
+}
+
 public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, Identifiable {
     public var id: String
     public var name: String
@@ -12,6 +42,9 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
     public var baseBranchMode: WorkspaceAlignmentBaseBranchMode
     public var specifiedBaseBranch: String?
     public var projectPaths: [String]
+    public var members: [WorkspaceAlignmentMemberDefinition]
+    public var rootDirectoryName: String?
+    public var memberAliases: [String: String]
     public var createdAt: SwiftDate
     public var updatedAt: SwiftDate
 
@@ -22,6 +55,9 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         baseBranchMode: WorkspaceAlignmentBaseBranchMode = .autoDetect,
         specifiedBaseBranch: String? = nil,
         projectPaths: [String] = [],
+        members: [WorkspaceAlignmentMemberDefinition] = [],
+        rootDirectoryName: String? = nil,
+        memberAliases: [String: String] = [:],
         createdAt: SwiftDate = Date().timeIntervalSince1970,
         updatedAt: SwiftDate = Date().timeIntervalSince1970
     ) {
@@ -31,8 +67,40 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         self.baseBranchMode = baseBranchMode
         self.specifiedBaseBranch = specifiedBaseBranch
         self.projectPaths = projectPaths
+        self.members = members
+        self.rootDirectoryName = rootDirectoryName
+        self.memberAliases = memberAliases
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case targetBranch
+        case baseBranchMode
+        case specifiedBaseBranch
+        case projectPaths
+        case members
+        case rootDirectoryName
+        case memberAliases
+        case createdAt
+        case updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        self.name = try container.decode(String.self, forKey: .name)
+        self.targetBranch = try container.decode(String.self, forKey: .targetBranch)
+        self.baseBranchMode = try container.decodeIfPresent(WorkspaceAlignmentBaseBranchMode.self, forKey: .baseBranchMode) ?? .autoDetect
+        self.specifiedBaseBranch = try container.decodeIfPresent(String.self, forKey: .specifiedBaseBranch)
+        self.projectPaths = try container.decodeIfPresent([String].self, forKey: .projectPaths) ?? []
+        self.members = try container.decodeIfPresent([WorkspaceAlignmentMemberDefinition].self, forKey: .members) ?? []
+        self.rootDirectoryName = try container.decodeIfPresent(String.self, forKey: .rootDirectoryName)
+        self.memberAliases = try container.decodeIfPresent([String: String].self, forKey: .memberAliases) ?? [:]
+        self.createdAt = try container.decodeIfPresent(SwiftDate.self, forKey: .createdAt) ?? Date().timeIntervalSince1970
+        self.updatedAt = try container.decodeIfPresent(SwiftDate.self, forKey: .updatedAt) ?? self.createdAt
     }
 
     public func sanitized() -> WorkspaceAlignmentGroupDefinition {
@@ -41,8 +109,40 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         copy.targetBranch = copy.targetBranch.trimmingCharacters(in: .whitespacesAndNewlines)
         let specified = copy.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.specifiedBaseBranch = (specified?.isEmpty == false) ? specified : nil
-        copy.projectPaths = normalizeWorkspaceAlignmentPathList(copy.projectPaths)
+        let normalizedMembers: [WorkspaceAlignmentMemberDefinition]
+        if copy.members.isEmpty {
+            normalizedMembers = normalizeWorkspaceAlignmentPathList(copy.projectPaths).map { path in
+                WorkspaceAlignmentMemberDefinition(
+                    projectPath: path,
+                    targetBranch: copy.targetBranch,
+                    baseBranchMode: copy.baseBranchMode,
+                    specifiedBaseBranch: copy.specifiedBaseBranch
+                )
+            }
+        } else {
+            normalizedMembers = normalizeWorkspaceAlignmentMemberList(copy.members)
+        }
+        copy.members = normalizedMembers
+        copy.projectPaths = normalizedMembers.map(\.projectPath)
+        if copy.targetBranch.isEmpty, let firstTargetBranch = normalizedMembers.first?.targetBranch {
+            copy.targetBranch = firstTargetBranch
+        }
+        if normalizedMembers.count == 1, let onlyMember = normalizedMembers.first {
+            copy.baseBranchMode = onlyMember.baseBranchMode
+            copy.specifiedBaseBranch = onlyMember.specifiedBaseBranch
+        }
+        let trimmedRootDirectoryName = copy.rootDirectoryName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedRootDirectoryName = trimmedRootDirectoryName.isEmpty ? nil : trimmedRootDirectoryName
+        copy.rootDirectoryName = normalizedRootDirectoryName
+        copy.memberAliases = normalizeWorkspaceAlignmentAliasMap(
+            copy.memberAliases,
+            allowedPaths: Set(copy.projectPaths)
+        )
         return copy
+    }
+
+    public var effectiveMembers: [WorkspaceAlignmentMemberDefinition] {
+        sanitized().members
     }
 }
 
@@ -127,20 +227,29 @@ public enum WorkspaceAlignmentOpenTarget: Equatable, Sendable {
 public struct WorkspaceAlignmentMemberProjection: Equatable, Sendable, Identifiable {
     public var groupID: String
     public var projectPath: String
+    public var alias: String
     public var projectName: String
+    public var targetBranch: String
+    public var branchLabel: String
     public var status: WorkspaceAlignmentMemberStatus
     public var openTarget: WorkspaceAlignmentOpenTarget
 
     public init(
         groupID: String,
         projectPath: String,
+        alias: String? = nil,
         projectName: String,
+        targetBranch: String? = nil,
+        branchLabel: String? = nil,
         status: WorkspaceAlignmentMemberStatus,
         openTarget: WorkspaceAlignmentOpenTarget? = nil
     ) {
         self.groupID = groupID
         self.projectPath = projectPath
+        self.alias = alias ?? URL(fileURLWithPath: projectPath).lastPathComponent
         self.projectName = projectName
+        self.targetBranch = targetBranch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.branchLabel = branchLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.status = status
         self.openTarget = openTarget ?? .project(projectPath: projectPath)
     }
@@ -166,7 +275,27 @@ public struct WorkspaceAlignmentGroupProjection: Equatable, Sendable, Identifiab
         if members.isEmpty {
             return "\(definition.targetBranch) · 暂无项目"
         }
-        return "\(definition.targetBranch) · \(members.count) 项目"
+        let branchLabels = members
+            .map(\.branchLabel)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !branchLabels.isEmpty else {
+            return "\(definition.targetBranch) · \(members.count) 项目"
+        }
+        let counts = Dictionary(grouping: branchLabels, by: { $0 }).mapValues(\.count)
+        let ordered = counts.keys.sorted { lhs, rhs in
+            if counts[lhs] == counts[rhs] {
+                return lhs.localizedStandardCompare(rhs) == .orderedAscending
+            }
+            return (counts[lhs] ?? 0) > (counts[rhs] ?? 0)
+        }
+        let segments = ordered.prefix(2).map { branch in
+            "\(branch) × \(counts[branch] ?? 0)"
+        }
+        if counts.count > 2 {
+            return segments.joined(separator: " · ") + " · \(members.count) 项目"
+        }
+        return segments.joined(separator: " · ")
     }
 
     public var summaryText: String {
@@ -245,4 +374,33 @@ private func normalizeWorkspaceAlignmentPathList(_ paths: [String]) -> [String] 
         .map(normalizeWorkspaceAlignmentPath)
         .filter { !$0.isEmpty }
         .filter { seen.insert($0).inserted }
+}
+
+private func normalizeWorkspaceAlignmentMemberList(
+    _ members: [WorkspaceAlignmentMemberDefinition]
+) -> [WorkspaceAlignmentMemberDefinition] {
+    var seen = Set<String>()
+    return members
+        .map { $0.sanitized() }
+        .filter { !$0.projectPath.isEmpty }
+        .filter { seen.insert($0.projectPath).inserted }
+}
+
+private func normalizeWorkspaceAlignmentAliasMap(
+    _ aliases: [String: String],
+    allowedPaths: Set<String>
+) -> [String: String] {
+    var normalized = [String: String]()
+    for (rawPath, rawAlias) in aliases {
+        let path = normalizeWorkspaceAlignmentPath(rawPath)
+        guard allowedPaths.contains(path) else {
+            continue
+        }
+        let alias = rawAlias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !alias.isEmpty else {
+            continue
+        }
+        normalized[path] = alias
+    }
+    return normalized
 }

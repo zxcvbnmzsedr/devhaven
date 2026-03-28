@@ -160,6 +160,7 @@ enum GhosttyRuntimeEnvironmentBuilder {
         environment["DEVHAVEN_AGENT_SIGNAL_DIR"] = signalDirectory.path
 
         guard let agentResourcesURL else {
+            injectWorkspaceContextIfPresent(into: &environment)
             return environment
         }
 
@@ -175,7 +176,47 @@ enum GhosttyRuntimeEnvironmentBuilder {
             environment["PATH"] = existingPath
         }
 
+        injectWorkspaceContextIfPresent(into: &environment)
         return environment
+    }
+
+    private static func injectWorkspaceContextIfPresent(
+        into environment: inout [String: String]
+    ) {
+        let projectPath = environment["DEVHAVEN_PROJECT_PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !projectPath.isEmpty else {
+            return
+        }
+
+        let workspaceRootURL = URL(fileURLWithPath: projectPath, isDirectory: true)
+        let manifestURL = workspaceRootURL.appending(path: "WORKSPACE.json", directoryHint: .notDirectory)
+        let readmeURL = workspaceRootURL.appending(path: "WORKSPACE.md", directoryHint: .notDirectory)
+        guard FileManager.default.fileExists(atPath: manifestURL.path) else {
+            return
+        }
+
+        environment["DEVHAVEN_WORKSPACE_ROOT"] = workspaceRootURL.path
+        environment["DEVHAVEN_WORKSPACE_MANIFEST"] = manifestURL.path
+        if FileManager.default.fileExists(atPath: readmeURL.path) {
+            environment["DEVHAVEN_WORKSPACE_README"] = readmeURL.path
+        }
+
+        guard let manifest = loadWorkspaceManifest(from: manifestURL) else {
+            return
+        }
+        environment["DEVHAVEN_WORKSPACE_ID"] = manifest.id
+        environment["DEVHAVEN_WORKSPACE_NAME"] = manifest.name
+    }
+
+    private static func loadWorkspaceManifest(
+        from fileURL: URL
+    ) -> WorkspaceAlignmentRootManifest? {
+        guard let data = try? Data(contentsOf: fileURL) else {
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(WorkspaceAlignmentRootManifest.self, from: data)
     }
 }
 

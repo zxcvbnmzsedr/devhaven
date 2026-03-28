@@ -7,6 +7,27 @@ private struct WorktreeCreateContext {
     let previewPath: String
 }
 
+private struct WorkspaceAlignmentStatusProbe: Sendable {
+    let projectPath: String
+    let targetBranch: String
+    let managedWorktreePath: String
+    let branches: [NativeGitBranch]
+    let worktrees: [NativeGitWorktree]
+    let currentBranch: String
+
+    var branchExists: Bool {
+        branches.contains(where: { $0.name == targetBranch })
+    }
+
+    var occupiedTargetWorktree: NativeGitWorktree? {
+        worktrees.first(where: { $0.branch == targetBranch })
+    }
+
+    var hasOccupiedTargetCheckout: Bool {
+        currentBranch == targetBranch || occupiedTargetWorktree != nil
+    }
+}
+
 @MainActor
 @Observable
 public final class NativeAppViewModel {
@@ -24,6 +45,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
     @ObservationIgnored private let runManager: any WorkspaceRunManaging
     @ObservationIgnored private let workspaceRestoreCoordinator: WorkspaceRestoreCoordinator
+    @ObservationIgnored private let workspaceAlignmentRootStore: WorkspaceAlignmentRootStore
     @ObservationIgnored private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider?
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
     @ObservationIgnored private var projectNotesSummaryBackfillTask: Task<Void, Never>?
@@ -168,6 +190,7 @@ public final class NativeAppViewModel {
         agentSignalStore: WorkspaceAgentSignalStore? = nil,
         runManager: (any WorkspaceRunManaging)? = nil,
         workspaceRestoreStore: WorkspaceRestoreStore? = nil,
+        workspaceAlignmentRootStore: WorkspaceAlignmentRootStore? = nil,
         workspaceRestoreAutosaveDelayNanoseconds: UInt64 = 400_000_000
     ) {
         self.store = store
@@ -190,6 +213,9 @@ public final class NativeAppViewModel {
         self.workspaceRestoreCoordinator = WorkspaceRestoreCoordinator(
             store: workspaceRestoreStore ?? WorkspaceRestoreStore(homeDirectoryURL: store.backgroundWorkHomeDirectoryURL),
             autosaveDelayNanoseconds: workspaceRestoreAutosaveDelayNanoseconds
+        )
+        self.workspaceAlignmentRootStore = workspaceAlignmentRootStore ?? WorkspaceAlignmentRootStore(
+            baseDirectoryURL: store.workspaceRootsDirectoryURL
         )
         self.workspacePaneSnapshotProvider = nil
         self.snapshot = NativeAppSnapshot()
@@ -351,8 +377,13 @@ public final class NativeAppViewModel {
         for session in openWorkspaceSessions where session.isQuickTerminal {
             let attention = attentionStateByProjectPath[session.projectPath]
             let agentOverrides = agentDisplayOverridesByProjectPath[session.projectPath] ?? [:]
+            let transientProject = if let workspaceRootContext = session.workspaceRootContext {
+                Project.workspaceRoot(name: workspaceRootContext.workspaceName, path: session.projectPath)
+            } else {
+                Project.quickTerminal(at: session.projectPath)
+            }
             groups.append(WorkspaceSidebarProjectGroup(
-                rootProject: .quickTerminal(at: session.projectPath),
+                rootProject: transientProject,
                 worktrees: [],
                 isActive: activeWorkspaceProjectPath == session.projectPath,
                 notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
@@ -368,20 +399,32 @@ public final class NativeAppViewModel {
 
     public var workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection] {
         snapshot.appState.workspaceAlignmentGroups.map { definition in
-            let members = definition.projectPaths.map { projectPath in
-                let normalizedProjectPath = normalizePathForCompare(projectPath)
-                let status = workspaceAlignmentStatusByKey[workspaceAlignmentStatusKey(groupID: definition.id, projectPath: projectPath)] ?? .checking
-                let project = snapshot.projects.first(where: { normalizePathForCompare($0.path) == normalizePathForCompare(projectPath) })
+            let aliasByProjectPath = resolvedWorkspaceAlignmentAliases(for: definition)
+            let members = definition.effectiveMembers.map { memberDefinition in
+                let normalizedProjectPath = normalizePathForCompare(memberDefinition.projectPath)
+                let status = workspaceAlignmentStatusByKey[workspaceAlignmentStatusKey(groupID: definition.id, projectPath: memberDefinition.projectPath)] ?? .checking
+                let project = snapshot.projects.first(where: {
+                    normalizePathForCompare($0.path) == normalizePathForCompare(memberDefinition.projectPath)
+                })
+                let openTarget = workspaceAlignmentOpenTarget(
+                    for: normalizedProjectPath,
+                    targetBranch: memberDefinition.targetBranch,
+                    status: status
+                )
                 return WorkspaceAlignmentMemberProjection(
                     groupID: definition.id,
                     projectPath: normalizedProjectPath,
-                    projectName: project?.name ?? URL(fileURLWithPath: projectPath).lastPathComponent,
-                    status: status,
-                    openTarget: workspaceAlignmentOpenTarget(
+                    alias: aliasByProjectPath[normalizedProjectPath] ?? URL(fileURLWithPath: normalizedProjectPath).lastPathComponent,
+                    projectName: project?.name ?? URL(fileURLWithPath: memberDefinition.projectPath).lastPathComponent,
+                    targetBranch: memberDefinition.targetBranch,
+                    branchLabel: workspaceAlignmentBranchLabel(
                         for: normalizedProjectPath,
-                        targetBranch: definition.targetBranch,
-                        status: status
-                    )
+                        targetBranch: memberDefinition.targetBranch,
+                        status: status,
+                        openTarget: openTarget
+                    ),
+                    status: status,
+                    openTarget: openTarget
                 )
             }
             return WorkspaceAlignmentGroupProjection(definition: definition, members: members)
@@ -1022,7 +1065,7 @@ public final class NativeAppViewModel {
 
     public var cliSessionItems: [CLISessionItem] {
         openWorkspaceSessions
-            .filter(\.isQuickTerminal)
+            .filter { $0.isQuickTerminal && $0.workspaceRootContext == nil }
             .map { session in
             CLISessionItem(
                 projectPath: session.projectPath,
@@ -1290,6 +1333,24 @@ public final class NativeAppViewModel {
     public func exitWorkspace() {
         activeWorkspaceProjectPath = nil
         isDetailPanelPresented = false
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func enterWorkspaceAlignmentGroup(_ id: String) throws {
+        guard let group = workspaceAlignmentGroups.first(where: { $0.id == id }) else {
+            throw NativeWorktreeError.invalidProject("工作区不存在")
+        }
+        let rootURL = try syncWorkspaceAlignmentRoot(for: group)
+        openWorkspaceSessionIfNeeded(
+            for: rootURL.path,
+            rootProjectPath: rootURL.path,
+            isQuickTerminal: true,
+            workspaceRootContext: WorkspaceRootSessionContext(
+                workspaceID: group.id,
+                workspaceName: group.definition.name
+            )
+        )
+        activateWorkspaceProject(rootURL.path)
         scheduleWorkspaceRestoreAutosave()
     }
 
@@ -1756,67 +1817,88 @@ public final class NativeAppViewModel {
     }
 
     public func listWorkspaceBranches(for rootProjectPath: String) async throws -> [NativeGitBranch] {
-        try await Task.detached(priority: .userInitiated) {
-            try self.worktreeService.listBranches(at: rootProjectPath)
+        let worktreeService = self.worktreeService
+        return try await Task.detached(priority: .userInitiated) {
+            try worktreeService.listBranches(at: rootProjectPath)
         }.value
     }
 
     public func listProjectWorktrees(for rootProjectPath: String) async throws -> [NativeGitWorktree] {
-        try await Task.detached(priority: .userInitiated) {
-            try self.worktreeService.listWorktrees(at: rootProjectPath)
+        let worktreeService = self.worktreeService
+        return try await Task.detached(priority: .userInitiated) {
+            try worktreeService.listWorktrees(at: rootProjectPath)
+        }.value
+    }
+
+    public func currentWorkspaceBranch(for rootProjectPath: String) async throws -> String {
+        let worktreeService = self.worktreeService
+        return try await Task.detached(priority: .userInitiated) {
+            try worktreeService.currentBranch(at: rootProjectPath)
         }.value
     }
 
     public func refreshProjectWorktrees(_ rootProjectPath: String) async throws {
-        let gitWorktrees = try await listProjectWorktrees(for: rootProjectPath)
-        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard snapshot.projects.contains(where: { normalizePathForCompare($0.path) == normalizedRootProjectPath }) else {
             throw NativeWorktreeError.invalidProject("项目不存在或已移除")
         }
-        var projects = snapshot.projects
-        let preservedOpenedWorktrees = openedChildWorktrees(for: rootProjectPath, in: projects)
-        projects[projectIndex].worktrees = buildSyncedWorktrees(
-            existingWorktrees: projects[projectIndex].worktrees,
-            gitWorktrees: gitWorktrees,
-            preservedLiveWorktrees: preservedOpenedWorktrees
+        async let gitWorktrees = listProjectWorktrees(for: normalizedRootProjectPath)
+        async let currentBranch = currentWorkspaceBranch(for: normalizedRootProjectPath)
+        let (resolvedWorktrees, resolvedCurrentBranch) = try await (gitWorktrees, currentBranch)
+        try syncProjectRepositoryState(
+            rootProjectPath: normalizedRootProjectPath,
+            gitWorktrees: resolvedWorktrees,
+            currentBranch: resolvedCurrentBranch
         )
-        try persistProjects(projects)
-        refreshCurrentBranch(for: rootProjectPath)
     }
 
     public func createWorkspaceAlignmentGroup(
         name: String,
-        targetBranch: String,
-        baseBranchMode: WorkspaceAlignmentBaseBranchMode,
-        specifiedBaseBranch: String?,
-        projectPaths: [String],
+        members: [WorkspaceAlignmentMemberDefinition],
+        memberAliases: [String: String] = [:],
         applyRules: Bool
     ) async throws {
         let now = swiftDateFromDate(Date())
+        let groupID = UUID().uuidString
+        let sanitizedMembers = normalizeWorkspaceAlignmentMemberDefinitions(members)
+        let firstMember = sanitizedMembers.first
         let definition = WorkspaceAlignmentGroupDefinition(
+            id: groupID,
             name: name,
-            targetBranch: targetBranch,
-            baseBranchMode: baseBranchMode,
-            specifiedBaseBranch: specifiedBaseBranch,
-            projectPaths: projectPaths,
+            targetBranch: firstMember?.targetBranch ?? "",
+            baseBranchMode: firstMember?.baseBranchMode ?? .autoDetect,
+            specifiedBaseBranch: firstMember?.specifiedBaseBranch,
+            projectPaths: sanitizedMembers.map(\.projectPath),
+            members: sanitizedMembers,
+            rootDirectoryName: makeWorkspaceAlignmentRootDirectoryName(name: name, id: groupID),
+            memberAliases: memberAliases,
             createdAt: now,
             updatedAt: now
-        ).sanitized()
-        try validateWorkspaceAlignmentGroup(definition, replacing: nil)
+        )
+        var sanitizedDefinition = definition.sanitized()
+        sanitizedDefinition.rootDirectoryName = sanitizedDefinition.rootDirectoryName
+            ?? makeWorkspaceAlignmentRootDirectoryName(name: sanitizedDefinition.name, id: sanitizedDefinition.id)
+        sanitizedDefinition.memberAliases = buildWorkspaceAlignmentMemberAliases(
+            for: sanitizedDefinition.projectPaths,
+            existing: sanitizedDefinition.memberAliases
+        )
+        try validateWorkspaceAlignmentGroup(sanitizedDefinition, replacing: nil)
         var groups = snapshot.appState.workspaceAlignmentGroups
-        groups.append(definition)
+        groups.append(sanitizedDefinition)
         try persistWorkspaceAlignmentGroups(groups)
-        try await recheckWorkspaceAlignmentGroup(definition.id)
-        if applyRules, !definition.projectPaths.isEmpty {
-            try await applyWorkspaceAlignmentGroup(definition.id)
+        try await recheckWorkspaceAlignmentGroup(sanitizedDefinition.id)
+        if applyRules, !sanitizedDefinition.projectPaths.isEmpty {
+            try await applyWorkspaceAlignmentGroup(sanitizedDefinition.id)
+        } else {
+            _ = try syncWorkspaceAlignmentRootIfPossible(sanitizedDefinition.id)
         }
     }
 
     public func updateWorkspaceAlignmentGroup(
         id: String,
         name: String,
-        targetBranch: String,
-        baseBranchMode: WorkspaceAlignmentBaseBranchMode,
-        specifiedBaseBranch: String?,
+        members: [WorkspaceAlignmentMemberDefinition],
+        memberAliases: [String: String] = [:],
         applyRules: Bool
     ) async throws {
         guard let index = snapshot.appState.workspaceAlignmentGroups.firstIndex(where: { $0.id == id }) else {
@@ -1824,12 +1906,19 @@ public final class NativeAppViewModel {
         }
         var groups = snapshot.appState.workspaceAlignmentGroups
         var next = groups[index]
+        let preservedRootDirectoryName = next.rootDirectoryName ?? makeWorkspaceAlignmentRootDirectoryName(name: next.name, id: next.id)
+        let sanitizedMembers = normalizeWorkspaceAlignmentMemberDefinitions(members)
+        let firstMember = sanitizedMembers.first
         next.name = name
-        next.targetBranch = targetBranch
-        next.baseBranchMode = baseBranchMode
-        next.specifiedBaseBranch = specifiedBaseBranch
+        next.targetBranch = firstMember?.targetBranch ?? ""
+        next.baseBranchMode = firstMember?.baseBranchMode ?? .autoDetect
+        next.specifiedBaseBranch = firstMember?.specifiedBaseBranch
+        next.projectPaths = sanitizedMembers.map(\.projectPath)
+        next.members = sanitizedMembers
         next.updatedAt = swiftDateFromDate(Date())
         next = next.sanitized()
+        next.rootDirectoryName = preservedRootDirectoryName
+        next.memberAliases = buildWorkspaceAlignmentMemberAliases(for: next.projectPaths, existing: memberAliases)
         try validateWorkspaceAlignmentGroup(next, replacing: id)
         groups[index] = next
         try persistWorkspaceAlignmentGroups(groups)
@@ -1837,17 +1926,27 @@ public final class NativeAppViewModel {
         try await recheckWorkspaceAlignmentGroup(id)
         if applyRules, !next.projectPaths.isEmpty {
             try await applyWorkspaceAlignmentGroup(id)
+        } else {
+            _ = try syncWorkspaceAlignmentRootIfPossible(id)
         }
     }
 
     public func deleteWorkspaceAlignmentGroup(_ id: String) throws {
+        let deletedDefinition = snapshot.appState.workspaceAlignmentGroups.first(where: { $0.id == id })
         let groups = snapshot.appState.workspaceAlignmentGroups.filter { $0.id != id }
         try persistWorkspaceAlignmentGroups(groups)
         clearWorkspaceAlignmentStatuses(for: id)
+        if let rootSession = openWorkspaceSessions.first(where: { $0.workspaceRootContext?.workspaceID == id }) {
+            closeWorkspaceProject(rootSession.projectPath)
+        }
+        if let deletedDefinition {
+            try? workspaceAlignmentRootStore.removeRoot(for: deletedDefinition)
+        }
     }
 
-    public func addProjects(
-        _ projectPaths: [String],
+    public func addWorkspaceAlignmentMembers(
+        _ members: [WorkspaceAlignmentMemberDefinition],
+        memberAliases: [String: String] = [:],
         toWorkspaceAlignmentGroup id: String,
         applyRules: Bool
     ) async throws {
@@ -1855,15 +1954,28 @@ public final class NativeAppViewModel {
             throw NativeWorktreeError.invalidProject("工作区不存在")
         }
         var groups = snapshot.appState.workspaceAlignmentGroups
-        groups[index].projectPaths = normalizePathList(groups[index].projectPaths + projectPaths)
+        let existingMembers = groups[index].effectiveMembers
+        let mergedMembers = normalizeWorkspaceAlignmentMemberDefinitions(existingMembers + members)
+        groups[index].members = mergedMembers
+        groups[index].projectPaths = mergedMembers.map(\.projectPath)
+        if groups[index].targetBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let firstTargetBranch = mergedMembers.first?.targetBranch {
+            groups[index].targetBranch = firstTargetBranch
+        }
         groups[index].updatedAt = swiftDateFromDate(Date())
         groups[index] = groups[index].sanitized()
+        groups[index].memberAliases = buildWorkspaceAlignmentMemberAliases(
+            for: groups[index].projectPaths,
+            existing: groups[index].memberAliases.merging(memberAliases, uniquingKeysWith: { _, new in new })
+        )
         try persistWorkspaceAlignmentGroups(groups)
         try await recheckWorkspaceAlignmentGroup(id)
         if applyRules {
-            for projectPath in projectPaths {
-                try await applyWorkspaceAlignmentRule(for: projectPath, in: groups[index])
+            for member in members {
+                try await applyWorkspaceAlignmentRule(for: member.projectPath, in: groups[index])
             }
+        } else {
+            _ = try syncWorkspaceAlignmentRootIfPossible(id)
         }
     }
 
@@ -1875,37 +1987,44 @@ public final class NativeAppViewModel {
             throw NativeWorktreeError.invalidProject("工作区不存在")
         }
         var groups = snapshot.appState.workspaceAlignmentGroups
+        groups[index].members = groups[index].effectiveMembers.filter {
+            normalizePathForCompare($0.projectPath) != normalizePathForCompare(projectPath)
+        }
         groups[index].projectPaths = groups[index].projectPaths.filter {
             normalizePathForCompare($0) != normalizePathForCompare(projectPath)
         }
         groups[index].updatedAt = swiftDateFromDate(Date())
         groups[index] = groups[index].sanitized()
+        groups[index].memberAliases.removeValue(forKey: normalizePathForCompare(projectPath))
         try persistWorkspaceAlignmentGroups(groups)
         workspaceAlignmentStatusByKey.removeValue(forKey: workspaceAlignmentStatusKey(groupID: id, projectPath: projectPath))
+        _ = try syncWorkspaceAlignmentRootIfPossible(id)
     }
 
     public func recheckWorkspaceAlignmentGroup(_ id: String) async throws {
         guard let definition = snapshot.appState.workspaceAlignmentGroups.first(where: { $0.id == id }) else {
             throw NativeWorktreeError.invalidProject("工作区不存在")
         }
-        for projectPath in definition.projectPaths {
-            updateWorkspaceAlignmentStatus(.checking, groupID: id, projectPath: projectPath)
+        for member in definition.effectiveMembers {
+            updateWorkspaceAlignmentStatus(.checking, groupID: id, projectPath: member.projectPath)
             do {
-                try await refreshWorkspaceAlignmentProjectStatus(projectPath, in: definition)
+                try await refreshWorkspaceAlignmentProjectStatus(member, in: definition)
             } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                updateWorkspaceAlignmentStatus(.checkFailed(message), groupID: id, projectPath: projectPath)
+                updateWorkspaceAlignmentStatus(.checkFailed(message), groupID: id, projectPath: member.projectPath)
             }
         }
+        _ = try syncWorkspaceAlignmentRootIfPossible(id)
     }
 
     public func applyWorkspaceAlignmentGroup(_ id: String) async throws {
         guard let definition = snapshot.appState.workspaceAlignmentGroups.first(where: { $0.id == id }) else {
             throw NativeWorktreeError.invalidProject("工作区不存在")
         }
-        for projectPath in definition.projectPaths {
-            try await applyWorkspaceAlignmentRule(for: projectPath, in: definition)
+        for member in definition.effectiveMembers {
+            try await applyWorkspaceAlignmentRule(for: member.projectPath, in: definition)
         }
+        _ = try syncWorkspaceAlignmentRootIfPossible(id)
     }
 
     public func applyWorkspaceAlignmentRule(
@@ -1916,6 +2035,7 @@ public final class NativeAppViewModel {
             throw NativeWorktreeError.invalidProject("工作区不存在")
         }
         try await applyWorkspaceAlignmentRule(for: projectPath, in: definition)
+        _ = try syncWorkspaceAlignmentRootIfPossible(id)
     }
 
     public func addExistingWorkspaceWorktree(
@@ -2863,11 +2983,19 @@ public final class NativeAppViewModel {
                 refreshCurrentBranch(for: sessionSnapshot.projectPath)
             }
 
+            let restoredWorkspaceRootContext = sessionSnapshot.workspaceRootContext.flatMap { context in
+                snapshot.appState.workspaceAlignmentGroups
+                    .first(where: { $0.id == context.workspaceID })
+                    .map { WorkspaceRootSessionContext(workspaceID: context.workspaceID, workspaceName: $0.name) }
+                    ?? context
+            }
+
             return OpenWorkspaceSessionState(
                 projectPath: sessionSnapshot.projectPath,
                 rootProjectPath: sessionSnapshot.rootProjectPath,
                 controller: controller,
-                isQuickTerminal: sessionSnapshot.isQuickTerminal
+                isQuickTerminal: sessionSnapshot.isQuickTerminal,
+                workspaceRootContext: restoredWorkspaceRootContext
             )
         }
 
@@ -2898,6 +3026,12 @@ public final class NativeAppViewModel {
     }
 
     private func canRestoreWorkspaceSession(_ sessionSnapshot: ProjectWorkspaceRestoreSnapshot) -> Bool {
+        if let workspaceRootContext = sessionSnapshot.workspaceRootContext {
+            guard snapshot.appState.workspaceAlignmentGroups.contains(where: { $0.id == workspaceRootContext.workspaceID }) else {
+                return false
+            }
+            return (try? syncWorkspaceAlignmentRootIfPossible(workspaceRootContext.workspaceID)) != nil
+        }
         if sessionSnapshot.isQuickTerminal {
             return !sessionSnapshot.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
@@ -2915,7 +3049,12 @@ public final class NativeAppViewModel {
         }
     }
 
-    private func openWorkspaceSessionIfNeeded(for path: String, rootProjectPath: String, isQuickTerminal: Bool = false) {
+    private func openWorkspaceSessionIfNeeded(
+        for path: String,
+        rootProjectPath: String,
+        isQuickTerminal: Bool = false,
+        workspaceRootContext: WorkspaceRootSessionContext? = nil
+    ) {
         guard !openWorkspaceProjectPaths.contains(path) else {
             return
         }
@@ -2926,7 +3065,8 @@ public final class NativeAppViewModel {
                 projectPath: path,
                 rootProjectPath: rootProjectPath,
                 controller: controller,
-                isQuickTerminal: isQuickTerminal
+                isQuickTerminal: isQuickTerminal,
+                workspaceRootContext: workspaceRootContext
             )
         )
         if path == rootProjectPath, !isQuickTerminal {
@@ -3606,6 +3746,39 @@ public final class NativeAppViewModel {
         }
     }
 
+    private func syncProjectRepositoryState(
+        rootProjectPath: String,
+        gitWorktrees: [NativeGitWorktree],
+        currentBranch: String
+    ) throws {
+        if let projectIndex = snapshot.projects.firstIndex(where: {
+            normalizePathForCompare($0.path) == rootProjectPath
+        }) {
+            let storedRootProjectPath = snapshot.projects[projectIndex].path
+            let preservedOpenedWorktrees = openedChildWorktrees(for: storedRootProjectPath, in: snapshot.projects)
+            let nextWorktrees = buildSyncedWorktrees(
+                existingWorktrees: snapshot.projects[projectIndex].worktrees,
+                gitWorktrees: gitWorktrees,
+                preservedLiveWorktrees: preservedOpenedWorktrees
+            )
+
+            if snapshot.projects[projectIndex].worktrees != nextWorktrees {
+                var projects = snapshot.projects
+                projects[projectIndex].worktrees = nextWorktrees
+                try persistProjects(projects)
+            }
+
+            if currentBranchByProjectPath[storedRootProjectPath] != currentBranch {
+                currentBranchByProjectPath[storedRootProjectPath] = currentBranch
+            }
+            return
+        }
+
+        if currentBranchByProjectPath[rootProjectPath] != currentBranch {
+            currentBranchByProjectPath[rootProjectPath] = currentBranch
+        }
+    }
+
     private func persistWorkspaceAlignmentGroups(_ groups: [WorkspaceAlignmentGroupDefinition]) throws {
         try store.updateWorkspaceAlignmentGroups(groups)
         snapshot.appState.workspaceAlignmentGroups = groups
@@ -3618,19 +3791,120 @@ public final class NativeAppViewModel {
         guard !definition.name.isEmpty else {
             throw NativeWorktreeError.invalidProject("工作区名称不能为空")
         }
-        guard !definition.targetBranch.isEmpty else {
-            throw NativeWorktreeError.invalidBranch("目标 branch 不能为空")
-        }
         let duplicateName = snapshot.appState.workspaceAlignmentGroups.contains {
             $0.id != groupID && $0.name.caseInsensitiveCompare(definition.name) == .orderedSame
         }
         if duplicateName {
             throw NativeWorktreeError.invalidProject("已存在同名工作区")
         }
-        if definition.baseBranchMode == .specified,
-           (definition.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-            throw NativeWorktreeError.invalidBaseBranch("请填写基线分支")
+        let members = definition.effectiveMembers
+        let normalizedMemberPaths = members.map { normalizePathForCompare($0.projectPath) }
+        if Set(normalizedMemberPaths).count != normalizedMemberPaths.count {
+            throw NativeWorktreeError.invalidProject("工作区内存在重复项目")
         }
+        for member in members {
+            if member.targetBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let projectName = snapshot.projects.first(where: {
+                    normalizePathForCompare($0.path) == normalizePathForCompare(member.projectPath)
+                })?.name ?? URL(fileURLWithPath: member.projectPath).lastPathComponent
+                throw NativeWorktreeError.invalidBranch("请为 \(projectName) 填写目标 branch")
+            }
+            if member.baseBranchMode == .specified,
+               (member.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                let projectName = snapshot.projects.first(where: {
+                    normalizePathForCompare($0.path) == normalizePathForCompare(member.projectPath)
+                })?.name ?? URL(fileURLWithPath: member.projectPath).lastPathComponent
+                throw NativeWorktreeError.invalidBaseBranch("请为 \(projectName) 填写基线分支")
+            }
+        }
+    }
+
+    private func buildWorkspaceAlignmentMemberAliases(
+        for projectPaths: [String],
+        existing: [String: String]
+    ) -> [String: String] {
+        let normalizedPaths = normalizePathList(projectPaths)
+        var aliases = [String: String]()
+        var usedAliases = Set<String>()
+
+        for path in normalizedPaths {
+            let preferredAlias = existing[normalizePathForCompare(path)]
+            let projectName = snapshot.projects.first(where: {
+                normalizePathForCompare($0.path) == normalizePathForCompare(path)
+            })?.name ?? URL(fileURLWithPath: path).lastPathComponent
+            let alias = uniqueWorkspaceAlignmentAlias(
+                preferredAlias ?? projectName,
+                usedAliases: &usedAliases
+            )
+            aliases[path] = alias
+        }
+
+        return aliases
+    }
+
+    private func resolvedWorkspaceAlignmentAliases(
+        for definition: WorkspaceAlignmentGroupDefinition
+    ) -> [String: String] {
+        buildWorkspaceAlignmentMemberAliases(
+            for: definition.effectiveMembers.map(\.projectPath),
+            existing: definition.memberAliases
+        )
+    }
+
+    private func workspaceAlignmentMemberDefinition(
+        for projectPath: String,
+        in definition: WorkspaceAlignmentGroupDefinition
+    ) -> WorkspaceAlignmentMemberDefinition? {
+        definition.effectiveMembers.first(where: {
+            normalizePathForCompare($0.projectPath) == normalizePathForCompare(projectPath)
+        })
+    }
+
+    private func normalizeWorkspaceAlignmentMemberDefinitions(
+        _ members: [WorkspaceAlignmentMemberDefinition]
+    ) -> [WorkspaceAlignmentMemberDefinition] {
+        var seen = Set<String>()
+        return members
+            .map { $0.sanitized() }
+            .filter { !$0.projectPath.isEmpty }
+            .filter { seen.insert(normalizePathForCompare($0.projectPath)).inserted }
+    }
+
+    private func uniqueWorkspaceAlignmentAlias(
+        _ preferredAlias: String,
+        usedAliases: inout Set<String>
+    ) -> String {
+        let sanitizedBase = sanitizeWorkspaceAlignmentAlias(preferredAlias)
+        var candidate = sanitizedBase
+        var suffix = 2
+        while usedAliases.contains(candidate.lowercased()) {
+            candidate = "\(sanitizedBase)-\(suffix)"
+            suffix += 1
+        }
+        usedAliases.insert(candidate.lowercased())
+        return candidate
+    }
+
+    private func sanitizeWorkspaceAlignmentAlias(_ rawValue: String) -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let replaced = trimmed
+            .replacingOccurrences(of: #"[^A-Za-z0-9._-]+"#, with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-._"))
+        return replaced.isEmpty ? "member" : replaced
+    }
+
+    private func syncWorkspaceAlignmentRootIfPossible(_ groupID: String) throws -> URL? {
+        guard let group = workspaceAlignmentGroups.first(where: { $0.id == groupID }) else {
+            return nil
+        }
+        return try syncWorkspaceAlignmentRoot(for: group)
+    }
+
+    @discardableResult
+    private func syncWorkspaceAlignmentRoot(
+        for group: WorkspaceAlignmentGroupProjection
+    ) throws -> URL {
+        try workspaceAlignmentRootStore.syncRoot(for: group)
     }
 
     private func workspaceAlignmentStatusKey(groupID: String, projectPath: String) -> String {
@@ -3665,39 +3939,63 @@ public final class NativeAppViewModel {
             return .project(projectPath: projectPath)
         }
 
-        let expectedManagedPath = try? managedWorktreePathPreview(for: rootProject.path, branch: targetBranch)
-        let normalizedExpectedManagedPath = expectedManagedPath.map(normalizePathForCompare)
-
-        if let worktree = rootProject.worktrees.first(where: { worktree in
-            let normalizedCandidatePath = normalizePathForCompare(worktree.path)
-            if let normalizedExpectedManagedPath {
-                return normalizedCandidatePath == normalizedExpectedManagedPath
-            }
-            return worktree.branch == targetBranch
-        }) {
-            return .worktree(rootProjectPath: rootProject.path, worktreePath: worktree.path)
+        let currentBranch = currentBranchByProjectPath[rootProject.path] ?? currentBranchByProjectPath[normalizedProjectPath]
+        if currentBranch == targetBranch {
+            return .project(projectPath: rootProject.path)
         }
 
-        if let expectedManagedPath {
-            return .worktree(rootProjectPath: rootProject.path, worktreePath: expectedManagedPath)
+        if let worktree = rootProject.worktrees.first(where: { $0.branch == targetBranch }) {
+            return .worktree(rootProjectPath: rootProject.path, worktreePath: worktree.path)
         }
 
         return .project(projectPath: rootProject.path)
     }
 
+    private func workspaceAlignmentBranchLabel(
+        for projectPath: String,
+        targetBranch: String,
+        status: WorkspaceAlignmentMemberStatus,
+        openTarget: WorkspaceAlignmentOpenTarget
+    ) -> String {
+        switch status {
+        case let .currentBranch(branch):
+            return branch
+        case .aligned, .branchMissing, .worktreeMissing, .checking, .applying, .applyFailed, .checkFailed:
+            break
+        }
+
+        if let rootProject = snapshot.projects.first(where: {
+            normalizePathForCompare($0.path) == normalizePathForCompare(projectPath)
+        }) {
+            switch openTarget {
+            case .project:
+                if let currentBranch = currentBranchByProjectPath[rootProject.path] {
+                    return currentBranch
+                }
+            case let .worktree(_, worktreePath):
+                if let worktree = rootProject.worktrees.first(where: {
+                    normalizePathForCompare($0.path) == normalizePathForCompare(worktreePath)
+                }) {
+                    return worktree.branch
+                }
+            }
+        }
+
+        return targetBranch
+    }
+
     private func resolveWorkspaceAlignmentBaseBranch(
-        for definition: WorkspaceAlignmentGroupDefinition,
-        projectPath: String
+        for member: WorkspaceAlignmentMemberDefinition
     ) async throws -> String {
-        switch definition.baseBranchMode {
+        switch member.baseBranchMode {
         case .specified:
-            let branch = definition.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let branch = member.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !branch.isEmpty else {
                 throw NativeWorktreeError.invalidBaseBranch("请填写基线分支")
             }
             return branch
         case .autoDetect:
-            let branches = try await listWorkspaceBranches(for: projectPath)
+            let branches = try await listWorkspaceBranches(for: member.projectPath)
             if branches.contains(where: { $0.name == "develop" }) {
                 return "develop"
             }
@@ -3712,86 +4010,100 @@ public final class NativeAppViewModel {
     }
 
     private func refreshWorkspaceAlignmentProjectStatus(
-        _ projectPath: String,
+        _ member: WorkspaceAlignmentMemberDefinition,
         in definition: WorkspaceAlignmentGroupDefinition
     ) async throws {
-        if snapshot.projects.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(projectPath) }) {
-            try await refreshProjectWorktrees(projectPath)
-        }
-        let status = try resolveWorkspaceAlignmentStatus(
-            projectPath: projectPath,
-            targetBranch: definition.targetBranch
+        let probe = try await loadWorkspaceAlignmentStatusProbe(
+            projectPath: member.projectPath,
+            targetBranch: member.targetBranch
         )
-        updateWorkspaceAlignmentStatus(status, groupID: definition.id, projectPath: projectPath)
+        try syncProjectRepositoryState(
+            rootProjectPath: probe.projectPath,
+            gitWorktrees: probe.worktrees,
+            currentBranch: probe.currentBranch
+        )
+        let status = resolveWorkspaceAlignmentStatus(from: probe)
+        updateWorkspaceAlignmentStatus(status, groupID: definition.id, projectPath: member.projectPath)
     }
 
-    private func resolveWorkspaceAlignmentStatus(
+    private func loadWorkspaceAlignmentStatusProbe(
         projectPath: String,
         targetBranch: String
-    ) throws -> WorkspaceAlignmentMemberStatus {
+    ) async throws -> WorkspaceAlignmentStatusProbe {
         let normalizedProjectPath = normalizePathForCompare(projectPath)
         guard !normalizedProjectPath.isEmpty else {
             throw NativeWorktreeError.invalidProject("项目路径无效")
         }
-        let expectedWorktreePath = try worktreeService.managedWorktreePath(for: normalizedProjectPath, branch: targetBranch)
-        let normalizedExpectedWorktreePath = normalizePathForCompare(expectedWorktreePath)
-        let branches = try worktreeService.listBranches(at: normalizedProjectPath)
-        let worktrees = try worktreeService.listWorktrees(at: normalizedProjectPath)
+        let trimmedTargetBranch = targetBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let worktreeService = self.worktreeService
+        return try await Task.detached(priority: .userInitiated) {
+            let managedWorktreePath = try worktreeService.managedWorktreePath(for: normalizedProjectPath, branch: trimmedTargetBranch)
+            let branches = try worktreeService.listBranches(at: normalizedProjectPath)
+            let worktrees = try worktreeService.listWorktrees(at: normalizedProjectPath)
+            let currentBranch = try worktreeService.currentBranch(at: normalizedProjectPath)
+            return WorkspaceAlignmentStatusProbe(
+                projectPath: normalizedProjectPath,
+                targetBranch: trimmedTargetBranch,
+                managedWorktreePath: managedWorktreePath,
+                branches: branches,
+                worktrees: worktrees,
+                currentBranch: currentBranch
+            )
+        }.value
+    }
 
-        if worktrees.contains(where: {
-            normalizePathForCompare($0.path) == normalizedExpectedWorktreePath && $0.branch == targetBranch
-        }) {
+    private func resolveWorkspaceAlignmentStatus(from probe: WorkspaceAlignmentStatusProbe) -> WorkspaceAlignmentMemberStatus {
+        if probe.hasOccupiedTargetCheckout {
             return .aligned
         }
 
-        if !branches.map(\.name).contains(targetBranch) {
+        if !probe.branchExists {
             return .branchMissing
         }
 
-        let currentBranch = try worktreeService.currentBranch(at: normalizedProjectPath)
-        if currentBranch == targetBranch {
-            return .worktreeMissing
-        }
-        return .currentBranch(currentBranch)
+        return .currentBranch(probe.currentBranch)
     }
 
     private func applyWorkspaceAlignmentRule(
         for projectPath: String,
         in definition: WorkspaceAlignmentGroupDefinition
     ) async throws {
+        guard let member = workspaceAlignmentMemberDefinition(
+            for: projectPath,
+            in: definition
+        ) else {
+            throw NativeWorktreeError.invalidProject("工作区成员不存在")
+        }
         updateWorkspaceAlignmentStatus(.applying, groupID: definition.id, projectPath: projectPath)
         do {
             let normalizedProjectPath = normalizePathForCompare(projectPath)
-            let targetBranch = definition.targetBranch
-            let targetPath = try managedWorktreePathPreview(for: normalizedProjectPath, branch: targetBranch)
-            let branches = try await listWorkspaceBranches(for: normalizedProjectPath)
-            let existingWorktrees = try await listProjectWorktrees(for: normalizedProjectPath)
+            let targetBranch = member.targetBranch
+            let probe = try await loadWorkspaceAlignmentStatusProbe(
+                projectPath: normalizedProjectPath,
+                targetBranch: targetBranch
+            )
+            try syncProjectRepositoryState(
+                rootProjectPath: probe.projectPath,
+                gitWorktrees: probe.worktrees,
+                currentBranch: probe.currentBranch
+            )
 
-            if existingWorktrees.contains(where: {
-                normalizePathForCompare($0.path) == normalizePathForCompare(targetPath) && $0.branch == targetBranch
-            }) {
-                try addExistingWorkspaceWorktree(
-                    from: normalizedProjectPath,
-                    worktreePath: targetPath,
-                    branch: targetBranch,
-                    autoOpen: false
-                )
-            } else {
-                let branchExists = branches.map(\.name).contains(targetBranch)
-                let baseBranch = branchExists ? nil : try await resolveWorkspaceAlignmentBaseBranch(
-                    for: definition,
-                    projectPath: normalizedProjectPath
-                )
-                try await createWorkspaceWorktree(
-                    from: normalizedProjectPath,
-                    branch: targetBranch,
-                    createBranch: !branchExists,
-                    baseBranch: baseBranch,
-                    autoOpen: false,
-                    targetPath: targetPath
-                )
+            if probe.hasOccupiedTargetCheckout {
+                updateWorkspaceAlignmentStatus(.aligned, groupID: definition.id, projectPath: projectPath)
+                return
             }
-            try await refreshWorkspaceAlignmentProjectStatus(projectPath, in: definition)
+
+            let branchExists = probe.branchExists
+            let baseBranch = branchExists ? nil : try await resolveWorkspaceAlignmentBaseBranch(for: member)
+            try await createWorkspaceWorktree(
+                from: normalizedProjectPath,
+                branch: targetBranch,
+                createBranch: !branchExists,
+                baseBranch: baseBranch,
+                autoOpen: false,
+                targetPath: probe.managedWorktreePath
+            )
+            try await refreshWorkspaceAlignmentProjectStatus(member, in: definition)
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             updateWorkspaceAlignmentStatus(.applyFailed(message), groupID: definition.id, projectPath: projectPath)

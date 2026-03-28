@@ -694,17 +694,60 @@ public struct MarkdownDocument: Equatable, Sendable {
 }
 
 extension Project {
-    public static let quickTerminalID = "__devhaven_quick_terminal__"
+    public static let quickTerminalIDPrefix = "__devhaven_quick_terminal__:"
+    public static let workspaceRootIDPrefix = "__devhaven_workspace_root__:"
+
+    public enum TransientWorkspaceKind: Equatable, Sendable {
+        case quickTerminal
+        case workspaceRoot
+    }
+
+    public var transientWorkspaceKind: TransientWorkspaceKind? {
+        if id.hasPrefix(Self.quickTerminalIDPrefix) {
+            return .quickTerminal
+        }
+        if id.hasPrefix(Self.workspaceRootIDPrefix) {
+            return .workspaceRoot
+        }
+        return nil
+    }
 
     public var isQuickTerminal: Bool {
-        id == Self.quickTerminalID
+        transientWorkspaceKind == .quickTerminal
+    }
+
+    public var isWorkspaceRoot: Bool {
+        transientWorkspaceKind == .workspaceRoot
+    }
+
+    public var isTransientWorkspaceProject: Bool {
+        transientWorkspaceKind != nil
     }
 
     public static func quickTerminal(at homePath: String) -> Project {
         Project(
-            id: Self.quickTerminalID,
+            id: "\(Self.quickTerminalIDPrefix)\(homePath)",
             name: "快速终端",
             path: homePath,
+            tags: [],
+            runConfigurations: [],
+            worktrees: [],
+            mtime: 0,
+            size: 0,
+            checksum: "",
+            gitCommits: 0,
+            gitLastCommit: 0,
+            notesSummary: nil,
+            created: 0,
+            checked: 0
+        )
+    }
+
+    public static func workspaceRoot(name: String, path: String) -> Project {
+        Project(
+            id: "\(Self.workspaceRootIDPrefix)\(path)",
+            name: name,
+            path: path,
             tags: [],
             runConfigurations: [],
             worktrees: [],

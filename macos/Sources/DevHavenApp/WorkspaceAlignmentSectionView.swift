@@ -4,6 +4,7 @@ import DevHavenCore
 struct WorkspaceAlignmentSectionView: View {
     let groups: [WorkspaceAlignmentGroupProjection]
     let onRequestCreateWorkspace: () -> Void
+    let onOpenWorkspace: (String) -> Void
     let onRequestEditWorkspace: (String) -> Void
     let onRequestAddProjects: (String) -> Void
     let onRequestRecheck: (String) -> Void
@@ -26,6 +27,7 @@ struct WorkspaceAlignmentSectionView: View {
                     WorkspaceAlignmentGroupCard(
                         group: group,
                         isExpanded: expandedGroupIDs.contains(group.id),
+                        onOpenWorkspace: { onOpenWorkspace(group.id) },
                         onToggleExpanded: {
                             toggleExpanded(for: group.id)
                         },
@@ -109,6 +111,7 @@ struct WorkspaceAlignmentSectionView: View {
 private struct WorkspaceAlignmentGroupCard: View {
     let group: WorkspaceAlignmentGroupProjection
     let isExpanded: Bool
+    let onOpenWorkspace: () -> Void
     let onToggleExpanded: () -> Void
     let onRequestEdit: () -> Void
     let onRequestAddProjects: () -> Void
@@ -121,41 +124,57 @@ private struct WorkspaceAlignmentGroupCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button(action: onToggleExpanded) {
-                HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Button(action: onToggleExpanded) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(NativeTheme.textSecondary)
-                        .frame(width: 10)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(group.definition.name)
-                            .font(.callout.weight(.semibold))
-                            .foregroundStyle(NativeTheme.textPrimary)
-                            .lineLimit(1)
-                        Text(group.branchMetadataText)
-                            .font(.caption2)
-                            .foregroundStyle(NativeTheme.textSecondary.opacity(0.85))
-                            .lineLimit(1)
-                        Text(group.summaryText)
-                            .font(.caption2)
-                            .foregroundStyle(NativeTheme.textSecondary.opacity(0.85))
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
+                        .frame(width: 28, height: 28)
+                        .background(NativeTheme.surface)
+                        .clipShape(.rect(cornerRadius: 8))
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 9)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(NativeTheme.elevated)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10)
-                        .stroke(NativeTheme.border.opacity(0.5), lineWidth: 1)
-                )
-                .clipShape(.rect(cornerRadius: 10))
-                .contentShape(.rect(cornerRadius: 10))
+                .buttonStyle(.plain)
+
+                Button(action: onOpenWorkspace) {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(group.definition.name)
+                                .font(.callout.weight(.semibold))
+                                .foregroundStyle(NativeTheme.textPrimary)
+                                .lineLimit(1)
+                            Text(group.branchMetadataText)
+                                .font(.caption2)
+                                .foregroundStyle(NativeTheme.textSecondary.opacity(0.85))
+                                .lineLimit(1)
+                            Text(group.summaryText)
+                                .font(.caption2)
+                                .foregroundStyle(NativeTheme.textSecondary.opacity(0.85))
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "terminal")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NativeTheme.accent)
+                            .frame(width: 24, height: 24)
+                            .background(NativeTheme.surface.opacity(0.8))
+                            .clipShape(.rect(cornerRadius: 7))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(NativeTheme.elevated)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(NativeTheme.border.opacity(0.5), lineWidth: 1)
+                    )
+                    .clipShape(.rect(cornerRadius: 10))
+                    .contentShape(.rect(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             .contextMenu {
+                Button("进入工作区", action: onOpenWorkspace)
+                Divider()
                 Button("编辑工作区…", action: onRequestEdit)
                 Button("添加项目…", action: onRequestAddProjects)
                 Divider()
@@ -196,10 +215,16 @@ private struct WorkspaceAlignmentMemberRow: View {
                 Image(systemName: "arrow.turn.down.right")
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(NativeTheme.textSecondary.opacity(0.5))
-                Text(member.projectName)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(NativeTheme.textSecondary)
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(member.alias)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NativeTheme.textPrimary)
+                        .lineLimit(1)
+                    Text("\(member.projectName) · \(member.branchLabel)")
+                        .font(.caption2)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 6)
                 Text(member.status.displayText)
                     .font(.caption2.weight(.medium))
@@ -218,7 +243,7 @@ private struct WorkspaceAlignmentMemberRow: View {
             .contentShape(.rect(cornerRadius: 7))
         }
         .buttonStyle(.plain)
-        .help(member.status.detailText(targetBranch: group.definition.targetBranch) ?? member.openTarget.path)
+        .help(member.status.detailText(targetBranch: member.targetBranch) ?? member.openTarget.path)
         .contextMenu {
             Button("打开项目", action: onOpenProject)
             Button("重新应用工作区规则", action: onRequestApply)
