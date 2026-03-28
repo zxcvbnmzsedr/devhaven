@@ -26,6 +26,10 @@ final class WorkspaceAlignmentModelsTests: XCTestCase {
             ]
         )
 
+        XCTAssertEqual(
+            projection.summaryMetrics,
+            WorkspaceAlignmentSummaryMetrics(aligned: 1, drifted: 1)
+        )
         XCTAssertEqual(projection.summaryText, "1 已对齐 · 1 偏离")
     }
 

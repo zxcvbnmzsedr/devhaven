@@ -82,18 +82,34 @@ struct WorkspaceAlignmentSectionView: View {
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("暂无工作区")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(NativeTheme.textSecondary)
-            Text("右键此区域或点击加号新建工作区，用统一规则对齐 branch / worktree。")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NativeTheme.accent)
+                Text("暂无工作区")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NativeTheme.textPrimary)
+            }
+
+            Text("工作区是一个虚拟框，里面可以放多个项目，并统一对齐 branch / worktree。")
                 .font(.caption2)
-                .foregroundStyle(NativeTheme.textSecondary.opacity(0.8))
+                .foregroundStyle(NativeTheme.textSecondary.opacity(0.85))
+
+            WorkspaceAlignmentBadge(
+                title: "点击加号新建第一个工作区",
+                systemImage: "plus",
+                tone: .neutral
+            )
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(NativeTheme.elevated)
-        .clipShape(.rect(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(NativeTheme.border.opacity(0.65), lineWidth: 1)
+        )
+        .clipShape(.rect(cornerRadius: 12))
         .contextMenu {
             Button("新建工作区…", action: onRequestCreateWorkspace)
         }
@@ -122,73 +138,107 @@ private struct WorkspaceAlignmentGroupCard: View {
     let onRequestApplyProject: (String) -> Void
     let onRequestRemoveProject: (String) -> Void
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Button(action: onToggleExpanded) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(NativeTheme.textSecondary)
-                        .frame(width: 28, height: 28)
-                        .background(NativeTheme.surface)
-                        .clipShape(.rect(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
+    private var outlineColor: Color {
+        let metrics = group.summaryMetrics
+        if metrics.failed > 0 {
+            return NativeTheme.danger.opacity(0.55)
+        }
+        if metrics.processing > 0 || metrics.drifted > 0 {
+            return NativeTheme.warning.opacity(0.45)
+        }
+        if metrics.aligned > 0 {
+            return NativeTheme.accent.opacity(0.45)
+        }
+        return NativeTheme.border.opacity(0.75)
+    }
 
-                Button(action: onOpenWorkspace) {
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(group.definition.name)
-                                .font(.callout.weight(.semibold))
-                                .foregroundStyle(NativeTheme.textPrimary)
-                                .lineLimit(1)
-                            Text(group.branchMetadataText)
-                                .font(.caption2)
-                                .foregroundStyle(NativeTheme.textSecondary.opacity(0.85))
-                                .lineLimit(1)
-                            Text(group.summaryText)
-                                .font(.caption2)
-                                .foregroundStyle(NativeTheme.textSecondary.opacity(0.85))
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "terminal")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(NativeTheme.accent)
-                            .frame(width: 24, height: 24)
-                            .background(NativeTheme.surface.opacity(0.8))
-                            .clipShape(.rect(cornerRadius: 7))
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 9)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(NativeTheme.elevated)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(NativeTheme.border.opacity(0.5), lineWidth: 1)
-                    )
-                    .clipShape(.rect(cornerRadius: 10))
-                    .contentShape(.rect(cornerRadius: 10))
-                }
-                .buttonStyle(.plain)
-            }
-            .contextMenu {
-                Button("进入工作区", action: onOpenWorkspace)
-                Divider()
-                Button("编辑工作区…", action: onRequestEdit)
-                Button("添加项目…", action: onRequestAddProjects)
-                Divider()
-                Button("重新检查状态", action: onRequestRecheck)
-                Button("应用工作区规则", action: onRequestApply)
-                Divider()
-                Button("删除工作区", role: .destructive, action: onRequestDelete)
-            }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
 
             if isExpanded {
-                VStack(spacing: 4) {
-                    ForEach(group.members) { member in
+                Rectangle()
+                    .fill(NativeTheme.border.opacity(0.8))
+                    .frame(height: 1)
+
+                memberList
+            }
+        }
+        .background(NativeTheme.elevated)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(outlineColor, lineWidth: 1)
+        )
+        .clipShape(.rect(cornerRadius: 12))
+        .contentShape(.rect(cornerRadius: 12))
+        .animation(.easeInOut(duration: 0.16), value: isExpanded)
+        .contextMenu {
+            Button("进入工作区", action: onOpenWorkspace)
+            Divider()
+            Button("编辑工作区…", action: onRequestEdit)
+            Button("添加项目…", action: onRequestAddProjects)
+            Divider()
+            Button("重新检查状态", action: onRequestRecheck)
+            Button("应用工作区规则", action: onRequestApply)
+            Divider()
+            Button("删除工作区", role: .destructive, action: onRequestDelete)
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Button(action: onToggleExpanded) {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NativeTheme.textSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(NativeTheme.surface)
+                    .clipShape(.rect(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onOpenWorkspace) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(group.definition.name)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(NativeTheme.textPrimary)
+                        .lineLimit(1)
+
+                    WorkspaceAlignmentBadge(
+                        title: group.definition.targetBranch,
+                        systemImage: "arrow.triangle.branch",
+                        tone: .neutral,
+                        monospaced: true
+                    )
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(12)
+    }
+
+    private var memberList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if group.members.isEmpty {
+                Text("右键工作区卡片即可添加项目，也可以在项目卡片里直接加入该工作区。")
+                    .font(.caption2)
+                    .foregroundStyle(NativeTheme.textSecondary.opacity(0.82))
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 12)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(group.members.enumerated()), id: \.element.id) { index, member in
+                        if index > 0 {
+                            Rectangle()
+                                .fill(NativeTheme.border.opacity(0.6))
+                                .frame(height: 1)
+                                .padding(.horizontal, 12)
+                        }
+
                         WorkspaceAlignmentMemberRow(
-                            group: group,
                             member: member,
                             onOpenProject: { onOpenProject(member) },
                             onRequestApply: { onRequestApplyProject(member.projectPath) },
@@ -196,53 +246,107 @@ private struct WorkspaceAlignmentGroupCard: View {
                         )
                     }
                 }
-                .padding(.leading, 12)
+                .padding(.top, 6)
+                .padding(.bottom, 6)
             }
         }
     }
 }
 
 private struct WorkspaceAlignmentMemberRow: View {
-    let group: WorkspaceAlignmentGroupProjection
     let member: WorkspaceAlignmentMemberProjection
     let onOpenProject: () -> Void
     let onRequestApply: () -> Void
     let onRequestRemove: () -> Void
 
+    @State private var isHovering = false
+
+    private var statusTone: WorkspaceAlignmentBadgeTone {
+        switch member.status {
+        case .aligned:
+            .accent
+        case .currentBranch, .branchMissing, .worktreeMissing:
+            .warning
+        case .checking, .applying:
+            .neutral
+        case .applyFailed, .checkFailed:
+            .danger
+        }
+    }
+
+    private var titleText: String {
+        member.alias
+    }
+
+    private var subtitleText: String {
+        var segments: [String] = []
+        if member.projectName != member.alias {
+            segments.append(member.projectName)
+        }
+        segments.append(openTargetText)
+        return segments.joined(separator: " · ")
+    }
+
+    private var openTargetText: String {
+        switch member.openTarget {
+        case let .project(projectPath):
+            return URL(fileURLWithPath: projectPath).lastPathComponent
+        case let .worktree(_, worktreePath):
+            return URL(fileURLWithPath: worktreePath).lastPathComponent
+        }
+    }
+
     var body: some View {
         Button(action: onOpenProject) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.turn.down.right")
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(NativeTheme.textSecondary.opacity(0.5))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(member.alias)
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: memberIconName)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(iconColor)
+                    .frame(width: 18, height: 18)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(titleText)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(NativeTheme.textPrimary)
                         .lineLimit(1)
-                    Text("\(member.projectName) · \(member.branchLabel)")
+
+                    Text(subtitleText)
                         .font(.caption2)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                        .lineLimit(1)
+                        .foregroundStyle(NativeTheme.textSecondary.opacity(0.88))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                 }
-                Spacer(minLength: 6)
-                Text(member.status.displayText)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(statusColor)
-                    .lineLimit(1)
+
+                Spacer(minLength: 10)
+
+                VStack(alignment: .trailing, spacing: 6) {
+                    WorkspaceAlignmentBadge(
+                        title: member.status.displayText,
+                        tone: statusTone
+                    )
+
+                    if !member.branchLabel.isEmpty {
+                        WorkspaceAlignmentBadge(
+                            title: member.branchLabel,
+                            systemImage: "arrow.triangle.branch",
+                            tone: .neutral,
+                            monospaced: true
+                        )
+                    }
+                }
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.clear)
-            .overlay(
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke(NativeTheme.border.opacity(0.4), lineWidth: 1)
-            )
-            .clipShape(.rect(cornerRadius: 7))
-            .contentShape(.rect(cornerRadius: 7))
+            .background(isHovering ? NativeTheme.surface.opacity(0.92) : Color.clear)
+            .clipShape(.rect(cornerRadius: 8))
+            .contentShape(.rect(cornerRadius: 8))
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .padding(.horizontal, 6)
         .help(member.status.detailText(targetBranch: member.targetBranch) ?? member.openTarget.path)
         .contextMenu {
             Button("打开项目", action: onOpenProject)
@@ -251,16 +355,79 @@ private struct WorkspaceAlignmentMemberRow: View {
         }
     }
 
-    private var statusColor: Color {
-        switch member.status {
-        case .aligned:
-            NativeTheme.accent
-        case .currentBranch, .branchMissing, .worktreeMissing:
-            NativeTheme.warning
-        case .checking, .applying:
+    private var memberIconName: String {
+        switch member.openTarget {
+        case .project:
+            "folder"
+        case .worktree:
+            "square.split.bottomrightquarter"
+        }
+    }
+
+    private var iconColor: Color {
+        switch member.openTarget {
+        case .project:
+            NativeTheme.textSecondary.opacity(0.9)
+        case .worktree:
+            NativeTheme.accent.opacity(0.95)
+        }
+    }
+}
+
+private enum WorkspaceAlignmentBadgeTone {
+    case neutral
+    case accent
+    case warning
+    case danger
+}
+
+private struct WorkspaceAlignmentBadge: View {
+    let title: String
+    var systemImage: String? = nil
+    var tone: WorkspaceAlignmentBadgeTone = .neutral
+    var monospaced = false
+
+    private var backgroundColor: Color {
+        switch tone {
+        case .neutral:
+            NativeTheme.surface.opacity(0.95)
+        case .accent:
+            NativeTheme.accent.opacity(0.18)
+        case .warning:
+            NativeTheme.warning.opacity(0.18)
+        case .danger:
+            NativeTheme.danger.opacity(0.18)
+        }
+    }
+
+    private var foregroundColor: Color {
+        switch tone {
+        case .neutral:
             NativeTheme.textSecondary
-        case .applyFailed, .checkFailed:
+        case .accent:
+            NativeTheme.accent
+        case .warning:
+            NativeTheme.warning
+        case .danger:
             NativeTheme.danger
         }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .font(.caption2.weight(.semibold))
+            }
+
+            Text(title)
+                .font(monospaced ? .caption2.monospaced() : .caption2.weight(.medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(foregroundColor)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(backgroundColor)
+        .clipShape(.rect(cornerRadius: 6))
     }
 }

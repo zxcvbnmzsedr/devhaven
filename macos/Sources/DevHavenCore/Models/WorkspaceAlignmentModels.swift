@@ -271,6 +271,12 @@ public struct WorkspaceAlignmentGroupProjection: Equatable, Sendable, Identifiab
 
     public var id: String { definition.id }
 
+    public var summaryMetrics: WorkspaceAlignmentSummaryMetrics {
+        members.reduce(into: WorkspaceAlignmentSummaryMetrics()) { partialResult, member in
+            partialResult.record(member.status.summaryBucket)
+        }
+    }
+
     public var branchMetadataText: String {
         if members.isEmpty {
             return "\(definition.targetBranch) · 暂无项目"
@@ -303,9 +309,7 @@ public struct WorkspaceAlignmentGroupProjection: Equatable, Sendable, Identifiab
             return "右键或点击加号可添加项目"
         }
 
-        let buckets = members.reduce(into: WorkspaceAlignmentSummaryCounts()) { partialResult, member in
-            partialResult.record(member.status.summaryBucket)
-        }
+        let buckets = summaryMetrics
 
         if buckets.failed == 0, buckets.processing == 0, buckets.drifted == 0 {
             return "全部已对齐"
@@ -333,6 +337,37 @@ public struct WorkspaceAlignmentGroupProjection: Equatable, Sendable, Identifiab
     }
 }
 
+public struct WorkspaceAlignmentSummaryMetrics: Equatable, Sendable {
+    public var aligned: Int
+    public var processing: Int
+    public var drifted: Int
+    public var failed: Int
+
+    public init(
+        aligned: Int = 0,
+        processing: Int = 0,
+        drifted: Int = 0,
+        failed: Int = 0
+    ) {
+        self.aligned = aligned
+        self.processing = processing
+        self.drifted = drifted
+        self.failed = failed
+    }
+
+    public var issueCount: Int {
+        failed + processing + drifted
+    }
+
+    public var totalCount: Int {
+        aligned + processing + drifted + failed
+    }
+
+    public var isFullyAligned: Bool {
+        totalCount > 0 && issueCount == 0
+    }
+}
+
 private enum WorkspaceAlignmentSummaryBucket {
     case aligned
     case processing
@@ -340,12 +375,7 @@ private enum WorkspaceAlignmentSummaryBucket {
     case failed
 }
 
-private struct WorkspaceAlignmentSummaryCounts {
-    var aligned = 0
-    var processing = 0
-    var drifted = 0
-    var failed = 0
-
+private extension WorkspaceAlignmentSummaryMetrics {
     mutating func record(_ bucket: WorkspaceAlignmentSummaryBucket) {
         switch bucket {
         case .aligned:
