@@ -4,7 +4,10 @@ import DevHavenCore
 struct WorkspaceProjectListView: View {
     let groups: [WorkspaceSidebarProjectGroup]
     let canOpenMoreProjects: Bool
+    let workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection]
+    let workspaceAlignmentProjectOptions: [Project]
     let onSelectProject: (String) -> Void
+    let onOpenWorkspaceAlignmentProject: (WorkspaceAlignmentMemberProjection) -> Void
     let onOpenProjectPicker: () -> Void
     let onRequestCreateWorktree: (String) -> Void
     let onRefreshWorktrees: (String) -> Void
@@ -13,6 +16,16 @@ struct WorkspaceProjectListView: View {
     let onRequestDeleteWorktree: (String, String) -> Void
     let onFocusNotification: (WorkspaceTerminalNotification) -> Void
     let onCloseProject: (String) -> Void
+    let onRequestCreateWorkspaceAlignment: (String?) -> Void
+    let onOpenWorkspaceAlignment: (String) -> Void
+    let onRequestEditWorkspaceAlignment: (String) -> Void
+    let onRequestAddProjectsToWorkspaceAlignment: (String) -> Void
+    let onRequestRecheckWorkspaceAlignment: (String) -> Void
+    let onRequestApplyWorkspaceAlignment: (String) -> Void
+    let onRequestDeleteWorkspaceAlignment: (String) -> Void
+    let onRequestApplyWorkspaceAlignmentProject: (String, String) -> Void
+    let onRequestRemoveWorkspaceAlignmentProject: (String, String) -> Void
+    let onAddProjectToWorkspaceAlignment: (String, String) -> Void
     let onExit: () -> Void
 
     var body: some View {
@@ -23,6 +36,7 @@ struct WorkspaceProjectListView: View {
                     ForEach(groups) { group in
                         ProjectGroupView(
                             group: group,
+                            workspaceAlignmentGroups: workspaceAlignmentGroups,
                             onSelectProject: onSelectProject,
                             onRefreshWorktrees: onRefreshWorktrees,
                             onRequestCreateWorktree: onRequestCreateWorktree,
@@ -30,9 +44,28 @@ struct WorkspaceProjectListView: View {
                             onOpenWorktree: onOpenWorktree,
                             onRetryWorktree: onRetryWorktree,
                             onRequestDeleteWorktree: onRequestDeleteWorktree,
-                            onFocusNotification: onFocusNotification
+                            onFocusNotification: onFocusNotification,
+                            onRequestCreateWorkspaceAlignmentFromProject: onRequestCreateWorkspaceAlignment,
+                            onAddProjectToWorkspaceAlignment: onAddProjectToWorkspaceAlignment
                         )
                     }
+
+                    Divider()
+                        .padding(.vertical, 4)
+
+                    WorkspaceAlignmentSectionView(
+                        groups: workspaceAlignmentGroups,
+                        onRequestCreateWorkspace: { onRequestCreateWorkspaceAlignment(nil) },
+                        onOpenWorkspace: onOpenWorkspaceAlignment,
+                        onRequestEditWorkspace: onRequestEditWorkspaceAlignment,
+                        onRequestAddProjects: onRequestAddProjectsToWorkspaceAlignment,
+                        onRequestRecheck: onRequestRecheckWorkspaceAlignment,
+                        onRequestApply: onRequestApplyWorkspaceAlignment,
+                        onRequestDelete: onRequestDeleteWorkspaceAlignment,
+                        onOpenProject: onOpenWorkspaceAlignmentProject,
+                        onRequestApplyProject: onRequestApplyWorkspaceAlignmentProject,
+                        onRequestRemoveProject: onRequestRemoveWorkspaceAlignmentProject
+                    )
                 }
                 .padding(10)
             }
@@ -77,6 +110,7 @@ struct WorkspaceProjectListView: View {
 
 private struct ProjectGroupView: View {
     let group: WorkspaceSidebarProjectGroup
+    let workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection]
     let onSelectProject: (String) -> Void
     let onRefreshWorktrees: (String) -> Void
     let onRequestCreateWorktree: (String) -> Void
@@ -85,6 +119,8 @@ private struct ProjectGroupView: View {
     let onRetryWorktree: (String, String) -> Void
     let onRequestDeleteWorktree: (String, String) -> Void
     let onFocusNotification: (WorkspaceTerminalNotification) -> Void
+    let onRequestCreateWorkspaceAlignmentFromProject: (String?) -> Void
+    let onAddProjectToWorkspaceAlignment: (String, String) -> Void
 
     @State private var isHovering = false
 
@@ -101,6 +137,21 @@ private struct ProjectGroupView: View {
             }
             .buttonStyle(.plain)
             .onHover { isHovering = $0 }
+            .contextMenu {
+                if !group.rootProject.isTransientWorkspaceProject {
+                    Button("基于当前项目新建工作区…") {
+                        onRequestCreateWorkspaceAlignmentFromProject(group.rootProject.path)
+                    }
+                    if !workspaceAlignmentGroups.isEmpty {
+                        Divider()
+                        ForEach(workspaceAlignmentGroups) { workspace in
+                            Button("添加到「\(workspace.definition.name)」") {
+                                onAddProjectToWorkspaceAlignment(group.rootProject.path, workspace.id)
+                            }
+                        }
+                    }
+                }
+            }
 
             if !group.worktrees.isEmpty {
                 VStack(spacing: 4) {
@@ -136,7 +187,7 @@ private struct ProjectGroupView: View {
                         .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
                         .lineLimit(1)
                 }
-                if let branch = group.currentBranch, !group.rootProject.isQuickTerminal {
+                if let branch = group.currentBranch, !group.rootProject.isTransientWorkspaceProject {
                     Text(branch)
                         .font(.caption2.monospaced())
                         .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
@@ -170,7 +221,7 @@ private struct ProjectGroupView: View {
                 groupStatusAccessory
 
                 HStack(spacing: 4) {
-                    if !group.rootProject.isQuickTerminal {
+                    if !group.rootProject.isTransientWorkspaceProject {
                         iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
                             onRefreshWorktrees(group.rootProject.path)
                         }

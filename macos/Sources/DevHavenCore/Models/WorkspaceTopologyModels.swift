@@ -1126,12 +1126,16 @@ public struct WorkspaceSessionState: Equatable, Sendable {
 
     public func makeRestoreSnapshot(
         rootProjectPath: String,
-        isQuickTerminal: Bool
+        isQuickTerminal: Bool,
+        workspaceRootContext: WorkspaceRootSessionContext?,
+        workspaceAlignmentGroupID: String?
     ) -> ProjectWorkspaceRestoreSnapshot {
         ProjectWorkspaceRestoreSnapshot(
             projectPath: projectPath,
             rootProjectPath: rootProjectPath,
             isQuickTerminal: isQuickTerminal,
+            workspaceRootContext: workspaceRootContext,
+            workspaceAlignmentGroupID: workspaceAlignmentGroupID,
             workspaceId: workspaceId,
             selectedTabId: selectedTabId,
             nextTabNumber: nextTabNumber,

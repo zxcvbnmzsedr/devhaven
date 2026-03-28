@@ -13,12 +13,38 @@ private struct WorkspaceDialogProject: Identifiable {
     var id: String { project.path }
 }
 
+private struct WorkspaceAlignmentEditorContext: Identifiable {
+    let id: String
+    let title: String
+    let mode: WorkspaceAlignmentEditorSheetMode
+    let initialData: WorkspaceAlignmentEditorFormData
+}
+
+private struct WorkspaceAlignmentAddProjectsContext: Identifiable {
+    let id: String
+    let workspaceID: String
+    let workspaceName: String
+    let excludedProjectPaths: Set<String>
+}
+
+private struct WorkspaceAlignmentDeleteRequest: Identifiable {
+    let id: String
+    let name: String
+}
+
 struct WorkspaceProjectSidebarHostView: View {
     @Bindable var viewModel: NativeAppViewModel
     @StateObject private var sidebarProjectionStore = WorkspaceSidebarProjectionStore()
     @State private var isProjectPickerPresented = false
     @State private var worktreeDialogProjectPath: String?
     @State private var pendingDeleteRequest: WorktreeDeleteRequest?
+    @State private var alignmentEditorContext: WorkspaceAlignmentEditorContext?
+    @State private var alignmentEditorIsSubmitting = false
+    @State private var alignmentEditorErrorMessage: String?
+    @State private var alignmentAddProjectsContext: WorkspaceAlignmentAddProjectsContext?
+    @State private var alignmentAddProjectsIsSubmitting = false
+    @State private var alignmentAddProjectsErrorMessage: String?
+    @State private var pendingDeleteWorkspaceAlignment: WorkspaceAlignmentDeleteRequest?
 
     private var worktreeDialogProject: Project? {
         guard let worktreeDialogProjectPath else {
@@ -27,11 +53,21 @@ struct WorkspaceProjectSidebarHostView: View {
         return viewModel.snapshot.projects.first(where: { $0.path == worktreeDialogProjectPath })
     }
 
+    private func openOrActivateProject(_ member: WorkspaceAlignmentMemberProjection) {
+        if member.openTarget.path.isEmpty {
+            return
+        }
+        viewModel.openWorkspaceAlignmentMember(member)
+    }
+
     var body: some View {
         WorkspaceProjectListView(
             groups: sidebarProjectionStore.projection.groups,
             canOpenMoreProjects: !sidebarProjectionStore.projection.availableProjects.isEmpty,
+            workspaceAlignmentGroups: sidebarProjectionStore.projection.workspaceAlignmentGroups,
+            workspaceAlignmentProjectOptions: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions,
             onSelectProject: viewModel.activateWorkspaceProject,
+            onOpenWorkspaceAlignmentProject: openOrActivateProject,
             onOpenProjectPicker: { isProjectPickerPresented = true },
             onRequestCreateWorktree: { projectPath in
                 worktreeDialogProjectPath = projectPath
@@ -62,10 +98,86 @@ struct WorkspaceProjectSidebarHostView: View {
             },
             onFocusNotification: viewModel.focusWorkspaceNotification,
             onCloseProject: viewModel.closeWorkspaceProject,
+            onRequestCreateWorkspaceAlignment: { projectPath in
+                presentCreateWorkspaceAlignmentSheet(prefilledProjectPath: projectPath)
+            },
+            onOpenWorkspaceAlignment: { workspaceID in
+                do {
+                    try viewModel.enterWorkspaceAlignmentGroup(workspaceID)
+                } catch {
+                    viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            },
+            onRequestEditWorkspaceAlignment: presentEditWorkspaceAlignmentSheet,
+            onRequestAddProjectsToWorkspaceAlignment: presentAddProjectsSheet,
+            onRequestRecheckWorkspaceAlignment: { workspaceID in
+                Task {
+                    do {
+                        try await viewModel.recheckWorkspaceAlignmentGroup(workspaceID)
+                    } catch {
+                        viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    }
+                }
+            },
+            onRequestApplyWorkspaceAlignment: { workspaceID in
+                Task {
+                    do {
+                        try await viewModel.applyWorkspaceAlignmentGroup(workspaceID)
+                    } catch {
+                        viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    }
+                }
+            },
+            onRequestDeleteWorkspaceAlignment: { workspaceID in
+                if let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }) {
+                    pendingDeleteWorkspaceAlignment = WorkspaceAlignmentDeleteRequest(id: group.id, name: group.definition.name)
+                }
+            },
+            onRequestApplyWorkspaceAlignmentProject: { workspaceID, projectPath in
+                Task {
+                    do {
+                        try await viewModel.applyWorkspaceAlignmentRule(for: projectPath, inWorkspaceAlignmentGroup: workspaceID)
+                    } catch {
+                        viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    }
+                }
+            },
+            onRequestRemoveWorkspaceAlignmentProject: { workspaceID, projectPath in
+                do {
+                    try viewModel.removeProject(projectPath, fromWorkspaceAlignmentGroup: workspaceID)
+                } catch {
+                    viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            },
+            onAddProjectToWorkspaceAlignment: { projectPath, workspaceID in
+                Task {
+                    do {
+                        let template = workspaceAlignmentInitialAddTemplate(for: workspaceID)
+                        let entry = WorkspaceAlignmentMemberFormEntry(
+                            projectPath: projectPath,
+                            alias: workspaceAlignmentDefaultAlias(for: projectPath),
+                            targetBranch: template?.targetBranch ?? "",
+                            baseBranchMode: template?.baseBranchMode ?? .autoDetect,
+                            specifiedBaseBranch: template?.specifiedBaseBranch ?? ""
+                        )
+                        try await viewModel.addWorkspaceAlignmentMembers(
+                            [workspaceAlignmentMemberDefinition(from: entry)],
+                            memberAliases: workspaceAlignmentMemberAliases(from: [entry]),
+                            toWorkspaceAlignmentGroup: workspaceID,
+                            applyRules: true
+                        )
+                    } catch {
+                        viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    }
+                }
+            },
             onExit: viewModel.exitWorkspace
         )
         .onAppear {
             syncSidebarProjection()
+            Task {
+                await refreshWorkspaceAlignmentGroupsIfNeeded()
+            }
         }
         .onChange(of: viewModel.workspaceSidebarProjectionRevision) { _, _ in
             syncSidebarProjection()
@@ -116,6 +228,37 @@ struct WorkspaceProjectSidebarHostView: View {
             )
             .preferredColorScheme(.dark)
         }
+        .sheet(item: $alignmentEditorContext) { context in
+            WorkspaceAlignmentEditorSheet(
+                title: context.title,
+                mode: context.mode,
+                availableProjects: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions,
+                initialData: context.initialData,
+                errorMessage: alignmentEditorErrorMessage,
+                isSubmitting: alignmentEditorIsSubmitting,
+                onSubmit: { formData in
+                    submitWorkspaceAlignmentEditor(context: context, formData: formData)
+                },
+                onClose: dismissAlignmentEditor
+            )
+            .preferredColorScheme(.dark)
+        }
+        .sheet(item: $alignmentAddProjectsContext) { context in
+            WorkspaceAlignmentAddProjectsSheet(
+                workspaceName: context.workspaceName,
+                availableProjects: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions.filter {
+                    !context.excludedProjectPaths.contains($0.path)
+                },
+                initialMemberTemplate: workspaceAlignmentInitialAddTemplate(for: context.workspaceID),
+                errorMessage: alignmentAddProjectsErrorMessage,
+                isSubmitting: alignmentAddProjectsIsSubmitting,
+                onSubmit: { members, applyRules in
+                    submitAddProjects(to: context.workspaceID, members: members, applyRules: applyRules)
+                },
+                onClose: dismissAlignmentAddProjects
+            )
+            .preferredColorScheme(.dark)
+        }
         .confirmationDialog(
             "删除 worktree",
             isPresented: Binding(
@@ -148,6 +291,28 @@ struct WorkspaceProjectSidebarHostView: View {
                 Text("将删除 \(pendingDeleteRequest.worktreePath)，并丢弃其中未提交修改与未跟踪文件。若该 worktree 由 DevHaven 创建，还会尝试删除对应本地分支。")
             }
         }
+        .alert(
+            "删除工作区",
+            isPresented: Binding(
+                get: { pendingDeleteWorkspaceAlignment != nil },
+                set: { if !$0 { pendingDeleteWorkspaceAlignment = nil } }
+            ),
+            presenting: pendingDeleteWorkspaceAlignment
+        ) { request in
+            Button("删除工作区", role: .destructive) {
+                do {
+                    try viewModel.deleteWorkspaceAlignmentGroup(request.id)
+                } catch {
+                    viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+                pendingDeleteWorkspaceAlignment = nil
+            }
+            Button("取消", role: .cancel) {
+                pendingDeleteWorkspaceAlignment = nil
+            }
+        } message: { request in
+            Text("将删除工作区「\(request.name)」。不会删除项目本体，也不会删除已有仓库或 worktree。")
+        }
     }
 
     private var openWorkspaceProjectPickerAction: (() -> Void)? {
@@ -161,5 +326,196 @@ struct WorkspaceProjectSidebarHostView: View {
 
     private func syncSidebarProjection() {
         sidebarProjectionStore.sync(from: viewModel)
+    }
+
+    private func presentCreateWorkspaceAlignmentSheet(prefilledProjectPath: String?) {
+        alignmentEditorIsSubmitting = false
+        alignmentEditorErrorMessage = nil
+        var selectedProjectPaths = Set<String>()
+        if let prefilledProjectPath {
+            selectedProjectPaths.insert(prefilledProjectPath)
+        }
+        alignmentEditorContext = WorkspaceAlignmentEditorContext(
+            id: UUID().uuidString,
+            title: "新建工作区",
+            mode: .create,
+            initialData: WorkspaceAlignmentEditorFormData(
+                name: "",
+                members: selectedProjectPaths
+                    .map { projectPath in
+                        WorkspaceAlignmentMemberFormEntry(
+                            projectPath: projectPath,
+                            alias: workspaceAlignmentDefaultAlias(for: projectPath),
+                            targetBranch: "",
+                            baseBranchMode: .autoDetect,
+                            specifiedBaseBranch: ""
+                        )
+                    },
+                applyRulesAfterSave: prefilledProjectPath != nil
+            )
+        )
+    }
+
+    private func presentEditWorkspaceAlignmentSheet(_ workspaceID: String) {
+        guard let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }) else {
+            return
+        }
+        alignmentEditorIsSubmitting = false
+        alignmentEditorErrorMessage = nil
+        alignmentEditorContext = WorkspaceAlignmentEditorContext(
+            id: group.id,
+            title: "编辑工作区",
+            mode: .edit,
+            initialData: WorkspaceAlignmentEditorFormData(
+                name: group.definition.name,
+                members: group.definition.effectiveMembers.map { member in
+                    WorkspaceAlignmentMemberFormEntry(
+                        projectPath: member.projectPath,
+                        alias: group.definition.memberAliases[member.projectPath] ?? workspaceAlignmentDefaultAlias(for: member.projectPath),
+                        targetBranch: member.targetBranch,
+                        baseBranchMode: member.baseBranchMode,
+                        specifiedBaseBranch: member.specifiedBaseBranch ?? ""
+                    )
+                },
+                applyRulesAfterSave: false
+            )
+        )
+    }
+
+    private func presentAddProjectsSheet(_ workspaceID: String) {
+        guard let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }) else {
+            return
+        }
+        alignmentAddProjectsIsSubmitting = false
+        alignmentAddProjectsErrorMessage = nil
+        alignmentAddProjectsContext = WorkspaceAlignmentAddProjectsContext(
+            id: group.id,
+            workspaceID: group.id,
+            workspaceName: group.definition.name,
+            excludedProjectPaths: Set(group.definition.projectPaths)
+        )
+    }
+
+    private func dismissAlignmentEditor() {
+        alignmentEditorContext = nil
+        alignmentEditorIsSubmitting = false
+        alignmentEditorErrorMessage = nil
+    }
+
+    private func dismissAlignmentAddProjects() {
+        alignmentAddProjectsContext = nil
+        alignmentAddProjectsIsSubmitting = false
+        alignmentAddProjectsErrorMessage = nil
+    }
+
+    private func submitWorkspaceAlignmentEditor(
+        context: WorkspaceAlignmentEditorContext,
+        formData: WorkspaceAlignmentEditorFormData
+    ) {
+        alignmentEditorIsSubmitting = true
+        alignmentEditorErrorMessage = nil
+        Task {
+            do {
+                switch context.mode {
+                case .create:
+                    try await viewModel.createWorkspaceAlignmentGroup(
+                        name: formData.name,
+                        members: formData.members.map(workspaceAlignmentMemberDefinition(from:)),
+                        memberAliases: workspaceAlignmentMemberAliases(from: formData.members),
+                        applyRules: formData.applyRulesAfterSave
+                    )
+                case .edit:
+                    try await viewModel.updateWorkspaceAlignmentGroup(
+                        id: context.id,
+                        name: formData.name,
+                        members: formData.members.map(workspaceAlignmentMemberDefinition(from:)),
+                        memberAliases: workspaceAlignmentMemberAliases(from: formData.members),
+                        applyRules: formData.applyRulesAfterSave
+                    )
+                }
+                dismissAlignmentEditor()
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                alignmentEditorIsSubmitting = false
+                alignmentEditorErrorMessage = message
+                viewModel.errorMessage = message
+            }
+        }
+    }
+
+    private func submitAddProjects(
+        to workspaceID: String,
+        members: [WorkspaceAlignmentMemberFormEntry],
+        applyRules: Bool
+    ) {
+        alignmentAddProjectsIsSubmitting = true
+        alignmentAddProjectsErrorMessage = nil
+        Task {
+            do {
+                try await viewModel.addWorkspaceAlignmentMembers(
+                    members.map(workspaceAlignmentMemberDefinition(from:)),
+                    memberAliases: workspaceAlignmentMemberAliases(from: members),
+                    toWorkspaceAlignmentGroup: workspaceID,
+                    applyRules: applyRules
+                )
+                dismissAlignmentAddProjects()
+            } catch {
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                alignmentAddProjectsIsSubmitting = false
+                alignmentAddProjectsErrorMessage = message
+                viewModel.errorMessage = message
+            }
+        }
+    }
+
+    private func refreshWorkspaceAlignmentGroupsIfNeeded() async {
+        for group in sidebarProjectionStore.projection.workspaceAlignmentGroups where group.members.contains(where: { $0.status == .checking }) {
+            do {
+                try await viewModel.recheckWorkspaceAlignmentGroup(group.id)
+            } catch {
+                viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func workspaceAlignmentProjectName(for path: String) -> String {
+        sidebarProjectionStore.projection.workspaceAlignmentProjectOptions
+            .first(where: { $0.path == path })?.name
+        ?? URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    private func workspaceAlignmentDefaultAlias(for path: String) -> String {
+        sanitizeWorkspaceAlias(workspaceAlignmentProjectName(for: path))
+    }
+
+    private func workspaceAlignmentMemberDefinition(
+        from entry: WorkspaceAlignmentMemberFormEntry
+    ) -> WorkspaceAlignmentMemberDefinition {
+        WorkspaceAlignmentMemberDefinition(
+            projectPath: entry.projectPath,
+            targetBranch: entry.targetBranch,
+            baseBranchMode: entry.baseBranchMode,
+            specifiedBaseBranch: entry.specifiedBaseBranch
+        )
+    }
+
+    private func workspaceAlignmentMemberAliases(
+        from members: [WorkspaceAlignmentMemberFormEntry]
+    ) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: members.map { ($0.projectPath, sanitizeWorkspaceAlias($0.alias)) })
+    }
+
+    private func workspaceAlignmentInitialAddTemplate(for workspaceID: String) -> WorkspaceAlignmentMemberFormEntry? {
+        guard let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }),
+              let firstMember = group.definition.effectiveMembers.first else {
+            return nil
+        }
+        return WorkspaceAlignmentMemberFormEntry(
+            projectPath: "",
+            alias: "",
+            targetBranch: firstMember.targetBranch,
+            baseBranchMode: firstMember.baseBranchMode,
+            specifiedBaseBranch: firstMember.specifiedBaseBranch ?? ""
+        )
     }
 }

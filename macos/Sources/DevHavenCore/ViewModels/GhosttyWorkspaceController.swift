@@ -161,8 +161,18 @@ public final class GhosttyWorkspaceController {
         onChange?()
     }
 
-    public func makeRestoreSnapshot(rootProjectPath: String, isQuickTerminal: Bool) -> ProjectWorkspaceRestoreSnapshot {
-        projection.makeRestoreSnapshot(rootProjectPath: rootProjectPath, isQuickTerminal: isQuickTerminal)
+    public func makeRestoreSnapshot(
+        rootProjectPath: String,
+        isQuickTerminal: Bool,
+        workspaceRootContext: WorkspaceRootSessionContext?,
+        workspaceAlignmentGroupID: String?
+    ) -> ProjectWorkspaceRestoreSnapshot {
+        projection.makeRestoreSnapshot(
+            rootProjectPath: rootProjectPath,
+            isQuickTerminal: isQuickTerminal,
+            workspaceRootContext: workspaceRootContext,
+            workspaceAlignmentGroupID: workspaceAlignmentGroupID
+        )
     }
 
     public func restore(from snapshot: ProjectWorkspaceRestoreSnapshot) {
