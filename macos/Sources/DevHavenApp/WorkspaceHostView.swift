@@ -276,6 +276,7 @@ struct WorkspaceHostView: View {
                     tab: tab,
                     isTabSelected: tab.id == workspace.selectedTabId,
                     surfaceModelForPane: surfaceModel,
+                    surfaceActivityForPane: surfaceActivity,
                     onFocusPane: { workspace.focusPane($0) },
                     onClosePane: { workspace.closePane($0) },
                     onSplitPane: { paneID, direction in
@@ -340,7 +341,7 @@ struct WorkspaceHostView: View {
     }
 
     private func surfaceModel(for pane: WorkspacePaneState) -> GhosttySurfaceHostModel {
-        let model = terminalSessionStore.model(
+        terminalSessionStore.model(
             for: pane,
             onFocusChange: { focused in
                 guard focused else { return }
@@ -392,7 +393,10 @@ struct WorkspaceHostView: View {
                 return self.handleSplitAction(action, paneID: pane.id)
             }
         )
-        let activity = WorkspaceSurfaceActivityPolicy.activity(
+    }
+
+    private func surfaceActivity(for pane: WorkspacePaneState) -> WorkspaceSurfaceActivity {
+        WorkspaceSurfaceActivityPolicy.activity(
             isWorkspaceVisible: isWorkspaceVisible,
             isSelectedTab: pane.request.tabId == workspace.selectedTabId,
             windowIsVisible: windowActivity.isVisible,
@@ -400,11 +404,6 @@ struct WorkspaceHostView: View {
             focusedPaneID: workspace.tabs.first(where: { $0.id == pane.request.tabId })?.focusedPaneId,
             paneID: pane.id
         )
-        model.syncSurfaceActivity(isVisible: activity.isVisible, isFocused: activity.isFocused)
-        if activity.isFocused {
-            model.restoreWindowResponderIfNeeded()
-        }
-        return model
     }
 
     private var isWorkspaceVisible: Bool {

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Foundation
 import GhosttyKit
 import DevHavenCore
@@ -40,6 +41,7 @@ final class GhosttyRuntime {
     private(set) var app: ghostty_app_t?
     private var observers: [NSObjectProtocol] = []
     private var surfaceRefs: [SurfaceReference] = []
+    private var lastKeyboardLayoutID: String?
 
     init() {
         guard let config = ghostty_config_new() else {
@@ -87,6 +89,7 @@ final class GhosttyRuntime {
         }
 
         self.app = app
+        lastKeyboardLayoutID = currentKeyboardLayoutID()
         let runtimeBits = UInt(bitPattern: Unmanaged.passUnretained(self).toOpaque())
         installObservers(runtimeBits: runtimeBits)
     }
@@ -305,7 +308,23 @@ final class GhosttyRuntime {
 
     private func handleKeyboardSelectionDidChange() {
         guard let app else { return }
+        let nextKeyboardLayoutID = currentKeyboardLayoutID()
+        guard nextKeyboardLayoutID != lastKeyboardLayoutID else {
+            return
+        }
+        lastKeyboardLayoutID = nextKeyboardLayoutID
         ghostty_app_keyboard_changed(app)
+    }
+
+    private func currentKeyboardLayoutID() -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue() else {
+            return nil
+        }
+        guard let rawValue = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else {
+            return nil
+        }
+        let value = Unmanaged<CFString>.fromOpaque(rawValue).takeUnretainedValue()
+        return value as String
     }
 
     private func tick() {

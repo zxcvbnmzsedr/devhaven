@@ -7,6 +7,11 @@ private struct WorktreeCreateContext {
     let previewPath: String
 }
 
+private struct DisplayProjectLookupKey: Hashable {
+    let path: String
+    let rootProjectPath: String?
+}
+
 @MainActor
 @Observable
 public final class NativeAppViewModel {
@@ -29,6 +34,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var projectNotesSummaryBackfillTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
     @ObservationIgnored private var isAgentSignalObservationStarted = false
+    @ObservationIgnored private var displayProjectCacheByLookupKey: [DisplayProjectLookupKey: Project?] = [:]
 
     public enum DirectoryFilter: Equatable, Sendable {
         case all
@@ -87,6 +93,9 @@ public final class NativeAppViewModel {
     public var snapshot: NativeAppSnapshot {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: snapshot)
+            if oldValue.projects != snapshot.projects {
+                displayProjectCacheByLookupKey.removeAll()
+            }
         }
     }
     public var selectedProjectPath: String?
@@ -651,7 +660,11 @@ public final class NativeAppViewModel {
         status: WorkspaceTaskStatus
     ) {
         var attention = attentionStateByProjectPath[projectPath] ?? WorkspaceAttentionState()
+        let previousAttention = attention
         attention.setTaskStatus(status, for: paneID)
+        guard attention != previousAttention else {
+            return
+        }
         attentionStateByProjectPath[projectPath] = attention
     }
 
@@ -660,13 +673,11 @@ public final class NativeAppViewModel {
             return
         }
         var attention = attentionStateByProjectPath[signal.projectPath] ?? WorkspaceAttentionState()
-        attention.setAgentState(
-            signal.state,
-            kind: signal.agentKind,
-            summary: signal.summary,
-            updatedAt: signal.updatedAt,
-            for: signal.paneId
-        )
+        let previousAttention = attention
+        applyAgentSignal(signal, to: &attention)
+        guard attention != previousAttention else {
+            return
+        }
         attentionStateByProjectPath[signal.projectPath] = attention
     }
 
@@ -674,7 +685,11 @@ public final class NativeAppViewModel {
         guard var attention = attentionStateByProjectPath[projectPath] else {
             return
         }
+        let previousAttention = attention
         attention.clearAgentState(for: paneID)
+        guard attention != previousAttention else {
+            return
+        }
         attentionStateByProjectPath[projectPath] = attention
     }
 
@@ -711,10 +726,11 @@ public final class NativeAppViewModel {
 
     public func codexDisplayCandidates() -> [WorkspaceAgentDisplayCandidate] {
         let openPaths = Set(openWorkspaceProjectPaths)
-        return attentionStateByProjectPath
+        let candidates = attentionStateByProjectPath
             .filter { openPaths.contains($0.key) }
             .flatMap { projectPath, attention in
-                attention.agentStateByPaneID.compactMap { paneID, state in
+                attention.agentStateByPaneID.compactMap { entry -> WorkspaceAgentDisplayCandidate? in
+                    let (paneID, state) = entry
                     guard (state == .running || state == .waiting),
                           attention.agentKindByPaneID[paneID] == .codex
                     else {
@@ -727,6 +743,7 @@ public final class NativeAppViewModel {
                     )
                 }
             }
+        return WorkspaceAgentDisplayCandidate.observationStableSorted(candidates)
     }
 
     public func replaceWorkspaceAgentDisplayOverrides(
@@ -3561,14 +3578,21 @@ public final class NativeAppViewModel {
 
     private func applyAgentSignalSnapshots(_ snapshots: [String: WorkspaceAgentSessionSignal]) {
         let openPaths = Set(openWorkspaceProjectPaths)
+        var nextAttentionStateByProjectPath = attentionStateByProjectPath.filter { openPaths.contains($0.key) }
         for path in openPaths {
-            if var attention = attentionStateByProjectPath[path] {
-                attention.clearAgentStates()
-                attentionStateByProjectPath[path] = attention
+            guard var attention = nextAttentionStateByProjectPath[path] else {
+                continue
             }
+            attention.clearAgentStates()
+            nextAttentionStateByProjectPath[path] = attention
         }
         for signal in snapshots.values where openPaths.contains(signal.projectPath) {
-            recordAgentSignal(signal)
+            var attention = nextAttentionStateByProjectPath[signal.projectPath] ?? WorkspaceAttentionState()
+            applyAgentSignal(signal, to: &attention)
+            nextAttentionStateByProjectPath[signal.projectPath] = attention
+        }
+        if attentionStateByProjectPath != nextAttentionStateByProjectPath {
+            attentionStateByProjectPath = nextAttentionStateByProjectPath
         }
         pruneWorkspaceAgentDisplayOverrides()
     }
@@ -3611,6 +3635,19 @@ public final class NativeAppViewModel {
         workspaceSidebarProjectionRevision &+= 1
     }
 
+    private func applyAgentSignal(
+        _ signal: WorkspaceAgentSessionSignal,
+        to attention: inout WorkspaceAttentionState
+    ) {
+        attention.setAgentState(
+            signal.state,
+            kind: signal.agentKind,
+            summary: signal.summary,
+            updatedAt: signal.updatedAt,
+            for: signal.paneId
+        )
+    }
+
     private func resolvedWorkspaceRunConfigurations(for projectPath: String) -> [WorkspaceRunConfiguration] {
         guard let session = openWorkspaceSessions.first(where: { $0.projectPath == projectPath }),
               let project = resolveDisplayProject(for: projectPath)
@@ -3644,25 +3681,34 @@ public final class NativeAppViewModel {
     }
 
     private func resolveDisplayProject(for path: String, rootProjectPath: String? = nil) -> Project? {
+        let lookupKey = DisplayProjectLookupKey(path: path, rootProjectPath: rootProjectPath)
+        if let cachedProject = displayProjectCacheByLookupKey[lookupKey] {
+            return cachedProject
+        }
+
+        let resolvedProject: Project?
         if let project = snapshot.projects.first(where: { $0.path == path }) {
-            return project
-        }
-
-        let rootProject: Project?
-        if let rootProjectPath {
-            rootProject = snapshot.projects.first(where: { $0.path == rootProjectPath })
+            resolvedProject = project
         } else {
-            rootProject = snapshot.projects.first(where: { project in
-                project.worktrees.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(path) })
-            })
+            let rootProject: Project?
+            if let rootProjectPath {
+                rootProject = snapshot.projects.first(where: { $0.path == rootProjectPath })
+            } else {
+                rootProject = snapshot.projects.first(where: { project in
+                    project.worktrees.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(path) })
+                })
+            }
+
+            if let rootProject,
+               let worktree = rootProject.worktrees.first(where: { normalizePathForCompare($0.path) == normalizePathForCompare(path) }) {
+                resolvedProject = buildWorktreeVirtualProject(sourceProject: rootProject, worktree: worktree)
+            } else {
+                resolvedProject = nil
+            }
         }
 
-        guard let rootProject,
-              let worktree = rootProject.worktrees.first(where: { normalizePathForCompare($0.path) == normalizePathForCompare(path) })
-        else {
-            return nil
-        }
-        return buildWorktreeVirtualProject(sourceProject: rootProject, worktree: worktree)
+        displayProjectCacheByLookupKey[lookupKey] = resolvedProject
+        return resolvedProject
     }
 
     private func persistProjects(_ projects: [Project]) throws {

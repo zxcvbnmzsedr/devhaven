@@ -3,48 +3,47 @@ import DevHavenCore
 
 struct WorkspaceShellView: View {
     @Bindable var viewModel: NativeAppViewModel
-    @State private var codexPresentationCoordinator = CodexAgentPresentationCoordinator()
+    @State private var terminalCommandRouter = WorkspaceTerminalCommandRouter()
     @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
 
     var body: some View {
         workspaceContent
             .background(NativeTheme.window)
-            .focusedSceneValue(\.startTerminalSearchAction, startTerminalSearchAction)
-            .focusedSceneValue(\.searchSelectionAction, searchSelectionAction)
-            .focusedSceneValue(\.navigateTerminalSearchNextAction, navigateTerminalSearchNextAction)
-            .focusedSceneValue(\.navigateTerminalSearchPreviousAction, navigateTerminalSearchPreviousAction)
-            .focusedSceneValue(\.endTerminalSearchAction, endTerminalSearchAction)
+            .background {
+                WorkspaceCodexPresentationCoordinatorBridge(
+                    viewModel: viewModel,
+                    terminalStoreRegistry: terminalStoreRegistry
+                )
+            }
+            .focusedSceneValue(\.workspaceTerminalCommandRouter, terminalCommandRouter)
+            .focusedSceneValue(\.workspaceTerminalSearchActionsEnabled, terminalSearchActionsEnabled)
             .onAppear {
                 viewModel.setWorkspacePaneSnapshotProvider(workspacePaneSnapshotProvider)
                 viewModel.startWorkspaceAgentSignalObservation()
                 syncTerminalStores()
+                syncTerminalCommandRouter()
                 warmActiveWorkspace()
                 viewModel.syncActiveWorkspaceToolWindowContext()
-                syncCodexPresentationCoordinator()
                 WorkspaceLaunchDiagnostics.shared.recordShellMounted(
                     activeProjectPath: viewModel.activeWorkspaceProjectPath,
                     openSessionCount: viewModel.openWorkspaceSessions.count
                 )
             }
             .onDisappear {
-                codexPresentationCoordinator.disconnect()
                 viewModel.stopWorkspaceAgentSignalObservation()
                 viewModel.setWorkspacePaneSnapshotProvider(nil)
             }
             .onChange(of: viewModel.openWorkspaceProjectPaths) { _, _ in
                 syncTerminalStores()
+                syncTerminalCommandRouter()
                 viewModel.refreshWorkspaceAgentSignals()
                 warmActiveWorkspace()
                 viewModel.syncActiveWorkspaceToolWindowContext()
-                syncCodexPresentationCoordinator()
             }
             .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
+                syncTerminalCommandRouter()
                 warmActiveWorkspace()
                 viewModel.syncActiveWorkspaceToolWindowContext()
-                syncCodexPresentationCoordinator()
-            }
-            .onChange(of: viewModel.codexDisplayCandidates()) { _, _ in
-                syncCodexPresentationCoordinator()
             }
             .onChange(of: viewModel.workspaceBottomToolWindowState.activeKind) { _, _ in
                 viewModel.syncActiveWorkspaceToolWindowContext()
@@ -59,8 +58,8 @@ struct WorkspaceShellView: View {
                 viewModel.syncActiveWorkspaceToolWindowContext()
             }
             .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
+                syncTerminalCommandRouter()
                 warmActiveWorkspace()
-                syncCodexPresentationCoordinator()
             }
     }
 
@@ -81,11 +80,14 @@ struct WorkspaceShellView: View {
     }
 
     private var terminalModeContent: some View {
-        ZStack {
+        let openWorkspaceProjectsByPath = Dictionary(
+            uniqueKeysWithValues: viewModel.openWorkspaceProjects.map { ($0.path, $0) }
+        )
+        return ZStack {
             ForEach(viewModel.openWorkspaceSessions) { session in
                 let project: Project? = session.isQuickTerminal
                     ? .quickTerminal(at: session.projectPath)
-                    : viewModel.openWorkspaceProjects.first(where: { $0.path == session.projectPath })
+                    : openWorkspaceProjectsByPath[session.projectPath]
                 if let project {
                     WorkspaceHostView(
                         viewModel: viewModel,
@@ -297,13 +299,6 @@ struct WorkspaceShellView: View {
         )
     }
 
-    private func syncCodexPresentationCoordinator() {
-        codexPresentationCoordinator.connect(
-            viewModel: viewModel,
-            terminalStoreRegistry: terminalStoreRegistry
-        )
-    }
-
     private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider {
         { projectPath, paneID in
             terminalStoreRegistry
@@ -313,51 +308,24 @@ struct WorkspaceShellView: View {
         }
     }
 
-    private var startTerminalSearchAction: (() -> Void)? {
-        terminalSearchAction { $0.startSearch() }
+    private var terminalSearchActionsEnabled: Bool {
+        viewModel.workspaceFocusedArea == .terminal
+            && viewModel.activeWorkspaceController?.selectedPane != nil
     }
 
-    private var searchSelectionAction: (() -> Void)? {
-        terminalSearchAction { $0.searchSelection() }
-    }
-
-    private var navigateTerminalSearchNextAction: (() -> Void)? {
-        terminalSearchAction { $0.navigateSearchNext() }
-    }
-
-    private var navigateTerminalSearchPreviousAction: (() -> Void)? {
-        terminalSearchAction { $0.navigateSearchPrevious() }
-    }
-
-    private var endTerminalSearchAction: (() -> Void)? {
-        terminalSearchAction { $0.endSearch() }
-    }
-
-    private func terminalSearchAction(
-        _ perform: @escaping (GhosttySurfaceHostModel) -> Void
-    ) -> (() -> Void)? {
-        guard viewModel.workspaceFocusedArea == .terminal else {
-            return nil
-        }
-        guard viewModel.activeWorkspaceController?.selectedPane != nil else {
-            return nil
-        }
-        return {
-            guard let model = resolvedActiveTerminalSearchModel() else {
-                return
+    private func syncTerminalCommandRouter() {
+        let viewModel = viewModel
+        let terminalStoreRegistry = terminalStoreRegistry
+        terminalCommandRouter.resolveActiveModel = {
+            guard viewModel.workspaceFocusedArea == .terminal,
+                  let activeProjectPath = viewModel.activeWorkspaceProjectPath,
+                  let controller = viewModel.activeWorkspaceController,
+                  let selectedPane = controller.selectedPane
+            else {
+                return nil
             }
-            perform(model)
+            return terminalStoreRegistry.store(for: activeProjectPath).model(for: selectedPane)
         }
-    }
-
-    private func resolvedActiveTerminalSearchModel() -> GhosttySurfaceHostModel? {
-        guard let activeProjectPath = viewModel.activeWorkspaceProjectPath,
-              let controller = viewModel.activeWorkspaceController,
-              let selectedPane = controller.selectedPane
-        else {
-            return nil
-        }
-        return terminalStoreRegistry.store(for: activeProjectPath).model(for: selectedPane)
     }
 
     private func gitModeEmptyState(title: String, systemImage: String, description: String) -> some View {
@@ -367,6 +335,43 @@ struct WorkspaceShellView: View {
             description: Text(description)
         )
         .foregroundStyle(NativeTheme.textSecondary)
+    }
+}
+
+private struct WorkspaceCodexPresentationCoordinatorBridge: View {
+    @Bindable var viewModel: NativeAppViewModel
+    let terminalStoreRegistry: WorkspaceTerminalStoreRegistry
+    @State private var codexPresentationCoordinator = CodexAgentPresentationCoordinator()
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .allowsHitTesting(false)
+            .onAppear {
+                syncCoordinator()
+            }
+            .onDisappear {
+                codexPresentationCoordinator.disconnect()
+            }
+            .onChange(of: viewModel.openWorkspaceProjectPaths) { _, _ in
+                syncCoordinator()
+            }
+            .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
+                syncCoordinator()
+            }
+            .onChange(of: viewModel.codexDisplayCandidates()) { _, _ in
+                syncCoordinator()
+            }
+            .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
+                syncCoordinator()
+            }
+    }
+
+    private func syncCoordinator() {
+        codexPresentationCoordinator.connect(
+            viewModel: viewModel,
+            terminalStoreRegistry: terminalStoreRegistry
+        )
     }
 }
 

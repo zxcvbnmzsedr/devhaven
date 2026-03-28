@@ -66,6 +66,20 @@ public struct WorkspaceAgentDisplayCandidate: Equatable, Sendable {
         self.paneID = paneID
         self.signalState = signalState
     }
+
+    public static func observationStableSorted(
+        _ candidates: [WorkspaceAgentDisplayCandidate]
+    ) -> [WorkspaceAgentDisplayCandidate] {
+        candidates.sorted { lhs, rhs in
+            if lhs.projectPath != rhs.projectPath {
+                return lhs.projectPath < rhs.projectPath
+            }
+            if lhs.paneID != rhs.paneID {
+                return lhs.paneID < rhs.paneID
+            }
+            return lhs.signalState.rawValue < rhs.signalState.rawValue
+        }
+    }
 }
 
 public struct WorkspaceAttentionState: Equatable, Sendable {
