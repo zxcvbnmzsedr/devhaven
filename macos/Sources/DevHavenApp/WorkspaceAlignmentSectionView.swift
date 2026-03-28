@@ -92,10 +92,6 @@ struct WorkspaceAlignmentSectionView: View {
                     .foregroundStyle(NativeTheme.textPrimary)
             }
 
-            Text("工作区是一个虚拟框，里面可以放多个项目，并统一对齐 branch / worktree。")
-                .font(.caption2)
-                .foregroundStyle(NativeTheme.textSecondary.opacity(0.85))
-
             WorkspaceAlignmentBadge(
                 title: "点击加号新建第一个工作区",
                 systemImage: "plus",
