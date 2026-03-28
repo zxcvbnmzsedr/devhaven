@@ -47,6 +47,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
     @ObservationIgnored private let gitRepositoryService: NativeGitRepositoryService
+    @ObservationIgnored private let workspaceFileSystemService: WorkspaceFileSystemService
     @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
     @ObservationIgnored private let runManager: any WorkspaceRunManaging
     @ObservationIgnored private let workspaceRestoreCoordinator: WorkspaceRestoreCoordinator
@@ -134,6 +135,8 @@ public final class NativeAppViewModel {
     public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
     public var workspaceBottomToolWindowState: WorkspaceBottomToolWindowState
     public var workspaceFocusedArea: WorkspaceFocusedArea
+    private var workspaceProjectTreeStatesByProjectPath: [String: WorkspaceProjectTreeState]
+    private var workspaceEditorTabsByProjectPath: [String: [WorkspaceEditorTabState]]
     private var workspaceDiffTabsByProjectPath: [String: [WorkspaceDiffTabState]]
     private var workspaceSelectedPresentedTabByProjectPath: [String: WorkspacePresentedTabSelection]
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState] {
@@ -196,6 +199,7 @@ public final class NativeAppViewModel {
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
         worktreeService: (any NativeWorktreeServicing)? = nil,
         gitRepositoryService: NativeGitRepositoryService = NativeGitRepositoryService(),
+        workspaceFileSystemService: WorkspaceFileSystemService = WorkspaceFileSystemService(),
         agentSignalStore: WorkspaceAgentSignalStore? = nil,
         runManager: (any WorkspaceRunManaging)? = nil,
         workspaceRestoreStore: WorkspaceRestoreStore? = nil,
@@ -212,6 +216,7 @@ public final class NativeAppViewModel {
         self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.worktreeService = worktreeService ?? NativeGitWorktreeService()
         self.gitRepositoryService = gitRepositoryService
+        self.workspaceFileSystemService = workspaceFileSystemService
         self.agentSignalStore = agentSignalStore ?? WorkspaceAgentSignalStore(
             baseDirectoryURL: store.agentStatusSessionsDirectoryURL
         )
@@ -234,6 +239,8 @@ public final class NativeAppViewModel {
         self.workspaceSideToolWindowState = WorkspaceSideToolWindowState()
         self.workspaceBottomToolWindowState = WorkspaceBottomToolWindowState()
         self.workspaceFocusedArea = .terminal
+        self.workspaceProjectTreeStatesByProjectPath = [:]
+        self.workspaceEditorTabsByProjectPath = [:]
         self.workspaceDiffTabsByProjectPath = [:]
         self.workspaceSelectedPresentedTabByProjectPath = [:]
         self.attentionStateByProjectPath = [:]
@@ -934,6 +941,20 @@ public final class NativeAppViewModel {
         return workspaceDiffTabsByProjectPath[activeWorkspaceProjectPath] ?? []
     }
 
+    public var activeWorkspaceEditorTabs: [WorkspaceEditorTabState] {
+        guard let activeWorkspaceProjectPath else {
+            return []
+        }
+        return workspaceEditorTabsByProjectPath[activeWorkspaceProjectPath] ?? []
+    }
+
+    public var activeWorkspaceProjectTreeState: WorkspaceProjectTreeState? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return workspaceProjectTreeStatesByProjectPath[activeWorkspaceProjectPath]
+    }
+
     public func workspacePresentedTabs(for projectPath: String) -> [WorkspacePresentedTabItem] {
         let selected = resolvedWorkspacePresentedTabSelection(for: projectPath)
         let terminalTabs = workspaceController(for: projectPath)?.tabs.map { tab in
@@ -944,6 +965,14 @@ public final class NativeAppViewModel {
                 isSelected: selected == .terminal(tab.id)
             )
         } ?? []
+        let editorTabs = (workspaceEditorTabsByProjectPath[projectPath] ?? []).map { tab in
+            WorkspacePresentedTabItem(
+                id: tab.id,
+                title: tab.isDirty ? "● \(tab.title)" : tab.title,
+                selection: .editor(tab.id),
+                isSelected: selected == .editor(tab.id)
+            )
+        }
         let diffTabs = (workspaceDiffTabsByProjectPath[projectPath] ?? []).map { tab in
             WorkspacePresentedTabItem(
                 id: tab.id,
@@ -952,7 +981,7 @@ public final class NativeAppViewModel {
                 isSelected: selected == .diff(tab.id)
             )
         }
-        return terminalTabs + diffTabs
+        return terminalTabs + editorTabs + diffTabs
     }
 
     public func workspaceSelectedPresentedTab(for projectPath: String) -> WorkspacePresentedTabSelection? {
@@ -974,6 +1003,10 @@ public final class NativeAppViewModel {
         return viewModel
     }
 
+    public func workspaceEditorTabState(for projectPath: String, tabID: String) -> WorkspaceEditorTabState? {
+        workspaceEditorTabsByProjectPath[projectPath]?.first(where: { $0.id == tabID })
+    }
+
     public var activeWorkspaceSelectedPresentedTab: WorkspacePresentedTabSelection? {
         guard let activeWorkspaceProjectPath else {
             return nil
@@ -983,6 +1016,13 @@ public final class NativeAppViewModel {
 
     public var activeWorkspaceSelectedDiffTabID: String? {
         guard case let .diff(tabID)? = activeWorkspaceSelectedPresentedTab else {
+            return nil
+        }
+        return tabID
+    }
+
+    public var activeWorkspaceSelectedEditorTabID: String? {
+        guard case let .editor(tabID)? = activeWorkspaceSelectedPresentedTab else {
             return nil
         }
         return tabID
@@ -1501,6 +1541,338 @@ public final class NativeAppViewModel {
         )
     }
 
+    public func prepareActiveWorkspaceProjectTreeState() {
+        guard let activeWorkspaceProject else {
+            return
+        }
+        if workspaceProjectTreeStatesByProjectPath[activeWorkspaceProject.path] == nil {
+            refreshWorkspaceProjectTree(for: activeWorkspaceProject.path)
+        }
+    }
+
+    public func refreshWorkspaceProjectTree(for projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+
+        let existingState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+        do {
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = try rebuildWorkspaceProjectTree(
+                for: resolvedProjectPath,
+                preserving: existingState
+            )
+            errorMessage = nil
+        } catch {
+            var fallbackState = existingState ?? WorkspaceProjectTreeState(rootProjectPath: resolvedProjectPath)
+            fallbackState.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = fallbackState
+            errorMessage = fallbackState.errorMessage
+        }
+    }
+
+    public func refreshWorkspaceProjectTreeNode(_ path: String?, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+        // 首版先走整棵树重建，优先保证 rename/delete/create 后路径映射与展开态一致。
+        refreshWorkspaceProjectTree(for: resolvedProjectPath)
+        if let path {
+            selectWorkspaceProjectTreeNode(path, in: resolvedProjectPath)
+        }
+    }
+
+    public func selectWorkspaceProjectTreeNode(_ path: String?, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var state = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+        else {
+            return
+        }
+        state.selectedPath = path
+        workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
+    }
+
+    public func toggleWorkspaceProjectTreeDirectory(_ directoryPath: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var state = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+        else {
+            return
+        }
+
+        if state.expandedDirectoryPaths.contains(directoryPath) {
+            state.expandedDirectoryPaths.remove(directoryPath)
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
+            return
+        }
+
+        do {
+            state.expandedDirectoryPaths.insert(directoryPath)
+            state.childrenByDirectoryPath[directoryPath] = try workspaceFileSystemService.listDirectory(at: directoryPath)
+            state.errorMessage = nil
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
+            errorMessage = nil
+        } catch {
+            state.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
+            errorMessage = state.errorMessage
+        }
+    }
+
+    public func openWorkspaceEditorTab(for filePath: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+
+        let normalizedFilePath = normalizePathForCompare(filePath)
+        if let existing = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: {
+            normalizePathForCompare($0.filePath) == normalizedFilePath
+        }) {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(existing.id)
+            workspaceFocusedArea = .editorTab(existing.id)
+            selectWorkspaceProjectTreeNode(existing.filePath, in: resolvedProjectPath)
+            return
+        }
+
+        do {
+            let document = try workspaceFileSystemService.loadDocument(at: normalizedFilePath)
+            let tab = WorkspaceEditorTabState(
+                id: "workspace-editor:\(UUID().uuidString.lowercased())",
+                identity: normalizedFilePath,
+                projectPath: resolvedProjectPath,
+                filePath: normalizedFilePath,
+                title: URL(fileURLWithPath: normalizedFilePath).lastPathComponent,
+                kind: document.kind,
+                text: document.text,
+                isEditable: document.isEditable,
+                message: document.message,
+                lastLoadedModificationDate: document.modificationDate
+            )
+            workspaceEditorTabsByProjectPath[resolvedProjectPath, default: []].append(tab)
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(tab.id)
+            workspaceFocusedArea = .editorTab(tab.id)
+            selectWorkspaceProjectTreeNode(normalizedFilePath, in: resolvedProjectPath)
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func createWorkspaceProjectTreeItem(
+        named name: String,
+        isDirectory: Bool,
+        under targetPath: String? = nil,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+
+        let parentDirectoryPath = resolveWorkspaceProjectTreeTargetDirectory(
+            targetPath: targetPath ?? workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]?.selectedPath,
+            projectPath: resolvedProjectPath
+        )
+
+        do {
+            let createdNode = try (isDirectory
+                ? workspaceFileSystemService.createDirectory(named: name, inDirectory: parentDirectoryPath)
+                : workspaceFileSystemService.createFile(named: name, inDirectory: parentDirectoryPath))
+            var preservedState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+                ?? WorkspaceProjectTreeState(rootProjectPath: resolvedProjectPath)
+            preservedState.expandedDirectoryPaths.insert(parentDirectoryPath)
+            preservedState.selectedPath = createdNode.path
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = try rebuildWorkspaceProjectTree(
+                for: resolvedProjectPath,
+                preserving: preservedState
+            )
+            if createdNode.isDirectory {
+                selectWorkspaceProjectTreeNode(createdNode.path, in: resolvedProjectPath)
+            } else {
+                openWorkspaceEditorTab(for: createdNode.path, in: resolvedProjectPath)
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func renameWorkspaceProjectTreeNode(
+        _ sourcePath: String,
+        to newName: String,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+
+        let normalizedSourcePath = normalizePathForCompare(sourcePath)
+        let existingState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+
+        do {
+            let renamedNode = try workspaceFileSystemService.renameItem(at: normalizedSourcePath, to: newName)
+            remapWorkspaceEditorTabs(
+                in: resolvedProjectPath,
+                replacingPathPrefix: normalizedSourcePath,
+                with: renamedNode.path
+            )
+            var preservedState = remapWorkspaceProjectTreeState(
+                existingState,
+                replacingPathPrefix: normalizedSourcePath,
+                with: renamedNode.path
+            ) ?? WorkspaceProjectTreeState(rootProjectPath: resolvedProjectPath)
+            preservedState.selectedPath = renamedNode.path
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = try rebuildWorkspaceProjectTree(
+                for: resolvedProjectPath,
+                preserving: preservedState
+            )
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func trashWorkspaceProjectTreeNode(
+        _ path: String,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+
+        let normalizedPath = normalizePathForCompare(path)
+        do {
+            try workspaceFileSystemService.trashItem(at: normalizedPath)
+            closeWorkspaceEditorTabsUnderPath(normalizedPath, in: resolvedProjectPath)
+            var preservedState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+            preservedState?.selectedPath = nil
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = try rebuildWorkspaceProjectTree(
+                for: resolvedProjectPath,
+                preserving: preservedState
+            )
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func updateWorkspaceEditorText(_ text: String, tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
+              let index = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return
+        }
+
+        tabs[index].text = text
+        tabs[index].isDirty = tabs[index].kind == .text
+        workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+    }
+
+    public func reloadWorkspaceEditorTab(_ tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID })
+        else {
+            return
+        }
+
+        do {
+            let document = try workspaceFileSystemService.loadDocument(at: tab.filePath)
+            updateWorkspaceEditorTab(
+                tabID,
+                in: resolvedProjectPath,
+                mutate: { current in
+                    current.kind = document.kind
+                    current.text = document.text
+                    current.isEditable = document.isEditable
+                    current.isDirty = false
+                    current.isLoading = false
+                    current.isSaving = false
+                    current.message = document.message
+                    current.lastLoadedModificationDate = document.modificationDate
+                }
+            )
+            refreshWorkspaceProjectTree(for: resolvedProjectPath)
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func saveWorkspaceEditorTab(_ tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID }),
+              tab.kind == .text
+        else {
+            return
+        }
+
+        updateWorkspaceEditorTab(tabID, in: resolvedProjectPath) { current in
+            current.isSaving = true
+            current.message = nil
+        }
+
+        do {
+            let savedDocument = try workspaceFileSystemService.saveTextDocument(tab.text, to: tab.filePath)
+            updateWorkspaceEditorTab(tabID, in: resolvedProjectPath) { current in
+                current.kind = savedDocument.kind
+                current.text = savedDocument.text
+                current.isEditable = savedDocument.isEditable
+                current.isDirty = false
+                current.isSaving = false
+                current.message = savedDocument.message
+                current.lastLoadedModificationDate = savedDocument.modificationDate
+            }
+            refreshWorkspaceProjectTree(for: resolvedProjectPath)
+            errorMessage = nil
+        } catch {
+            updateWorkspaceEditorTab(tabID, in: resolvedProjectPath) { current in
+                current.isSaving = false
+                current.message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func closeWorkspaceEditorTab(_ tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
+              let removedIndex = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return
+        }
+
+        let removedTab = tabs[removedIndex]
+        let isClosingSelectedTab = resolvedWorkspacePresentedTabSelection(for: resolvedProjectPath) == .editor(tabID)
+        tabs.remove(at: removedIndex)
+        workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+
+        guard isClosingSelectedTab else {
+            return
+        }
+
+        if tabs.indices.contains(removedIndex) {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(tabs[removedIndex].id)
+            workspaceFocusedArea = .editorTab(tabs[removedIndex].id)
+        } else if let previous = tabs.last {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(previous.id)
+            workspaceFocusedArea = .editorTab(previous.id)
+        } else if let diffTab = (workspaceDiffTabsByProjectPath[resolvedProjectPath] ?? []).last {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(diffTab.id)
+            workspaceFocusedArea = .diffTab(diffTab.id)
+        } else if let terminalTabID = workspaceController(for: resolvedProjectPath)?.selectedTabId
+            ?? workspaceController(for: resolvedProjectPath)?.selectedTab?.id
+        {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .terminal(terminalTabID)
+            workspaceFocusedArea = .terminal
+        } else {
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = nil
+            workspaceFocusedArea = .terminal
+        }
+
+        if let treeState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath],
+           treeState.selectedPath == removedTab.filePath {
+            selectWorkspaceProjectTreeNode(nil, in: resolvedProjectPath)
+        }
+    }
+
     public func toggleWorkspaceToolWindow(_ kind: WorkspaceToolWindowKind) {
         switch kind.placement {
         case .side:
@@ -1706,6 +2078,13 @@ public final class NativeAppViewModel {
             workspaceController(for: resolvedProjectPath)?.selectTab(tabID)
             workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .terminal(tabID)
             workspaceFocusedArea = .terminal
+        case let .editor(tabID):
+            guard let editorTab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID }) else {
+                return
+            }
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(tabID)
+            workspaceFocusedArea = .editorTab(tabID)
+            selectWorkspaceProjectTreeNode(editorTab.filePath, in: resolvedProjectPath)
         case let .diff(tabID):
             guard workspaceDiffTabsByProjectPath[resolvedProjectPath]?.contains(where: { $0.id == tabID }) == true else {
                 return
@@ -1758,6 +2137,8 @@ public final class NativeAppViewModel {
         if workspaceSideToolWindowState.isVisible,
            let kind = workspaceSideToolWindowState.activeKind {
             switch kind {
+            case .project:
+                prepareActiveWorkspaceProjectTreeState()
             case .commit:
                 prepareActiveWorkspaceCommitViewModel()
             case .git:
@@ -1768,6 +2149,8 @@ public final class NativeAppViewModel {
         if workspaceBottomToolWindowState.isVisible,
            let kind = workspaceBottomToolWindowState.activeKind {
             switch kind {
+            case .project:
+                break
             case .commit:
                 prepareActiveWorkspaceCommitViewModel()
             case .git:
@@ -3206,9 +3589,165 @@ public final class NativeAppViewModel {
         openWorkspaceSessions.first(where: { $0.projectPath == path })?.isQuickTerminal ?? false
     }
 
+    private func buildWorkspaceProjectTreeState(
+        for projectPath: String,
+        preserving existingState: WorkspaceProjectTreeState?
+    ) throws -> WorkspaceProjectTreeState {
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        var nextState = existingState ?? WorkspaceProjectTreeState(rootProjectPath: normalizedProjectPath)
+        let rootNodes = try workspaceFileSystemService.listDirectory(at: normalizedProjectPath)
+        nextState.rootProjectPath = normalizedProjectPath
+        nextState.rootNodes = rootNodes
+        nextState.childrenByDirectoryPath[normalizedProjectPath] = rootNodes
+        nextState.errorMessage = nil
+
+        let expandedPaths = (existingState?.expandedDirectoryPaths ?? [])
+            .filter { normalizePathForCompare($0) != normalizedProjectPath }
+            .filter { workspaceFileSystemService.directoryExists(at: $0) }
+
+        nextState.expandedDirectoryPaths = Set(expandedPaths)
+        nextState.loadingDirectoryPaths = []
+        for directoryPath in expandedPaths {
+            nextState.childrenByDirectoryPath[directoryPath] = try workspaceFileSystemService.listDirectory(at: directoryPath)
+        }
+
+        if let selectedPath = existingState?.selectedPath,
+           FileManager.default.fileExists(atPath: selectedPath) {
+            nextState.selectedPath = selectedPath
+        } else {
+            nextState.selectedPath = nil
+        }
+
+        return nextState
+    }
+
+    private func rebuildWorkspaceProjectTree(
+        for projectPath: String,
+        preserving state: WorkspaceProjectTreeState?
+    ) throws -> WorkspaceProjectTreeState {
+        try buildWorkspaceProjectTreeState(for: projectPath, preserving: state)
+    }
+
+    private func resolveWorkspaceProjectTreeTargetDirectory(
+        targetPath: String?,
+        projectPath: String
+    ) -> String {
+        guard let targetPath else {
+            return projectPath
+        }
+        switch workspaceFileSystemService.itemKind(at: targetPath) {
+        case .directory:
+            return normalizePathForCompare(targetPath)
+        case .file, .symlink:
+            return workspaceFileSystemService.parentDirectoryPath(for: targetPath)
+        case .none:
+            return projectPath
+        }
+    }
+
+    private func remapWorkspaceProjectTreeState(
+        _ state: WorkspaceProjectTreeState?,
+        replacingPathPrefix sourcePath: String,
+        with destinationPath: String
+    ) -> WorkspaceProjectTreeState? {
+        guard var state else {
+            return nil
+        }
+        let sourcePrefix = normalizePathForCompare(sourcePath)
+        let destinationPrefix = normalizePathForCompare(destinationPath)
+
+        state.expandedDirectoryPaths = Set(
+            state.expandedDirectoryPaths.map { remapWorkspacePathPrefix($0, sourcePrefix: sourcePrefix, destinationPrefix: destinationPrefix) }
+        )
+        state.loadingDirectoryPaths = Set(
+            state.loadingDirectoryPaths.map { remapWorkspacePathPrefix($0, sourcePrefix: sourcePrefix, destinationPrefix: destinationPrefix) }
+        )
+        state.selectedPath = state.selectedPath.map {
+            remapWorkspacePathPrefix($0, sourcePrefix: sourcePrefix, destinationPrefix: destinationPrefix)
+        }
+        return state
+    }
+
+    private func remapWorkspaceEditorTabs(
+        in projectPath: String,
+        replacingPathPrefix sourcePath: String,
+        with destinationPath: String
+    ) {
+        guard var tabs = workspaceEditorTabsByProjectPath[projectPath] else {
+            return
+        }
+        let sourcePrefix = normalizePathForCompare(sourcePath)
+        let destinationPrefix = normalizePathForCompare(destinationPath)
+
+        for index in tabs.indices {
+            guard tabs[index].filePath == sourcePrefix || tabs[index].filePath.hasPrefix(sourcePrefix + "/") else {
+                continue
+            }
+            let remappedPath = remapWorkspacePathPrefix(
+                tabs[index].filePath,
+                sourcePrefix: sourcePrefix,
+                destinationPrefix: destinationPrefix
+            )
+            tabs[index].filePath = remappedPath
+            tabs[index].identity = remappedPath
+            tabs[index].title = URL(fileURLWithPath: remappedPath).lastPathComponent
+        }
+        workspaceEditorTabsByProjectPath[projectPath] = tabs
+
+        if let selection = workspaceSelectedPresentedTabByProjectPath[projectPath],
+           case let .editor(tabID) = selection,
+           tabs.contains(where: { $0.id == tabID }) {
+            workspaceFocusedArea = .editorTab(tabID)
+        }
+    }
+
+    private func closeWorkspaceEditorTabsUnderPath(_ path: String, in projectPath: String) {
+        guard let tabs = workspaceEditorTabsByProjectPath[projectPath], !tabs.isEmpty else {
+            return
+        }
+        let normalizedPath = normalizePathForCompare(path)
+        let tabIDsToClose = tabs
+            .filter { $0.filePath == normalizedPath || $0.filePath.hasPrefix(normalizedPath + "/") }
+            .map(\.id)
+        for tabID in tabIDsToClose {
+            closeWorkspaceEditorTab(tabID, in: projectPath)
+        }
+    }
+
+    private func remapWorkspacePathPrefix(
+        _ path: String,
+        sourcePrefix: String,
+        destinationPrefix: String
+    ) -> String {
+        let normalizedPath = normalizePathForCompare(path)
+        if normalizedPath == sourcePrefix {
+            return destinationPrefix
+        }
+        guard normalizedPath.hasPrefix(sourcePrefix + "/") else {
+            return normalizedPath
+        }
+        let suffix = String(normalizedPath.dropFirst(sourcePrefix.count))
+        return destinationPrefix + suffix
+    }
+
+    private func updateWorkspaceEditorTab(
+        _ tabID: String,
+        in projectPath: String,
+        mutate: (inout WorkspaceEditorTabState) -> Void
+    ) {
+        guard var tabs = workspaceEditorTabsByProjectPath[projectPath],
+              let index = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return
+        }
+        mutate(&tabs[index])
+        workspaceEditorTabsByProjectPath[projectPath] = tabs
+    }
+
     private func resolvedWorkspacePresentedTabSelection(for projectPath: String) -> WorkspacePresentedTabSelection? {
         let terminalTabID = workspaceController(for: projectPath)?.selectedTabId
             ?? workspaceController(for: projectPath)?.selectedTab?.id
+        let editorTabs = workspaceEditorTabsByProjectPath[projectPath] ?? []
         let diffTabs = workspaceDiffTabsByProjectPath[projectPath] ?? []
 
         if let stored = workspaceSelectedPresentedTabByProjectPath[projectPath] {
@@ -3216,6 +3755,10 @@ public final class NativeAppViewModel {
             case let .terminal(tabID):
                 if workspaceController(for: projectPath)?.tabs.contains(where: { $0.id == tabID }) == true {
                     return .terminal(tabID)
+                }
+            case let .editor(tabID):
+                if editorTabs.contains(where: { $0.id == tabID }) {
+                    return .editor(tabID)
                 }
             case let .diff(tabID):
                 if diffTabs.contains(where: { $0.id == tabID }) {
@@ -3602,6 +4145,11 @@ public final class NativeAppViewModel {
                 return nil
             }
             return .terminal(tabID)
+        case let .editor(tabID):
+            guard workspaceEditorTabsByProjectPath[projectPath]?.contains(where: { $0.id == tabID }) == true else {
+                return nil
+            }
+            return .editor(tabID)
         case let .diff(tabID):
             guard diffTabs.contains(where: { $0.id == tabID }) else {
                 return nil
@@ -3626,6 +4174,13 @@ public final class NativeAppViewModel {
         case let .bottomToolWindow(kind):
             showWorkspaceBottomToolWindow(kind)
             return true
+        case let .editorTab(tabID):
+            guard validPresentedTabSelection(.editor(tabID), in: projectPath, diffTabs: remainingDiffTabs) != nil else {
+                workspaceFocusedArea = defaultFocusedArea(for: selection)
+                return false
+            }
+            workspaceFocusedArea = .editorTab(tabID)
+            return true
         case let .diffTab(tabID):
             guard validPresentedTabSelection(.diff(tabID), in: projectPath, diffTabs: remainingDiffTabs) != nil else {
                 workspaceFocusedArea = defaultFocusedArea(for: selection)
@@ -3640,6 +4195,8 @@ public final class NativeAppViewModel {
         switch selection {
         case .terminal:
             return .terminal
+        case let .editor(tabID):
+            return .editorTab(tabID)
         case let .diff(tabID):
             return .diffTab(tabID)
         }
@@ -3647,9 +4204,11 @@ public final class NativeAppViewModel {
 
     private func clearWorkspaceRuntimePresentationState(for paths: Set<String>) {
         for path in paths {
+            workspaceEditorTabsByProjectPath[path] = nil
             for tab in workspaceDiffTabsByProjectPath[path] ?? [] {
                 workspaceDiffTabViewModels[tab.id] = nil
             }
+            workspaceProjectTreeStatesByProjectPath[path] = nil
             workspaceDiffTabsByProjectPath[path] = nil
             workspaceSelectedPresentedTabByProjectPath[path] = nil
         }

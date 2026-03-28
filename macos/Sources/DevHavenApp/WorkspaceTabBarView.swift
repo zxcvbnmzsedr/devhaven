@@ -65,6 +65,9 @@ struct WorkspaceTabBarView: View {
                     case .terminal:
                         Image(systemName: "terminal")
                             .font(.caption)
+                    case .editor:
+                        Image(systemName: "doc.text")
+                            .font(.caption)
                     case .diff:
                         Image(systemName: "square.split.2x1")
                             .font(.caption)

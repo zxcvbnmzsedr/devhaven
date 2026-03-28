@@ -94,6 +94,7 @@ public struct WorkspaceDiffTabState: Identifiable, Equatable, Sendable {
 
 public enum WorkspacePresentedTabSelection: Equatable, Sendable {
     case terminal(String)
+    case editor(String)
     case diff(String)
 }
 

@@ -145,7 +145,7 @@ struct WorkspaceShellView: View {
     @ViewBuilder
     private func topWorkspaceContent(totalWidth: CGFloat) -> some View {
         if viewModel.workspaceSideToolWindowState.isVisible,
-           viewModel.workspaceSideToolWindowState.activeKind == .commit {
+           viewModel.workspaceSideToolWindowState.activeKind != nil {
             WorkspaceSplitView(
                 direction: .horizontal,
                 ratio: sideToolWindowSplitRatio(totalWidth: totalWidth),
@@ -157,8 +157,17 @@ struct WorkspaceShellView: View {
                     viewModel.updateWorkspaceSideToolWindowWidth(WorkspaceSideToolWindowState.defaultWidth)
                 }
             ) {
-                WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Group {
+                    switch viewModel.workspaceSideToolWindowState.activeKind {
+                    case .project:
+                        WorkspaceProjectToolWindowHostView(viewModel: viewModel)
+                    case .commit:
+                        WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)
+                    case .git, .none:
+                        EmptyView()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } trailing: {
                 terminalModeContent
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -254,6 +254,23 @@ struct WorkspaceHostView: View {
     @ViewBuilder
     private func workspacePresentedContent(_ selection: WorkspacePresentedTabSelection?) -> some View {
         switch selection {
+        case let .editor(editorTabID):
+            if viewModel.workspaceEditorTabState(for: project.path, tabID: editorTabID) != nil {
+                WorkspaceEditorTabView(
+                    viewModel: viewModel,
+                    projectPath: project.path,
+                    tabID: editorTabID
+                )
+                .id(editorTabID)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        viewModel.setWorkspaceFocusedArea(.editorTab(editorTabID))
+                    }
+                )
+            } else {
+                editorTabUnavailableContent
+            }
         case let .diff(diffTabID):
             if let diffViewModel = viewModel.workspaceDiffTabViewModel(for: project.path, tabID: diffTabID) {
                 WorkspaceDiffTabView(viewModel: diffViewModel)
@@ -339,6 +356,16 @@ struct WorkspaceHostView: View {
             "Diff 标签页不可用",
             systemImage: "square.split.2x1",
             description: Text("当前 diff 标签页状态已失效，请重新从 changes browser 打开。")
+        )
+        .foregroundStyle(NativeTheme.textSecondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var editorTabUnavailableContent: some View {
+        ContentUnavailableView(
+            "编辑器标签页不可用",
+            systemImage: "doc.text",
+            description: Text("当前编辑器标签页状态已失效，请重新从 Project 树打开。")
         )
         .foregroundStyle(NativeTheme.textSecondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -459,6 +486,8 @@ struct WorkspaceHostView: View {
         switch selection {
         case let .terminal(tabID):
             workspace.closeTab(tabID)
+        case let .editor(editorTabID):
+            viewModel.closeWorkspaceEditorTab(editorTabID, in: project.path)
         case let .diff(diffTabID):
             viewModel.closeWorkspaceDiffTab(diffTabID, in: project.path)
         }
