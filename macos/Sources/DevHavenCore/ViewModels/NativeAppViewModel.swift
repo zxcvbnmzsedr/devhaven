@@ -1587,7 +1587,7 @@ public final class NativeAppViewModel {
         else {
             return
         }
-        state.selectedPath = path
+        state.selectedPath = state.canonicalDisplayPath(for: path)
         workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
     }
 
@@ -1598,17 +1598,24 @@ public final class NativeAppViewModel {
             return
         }
 
-        if state.expandedDirectoryPaths.contains(directoryPath) {
-            state.expandedDirectoryPaths.remove(directoryPath)
+        let normalizedDirectoryPath = state.canonicalDisplayPath(for: directoryPath)
+            ?? normalizePathForCompare(directoryPath)
+
+        if state.expandedDirectoryPaths.contains(normalizedDirectoryPath) {
+            state.expandedDirectoryPaths.remove(normalizedDirectoryPath)
             workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
             return
         }
 
         do {
-            state.expandedDirectoryPaths.insert(directoryPath)
-            state.childrenByDirectoryPath[directoryPath] = try workspaceFileSystemService.listDirectory(at: directoryPath)
+            state.expandedDirectoryPaths.insert(normalizedDirectoryPath)
+            try loadWorkspaceProjectTreeChildren(
+                for: normalizedDirectoryPath,
+                projectRootPath: resolvedProjectPath,
+                into: &state
+            )
             state.errorMessage = nil
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
+            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state.canonicalizedForDisplay()
             errorMessage = nil
         } catch {
             state.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -1643,6 +1650,7 @@ public final class NativeAppViewModel {
                 kind: document.kind,
                 text: document.text,
                 isEditable: document.isEditable,
+                externalChangeState: .inSync,
                 message: document.message,
                 lastLoadedModificationDate: document.modificationDate
             )
@@ -1766,6 +1774,50 @@ public final class NativeAppViewModel {
         workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
     }
 
+    public func checkWorkspaceEditorTabExternalChange(_ tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID })
+        else {
+            return
+        }
+
+        if !workspaceFileSystemService.itemExists(at: tab.filePath) {
+            updateWorkspaceEditorTab(tabID, in: resolvedProjectPath) { current in
+                current.externalChangeState = .removedOnDisk
+                if current.message?.isEmpty != false || isExternalEditorMessage(current.message) {
+                    current.message = "文件已在磁盘上被删除，请关闭标签页或另存为新文件。"
+                }
+            }
+            return
+        }
+
+        let diskModificationDate = workspaceFileSystemService.modificationDate(at: tab.filePath)
+        let hasChangedOnDisk: Bool = {
+            guard let diskModificationDate,
+                  let loadedDate = tab.lastLoadedModificationDate
+            else {
+                return false
+            }
+            return abs(diskModificationDate - loadedDate) > 0.0001
+        }()
+
+        updateWorkspaceEditorTab(tabID, in: resolvedProjectPath) { current in
+            if hasChangedOnDisk {
+                current.externalChangeState = .modifiedOnDisk
+                if current.message?.isEmpty != false || isExternalEditorMessage(current.message) {
+                    current.message = current.isDirty
+                        ? "检测到文件已被外部修改。为避免覆盖磁盘上的新内容，请先重新载入再决定如何处理。"
+                        : "检测到文件已被外部修改，可直接重新载入同步磁盘内容。"
+                }
+            } else {
+                current.externalChangeState = .inSync
+                if isExternalEditorMessage(current.message) {
+                    current.message = nil
+                }
+            }
+        }
+    }
+
     public func reloadWorkspaceEditorTab(_ tabID: String, in projectPath: String? = nil) {
         guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
               let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID })
@@ -1785,6 +1837,7 @@ public final class NativeAppViewModel {
                     current.isDirty = false
                     current.isLoading = false
                     current.isSaving = false
+                    current.externalChangeState = .inSync
                     current.message = document.message
                     current.lastLoadedModificationDate = document.modificationDate
                 }
@@ -1804,19 +1857,35 @@ public final class NativeAppViewModel {
             return
         }
 
+        checkWorkspaceEditorTabExternalChange(tabID, in: resolvedProjectPath)
+        guard let latestTab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID }) else {
+            return
+        }
+        guard latestTab.externalChangeState == .inSync || !latestTab.isDirty else {
+            updateWorkspaceEditorTab(tabID, in: resolvedProjectPath) { current in
+                current.isSaving = false
+                current.message = current.externalChangeState == .removedOnDisk
+                    ? "磁盘上的文件已被删除，当前不能直接保存覆盖。请先重新载入或另存为新文件。"
+                    : "检测到磁盘文件已变化，当前保存已阻止。请先重新载入确认差异。"
+            }
+            errorMessage = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID })?.message
+            return
+        }
+
         updateWorkspaceEditorTab(tabID, in: resolvedProjectPath) { current in
             current.isSaving = true
             current.message = nil
         }
 
         do {
-            let savedDocument = try workspaceFileSystemService.saveTextDocument(tab.text, to: tab.filePath)
+            let savedDocument = try workspaceFileSystemService.saveTextDocument(latestTab.text, to: latestTab.filePath)
             updateWorkspaceEditorTab(tabID, in: resolvedProjectPath) { current in
                 current.kind = savedDocument.kind
                 current.text = savedDocument.text
                 current.isEditable = savedDocument.isEditable
                 current.isDirty = false
                 current.isSaving = false
+                current.externalChangeState = .inSync
                 current.message = savedDocument.message
                 current.lastLoadedModificationDate = savedDocument.modificationDate
             }
@@ -3599,6 +3668,11 @@ public final class NativeAppViewModel {
         nextState.rootProjectPath = normalizedProjectPath
         nextState.rootNodes = rootNodes
         nextState.childrenByDirectoryPath[normalizedProjectPath] = rootNodes
+        try preloadVisibleWorkspaceProjectTreeDisplayChains(
+            forChildren: rootNodes,
+            projectRootPath: normalizedProjectPath,
+            into: &nextState
+        )
         nextState.errorMessage = nil
 
         let expandedPaths = (existingState?.expandedDirectoryPaths ?? [])
@@ -3608,7 +3682,11 @@ public final class NativeAppViewModel {
         nextState.expandedDirectoryPaths = Set(expandedPaths)
         nextState.loadingDirectoryPaths = []
         for directoryPath in expandedPaths {
-            nextState.childrenByDirectoryPath[directoryPath] = try workspaceFileSystemService.listDirectory(at: directoryPath)
+            try loadWorkspaceProjectTreeChildren(
+                for: directoryPath,
+                projectRootPath: normalizedProjectPath,
+                into: &nextState
+            )
         }
 
         if let selectedPath = existingState?.selectedPath,
@@ -3618,7 +3696,7 @@ public final class NativeAppViewModel {
             nextState.selectedPath = nil
         }
 
-        return nextState
+        return nextState.canonicalizedForDisplay()
     }
 
     private func rebuildWorkspaceProjectTree(
@@ -3668,6 +3746,65 @@ public final class NativeAppViewModel {
         return state
     }
 
+    private func loadWorkspaceProjectTreeChildren(
+        for directoryPath: String,
+        projectRootPath: String,
+        into state: inout WorkspaceProjectTreeState
+    ) throws {
+        let normalizedDirectoryPath = normalizePathForCompare(directoryPath)
+        let children = try workspaceFileSystemService.listDirectory(at: normalizedDirectoryPath)
+        state.childrenByDirectoryPath[normalizedDirectoryPath] = children
+        try preloadVisibleWorkspaceProjectTreeDisplayChains(
+            forChildren: children,
+            projectRootPath: projectRootPath,
+            into: &state
+        )
+    }
+
+    private func preloadVisibleWorkspaceProjectTreeDisplayChains(
+        forChildren children: [WorkspaceProjectTreeNode],
+        projectRootPath: String,
+        into state: inout WorkspaceProjectTreeState
+    ) throws {
+        for child in children where child.isDirectory {
+            try preloadWorkspaceProjectTreeDisplayChain(
+                startingAt: child,
+                projectRootPath: projectRootPath,
+                into: &state
+            )
+        }
+    }
+
+    private func preloadWorkspaceProjectTreeDisplayChain(
+        startingAt node: WorkspaceProjectTreeNode,
+        projectRootPath: String,
+        into state: inout WorkspaceProjectTreeState
+    ) throws {
+        guard let sourceRootPath = WorkspaceProjectTreeJavaPackageSupport.javaSourceRoot(
+            for: node.path,
+            projectRootPath: projectRootPath
+        ),
+        normalizePathForCompare(node.path) != normalizePathForCompare(sourceRootPath),
+        WorkspaceProjectTreeJavaPackageSupport.isPackageDirectoryPath(node.path, within: sourceRootPath)
+        else {
+            return
+        }
+
+        var currentNode = node
+        while true {
+            let currentPath = normalizePathForCompare(currentNode.path)
+            let children = try workspaceFileSystemService.listDirectory(at: currentPath)
+            state.childrenByDirectoryPath[currentPath] = children
+            guard let nextNode = WorkspaceProjectTreeJavaPackageSupport.compactedChildDirectory(
+                children: children,
+                sourceRootPath: sourceRootPath
+            ) else {
+                return
+            }
+            currentNode = nextNode
+        }
+    }
+
     private func remapWorkspaceEditorTabs(
         in projectPath: String,
         replacingPathPrefix sourcePath: String,
@@ -3714,11 +3851,11 @@ public final class NativeAppViewModel {
         }
     }
 
-    private func remapWorkspacePathPrefix(
-        _ path: String,
-        sourcePrefix: String,
-        destinationPrefix: String
-    ) -> String {
+private func remapWorkspacePathPrefix(
+    _ path: String,
+    sourcePrefix: String,
+    destinationPrefix: String
+) -> String {
         let normalizedPath = normalizePathForCompare(path)
         if normalizedPath == sourcePrefix {
             return destinationPrefix
@@ -3727,13 +3864,22 @@ public final class NativeAppViewModel {
             return normalizedPath
         }
         let suffix = String(normalizedPath.dropFirst(sourcePrefix.count))
-        return destinationPrefix + suffix
-    }
+    return destinationPrefix + suffix
+}
 
-    private func updateWorkspaceEditorTab(
-        _ tabID: String,
-        in projectPath: String,
-        mutate: (inout WorkspaceEditorTabState) -> Void
+private func isExternalEditorMessage(_ message: String?) -> Bool {
+    guard let message else {
+        return false
+    }
+    return message.hasPrefix("检测到文件已被外部修改")
+        || message.hasPrefix("文件已在磁盘上被删除")
+        || message.hasPrefix("磁盘上的文件已被删除")
+}
+
+private func updateWorkspaceEditorTab(
+    _ tabID: String,
+    in projectPath: String,
+    mutate: (inout WorkspaceEditorTabState) -> Void
     ) {
         guard var tabs = workspaceEditorTabsByProjectPath[projectPath],
               let index = tabs.firstIndex(where: { $0.id == tabID })

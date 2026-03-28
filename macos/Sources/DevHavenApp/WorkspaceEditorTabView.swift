@@ -15,6 +15,9 @@ struct WorkspaceEditorTabView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(NativeTheme.window)
+            .task(id: tabID) {
+                await monitorExternalChanges()
+            }
         } else {
             ContentUnavailableView(
                 "编辑器标签页不可用",
@@ -45,7 +48,8 @@ struct WorkspaceEditorTabView: View {
                             viewModel.updateWorkspaceEditorText(nextText, tabID: tabID, in: projectPath)
                         }
                     ),
-                    isEditable: tab.isEditable
+                    isEditable: tab.isEditable,
+                    syntaxStyle: WorkspaceEditorSyntaxStyle.infer(fromFilePath: tab.filePath)
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .binary:
@@ -86,6 +90,14 @@ struct WorkspaceEditorTabView: View {
                             .background(Color.orange.opacity(0.12))
                             .clipShape(.rect(cornerRadius: 999))
                     }
+                    switch tab.externalChangeState {
+                    case .inSync:
+                        EmptyView()
+                    case .modifiedOnDisk:
+                        statusChip(title: "磁盘已变更", foreground: .yellow, background: .yellow.opacity(0.14))
+                    case .removedOnDisk:
+                        statusChip(title: "磁盘已删除", foreground: .red, background: .red.opacity(0.14))
+                    }
                 }
                 Text(tab.filePath)
                     .font(.caption.monospaced())
@@ -93,6 +105,12 @@ struct WorkspaceEditorTabView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
+                if let message = tab.message, !message.isEmpty {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(tab.externalChangeState == .removedOnDisk ? .red : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 0)
@@ -107,7 +125,13 @@ struct WorkspaceEditorTabView: View {
                 viewModel.saveWorkspaceEditorTab(tabID, in: projectPath)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(tab.kind != .text || !tab.isEditable || !tab.isDirty || tab.isSaving)
+            .disabled(
+                tab.kind != .text
+                    || !tab.isEditable
+                    || !tab.isDirty
+                    || tab.isSaving
+                    || tab.externalChangeState == .removedOnDisk
+            )
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -122,5 +146,22 @@ struct WorkspaceEditorTabView: View {
         )
         .foregroundStyle(NativeTheme.textSecondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func statusChip(title: String, foreground: Color, background: Color) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(background)
+            .clipShape(.rect(cornerRadius: 999))
+    }
+
+    private func monitorExternalChanges() async {
+        while !Task.isCancelled {
+            viewModel.checkWorkspaceEditorTabExternalChange(tabID, in: projectPath)
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
     }
 }

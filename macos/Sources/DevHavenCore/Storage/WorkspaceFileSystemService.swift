@@ -209,6 +209,16 @@ public struct WorkspaceFileSystemService: Sendable {
         URL(fileURLWithPath: normalizeWorkspaceFileSystemPath(path)).lastPathComponent
     }
 
+    public func modificationDate(at path: String) -> SwiftDate? {
+        let normalizedPath = normalizeWorkspaceFileSystemPath(path)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: normalizedPath),
+              let modificationDate = attributes[.modificationDate] as? Date
+        else {
+            return nil
+        }
+        return modificationDate.timeIntervalSinceReferenceDate
+    }
+
     private func sanitizeFileSystemName(_ name: String) throws -> String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {

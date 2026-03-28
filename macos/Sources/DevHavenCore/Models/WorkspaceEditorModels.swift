@@ -7,6 +7,36 @@ public enum WorkspaceEditorDocumentKind: String, Equatable, Sendable {
     case missing
 }
 
+public enum WorkspaceEditorExternalChangeState: String, Equatable, Sendable {
+    case inSync
+    case modifiedOnDisk
+    case removedOnDisk
+}
+
+public enum WorkspaceEditorSyntaxStyle: String, Equatable, Sendable {
+    case plainText
+    case swift
+    case json
+    case markdown
+    case yaml
+
+    public static func infer(fromFilePath filePath: String) -> WorkspaceEditorSyntaxStyle {
+        let fileExtension = URL(fileURLWithPath: filePath).pathExtension.lowercased()
+        switch fileExtension {
+        case "swift":
+            return .swift
+        case "json":
+            return .json
+        case "md", "markdown":
+            return .markdown
+        case "yml", "yaml":
+            return .yaml
+        default:
+            return .plainText
+        }
+    }
+}
+
 public struct WorkspaceEditorDocumentSnapshot: Equatable, Sendable {
     public var filePath: String
     public var kind: WorkspaceEditorDocumentKind
@@ -44,6 +74,7 @@ public struct WorkspaceEditorTabState: Identifiable, Equatable, Sendable {
     public var isDirty: Bool
     public var isLoading: Bool
     public var isSaving: Bool
+    public var externalChangeState: WorkspaceEditorExternalChangeState
     public var message: String?
     public var lastLoadedModificationDate: SwiftDate?
 
@@ -59,6 +90,7 @@ public struct WorkspaceEditorTabState: Identifiable, Equatable, Sendable {
         isDirty: Bool = false,
         isLoading: Bool = false,
         isSaving: Bool = false,
+        externalChangeState: WorkspaceEditorExternalChangeState = .inSync,
         message: String? = nil,
         lastLoadedModificationDate: SwiftDate? = nil
     ) {
@@ -73,6 +105,7 @@ public struct WorkspaceEditorTabState: Identifiable, Equatable, Sendable {
         self.isDirty = isDirty
         self.isLoading = isLoading
         self.isSaving = isSaving
+        self.externalChangeState = externalChangeState
         self.message = message
         self.lastLoadedModificationDate = lastLoadedModificationDate
     }

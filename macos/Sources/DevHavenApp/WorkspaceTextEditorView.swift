@@ -37,6 +37,7 @@ struct WorkspaceTextEditorScrollRequestState: Equatable {
 
 struct WorkspaceTextEditorDecorationSignature: Equatable {
     var text: String
+    var syntaxStyle: WorkspaceEditorSyntaxStyle
     var highlights: [WorkspaceDiffEditorHighlight]
     var inlineHighlights: [WorkspaceDiffEditorInlineHighlight]
 }
@@ -45,6 +46,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
     let editorID: String
     @Binding var text: String
     let isEditable: Bool
+    let syntaxStyle: WorkspaceEditorSyntaxStyle
     let highlights: [WorkspaceDiffEditorHighlight]
     let inlineHighlights: [WorkspaceDiffEditorInlineHighlight]
     let scrollSyncState: Binding<WorkspaceTextEditorScrollSyncState>?
@@ -54,6 +56,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         editorID: String,
         text: Binding<String>,
         isEditable: Bool,
+        syntaxStyle: WorkspaceEditorSyntaxStyle = .plainText,
         highlights: [WorkspaceDiffEditorHighlight] = [],
         inlineHighlights: [WorkspaceDiffEditorInlineHighlight] = [],
         scrollSyncState: Binding<WorkspaceTextEditorScrollSyncState>? = nil,
@@ -62,6 +65,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         self.editorID = editorID
         self._text = text
         self.isEditable = isEditable
+        self.syntaxStyle = syntaxStyle
         self.highlights = highlights
         self.inlineHighlights = inlineHighlights
         self.scrollSyncState = scrollSyncState
@@ -108,6 +112,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         scrollView.documentView = textView
         context.coordinator.attach(scrollView: scrollView, textView: textView)
         context.coordinator.applyDecorationsIfNeeded(
+            syntaxStyle: syntaxStyle,
             highlights: highlights,
             inlineHighlights: inlineHighlights,
             force: true
@@ -127,6 +132,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         }
         textView.isEditable = isEditable
         context.coordinator.applyDecorationsIfNeeded(
+            syntaxStyle: syntaxStyle,
             highlights: highlights,
             inlineHighlights: inlineHighlights,
             force: textChanged
@@ -196,6 +202,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         }
 
         func applyDecorationsIfNeeded(
+            syntaxStyle: WorkspaceEditorSyntaxStyle,
             highlights: [WorkspaceDiffEditorHighlight],
             inlineHighlights: [WorkspaceDiffEditorInlineHighlight],
             force: Bool
@@ -205,6 +212,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             }
             let signature = WorkspaceTextEditorDecorationSignature(
                 text: textView.string,
+                syntaxStyle: syntaxStyle,
                 highlights: highlights,
                 inlineHighlights: inlineHighlights
             )
@@ -212,8 +220,12 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
                 return
             }
 
-            applyHighlights(highlights, to: textView)
-            applyInlineHighlights(inlineHighlights, to: textView)
+            applyTextPresentation(
+                syntaxStyle: syntaxStyle,
+                highlights: highlights,
+                inlineHighlights: inlineHighlights,
+                to: textView
+            )
             lastAppliedDecorationSignature = signature
         }
 
@@ -352,7 +364,12 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
 }
 
 @MainActor
-private func applyHighlights(_ highlights: [WorkspaceDiffEditorHighlight], to textView: NSTextView) {
+private func applyTextPresentation(
+    syntaxStyle: WorkspaceEditorSyntaxStyle,
+    highlights: [WorkspaceDiffEditorHighlight],
+    inlineHighlights: [WorkspaceDiffEditorInlineHighlight],
+    to textView: NSTextView
+) {
     guard let textStorage = textView.textStorage else {
         return
     }
@@ -366,6 +383,13 @@ private func applyHighlights(_ highlights: [WorkspaceDiffEditorHighlight], to te
         ],
         range: fullRange
     )
+
+    applySyntaxHighlighting(
+        syntaxStyle: syntaxStyle,
+        textStorage: textStorage,
+        content: content
+    )
+
     for highlight in highlights {
         let range = characterRange(for: highlight.lineRange, in: content)
         guard range.location != NSNotFound, range.length > 0 else {
@@ -377,15 +401,6 @@ private func applyHighlights(_ highlights: [WorkspaceDiffEditorHighlight], to te
             range: range
         )
     }
-    textStorage.endEditing()
-}
-
-@MainActor
-private func applyInlineHighlights(_ inlineHighlights: [WorkspaceDiffEditorInlineHighlight], to textView: NSTextView) {
-    guard let textStorage = textView.textStorage else {
-        return
-    }
-    let content = textView.string as NSString
     for inlineHighlight in inlineHighlights {
         let range = characterRange(
             forLineIndex: inlineHighlight.lineIndex,
@@ -400,6 +415,57 @@ private func applyInlineHighlights(_ inlineHighlights: [WorkspaceDiffEditorInlin
             value: inlineHighlightColor(for: inlineHighlight.kind),
             range: range
         )
+    }
+    textStorage.endEditing()
+}
+
+@MainActor
+private func applySyntaxHighlighting(
+    syntaxStyle: WorkspaceEditorSyntaxStyle,
+    textStorage: NSTextStorage,
+    content: NSString
+) {
+    guard syntaxStyle != .plainText else {
+        return
+    }
+
+    let fullString = content as String
+    let fullRange = NSRange(location: 0, length: content.length)
+
+    let apply: (String, NSRegularExpression.Options, NSColor) -> Void = { pattern, options, color in
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return
+        }
+        expression.enumerateMatches(in: fullString, options: [], range: fullRange) { result, _, _ in
+            guard let range = result?.range, range.location != NSNotFound else {
+                return
+            }
+            textStorage.addAttribute(.foregroundColor, value: color, range: range)
+        }
+    }
+
+    switch syntaxStyle {
+    case .swift:
+        apply(#"\b(import|struct|class|actor|enum|protocol|extension|func|let|var|if|else|guard|return|switch|case|for|while|in|where|break|continue|throw|throws|try|catch|async|await|public|private|fileprivate|internal|open|static|mutating|nonmutating|self|super|nil|true|false)\b"#, [], NSColor.systemPurple)
+        apply(#""([^"\\]|\\.)*""#, [], NSColor.systemRed)
+        apply(#"//.*"#, [.anchorsMatchLines], NSColor.systemGreen)
+        apply(#"/\*[\s\S]*?\*/"#, [.dotMatchesLineSeparators], NSColor.systemGreen)
+    case .json:
+        apply(#""([^"\\]|\\.)*"\s*:"# , [], NSColor.systemBlue)
+        apply(#""([^"\\]|\\.)*""#, [], NSColor.systemRed)
+        apply(#"\b(true|false|null)\b"#, [], NSColor.systemPurple)
+        apply(#"-?\b\d+(\.\d+)?\b"#, [], NSColor.systemOrange)
+    case .markdown:
+        apply(#"^#{1,6}.*$"#, [.anchorsMatchLines], NSColor.systemBlue)
+        apply(#"`[^`\n]+`"#, [], NSColor.systemRed)
+        apply(#"^\s*[-*+]\s.*$"#, [.anchorsMatchLines], NSColor.systemOrange)
+        apply(#"\[[^\]]+\]\([^)]+\)"#, [], NSColor.systemPurple)
+    case .yaml:
+        apply(#"^[\t ]*[-]?\s*[A-Za-z0-9_.\"'-]+\s*:"# , [.anchorsMatchLines], NSColor.systemBlue)
+        apply(#""([^"\\]|\\.)*""#, [], NSColor.systemRed)
+        apply(#"\b(true|false|null|yes|no|on|off)\b"#, [], NSColor.systemPurple)
+    case .plainText:
+        break
     }
 }
 

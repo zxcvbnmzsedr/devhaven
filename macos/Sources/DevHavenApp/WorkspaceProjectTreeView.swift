@@ -2,6 +2,8 @@ import SwiftUI
 import DevHavenCore
 
 struct WorkspaceProjectTreeView: View {
+    @FocusState private var isTreeFocused: Bool
+
     let project: Project
     let treeState: WorkspaceProjectTreeState
     let onRefresh: () -> Void
@@ -14,6 +16,10 @@ struct WorkspaceProjectTreeView: View {
     let onRenameNode: (String) -> Void
     let onTrashNode: (String) -> Void
     let onRevealInFinder: (String) -> Void
+
+    private var displayRootNodes: [WorkspaceProjectTreeDisplayNode] {
+        treeState.displayRootNodes
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +36,7 @@ struct WorkspaceProjectTreeView: View {
 
             Divider()
 
-            if treeState.rootNodes.isEmpty {
+            if displayRootNodes.isEmpty {
                 ContentUnavailableView(
                     "目录为空",
                     systemImage: "folder",
@@ -41,7 +47,7 @@ struct WorkspaceProjectTreeView: View {
             } else {
                 ScrollView {
                     WorkspaceProjectTreeBranchView(
-                        nodes: treeState.rootNodes,
+                        nodes: displayRootNodes,
                         level: 0,
                         treeState: treeState,
                         onCreateFile: onCreateFile,
@@ -59,6 +65,12 @@ struct WorkspaceProjectTreeView: View {
                 }
             }
         }
+        .focusable()
+        .focused($isTreeFocused)
+        .onAppear {
+            isTreeFocused = true
+        }
+        .onMoveCommand(perform: handleMoveCommand)
     }
 
     private var header: some View {
@@ -119,10 +131,62 @@ struct WorkspaceProjectTreeView: View {
         .buttonStyle(.plain)
         .help(title)
     }
+
+    private var visibleNodes: [WorkspaceProjectTreeDisplayNode] {
+        flattenVisibleNodes(displayRootNodes)
+    }
+
+    private func flattenVisibleNodes(_ nodes: [WorkspaceProjectTreeDisplayNode]) -> [WorkspaceProjectTreeDisplayNode] {
+        var result: [WorkspaceProjectTreeDisplayNode] = []
+        for node in nodes {
+            result.append(node)
+            if node.isDirectory, treeState.isExpanded(node.path) {
+                result.append(contentsOf: flattenVisibleNodes(node.children))
+            }
+        }
+        return result
+    }
+
+    private func handleMoveCommand(_ direction: MoveCommandDirection) {
+        guard let selectedPath = treeState.selectedPath,
+              let currentIndex = visibleNodes.firstIndex(where: { $0.matchesSelection(selectedPath) })
+        else {
+            if let first = visibleNodes.first {
+                onSelectNode(first.path)
+            }
+            return
+        }
+
+        let currentNode = visibleNodes[currentIndex]
+        switch direction {
+        case .up:
+            guard visibleNodes.indices.contains(currentIndex - 1) else { return }
+            onSelectNode(visibleNodes[currentIndex - 1].path)
+        case .down:
+            guard visibleNodes.indices.contains(currentIndex + 1) else { return }
+            onSelectNode(visibleNodes[currentIndex + 1].path)
+        case .left:
+            if currentNode.isDirectory, treeState.isExpanded(currentNode.path) {
+                onToggleDirectory(currentNode.path)
+            } else if let parentPath = currentNode.parentPath {
+                onSelectNode(parentPath)
+            }
+        case .right:
+            if currentNode.isDirectory {
+                if !treeState.isExpanded(currentNode.path) {
+                    onToggleDirectory(currentNode.path)
+                } else if let firstChild = currentNode.children.first {
+                    onSelectNode(firstChild.path)
+                }
+            }
+        @unknown default:
+            break
+        }
+    }
 }
 
 private struct WorkspaceProjectTreeBranchView: View {
-    let nodes: [WorkspaceProjectTreeNode]
+    let nodes: [WorkspaceProjectTreeDisplayNode]
     let level: Int
     let treeState: WorkspaceProjectTreeState
     let onCreateFile: (String?) -> Void
@@ -141,7 +205,7 @@ private struct WorkspaceProjectTreeBranchView: View {
                 WorkspaceProjectTreeRowView(
                     node: node,
                     level: level,
-                    isSelected: treeState.selectedPath == node.path,
+                    isSelected: node.matchesSelection(treeState.selectedPath),
                     isExpanded: node.isDirectory && treeState.isExpanded(node.path),
                     onSelect: { onSelectNode(node.path) },
                     onToggleDirectory: {
@@ -172,7 +236,7 @@ private struct WorkspaceProjectTreeBranchView: View {
                         .padding(.leading, CGFloat(level + 1) * 14 + 30)
                         .padding(.vertical, 4)
                     } else {
-                        let children = treeState.children(for: node.path)
+                        let children = node.children
                         if children.isEmpty {
                             Text("空目录")
                                 .font(.caption)
@@ -203,7 +267,7 @@ private struct WorkspaceProjectTreeBranchView: View {
 }
 
 private struct WorkspaceProjectTreeRowView: View {
-    let node: WorkspaceProjectTreeNode
+    let node: WorkspaceProjectTreeDisplayNode
     let level: Int
     let isSelected: Bool
     let isExpanded: Bool
