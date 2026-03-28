@@ -54,23 +54,10 @@ struct WorkspaceProjectSidebarHostView: View {
     }
 
     private func openOrActivateProject(_ member: WorkspaceAlignmentMemberProjection) {
-        switch member.openTarget {
-        case let .project(projectPath):
-            if viewModel.openWorkspaceProjectPaths.contains(projectPath) {
-                viewModel.activateWorkspaceProject(projectPath)
-            } else {
-                viewModel.enterWorkspace(projectPath)
-            }
-        case let .worktree(rootProjectPath, worktreePath):
-            if viewModel.openWorkspaceProjectPaths.contains(worktreePath) {
-                viewModel.activateWorkspaceProject(worktreePath)
-                return
-            }
-            if !viewModel.openWorkspaceProjectPaths.contains(rootProjectPath) {
-                viewModel.enterWorkspace(rootProjectPath)
-            }
-            viewModel.openWorkspaceWorktree(worktreePath, from: rootProjectPath)
+        if member.openTarget.path.isEmpty {
+            return
         }
+        viewModel.openWorkspaceAlignmentMember(member)
     }
 
     var body: some View {

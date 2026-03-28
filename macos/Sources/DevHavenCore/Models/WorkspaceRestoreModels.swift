@@ -33,6 +33,7 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
     public var rootProjectPath: String
     public var isQuickTerminal: Bool
     public var workspaceRootContext: WorkspaceRootSessionContext?
+    public var workspaceAlignmentGroupID: String?
     public var workspaceId: String
     public var selectedTabId: String?
     public var nextTabNumber: Int
@@ -44,6 +45,7 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
         rootProjectPath: String,
         isQuickTerminal: Bool,
         workspaceRootContext: WorkspaceRootSessionContext? = nil,
+        workspaceAlignmentGroupID: String? = nil,
         workspaceId: String,
         selectedTabId: String?,
         nextTabNumber: Int,
@@ -54,6 +56,7 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
         self.rootProjectPath = rootProjectPath
         self.isQuickTerminal = isQuickTerminal
         self.workspaceRootContext = workspaceRootContext
+        self.workspaceAlignmentGroupID = workspaceAlignmentGroupID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.workspaceId = workspaceId
         self.selectedTabId = selectedTabId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.nextTabNumber = max(nextTabNumber, 1)

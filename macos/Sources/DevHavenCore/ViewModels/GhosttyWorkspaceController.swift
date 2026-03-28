@@ -159,12 +159,14 @@ public final class GhosttyWorkspaceController {
     public func makeRestoreSnapshot(
         rootProjectPath: String,
         isQuickTerminal: Bool,
-        workspaceRootContext: WorkspaceRootSessionContext?
+        workspaceRootContext: WorkspaceRootSessionContext?,
+        workspaceAlignmentGroupID: String?
     ) -> ProjectWorkspaceRestoreSnapshot {
         projection.makeRestoreSnapshot(
             rootProjectPath: rootProjectPath,
             isQuickTerminal: isQuickTerminal,
-            workspaceRootContext: workspaceRootContext
+            workspaceRootContext: workspaceRootContext,
+            workspaceAlignmentGroupID: workspaceAlignmentGroupID
         )
     }
 
