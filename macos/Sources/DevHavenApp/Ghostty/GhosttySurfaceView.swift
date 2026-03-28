@@ -7,7 +7,7 @@ import QuartzCore
 
 @MainActor
 final class GhosttyTerminalSurfaceView: NSView {
-    private struct ScrollbarState {
+    private struct ScrollbarState: Equatable {
         let total: UInt64
         let offset: UInt64
         let length: UInt64
@@ -680,13 +680,20 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     func updateCellSize(_ backingCellSize: NSSize) {
+        guard backingCellSizeInPixels != backingCellSize else {
+            return
+        }
         backingCellSizeInPixels = backingCellSize
         cellSize = convertFromBacking(backingCellSize)
         scrollWrapper?.updateSurfaceSize()
     }
 
     func updateScrollbar(total: UInt64, offset: UInt64, length: UInt64) {
-        lastScrollbar = ScrollbarState(total: total, offset: offset, length: length)
+        let nextScrollbar = ScrollbarState(total: total, offset: offset, length: length)
+        guard lastScrollbar != nextScrollbar else {
+            return
+        }
+        lastScrollbar = nextScrollbar
         scrollWrapper?.updateScrollbar(total: total, offset: offset, length: length)
     }
 
@@ -701,7 +708,10 @@ final class GhosttyTerminalSurfaceView: NSView {
     private func updateSurfaceMetrics() {
         guard let surface else { return }
         let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        ghostty_surface_set_content_scale(surface, scale, scale)
+        if attachmentState.lastContentScale != scale {
+            attachmentState.lastContentScale = scale
+            ghostty_surface_set_content_scale(surface, scale, scale)
+        }
         let lastBackingSize = attachmentState.lastBackingSize
         let backingSize = convertToBacking(bounds.size)
         let decision = GhosttySurfaceResizePolicy.resizeDecision(

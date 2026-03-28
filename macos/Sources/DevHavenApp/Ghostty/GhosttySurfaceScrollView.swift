@@ -2,7 +2,7 @@ import AppKit
 
 @MainActor
 final class GhosttySurfaceScrollView: NSView {
-    private struct ScrollbarState {
+    private struct ScrollbarState: Equatable {
         let total: UInt64
         let offset: UInt64
         let length: UInt64
@@ -131,7 +131,11 @@ final class GhosttySurfaceScrollView: NSView {
     }
 
     func updateScrollbar(total: UInt64, offset: UInt64, length: UInt64) {
-        scrollbar = ScrollbarState(total: total, offset: offset, length: length)
+        let nextScrollbar = ScrollbarState(total: total, offset: offset, length: length)
+        guard scrollbar != nextScrollbar else {
+            return
+        }
+        scrollbar = nextScrollbar
         scrollView.hasVerticalScroller = true
         synchronizeScrollView()
     }
