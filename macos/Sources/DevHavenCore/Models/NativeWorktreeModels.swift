@@ -127,6 +127,95 @@ public struct NativeWorktreeRemoveResult: Equatable, Sendable {
     }
 }
 
+public struct NativeWorktreeEnvironmentResult: Equatable, Sendable {
+    public var warning: String?
+    public var executedCommands: [String]
+    public var failedCommand: String?
+    public var latestOutputLines: [String]
+
+    public init(
+        warning: String? = nil,
+        executedCommands: [String] = [],
+        failedCommand: String? = nil,
+        latestOutputLines: [String] = []
+    ) {
+        self.warning = warning
+        self.executedCommands = executedCommands
+        self.failedCommand = failedCommand
+        self.latestOutputLines = latestOutputLines
+    }
+}
+
+public struct NativeWorktreeCleanupRequest: Equatable, Sendable {
+    public var sourceProjectPath: String
+    public var worktreePath: String
+    public var branch: String?
+    public var shouldDeleteCreatedBranch: Bool
+
+    public init(
+        sourceProjectPath: String,
+        worktreePath: String,
+        branch: String? = nil,
+        shouldDeleteCreatedBranch: Bool
+    ) {
+        self.sourceProjectPath = sourceProjectPath
+        self.worktreePath = worktreePath
+        self.branch = branch
+        self.shouldDeleteCreatedBranch = shouldDeleteCreatedBranch
+    }
+}
+
+public struct NativeWorktreeCleanupResult: Equatable, Sendable {
+    public var removedWorktree: Bool
+    public var removedDirectory: Bool
+    public var removedBranch: Bool
+    public var warning: String?
+
+    public init(
+        removedWorktree: Bool = false,
+        removedDirectory: Bool = false,
+        removedBranch: Bool = false,
+        warning: String? = nil
+    ) {
+        self.removedWorktree = removedWorktree
+        self.removedDirectory = removedDirectory
+        self.removedBranch = removedBranch
+        self.warning = warning
+    }
+}
+
+public enum WorkspaceWorktreeDeleteKind: Equatable, Sendable {
+    case clearFailedCreation
+    case deletePersistedWorktree
+}
+
+public struct WorkspaceWorktreeDeletePresentation: Equatable, Sendable, Identifiable {
+    public var rootProjectPath: String
+    public var worktreePath: String
+    public var title: String
+    public var actionTitle: String
+    public var message: String
+    public var kind: WorkspaceWorktreeDeleteKind
+
+    public init(
+        rootProjectPath: String,
+        worktreePath: String,
+        title: String,
+        actionTitle: String,
+        message: String,
+        kind: WorkspaceWorktreeDeleteKind
+    ) {
+        self.rootProjectPath = rootProjectPath
+        self.worktreePath = worktreePath
+        self.title = title
+        self.actionTitle = actionTitle
+        self.message = message
+        self.kind = kind
+    }
+
+    public var id: String { "\(rootProjectPath)|\(worktreePath)|\(title)" }
+}
+
 public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
     public var rootProjectPath: String
     public var worktree: ProjectWorktree
@@ -138,6 +227,10 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
     public var agentState: WorkspaceAgentState?
     public var agentSummary: String?
     public var agentKind: WorkspaceAgentKind?
+    public var displayStateOverride: WorkspaceSidebarWorktreeDisplayState?
+    public var displayInitStepOverride: NativeWorktreeInitStep?
+    public var displayInitErrorOverride: String?
+    public var displayInitMessageOverride: String?
 
     public init(
         rootProjectPath: String,
@@ -149,7 +242,11 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
         taskStatus: WorkspaceTaskStatus? = nil,
         agentState: WorkspaceAgentState? = nil,
         agentSummary: String? = nil,
-        agentKind: WorkspaceAgentKind? = nil
+        agentKind: WorkspaceAgentKind? = nil,
+        displayStateOverride: WorkspaceSidebarWorktreeDisplayState? = nil,
+        displayInitStepOverride: NativeWorktreeInitStep? = nil,
+        displayInitErrorOverride: String? = nil,
+        displayInitMessageOverride: String? = nil
     ) {
         self.rootProjectPath = rootProjectPath
         self.worktree = worktree
@@ -161,16 +258,40 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
         self.agentState = agentState
         self.agentSummary = agentSummary
         self.agentKind = agentKind
+        self.displayStateOverride = displayStateOverride
+        self.displayInitStepOverride = displayInitStepOverride
+        self.displayInitErrorOverride = displayInitErrorOverride
+        self.displayInitMessageOverride = displayInitMessageOverride
     }
 
     public var id: String { worktree.id }
     public var path: String { worktree.path }
     public var name: String { worktree.name }
     public var branch: String { worktree.branch }
-    public var status: String? { worktree.status }
-    public var initStep: String? { worktree.initStep }
-    public var initError: String? { worktree.initError }
+    public var status: String? {
+        switch displayStateOverride {
+        case .creating:
+            "creating"
+        case .failed:
+            "failed"
+        case .normal, .none:
+            nil
+        }
+    }
+    public var initStep: String? { displayInitStepOverride?.rawValue }
+    public var initError: String? { displayInitErrorOverride }
+    public var initMessage: String? { displayInitMessageOverride }
     public var hasUnreadNotifications: Bool { unreadNotificationCount > 0 }
+
+    public var displayState: WorkspaceSidebarWorktreeDisplayState {
+        displayStateOverride ?? .normal
+    }
+}
+
+public enum WorkspaceSidebarWorktreeDisplayState: Equatable, Sendable {
+    case normal
+    case creating(message: String?)
+    case failed(message: String?)
 }
 
 public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
@@ -302,6 +423,7 @@ public enum NativeWorktreeError: LocalizedError, Equatable, Sendable {
 
 public protocol NativeWorktreeServicing: Sendable {
     func managedWorktreePath(for sourceProjectPath: String, branch: String) throws -> String
+    func preflightCreateWorktree(_ request: NativeWorktreeCreateRequest) throws -> String
     func currentBranch(at projectPath: String) throws -> String
     func listBranches(at projectPath: String) throws -> [NativeGitBranch]
     func listWorktrees(at projectPath: String) throws -> [NativeGitWorktree]
@@ -310,4 +432,13 @@ public protocol NativeWorktreeServicing: Sendable {
         progress: @escaping @Sendable (NativeWorktreeProgress) -> Void
     ) throws -> NativeWorktreeCreateResult
     func removeWorktree(_ request: NativeWorktreeRemoveRequest) throws -> NativeWorktreeRemoveResult
+    func cleanupFailedWorktreeCreate(_ request: NativeWorktreeCleanupRequest) throws -> NativeWorktreeCleanupResult
+}
+
+public protocol NativeWorktreeEnvironmentServicing: Sendable {
+    func prepareEnvironment(
+        mainRepositoryPath: String,
+        worktreePath: String,
+        workspaceName: String
+    ) -> NativeWorktreeEnvironmentResult
 }

@@ -130,12 +130,55 @@ private struct ProjectGroupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button {
-                onSelectProject(group.rootProject.path)
-            } label: {
-                projectCard
+            HStack(spacing: 6) {
+                Button {
+                    onSelectProject(group.rootProject.path)
+                } label: {
+                    projectMainContent
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect(cornerRadius: 10))
+
+                HStack(spacing: 4) {
+                    groupStatusAccessory
+
+                    HStack(spacing: 4) {
+                        if !group.rootProject.isTransientWorkspaceProject {
+                            iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
+                                onRefreshWorktrees(group.rootProject.path)
+                            }
+                            iconButton(systemName: "plus", help: "创建或添加 worktree") {
+                                onRequestCreateWorktree(group.rootProject.path)
+                            }
+                        }
+                        iconButton(systemName: "xmark", help: "关闭项目") {
+                            onCloseProject(group.rootProject.path)
+                        }
+                    }
+                    .allowsHitTesting(isHovering)
+                    .opacity(isHovering ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: isHovering)
+                }
+                .padding(.trailing, 6)
+                .padding(.vertical, 6)
+                .background(
+                    LinearGradient(
+                        colors: [cardBg.opacity(0), cardBg, cardBg],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(cardBg)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(group.isActive ? NativeTheme.accent.opacity(0.5) : NativeTheme.border.opacity(0.5), lineWidth: 1)
+            )
+            .clipShape(.rect(cornerRadius: 10))
+            .contentShape(.rect(cornerRadius: 10))
+            .help(group.rootProject.path)
             .onHover { isHovering = $0 }
             .contextMenu {
                 if !group.rootProject.isTransientWorkspaceProject {
@@ -170,7 +213,7 @@ private struct ProjectGroupView: View {
         }
     }
 
-    private var projectCard: some View {
+    private var projectMainContent: some View {
         let dirName = URL(fileURLWithPath: group.rootProject.path).lastPathComponent
         let showSubtitle = dirName != group.rootProject.name
         let agentAccessory = WorkspaceAgentStatusAccessory(agentState: group.agentState, agentKind: group.agentKind)
@@ -215,44 +258,7 @@ private struct ProjectGroupView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(cardBg)
-        .overlay(alignment: .trailing) {
-            HStack(spacing: 4) {
-                groupStatusAccessory
-
-                HStack(spacing: 4) {
-                    if !group.rootProject.isTransientWorkspaceProject {
-                        iconButton(systemName: "arrow.clockwise", help: "刷新 worktree") {
-                            onRefreshWorktrees(group.rootProject.path)
-                        }
-                        iconButton(systemName: "plus", help: "创建或添加 worktree") {
-                            onRequestCreateWorktree(group.rootProject.path)
-                        }
-                    }
-                    iconButton(systemName: "xmark", help: "关闭项目") {
-                        onCloseProject(group.rootProject.path)
-                    }
-                }
-                .opacity(isHovering ? 1 : 0)
-                .animation(.easeInOut(duration: 0.15), value: isHovering)
-            }
-            .padding(.trailing, 6)
-            .padding(.vertical, 6)
-            .background(
-                LinearGradient(
-                    colors: [cardBg.opacity(0), cardBg, cardBg],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(group.isActive ? NativeTheme.accent.opacity(0.5) : NativeTheme.border.opacity(0.5), lineWidth: 1)
-        )
-        .clipShape(.rect(cornerRadius: 10))
         .contentShape(.rect(cornerRadius: 10))
-        .help(group.rootProject.path)
     }
 
     @ViewBuilder
@@ -359,19 +365,59 @@ private struct WorktreeRowView: View {
     @State private var isHovering = false
 
     var body: some View {
-        Button {
-            if item.status == "failed" || item.status == "creating" { return }
-            onOpenWorktree(item.rootProjectPath, item.path)
-        } label: {
-            rowContent
+        HStack(spacing: 6) {
+            Button {
+                guard item.displayState == .normal else { return }
+                onOpenWorktree(item.rootProjectPath, item.path)
+            } label: {
+                rowMainContent
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect(cornerRadius: 7))
+            .disabled({
+                if case .creating = item.displayState { return true }
+                return false
+            }())
+
+            HStack(spacing: 4) {
+                if case .failed = item.displayState {
+                    actionChip(title: "重试", help: item.initError ?? "重试创建") {
+                        onRetryWorktree(item.rootProjectPath, item.path)
+                    }
+                }
+                actionChip(title: "删除", help: "删除 worktree") {
+                    onRequestDeleteWorktree(item.rootProjectPath, item.path)
+                }
+            }
+            .allowsHitTesting(isHovering && {
+                if case .creating = item.displayState { return false }
+                return true
+            }())
+            .opacity(isHovering && {
+                if case .creating = item.displayState { return false }
+                return true
+            }() ? 1 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isHovering)
+            .padding(.trailing, 6)
         }
-        .buttonStyle(.plain)
-        .disabled(item.status == "creating")
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onHover { isHovering = $0 }
         .help(item.path)
+        .background(item.isActive ? NativeTheme.accent.opacity(0.1) : Color.clear)
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(item.isActive ? NativeTheme.accent.opacity(0.4) : NativeTheme.border.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(.rect(cornerRadius: 7))
+        .contentShape(.rect(cornerRadius: 7))
+        .opacity({
+            if case .creating = item.displayState { return 0.7 }
+            return 1.0
+        }())
     }
 
-    private var rowContent: some View {
+    private var rowMainContent: some View {
         let agentAccessory = WorkspaceAgentStatusAccessory(agentState: item.agentState, agentKind: item.agentKind)
         return HStack(spacing: 6) {
             Image(systemName: "arrow.turn.down.right")
@@ -420,50 +466,25 @@ private struct WorktreeRowView: View {
                 }
             }
             Spacer(minLength: 4)
-            if item.branch != item.name {
-                Text(item.branch)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(NativeTheme.surface.opacity(0.8))
-                    .clipShape(.rect(cornerRadius: 5))
-            }
+            Text(item.branch)
+                .font(.caption2.monospaced())
+                .foregroundStyle(NativeTheme.textSecondary.opacity(0.7))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(NativeTheme.surface.opacity(0.8))
+                .clipShape(.rect(cornerRadius: 5))
             statusChip
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(item.isActive ? NativeTheme.accent.opacity(0.1) : Color.clear)
-        .overlay(alignment: .trailing) {
-            // 删除/重试按钮覆盖在行右侧
-            HStack(spacing: 4) {
-                if item.status == "failed" {
-                    actionChip(title: "重试", help: item.initError ?? "重试创建") {
-                        onRetryWorktree(item.rootProjectPath, item.path)
-                    }
-                }
-                actionChip(title: "删除", help: "删除 worktree") {
-                    onRequestDeleteWorktree(item.rootProjectPath, item.path)
-                }
-            }
-            .padding(.trailing, 6)
-            .opacity(isHovering && item.status != "creating" ? 1 : 0)
-            .animation(.easeInOut(duration: 0.15), value: isHovering)
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 7)
-                .stroke(item.isActive ? NativeTheme.accent.opacity(0.4) : NativeTheme.border.opacity(0.4), lineWidth: 1)
-        )
-        .clipShape(.rect(cornerRadius: 7))
         .contentShape(.rect(cornerRadius: 7))
-        .opacity(item.status == "creating" ? 0.7 : 1)
     }
 
     @ViewBuilder
     private var statusChip: some View {
-        switch item.status {
-        case "creating":
+        switch item.displayState {
+        case .creating:
             Text("创建中")
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(NativeTheme.warning)
@@ -471,7 +492,7 @@ private struct WorktreeRowView: View {
                 .padding(.vertical, 3)
                 .background(NativeTheme.warning.opacity(0.12))
                 .clipShape(.rect(cornerRadius: 6))
-        case "failed":
+        case .failed:
             Text("失败")
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(NativeTheme.danger)
@@ -479,7 +500,7 @@ private struct WorktreeRowView: View {
                 .padding(.vertical, 3)
                 .background(NativeTheme.danger.opacity(0.12))
                 .clipShape(.rect(cornerRadius: 6))
-        default:
+        case .normal:
             EmptyView()
         }
     }

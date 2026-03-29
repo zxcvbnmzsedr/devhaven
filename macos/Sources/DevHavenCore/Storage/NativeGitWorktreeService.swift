@@ -11,8 +11,30 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         try resolveTargetPath(sourceProjectPath: sourceProjectPath, branch: branch, explicitTargetPath: nil)
     }
 
+    public func preflightCreateWorktree(_ request: NativeWorktreeCreateRequest) throws -> String {
+        try ensureGitRepository(at: request.sourceProjectPath)
+        let branch = try normalizeBranchName(request.branch)
+        try validateBranchName(branch, at: request.sourceProjectPath)
+        let targetPath = try resolveTargetPath(
+            sourceProjectPath: request.sourceProjectPath,
+            branch: branch,
+            explicitTargetPath: request.targetPath
+        )
+        try validateTargetPath(targetPath, sourceProjectPath: request.sourceProjectPath)
+        try validateCreateRequest(request, branch: branch)
+        _ = try resolveCreateBranchStartPointIfNeeded(request, branch: branch)
+        return targetPath
+    }
+
     public func currentBranch(at projectPath: String) throws -> String {
         try ensureGitRepository(at: projectPath)
+        if let output = try? runGit(["symbolic-ref", "--quiet", "--short", "HEAD"], at: projectPath).stdout {
+            let branch = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !branch.isEmpty {
+                return branch
+            }
+        }
+
         let output = try runGit(["rev-parse", "--abbrev-ref", "HEAD"], at: projectPath).stdout
         let branch = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !branch.isEmpty else {
@@ -46,11 +68,13 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         try ensureGitRepository(at: request.sourceProjectPath)
 
         let branch = try normalizeBranchName(request.branch)
+        try validateBranchName(branch, at: request.sourceProjectPath)
         let targetPath = try resolveTargetPath(
             sourceProjectPath: request.sourceProjectPath,
             branch: branch,
             explicitTargetPath: request.targetPath
         )
+        try validateTargetPath(targetPath, sourceProjectPath: request.sourceProjectPath)
 
         progress(
             NativeWorktreeProgress(
@@ -88,22 +112,6 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
                 worktreePath: targetPath,
                 branch: branch,
                 baseBranch: request.baseBranch,
-                step: .preparingEnvironment,
-                message: "执行中：准备工作区环境..."
-            )
-        )
-
-        let warning = prepareWorktreeEnvironment(
-            mainRepositoryPath: request.sourceProjectPath,
-            worktreePath: targetPath,
-            workspaceName: branch
-        )
-
-        progress(
-            NativeWorktreeProgress(
-                worktreePath: targetPath,
-                branch: branch,
-                baseBranch: request.baseBranch,
                 step: .syncing,
                 message: "执行中：同步工作区状态..."
             )
@@ -116,9 +124,8 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
                 worktreePath: targetPath,
                 branch: branch,
                 baseBranch: request.baseBranch,
-                step: .ready,
-                message: warning == nil ? "创建完成" : "创建完成（环境初始化存在告警）",
-                error: warning
+                step: .syncing,
+                message: "Git worktree 已创建"
             )
         )
 
@@ -126,7 +133,7 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
             worktreePath: targetPath,
             branch: branch,
             baseBranch: request.baseBranch,
-            warning: warning
+            warning: nil
         )
     }
 
@@ -160,6 +167,72 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         return try deleteBranchIfNeeded(for: request)
     }
 
+    public func cleanupFailedWorktreeCreate(_ request: NativeWorktreeCleanupRequest) throws -> NativeWorktreeCleanupResult {
+        try ensureGitRepository(at: request.sourceProjectPath)
+
+        let normalizedWorktreePath = normalizePathForCompare(request.worktreePath)
+        guard !normalizedWorktreePath.isEmpty else {
+            return NativeWorktreeCleanupResult(warning: "清理失败 worktree 时未提供有效路径")
+        }
+
+        var removedWorktree = false
+        var removedDirectory = false
+        var removedBranch = false
+        var warnings = [String]()
+
+        if let listed = try? listWorktrees(at: request.sourceProjectPath),
+           listed.contains(where: { normalizePathForCompare($0.path) == normalizedWorktreePath }) {
+            do {
+                _ = try runGit(["worktree", "remove", "--force", request.worktreePath], at: request.sourceProjectPath)
+                removedWorktree = true
+            } catch {
+                warnings.append("移除残留 worktree 失败：\(error.localizedDescription)")
+            }
+        }
+
+        if request.shouldDeleteCreatedBranch,
+           let branch = request.branch?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !branch.isEmpty {
+            let listedAfterRemove = (try? listWorktrees(at: request.sourceProjectPath)) ?? []
+            let branchOccupied = listedAfterRemove.contains(where: { $0.branch == branch })
+            if !branchOccupied {
+                let localBranches = (try? listBranches(at: request.sourceProjectPath).map(\.name)) ?? []
+                if localBranches.contains(branch) {
+                    do {
+                        _ = try runGit(["branch", "-D", branch], at: request.sourceProjectPath)
+                        removedBranch = true
+                    } catch {
+                        warnings.append("删除残留分支 \(branch) 失败：\(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+
+        let targetURL = URL(fileURLWithPath: request.worktreePath)
+        if FileManager.default.fileExists(atPath: targetURL.path),
+           isManagedWorktreePath(request.worktreePath, for: request.sourceProjectPath) {
+            do {
+                try FileManager.default.removeItem(at: targetURL)
+                removedDirectory = true
+            } catch {
+                warnings.append("删除残留目录失败：\(error.localizedDescription)")
+            }
+        }
+
+        do {
+            _ = try runGit(["worktree", "prune"], at: request.sourceProjectPath)
+        } catch {
+            warnings.append("执行 git worktree prune 失败：\(error.localizedDescription)")
+        }
+
+        return NativeWorktreeCleanupResult(
+            removedWorktree: removedWorktree,
+            removedDirectory: removedDirectory,
+            removedBranch: removedBranch,
+            warning: warnings.isEmpty ? nil : warnings.joined(separator: "\n")
+        )
+    }
+
     private func deleteBranchIfNeeded(for request: NativeWorktreeRemoveRequest) throws -> NativeWorktreeRemoveResult {
         guard request.shouldDeleteBranch, let branch = request.branch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty else {
             return NativeWorktreeRemoveResult(warning: nil)
@@ -170,6 +243,17 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
             return NativeWorktreeRemoveResult(warning: nil)
         } catch let error as NativeWorktreeError {
             if case let .commandFailed(message) = error {
+                if shouldForceDeleteBranchAfterSafeDeleteFailure(message) {
+                    do {
+                        _ = try runGit(["branch", "-D", branch], at: request.sourceProjectPath)
+                        return NativeWorktreeRemoveResult(warning: nil)
+                    } catch let forcedError as NativeWorktreeError {
+                        if case let .commandFailed(forcedMessage) = forcedError {
+                            return NativeWorktreeRemoveResult(warning: normalizeDeleteBranchError(forcedMessage))
+                        }
+                        throw forcedError
+                    }
+                }
                 return NativeWorktreeRemoveResult(warning: normalizeDeleteBranchError(message))
             }
             throw error
@@ -288,7 +372,16 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
     private func resolveTargetPath(sourceProjectPath: String, branch: String, explicitTargetPath: String?) throws -> String {
         let trimmed = explicitTargetPath?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
-            return trimmed
+            guard NSString(string: trimmed).isAbsolutePath else {
+                throw NativeWorktreeError.invalidPath("目标路径必须是绝对路径")
+            }
+            let explicitURL = URL(fileURLWithPath: trimmed, isDirectory: true)
+            let normalizedExplicitPath = explicitURL.standardizedFileURL.path()
+            let normalizedSourcePath = URL(fileURLWithPath: sourceProjectPath, isDirectory: true).standardizedFileURL.path()
+            guard normalizePathForCompare(normalizedExplicitPath) != normalizePathForCompare(normalizedSourcePath) else {
+                throw NativeWorktreeError.invalidPath("目标目录不能与主仓库目录相同")
+            }
+            return normalizedExplicitPath
         }
 
         let normalizedBranch = branch
@@ -337,6 +430,59 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         let gitURL = URL(fileURLWithPath: projectPath).appending(path: ".git")
         guard FileManager.default.fileExists(atPath: gitURL.path) else {
             throw NativeWorktreeError.invalidRepository("不是 Git 仓库")
+        }
+    }
+
+    private func validateBranchName(_ branch: String, at projectPath: String) throws {
+        if branch.contains(where: \.isWhitespace) {
+            throw NativeWorktreeError.invalidBranch("分支名不能包含空格")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "check-ref-format", "--branch", branch]
+        process.currentDirectoryURL = URL(fileURLWithPath: projectPath, isDirectory: true)
+        let stderr = Pipe()
+        process.standardError = stderr
+
+        do {
+            try process.run()
+        } catch {
+            throw NativeWorktreeError.invalidBranch("分支名不合法：\(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if stderrText.isEmpty {
+                throw NativeWorktreeError.invalidBranch("分支名不合法，请检查后重试")
+            }
+            throw NativeWorktreeError.invalidBranch("分支名不合法：\(stderrText)")
+        }
+    }
+
+    private func validateTargetPath(_ targetPath: String, sourceProjectPath: String) throws {
+        let normalizedTargetPath = normalizePathForCompare(targetPath)
+        guard !normalizedTargetPath.isEmpty else {
+            throw NativeWorktreeError.invalidPath("目标路径不能为空")
+        }
+        let normalizedSourcePath = normalizePathForCompare(sourceProjectPath)
+        if normalizedTargetPath == normalizedSourcePath {
+            throw NativeWorktreeError.invalidPath("目标路径不能与主仓库目录相同")
+        }
+        let managedRoot = normalizePathForCompare(
+            homeDirectoryURL
+                .appending(path: ".devhaven", directoryHint: .isDirectory)
+                .appending(path: "worktrees", directoryHint: .isDirectory)
+                .appending(path: resolveRepositoryName(sourceProjectPath), directoryHint: .isDirectory)
+                .path()
+        )
+        let targetComponents = URL(fileURLWithPath: normalizedTargetPath).standardizedFileURL.pathComponents
+        let rootComponents = URL(fileURLWithPath: managedRoot).standardizedFileURL.pathComponents
+        guard targetComponents.count >= rootComponents.count,
+              Array(targetComponents.prefix(rootComponents.count)) == rootComponents else {
+            throw NativeWorktreeError.invalidPath("目标路径必须位于 DevHaven 管理的 worktree 目录内")
         }
     }
 
@@ -503,6 +649,20 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         return normalized
     }
 
+    private func isManagedWorktreePath(_ worktreePath: String, for sourceProjectPath: String) -> Bool {
+        let managedRoot = homeDirectoryURL
+            .appending(path: ".devhaven", directoryHint: .isDirectory)
+            .appending(path: "worktrees", directoryHint: .isDirectory)
+            .appending(path: resolveRepositoryName(sourceProjectPath), directoryHint: .isDirectory)
+
+        let normalizedTarget = URL(fileURLWithPath: worktreePath).standardizedFileURL.pathComponents
+        let normalizedRoot = managedRoot.standardizedFileURL.pathComponents
+        guard normalizedTarget.count >= normalizedRoot.count else {
+            return false
+        }
+        return Array(normalizedTarget.prefix(normalizedRoot.count)) == normalizedRoot
+    }
+
     private func shouldPruneAfterRemoveFailure(_ raw: String) -> Bool {
         let lower = raw.lowercased()
         return lower.contains("not a working tree") || lower.contains("is missing") || lower.contains("no such file or directory")
@@ -545,119 +705,10 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         return raw
     }
 
-    private func prepareWorktreeEnvironment(mainRepositoryPath: String, worktreePath: String, workspaceName: String) -> String? {
-        var warnings = [String]()
-        if let error = copySetupDirectory(mainRepositoryPath: mainRepositoryPath, worktreePath: worktreePath) {
-            warnings.append(error)
-        }
-        if let error = runSetupCommandsIfNeeded(mainRepositoryPath: mainRepositoryPath, worktreePath: worktreePath, workspaceName: workspaceName) {
-            warnings.append(error)
-        }
-        return warnings.isEmpty ? nil : warnings.joined(separator: "\n")
+    private func shouldForceDeleteBranchAfterSafeDeleteFailure(_ raw: String) -> Bool {
+        raw.lowercased().contains("not fully merged")
     }
 
-    private func copySetupDirectory(mainRepositoryPath: String, worktreePath: String) -> String? {
-        let sourceURL = URL(fileURLWithPath: mainRepositoryPath).appending(path: ".devhaven", directoryHint: .isDirectory)
-        let targetURL = URL(fileURLWithPath: worktreePath).appending(path: ".devhaven", directoryHint: .isDirectory)
-        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
-            return nil
-        }
-        guard !FileManager.default.fileExists(atPath: targetURL.path) else {
-            return nil
-        }
-
-        do {
-            try copyDirectoryRecursively(from: sourceURL, to: targetURL)
-            return nil
-        } catch {
-            return "复制 .devhaven 目录失败：\(error.localizedDescription)"
-        }
-    }
-
-    private func copyDirectoryRecursively(from sourceURL: URL, to targetURL: URL) throws {
-        try FileManager.default.createDirectory(at: targetURL, withIntermediateDirectories: true)
-        for entry in try FileManager.default.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
-            let destinationURL = targetURL.appending(path: entry.lastPathComponent)
-            let values = try entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            if values.isDirectory == true {
-                try copyDirectoryRecursively(from: entry, to: destinationURL)
-                continue
-            }
-            if values.isSymbolicLink == true {
-                let metadata = try FileManager.default.attributesOfItem(atPath: entry.path)
-                if metadata[.type] as? FileAttributeType == .typeDirectory {
-                    continue
-                }
-            }
-            if FileManager.default.fileExists(atPath: destinationURL.path) {
-                try FileManager.default.removeItem(at: destinationURL)
-            }
-            try FileManager.default.copyItem(at: entry, to: destinationURL)
-        }
-    }
-
-    private func runSetupCommandsIfNeeded(mainRepositoryPath: String, worktreePath: String, workspaceName: String) -> String? {
-        let configURL = URL(fileURLWithPath: mainRepositoryPath)
-            .appending(path: ".devhaven", directoryHint: .isDirectory)
-            .appending(path: "config.json")
-        guard FileManager.default.fileExists(atPath: configURL.path) else {
-            return nil
-        }
-
-        let commands: [String]
-        do {
-            commands = try loadSetupCommands(configURL: configURL)
-        } catch {
-            return error.localizedDescription
-        }
-        guard !commands.isEmpty else {
-            return nil
-        }
-
-        for command in commands {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh")
-            process.arguments = ["-lc", command]
-            process.currentDirectoryURL = URL(fileURLWithPath: worktreePath, isDirectory: true)
-            process.environment = ProcessInfo.processInfo.environment.merging([
-                "DEVHAVEN_WORKSPACE_NAME": workspaceName,
-                "DEVHAVEN_ROOT_PATH": mainRepositoryPath,
-            ]) { _, new in new }
-
-            let stdout = Pipe()
-            let stderr = Pipe()
-            process.standardOutput = stdout
-            process.standardError = stderr
-            do {
-                try process.run()
-            } catch {
-                return "执行 setup 命令失败（\(command)）：\(error.localizedDescription)"
-            }
-            process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let combined = [stdoutText.isEmpty ? nil : "stdout:\n\(stdoutText)", stderrText.isEmpty ? nil : "stderr:\n\(stderrText)"]
-                    .compactMap { $0 }
-                    .joined(separator: "\n\n")
-                return "环境初始化命令执行失败：\n$ \(command)\n退出码：\(process.terminationStatus)\n\(combined.isEmpty ? "命令无输出" : combined)"
-            }
-        }
-
-        return nil
-    }
-
-    private func loadSetupCommands(configURL: URL) throws -> [String] {
-        struct SetupConfig: Decodable {
-            var setup: [String] = []
-        }
-
-        let data = try Data(contentsOf: configURL)
-        let parsed = try JSONDecoder().decode(SetupConfig.self, from: data)
-        return parsed.setup
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
 }
 
 private struct ProcessOutput {
