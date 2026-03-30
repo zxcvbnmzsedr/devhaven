@@ -1,6 +1,7 @@
 import Foundation
 
 public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendable {
+    case project
     case commit
     case git
 
@@ -8,6 +9,8 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
 
     public var placement: WorkspaceToolWindowPlacement {
         switch self {
+        case .project:
+            return .side
         case .commit:
             return .side
         case .git:
@@ -17,6 +20,8 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
 
     public var title: String {
         switch self {
+        case .project:
+            return "Project"
         case .commit:
             return "Commit"
         case .git:
@@ -26,6 +31,8 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
 
     public var systemImage: String {
         switch self {
+        case .project:
+            return "folder"
         case .commit:
             return "checkmark.circle"
         case .git:
@@ -45,6 +52,7 @@ public enum WorkspaceFocusedArea: Equatable, Sendable {
     case terminal
     case sideToolWindow(WorkspaceToolWindowKind)
     case bottomToolWindow(WorkspaceToolWindowKind)
+    case editorTab(String)
     case diffTab(String)
 }
 

@@ -6,6 +6,10 @@ struct WorkspaceTabBarView: View {
     let canSplit: Bool
     let onSelectTab: (WorkspacePresentedTabSelection) -> Void
     let onCloseTab: (WorkspacePresentedTabSelection) -> Void
+    let onPromoteEditorPreview: (String) -> Void
+    let onSetEditorPinned: (String, Bool) -> Void
+    let onCloseOtherEditorTabs: (String) -> Void
+    let onCloseEditorTabsToRight: (String) -> Void
     let onCreateTab: () -> Void
     let onSplitHorizontally: () -> Void
     let onSplitVertically: () -> Void
@@ -55,6 +59,8 @@ struct WorkspaceTabBarView: View {
 
     private func tabChip(_ tab: WorkspacePresentedTabItem) -> some View {
         let isSelected = tab.isSelected
+        let semantics = WorkspaceTabChipSemantics.resolve(for: tab)
+        let editorTabContext = editorTabContext(for: tab)
 
         return HStack(spacing: 8) {
             Button {
@@ -65,15 +71,49 @@ struct WorkspaceTabBarView: View {
                     case .terminal:
                         Image(systemName: "terminal")
                             .font(.caption)
+                    case .editor:
+                        Image(systemName: "doc.text")
+                            .font(.caption)
                     case .diff:
                         Image(systemName: "square.split.2x1")
                             .font(.caption)
                     }
-                    Text(tab.title)
-                        .lineLimit(1)
+                    if let statusSymbol = semantics.leadingStatusSystemImage {
+                        Image(systemName: statusSymbol)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(
+                                isSelected
+                                    ? NativeTheme.textPrimary
+                                    : NativeTheme.textSecondary.opacity(semantics.leadingStatusOpacity)
+                            )
+                    }
+                    Group {
+                        if semantics.usesItalicTitle {
+                            Text(tab.title)
+                                .italic()
+                        } else {
+                            Text(tab.title)
+                        }
+                    }
+                    .lineLimit(1)
+                    if let badgeTitle = semantics.badgeTitle {
+                        Text(badgeTitle)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(isSelected ? NativeTheme.textPrimary : NativeTheme.textSecondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                Capsule()
+                                    .fill(isSelected ? NativeTheme.accent.opacity(0.18) : NativeTheme.border.opacity(0.5))
+                            )
+                    }
                 }
                 .font(.callout.weight(.semibold))
-                .foregroundStyle(isSelected ? NativeTheme.textPrimary : NativeTheme.textSecondary)
+                .foregroundStyle(
+                    isSelected
+                        ? NativeTheme.textPrimary
+                        : NativeTheme.textSecondary.opacity(semantics.titleOpacity)
+                )
             }
             .buttonStyle(.plain)
 
@@ -95,6 +135,74 @@ struct WorkspaceTabBarView: View {
             RoundedRectangle(cornerRadius: 10)
                 .stroke(isSelected ? NativeTheme.accent.opacity(0.65) : NativeTheme.border, lineWidth: 1)
         )
+        .contextMenu {
+            switch tab.selection {
+            case let .editor(tabID):
+                if tab.isPreview {
+                    Button("转为常规标签页") {
+                        onPromoteEditorPreview(tabID)
+                    }
+                }
+
+                if tab.isPinned {
+                    Button("取消固定标签页") {
+                        onSetEditorPinned(tabID, false)
+                    }
+                } else {
+                    Button(tab.isPreview ? "固定预览标签页" : "固定标签页") {
+                        onSetEditorPinned(tabID, true)
+                    }
+                }
+
+                Divider()
+
+                Button("关闭其他标签页") {
+                    onCloseOtherEditorTabs(tabID)
+                }
+                .disabled(editorTabContext.otherEditorTabCount == 0)
+
+                Button("关闭右侧标签页") {
+                    onCloseEditorTabsToRight(tabID)
+                }
+                .disabled(editorTabContext.editorTabsToRightCount == 0)
+
+                Divider()
+
+                Button("关闭") {
+                    onCloseTab(tab.selection)
+                }
+            case .terminal, .diff:
+                Button("关闭") {
+                    onCloseTab(tab.selection)
+                }
+            }
+        }
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                guard case let .editor(tabID) = tab.selection, tab.isPreview else {
+                    return
+                }
+                onPromoteEditorPreview(tabID)
+            }
+        )
+    }
+
+    private func editorTabContext(for tab: WorkspacePresentedTabItem) -> WorkspaceEditorTabContext {
+        let editorTabs = tabs.compactMap { candidate -> WorkspacePresentedTabItem? in
+            guard case .editor = candidate.selection else {
+                return nil
+            }
+            return candidate
+        }
+        guard case let .editor(tabID) = tab.selection,
+              let editorIndex = editorTabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return WorkspaceEditorTabContext(otherEditorTabCount: 0, editorTabsToRightCount: 0)
+        }
+        return WorkspaceEditorTabContext(
+            otherEditorTabCount: max(0, editorTabs.count - 1),
+            editorTabsToRightCount: max(0, editorTabs.count - editorIndex - 1)
+        )
     }
 
     private func toolbarButton(
@@ -115,4 +223,47 @@ struct WorkspaceTabBarView: View {
         .disabled(disabled)
         .help(title)
     }
+}
+
+struct WorkspaceTabChipSemantics: Equatable {
+    var leadingStatusSystemImage: String?
+    var leadingStatusOpacity: Double
+    var badgeTitle: String?
+    var usesItalicTitle: Bool
+    var titleOpacity: Double
+
+    static func resolve(for tab: WorkspacePresentedTabItem) -> Self {
+        if tab.isPinned {
+            return WorkspaceTabChipSemantics(
+                leadingStatusSystemImage: "pin.fill",
+                leadingStatusOpacity: 1,
+                badgeTitle: nil,
+                usesItalicTitle: false,
+                titleOpacity: 1
+            )
+        }
+
+        if tab.isPreview {
+            return WorkspaceTabChipSemantics(
+                leadingStatusSystemImage: nil,
+                leadingStatusOpacity: 1,
+                badgeTitle: "预览",
+                usesItalicTitle: true,
+                titleOpacity: 0.82
+            )
+        }
+
+        return WorkspaceTabChipSemantics(
+            leadingStatusSystemImage: nil,
+            leadingStatusOpacity: 1,
+            badgeTitle: nil,
+            usesItalicTitle: false,
+            titleOpacity: 1
+        )
+    }
+}
+
+private struct WorkspaceEditorTabContext: Equatable {
+    var otherEditorTabCount: Int
+    var editorTabsToRightCount: Int
 }

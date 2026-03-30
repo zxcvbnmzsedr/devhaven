@@ -172,6 +172,7 @@ public enum SettingsNavigationSection: String, Codable, Sendable, CaseIterable, 
 
 public struct AppSettings: Codable, Equatable, Sendable {
     public var editorOpenTool: OpenToolSettings
+    public var workspaceEditorDisplayOptions: WorkspaceEditorDisplayOptions
     public var terminalOpenTool: OpenToolSettings
     public var terminalUseWebglRenderer: Bool
     public var terminalTheme: String
@@ -193,6 +194,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     public init(
         editorOpenTool: OpenToolSettings = .init(commandPath: "", arguments: []),
+        workspaceEditorDisplayOptions: WorkspaceEditorDisplayOptions = .init(),
         terminalOpenTool: OpenToolSettings = .init(commandPath: "", arguments: []),
         terminalUseWebglRenderer: Bool = true,
         terminalTheme: String = "DevHaven Dark",
@@ -213,6 +215,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         webBindPort: Int = 3210
     ) {
         self.editorOpenTool = editorOpenTool
+        self.workspaceEditorDisplayOptions = workspaceEditorDisplayOptions
         self.terminalOpenTool = terminalOpenTool
         self.terminalUseWebglRenderer = terminalUseWebglRenderer
         self.terminalTheme = terminalTheme
@@ -235,6 +238,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case editorOpenTool
+        case workspaceEditorDisplayOptions
         case terminalOpenTool
         case terminalUseWebglRenderer
         case terminalTheme
@@ -258,6 +262,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.editorOpenTool = try container.decodeIfPresent(OpenToolSettings.self, forKey: .editorOpenTool) ?? .init(commandPath: "", arguments: [])
+        self.workspaceEditorDisplayOptions = try container.decodeIfPresent(WorkspaceEditorDisplayOptions.self, forKey: .workspaceEditorDisplayOptions) ?? .init()
         self.terminalOpenTool = try container.decodeIfPresent(OpenToolSettings.self, forKey: .terminalOpenTool) ?? .init(commandPath: "", arguments: [])
         self.terminalUseWebglRenderer = try container.decodeIfPresent(Bool.self, forKey: .terminalUseWebglRenderer) ?? true
         self.terminalTheme = try container.decodeIfPresent(String.self, forKey: .terminalTheme) ?? "DevHaven Dark"

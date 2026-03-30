@@ -146,6 +146,8 @@ struct WorkspaceGitRootView: View {
                 direction: .horizontal,
                 ratio: sidebarRatio,
                 onRatioChange: { sidebarRatio = $0 },
+                minLeadingSize: 220,
+                minTrailingSize: 360,
                 leading: {
                     WorkspaceGitSidebarView(
                         viewModel: viewModel,

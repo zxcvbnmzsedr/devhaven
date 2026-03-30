@@ -1,6 +1,23 @@
 import Foundation
 
 public typealias WorkspacePaneSnapshotProvider = @MainActor (_ projectPath: String, _ paneID: String) -> WorkspaceTerminalRestoreContext?
+public typealias WorkspaceEditorRestoreProvider = @MainActor (_ projectPath: String) -> WorkspaceEditorRestoreState
+
+public struct WorkspaceEditorRestoreState: Equatable, Sendable {
+    public var tabs: [WorkspaceEditorTabRestoreSnapshot]
+    public var selectedPresentedTab: WorkspaceRestorePresentedTabSelection?
+    public var presentation: WorkspaceEditorPresentationState?
+
+    public init(
+        tabs: [WorkspaceEditorTabRestoreSnapshot] = [],
+        selectedPresentedTab: WorkspaceRestorePresentedTabSelection? = nil,
+        presentation: WorkspaceEditorPresentationState? = nil
+    ) {
+        self.tabs = tabs
+        self.selectedPresentedTab = selectedPresentedTab
+        self.presentation = presentation
+    }
+}
 
 @MainActor
 final class WorkspaceRestoreCoordinator {
@@ -31,7 +48,8 @@ final class WorkspaceRestoreCoordinator {
         activeProjectPath: String?,
         selectedProjectPath: String?,
         sessions: [OpenWorkspaceSessionState],
-        paneSnapshotProvider: WorkspacePaneSnapshotProvider?
+        paneSnapshotProvider: WorkspacePaneSnapshotProvider?,
+        editorRestoreProvider: WorkspaceEditorRestoreProvider?
     ) {
         pendingAutosaveTask?.cancel()
         pendingAutosaveTask = Task { @MainActor [weak self] in
@@ -48,7 +66,8 @@ final class WorkspaceRestoreCoordinator {
                 activeProjectPath: activeProjectPath,
                 selectedProjectPath: selectedProjectPath,
                 sessions: sessions,
-                paneSnapshotProvider: paneSnapshotProvider
+                paneSnapshotProvider: paneSnapshotProvider,
+                editorRestoreProvider: editorRestoreProvider
             )
         }
     }
@@ -57,7 +76,8 @@ final class WorkspaceRestoreCoordinator {
         activeProjectPath: String?,
         selectedProjectPath: String?,
         sessions: [OpenWorkspaceSessionState],
-        paneSnapshotProvider: WorkspacePaneSnapshotProvider?
+        paneSnapshotProvider: WorkspacePaneSnapshotProvider?,
+        editorRestoreProvider: WorkspaceEditorRestoreProvider?
     ) throws {
         pendingAutosaveTask?.cancel()
         pendingAutosaveTask = nil
@@ -66,7 +86,8 @@ final class WorkspaceRestoreCoordinator {
             activeProjectPath: activeProjectPath,
             selectedProjectPath: selectedProjectPath,
             sessions: sessions,
-            paneSnapshotProvider: paneSnapshotProvider
+            paneSnapshotProvider: paneSnapshotProvider,
+            editorRestoreProvider: editorRestoreProvider
         )
 
         guard !snapshot.isEmpty else {
@@ -83,7 +104,8 @@ final class WorkspaceRestoreCoordinator {
         activeProjectPath: String?,
         selectedProjectPath: String?,
         sessions: [OpenWorkspaceSessionState],
-        paneSnapshotProvider: WorkspacePaneSnapshotProvider?
+        paneSnapshotProvider: WorkspacePaneSnapshotProvider?,
+        editorRestoreProvider: WorkspaceEditorRestoreProvider?
     ) -> WorkspaceRestoreSnapshot {
         let previousPaneMap = makePreviousPaneMap()
         let sessionSnapshots = sessions.map { session in
@@ -106,6 +128,10 @@ final class WorkspaceRestoreCoordinator {
                 )
                 return tab
             }
+            let editorRestoreState = editorRestoreProvider?(session.projectPath) ?? WorkspaceEditorRestoreState()
+            snapshot.editorTabs = editorRestoreState.tabs
+            snapshot.selectedPresentedTab = editorRestoreState.selectedPresentedTab
+            snapshot.editorPresentation = editorRestoreState.presentation
             return snapshot
         }
 

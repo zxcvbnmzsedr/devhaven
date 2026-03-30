@@ -653,6 +653,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
         )
         applyCachedSurfaceActivity(to: ownedSurfaceView)
         requestFocusIfNeeded(for: ownedSurfaceView, preferredFocus: preferredFocus)
+        restoreWindowResponderIfNeeded(preferredFocus: preferredFocus)
     }
 
     func applyLatestModelState(preferredFocus: Bool = false) {
@@ -666,6 +667,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
             return
         }
         requestFocusIfNeeded(for: ownedSurfaceView, preferredFocus: preferredFocus)
+        if preferredFocus {
+            restoreWindowResponderIfNeeded(preferredFocus: true)
+        }
     }
 
     func syncSurfaceActivity(isVisible: Bool, isFocused: Bool) {
@@ -680,8 +684,8 @@ final class GhosttySurfaceHostModel: ObservableObject {
         applyCachedSurfaceActivity(to: ownedSurfaceView)
     }
 
-    func restoreWindowResponderIfNeeded() {
-        guard shouldScheduleWindowResponderRestore() else {
+    func restoreWindowResponderIfNeeded(preferredFocus: Bool = false) {
+        guard shouldScheduleWindowResponderRestore(preferredFocus: preferredFocus) else {
             return
         }
         pendingWindowResponderRestoreTask = Task { @MainActor [weak self] in
@@ -690,7 +694,7 @@ final class GhosttySurfaceHostModel: ObservableObject {
                 return
             }
             self.pendingWindowResponderRestoreTask = nil
-            self.performWindowResponderRestoreIfNeeded()
+            self.performWindowResponderRestoreIfNeeded(preferredFocus: preferredFocus)
         }
     }
 
@@ -800,8 +804,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
         onCodexDisplaySnapshotChange?(nil)
     }
 
-    private func shouldScheduleWindowResponderRestore() -> Bool {
-        guard lastSurfaceIsFocused, let ownedSurfaceView else {
+    private func shouldScheduleWindowResponderRestore(preferredFocus: Bool) -> Bool {
+        let shouldRestoreFocusedPane = lastSurfaceIsFocused || preferredFocus
+        guard shouldRestoreFocusedPane, let ownedSurfaceView else {
             GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
                 request: request,
                 hasWindow: currentSurfaceView?.hasAttachedWindow ?? false,
@@ -844,8 +849,9 @@ final class GhosttySurfaceHostModel: ObservableObject {
         return true
     }
 
-    private func performWindowResponderRestoreIfNeeded() {
-        guard lastSurfaceIsFocused, let ownedSurfaceView else {
+    private func performWindowResponderRestoreIfNeeded(preferredFocus: Bool) {
+        let shouldRestoreFocusedPane = lastSurfaceIsFocused || preferredFocus
+        guard shouldRestoreFocusedPane, let ownedSurfaceView else {
             GhosttySurfaceLifecycleDiagnostics.shared.recordRestoreWindowResponder(
                 request: request,
                 hasWindow: currentSurfaceView?.hasAttachedWindow ?? false,

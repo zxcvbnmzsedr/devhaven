@@ -182,6 +182,9 @@ struct AppRootView: View {
         case let .closePane(paneID):
             viewModel.closeWorkspacePane(paneID)
             return true
+        case let .closeEditorTab(tabID):
+            viewModel.closeWorkspaceEditorTab(tabID)
+            return true
         case let .closeDiffTab(tabID):
             viewModel.closeWorkspaceDiffTab(tabID)
             return true
@@ -220,6 +223,7 @@ struct AppRootView: View {
         return MainWindowCloseShortcutWorkspaceContext(
             selectedPaneID: selectedPaneID,
             selectedTabID: selectedTabID,
+            selectedEditorTabID: viewModel.activeWorkspaceSelectedEditorTabID,
             selectedDiffTabID: viewModel.activeWorkspaceSelectedDiffTabID,
             selectedTabPaneCount: selectedTab?.leaves.count ?? 0,
             tabCount: workspace.tabCount
@@ -372,6 +376,7 @@ enum MainWindowCloseShortcutAction: Equatable {
     case hideRecycleBin
     case hideDetailPanel
     case closePane(String)
+    case closeEditorTab(String)
     case closeDiffTab(String)
     case closeTab(String)
     case exitWorkspace
@@ -381,6 +386,7 @@ enum MainWindowCloseShortcutAction: Equatable {
 struct MainWindowCloseShortcutWorkspaceContext: Equatable {
     var selectedPaneID: String?
     var selectedTabID: String?
+    var selectedEditorTabID: String? = nil
     var selectedDiffTabID: String? = nil
     var selectedTabPaneCount: Int
     var tabCount: Int
@@ -410,6 +416,9 @@ struct MainWindowCloseShortcutPlanner {
         }
         guard let workspace = context.workspace else {
             return .closeWindow
+        }
+        if let editorTabID = workspace.selectedEditorTabID {
+            return .closeEditorTab(editorTabID)
         }
         if let diffTabID = workspace.selectedDiffTabID {
             return .closeDiffTab(diffTabID)
