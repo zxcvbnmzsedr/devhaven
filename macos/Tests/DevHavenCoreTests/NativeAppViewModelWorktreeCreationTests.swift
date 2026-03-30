@@ -166,6 +166,45 @@ final class NativeAppViewModelWorktreeCreationTests: XCTestCase {
         XCTAssertTrue(localBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
+    func testDeleteWorkspaceWorktreeCleansPersistedRecordAfterManualDirectoryRemoval() async throws {
+        let fixture = try GitWorktreeCreationFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let viewModel = fixture.makeViewModel()
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.createWorkspaceWorktree(
+            from: fixture.repositoryURL.path,
+            branch: "feature/manual-remove",
+            createBranch: true,
+            baseBranch: "main",
+            autoOpen: false
+        )
+
+        let worktreePath = try XCTUnwrap(viewModel.snapshot.projects.first?.worktrees.first?.path)
+        let worktreeURL = URL(fileURLWithPath: worktreePath, isDirectory: true)
+        try FileManager.default.removeItem(at: worktreeURL)
+        _ = try fixture.git(in: fixture.repositoryURL, ["worktree", "prune"])
+
+        XCTAssertNotNil(
+            viewModel.workspaceWorktreeDeletePresentation(for: worktreePath, from: fixture.repositoryURL.path),
+            "手动删除后，仍应允许用户在侧边栏清理这条 stale worktree 记录"
+        )
+
+        try await viewModel.deleteWorkspaceWorktree(worktreePath, from: fixture.repositoryURL.path)
+
+        XCTAssertEqual(viewModel.snapshot.projects.first?.worktrees.count, 0)
+        let remainingBranch = try fixture.git(in: fixture.repositoryURL, ["branch", "--list", "feature/manual-remove"])
+        XCTAssertTrue(remainingBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
     func testCreateWorkspaceWorktreePreservesBaseBranchMetadataForLaterDelete() async throws {
         let fixture = try GitWorktreeCreationFixture.make()
         defer { fixture.cleanup() }

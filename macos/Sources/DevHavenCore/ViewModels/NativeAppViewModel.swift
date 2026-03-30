@@ -3356,16 +3356,32 @@ public final class NativeAppViewModel {
             throw NativeWorktreeError.invalidPath("worktree 不存在或已移除")
         }
 
-        let result = try await Task.detached(priority: .userInitiated) {
-            try self.worktreeService.removeWorktree(
-                NativeWorktreeRemoveRequest(
-                    sourceProjectPath: rootProjectPath,
-                    worktreePath: worktree.path,
-                    branch: worktree.branch,
-                    shouldDeleteBranch: (worktree.baseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                )
+        let shouldDeleteBranch = worktree.baseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let removeRequest = NativeWorktreeRemoveRequest(
+            sourceProjectPath: rootProjectPath,
+            worktreePath: worktree.path,
+            branch: worktree.branch,
+            shouldDeleteBranch: shouldDeleteBranch
+        )
+        let result: NativeWorktreeRemoveResult
+        do {
+            result = try await Task.detached(priority: .userInitiated) {
+                try self.worktreeService.removeWorktree(removeRequest)
+            }.value
+        } catch let error as NativeWorktreeError {
+            guard case let .invalidPath(message) = error,
+                  shouldTreatMissingPersistedWorktreeAsStaleRecord(message)
+            else {
+                throw error
+            }
+
+            let cleanupResult = try await cleanupMissingWorkspaceWorktreeRecord(
+                rootProjectPath: rootProjectPath,
+                worktree: worktree,
+                shouldDeleteBranch: shouldDeleteBranch
             )
-        }.value
+            result = NativeWorktreeRemoveResult(warning: cleanupResult.warning)
+        }
 
         var projects = snapshot.projects
         projects[projectIndex].worktrees.removeAll { normalizePathForCompare($0.path) == normalizePathForCompare(worktree.path) }
@@ -6559,6 +6575,27 @@ public final class NativeAppViewModel {
         } catch {
             return error.localizedDescription
         }
+    }
+
+    private func cleanupMissingWorkspaceWorktreeRecord(
+        rootProjectPath: String,
+        worktree: ProjectWorktree,
+        shouldDeleteBranch: Bool
+    ) async throws -> NativeWorktreeCleanupResult {
+        let request = NativeWorktreeCleanupRequest(
+            sourceProjectPath: rootProjectPath,
+            worktreePath: worktree.path,
+            branch: worktree.branch,
+            shouldDeleteCreatedBranch: shouldDeleteBranch
+        )
+        let worktreeService = self.worktreeService
+        return try await Task.detached(priority: .userInitiated) {
+            try worktreeService.cleanupFailedWorktreeCreate(request)
+        }.value
+    }
+
+    private func shouldTreatMissingPersistedWorktreeAsStaleRecord(_ message: String) -> Bool {
+        message.trimmingCharacters(in: .whitespacesAndNewlines) == "worktree 不存在或已移除"
     }
 
     private func formatWorktreeEnvironmentWarning(_ result: NativeWorktreeEnvironmentResult) -> String? {
