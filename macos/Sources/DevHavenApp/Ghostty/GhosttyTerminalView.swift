@@ -1,7 +1,7 @@
 import SwiftUI
 
 private struct GhosttySurfaceRepresentable: NSViewRepresentable {
-    @ObservedObject var model: GhosttySurfaceHostModel
+    let model: GhosttySurfaceHostModel
     let isFocused: Bool
 
     func makeNSView(context: Context) -> GhosttySurfaceScrollView {
@@ -48,7 +48,7 @@ private struct GhosttySurfaceRepresentable: NSViewRepresentable {
 }
 
 struct GhosttyTerminalView: View {
-    @ObservedObject var model: GhosttySurfaceHostModel
+    let model: GhosttySurfaceHostModel
     let isFocused: Bool
 
     var body: some View {

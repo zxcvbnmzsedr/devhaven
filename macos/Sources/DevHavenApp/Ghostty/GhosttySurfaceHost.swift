@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 import GhosttyKit
 import DevHavenCore
@@ -224,7 +225,7 @@ struct GhosttySurfaceHost: View {
     let isFocused: Bool
     let chromePolicy: WorkspaceChromePolicy
 
-    @ObservedObject var model: GhosttySurfaceHostModel
+    let model: GhosttySurfaceHostModel
 
     init(
         model: GhosttySurfaceHostModel,
@@ -354,7 +355,8 @@ struct GhosttySurfaceHost: View {
 }
 
 @MainActor
-final class GhosttySurfaceHostModel: ObservableObject {
+@Observable
+final class GhosttySurfaceHostModel {
     static let codexDisplaySnapshotWindowLimit = CodexAgentDisplaySnapshot.windowLimit
 
     struct SnapshotContext: Equatable, Sendable {
@@ -367,37 +369,55 @@ final class GhosttySurfaceHostModel: ObservableObject {
     let request: WorkspaceTerminalLaunchRequest
     let terminalRuntime: GhosttyRuntime?
 
-    @Published var initializationError: String?
-    @Published var surfaceTitle: String?
-    @Published var surfaceWorkingDirectory: String?
-    @Published var rendererHealthy = true
-    @Published var appearance: GhosttySurfaceAppearance = .fallback
-    @Published var processState: GhosttySurfaceProcessState = .starting
-    @Published var taskStatus: WorkspaceTaskStatus = .idle
-    @Published var bellCount = 0
-    @Published private(set) var hasPreparedSurfaceView = false
+    var initializationError: String?
+    var surfaceTitle: String?
+    var surfaceWorkingDirectory: String?
+    var rendererHealthy = true
+    var appearance: GhosttySurfaceAppearance = .fallback
+    var processState: GhosttySurfaceProcessState = .starting
+    var taskStatus: WorkspaceTaskStatus = .idle
+    var bellCount = 0
+    private(set) var hasPreparedSurfaceView = false
 
+    @ObservationIgnored
     private let appRuntime: GhosttyAppRuntime
+    @ObservationIgnored
     private let onFocusChange: ((Bool) -> Void)?
+    @ObservationIgnored
     private let onSurfaceExit: (() -> Void)?
+    @ObservationIgnored
     private let onTabTitleChange: ((String) -> Void)?
     var onNotificationEvent: ((String, String) -> Void)?
     var onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)?
     var onBell: (() -> Void)?
+    @ObservationIgnored
     private let onNewTab: (() -> Bool)?
+    @ObservationIgnored
     private let onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)?
+    @ObservationIgnored
     private let onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)?
+    @ObservationIgnored
     private let onMoveTab: ((ghostty_action_move_tab_s) -> Bool)?
+    @ObservationIgnored
     private let onSplitAction: ((GhosttySplitAction) -> Bool)?
+    @ObservationIgnored
     private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
     private var ownedSurfaceView: GhosttyTerminalSurfaceView?
+    @ObservationIgnored
     private var lastPreferredFocus = false
+    @ObservationIgnored
     private var lastSurfaceIsVisible = false
+    @ObservationIgnored
     private var lastSurfaceIsFocused = false
+    @ObservationIgnored
     private var pendingWindowResponderRestoreTask: Task<Void, Never>?
+    @ObservationIgnored
     private var pendingCodexDisplaySnapshotRefreshTask: Task<Void, Never>?
+    @ObservationIgnored
     private var codexDisplayTrackingEnabled = false
+    @ObservationIgnored
     private var cachedCodexDisplaySnapshot: CodexAgentDisplaySnapshot?
+    @ObservationIgnored
     private var onCodexDisplaySnapshotChange: ((CodexAgentDisplaySnapshot?) -> Void)?
 
     var currentSurfaceView: GhosttyTerminalSurfaceView? {
@@ -673,12 +693,13 @@ final class GhosttySurfaceHostModel: ObservableObject {
     }
 
     func syncSurfaceActivity(isVisible: Bool, isFocused: Bool) {
+        let didChange = lastSurfaceIsVisible != isVisible || lastSurfaceIsFocused != isFocused
         lastSurfaceIsVisible = isVisible
         lastSurfaceIsFocused = isFocused
         if !isFocused {
             cancelPendingWindowResponderRestore()
         }
-        guard let ownedSurfaceView else {
+        guard didChange, let ownedSurfaceView else {
             return
         }
         applyCachedSurfaceActivity(to: ownedSurfaceView)
