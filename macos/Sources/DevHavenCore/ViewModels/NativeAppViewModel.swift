@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Darwin
 
 private struct WorktreeCreateContext {
     let request: NativeWorktreeCreateRequest
@@ -38,6 +39,46 @@ private struct WorkspaceEditorBatchCloseState {
     let remainingTabIDs: [String]
 }
 
+private final class WorkspaceDirectoryWatcher {
+    private let source: DispatchSourceFileSystemObject
+    private var isStopped = false
+
+    init?(
+        directoryPath: String,
+        queue: DispatchQueue = .main,
+        onEvent: @escaping @Sendable () -> Void
+    ) {
+        let fileDescriptor = open(directoryPath, O_EVTONLY)
+        guard fileDescriptor >= 0 else {
+            return nil
+        }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fileDescriptor,
+            eventMask: [.write, .delete, .rename, .attrib, .extend, .link, .revoke],
+            queue: queue
+        )
+        source.setEventHandler(handler: onEvent)
+        source.setCancelHandler {
+            close(fileDescriptor)
+        }
+        source.resume()
+        self.source = source
+    }
+
+    deinit {
+        stop()
+    }
+
+    func stop() {
+        guard !isStopped else {
+            return
+        }
+        isStopped = true
+        source.cancel()
+    }
+}
+
 @MainActor
 @Observable
 public final class NativeAppViewModel {
@@ -64,6 +105,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var isAgentSignalObservationStarted = false
     @ObservationIgnored private var displayProjectCacheByLookupKey: [DisplayProjectLookupKey: Project?] = [:]
     @ObservationIgnored private var workspacePendingEditorBatchCloseState: WorkspaceEditorBatchCloseState?
+    @ObservationIgnored private var workspaceEditorDirectoryWatchersByProjectPath: [String: [String: WorkspaceDirectoryWatcher]] = [:]
 
     public enum DirectoryFilter: Equatable, Sendable {
         case all
@@ -145,6 +187,7 @@ public final class NativeAppViewModel {
     private var workspaceProjectTreeStatesByProjectPath: [String: WorkspaceProjectTreeState]
     private var workspaceEditorTabsByProjectPath: [String: [WorkspaceEditorTabState]]
     private var workspaceEditorPresentationByProjectPath: [String: WorkspaceEditorPresentationState]
+    private var workspaceEditorRuntimeSessionsByProjectPath: [String: [String: WorkspaceEditorRuntimeSessionState]]
     private var workspaceDiffTabsByProjectPath: [String: [WorkspaceDiffTabState]]
     private var workspaceSelectedPresentedTabByProjectPath: [String: WorkspacePresentedTabSelection]
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState] {
@@ -252,6 +295,7 @@ public final class NativeAppViewModel {
         self.workspaceProjectTreeStatesByProjectPath = [:]
         self.workspaceEditorTabsByProjectPath = [:]
         self.workspaceEditorPresentationByProjectPath = [:]
+        self.workspaceEditorRuntimeSessionsByProjectPath = [:]
         self.workspaceDiffTabsByProjectPath = [:]
         self.workspaceSelectedPresentedTabByProjectPath = [:]
         self.attentionStateByProjectPath = [:]
@@ -1031,6 +1075,37 @@ public final class NativeAppViewModel {
         workspaceEditorTabsByProjectPath[projectPath]?.first(where: { $0.id == tabID })
     }
 
+    public func workspaceEditorRuntimeSession(
+        for projectPath: String,
+        tabID: String
+    ) -> WorkspaceEditorRuntimeSessionState {
+        guard workspaceEditorTabState(for: projectPath, tabID: tabID) != nil else {
+            return WorkspaceEditorRuntimeSessionState()
+        }
+        return workspaceEditorRuntimeSessionsByProjectPath[projectPath]?[tabID]
+            ?? WorkspaceEditorRuntimeSessionState()
+    }
+
+    public func updateWorkspaceEditorRuntimeSession(
+        _ session: WorkspaceEditorRuntimeSessionState,
+        tabID: String,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              workspaceEditorTabState(for: resolvedProjectPath, tabID: tabID) != nil
+        else {
+            return
+        }
+
+        var sessions = workspaceEditorRuntimeSessionsByProjectPath[resolvedProjectPath] ?? [:]
+        if session == WorkspaceEditorRuntimeSessionState() {
+            sessions.removeValue(forKey: tabID)
+        } else {
+            sessions[tabID] = session
+        }
+        workspaceEditorRuntimeSessionsByProjectPath[resolvedProjectPath] = sessions
+    }
+
     public var activeWorkspaceSelectedPresentedTab: WorkspacePresentedTabSelection? {
         guard let activeWorkspaceProjectPath else {
             return nil
@@ -1704,6 +1779,11 @@ public final class NativeAppViewModel {
             }
 
             workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+            if let reusedPreviewIndex, tabs.indices.contains(reusedPreviewIndex) {
+                resetWorkspaceEditorRuntimeSession(tab.id, in: resolvedProjectPath)
+            }
+            syncWorkspaceEditorRuntimeSessions(for: resolvedProjectPath)
+            syncWorkspaceEditorDirectoryWatchers(for: resolvedProjectPath)
             assignWorkspaceEditorTab(tab.id, toActiveGroupIn: resolvedProjectPath)
             activateWorkspaceEditorTab(tab.id, in: resolvedProjectPath)
             errorMessage = nil
@@ -1819,8 +1899,11 @@ public final class NativeAppViewModel {
         }
 
         let shouldPromotePreviewTab = tabs[index].isPreview && tabs[index].text != text
+        let nextContentFingerprint = tabs[index].kind == .text
+            ? workspaceEditorContentFingerprint(text)
+            : nil
         tabs[index].text = text
-        tabs[index].isDirty = tabs[index].kind == .text
+        tabs[index].isDirty = nextContentFingerprint != tabs[index].savedContentFingerprint
         if shouldPromotePreviewTab {
             tabs[index].isPreview = false
         }
@@ -1896,6 +1979,7 @@ public final class NativeAppViewModel {
                     current.externalChangeState = .inSync
                     current.message = document.message
                     current.lastLoadedModificationDate = document.modificationDate
+                    current.savedContentFingerprint = document.contentFingerprint
                 }
             )
             refreshWorkspaceProjectTree(for: resolvedProjectPath)
@@ -1910,6 +1994,10 @@ public final class NativeAppViewModel {
               let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID }),
               tab.kind == .text
         else {
+            return
+        }
+
+        guard tab.isDirty else {
             return
         }
 
@@ -1944,6 +2032,7 @@ public final class NativeAppViewModel {
                 current.externalChangeState = .inSync
                 current.message = savedDocument.message
                 current.lastLoadedModificationDate = savedDocument.modificationDate
+                current.savedContentFingerprint = savedDocument.contentFingerprint
             }
             refreshWorkspaceProjectTree(for: resolvedProjectPath)
             errorMessage = nil
@@ -2066,6 +2155,9 @@ public final class NativeAppViewModel {
         let isClosingSelectedTab = resolvedWorkspacePresentedTabSelection(for: resolvedProjectPath) == .editor(tabID)
         tabs.remove(at: removedIndex)
         workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+        removeWorkspaceEditorRuntimeSession(tabID, in: resolvedProjectPath)
+        syncWorkspaceEditorRuntimeSessions(for: resolvedProjectPath)
+        syncWorkspaceEditorDirectoryWatchers(for: resolvedProjectPath)
         workspaceEditorPresentationByProjectPath[resolvedProjectPath] = removingWorkspaceEditorTab(
             tabID,
             from: resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
@@ -4204,6 +4296,7 @@ public final class NativeAppViewModel {
         }
 
         if didRemap {
+            syncWorkspaceEditorDirectoryWatchers(for: projectPath)
             scheduleWorkspaceRestoreAutosave()
         }
     }
@@ -4241,7 +4334,8 @@ public final class NativeAppViewModel {
             isEditable: document.isEditable,
             externalChangeState: .inSync,
             message: document.message,
-            lastLoadedModificationDate: document.modificationDate
+            lastLoadedModificationDate: document.modificationDate,
+            savedContentFingerprint: document.contentFingerprint
         )
     }
 
@@ -4546,8 +4640,11 @@ public final class NativeAppViewModel {
         workspacePendingEditorCloseRequest = nil
         workspacePendingEditorBatchCloseState = nil
         for projectPath in restoredProjectPaths {
+            workspaceEditorDirectoryWatchersByProjectPath[projectPath]?.values.forEach { $0.stop() }
+            workspaceEditorDirectoryWatchersByProjectPath[projectPath] = nil
             workspaceEditorTabsByProjectPath[projectPath] = []
             workspaceEditorPresentationByProjectPath[projectPath] = nil
+            workspaceEditorRuntimeSessionsByProjectPath[projectPath] = [:]
             workspaceSelectedPresentedTabByProjectPath[projectPath] = nil
         }
 
@@ -4573,12 +4670,15 @@ public final class NativeAppViewModel {
                     isEditable: document.isEditable,
                     externalChangeState: .inSync,
                     message: document.message,
-                    lastLoadedModificationDate: document.modificationDate
+                    lastLoadedModificationDate: document.modificationDate,
+                    savedContentFingerprint: document.contentFingerprint
                     ),
                     into: &restoredTabs
                 )
             }
             workspaceEditorTabsByProjectPath[projectPath] = restoredTabs
+            syncWorkspaceEditorRuntimeSessions(for: projectPath)
+            syncWorkspaceEditorDirectoryWatchers(for: projectPath)
             workspaceEditorPresentationByProjectPath[projectPath] = normalizedWorkspaceEditorPresentationState(
                 sessionSnapshot.editorPresentation
                     ?? makeDefaultWorkspaceEditorPresentationState(tabs: restoredTabs),
@@ -4638,6 +4738,74 @@ private func updateWorkspaceEditorTab(
         }
         mutate(&tabs[index])
         workspaceEditorTabsByProjectPath[projectPath] = tabs
+    }
+
+    private func resetWorkspaceEditorRuntimeSession(_ tabID: String, in projectPath: String) {
+        var sessions = workspaceEditorRuntimeSessionsByProjectPath[projectPath] ?? [:]
+        sessions.removeValue(forKey: tabID)
+        workspaceEditorRuntimeSessionsByProjectPath[projectPath] = sessions
+    }
+
+    private func removeWorkspaceEditorRuntimeSession(_ tabID: String, in projectPath: String) {
+        resetWorkspaceEditorRuntimeSession(tabID, in: projectPath)
+    }
+
+    private func syncWorkspaceEditorRuntimeSessions(for projectPath: String) {
+        let validTabIDs = Set((workspaceEditorTabsByProjectPath[projectPath] ?? []).map(\.id))
+        guard !validTabIDs.isEmpty else {
+            workspaceEditorRuntimeSessionsByProjectPath[projectPath] = [:]
+            return
+        }
+
+        var sessions = workspaceEditorRuntimeSessionsByProjectPath[projectPath] ?? [:]
+        sessions = sessions.filter { validTabIDs.contains($0.key) }
+        workspaceEditorRuntimeSessionsByProjectPath[projectPath] = sessions
+    }
+
+    private func syncWorkspaceEditorDirectoryWatchers(for projectPath: String) {
+        let requiredDirectories = Set(
+            (workspaceEditorTabsByProjectPath[projectPath] ?? []).map {
+                workspaceFileSystemService.parentDirectoryPath(for: $0.filePath)
+            }
+        )
+        var watchers = workspaceEditorDirectoryWatchersByProjectPath[projectPath] ?? [:]
+
+        for directoryPath in Set(watchers.keys).subtracting(requiredDirectories) {
+            watchers.removeValue(forKey: directoryPath)?.stop()
+        }
+
+        for directoryPath in requiredDirectories where watchers[directoryPath] == nil {
+            let normalizedDirectoryPath = normalizePathForCompare(directoryPath)
+            let watcher = WorkspaceDirectoryWatcher(directoryPath: normalizedDirectoryPath) { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.handleWorkspaceEditorDirectoryEvent(
+                        normalizedDirectoryPath,
+                        projectPath: projectPath
+                    )
+                }
+            }
+            if let watcher {
+                watchers[normalizedDirectoryPath] = watcher
+            }
+        }
+
+        workspaceEditorDirectoryWatchersByProjectPath[projectPath] = watchers
+    }
+
+    private func handleWorkspaceEditorDirectoryEvent(_ directoryPath: String, projectPath: String) {
+        let normalizedDirectoryPath = normalizePathForCompare(directoryPath)
+        let tabIDs = (workspaceEditorTabsByProjectPath[projectPath] ?? [])
+            .filter {
+                workspaceFileSystemService.parentDirectoryPath(for: $0.filePath) == normalizedDirectoryPath
+            }
+            .map(\.id)
+        guard !tabIDs.isEmpty else {
+            syncWorkspaceEditorDirectoryWatchers(for: projectPath)
+            return
+        }
+        for tabID in tabIDs {
+            checkWorkspaceEditorTabExternalChange(tabID, in: projectPath)
+        }
     }
 
     private func resolvedWorkspacePresentedTabSelection(for projectPath: String) -> WorkspacePresentedTabSelection? {
@@ -5100,8 +5268,11 @@ private func updateWorkspaceEditorTab(
 
     private func clearWorkspaceRuntimePresentationState(for paths: Set<String>) {
         for path in paths {
+            workspaceEditorDirectoryWatchersByProjectPath[path]?.values.forEach { $0.stop() }
+            workspaceEditorDirectoryWatchersByProjectPath[path] = nil
             workspaceEditorTabsByProjectPath[path] = nil
             workspaceEditorPresentationByProjectPath[path] = nil
+            workspaceEditorRuntimeSessionsByProjectPath[path] = nil
             for tab in workspaceDiffTabsByProjectPath[path] ?? [] {
                 workspaceDiffTabViewModels[tab.id] = nil
             }

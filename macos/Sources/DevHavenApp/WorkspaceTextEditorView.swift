@@ -79,7 +79,7 @@ struct WorkspaceTextEditorSearchRequestState: Equatable {
 }
 
 struct WorkspaceTextEditorDecorationSignature: Equatable {
-    var text: String
+    var contentRevision: Int
     var syntaxStyle: WorkspaceEditorSyntaxStyle
     var highlights: [WorkspaceDiffEditorHighlight]
     var inlineHighlights: [WorkspaceDiffEditorInlineHighlight]
@@ -102,6 +102,132 @@ struct WorkspaceTextEditorMarkupSignature: Equatable {
     var usesRegularExpression: Bool
     var highlights: [WorkspaceDiffEditorHighlight]
     var explicitMarkupMarkers: [WorkspaceEditorMarkupMarker]
+}
+
+private struct WorkspaceTextEditorContentCacheKey: Hashable {
+    var length: Int
+    var fingerprint: Int
+}
+
+private struct WorkspaceTextEditorRegularExpressionCacheKey: Hashable {
+    var pattern: String
+    var optionsRawValue: UInt
+}
+
+private struct WorkspaceTextEditorSearchCacheKey: Hashable {
+    var content: WorkspaceTextEditorContentCacheKey
+    var query: String
+    var isCaseSensitive: Bool
+    var matchesWholeWords: Bool
+    var usesRegularExpression: Bool
+}
+
+private struct WorkspaceTextEditorRegularExpressionCompileResult {
+    var expression: NSRegularExpression?
+    var errorMessage: String?
+}
+
+private final class WorkspaceTextEditorRegularExpressionCache: @unchecked Sendable {
+    static let shared = WorkspaceTextEditorRegularExpressionCache()
+    private static let maxEntryCount = 256
+
+    private let lock = NSLock()
+    private var cachedResults: [WorkspaceTextEditorRegularExpressionCacheKey: WorkspaceTextEditorRegularExpressionCompileResult] = [:]
+
+    func result(
+        pattern: String,
+        options: NSRegularExpression.Options
+    ) -> WorkspaceTextEditorRegularExpressionCompileResult {
+        let key = WorkspaceTextEditorRegularExpressionCacheKey(
+            pattern: pattern,
+            optionsRawValue: options.rawValue
+        )
+        lock.lock()
+        if let cached = cachedResults[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        let result: WorkspaceTextEditorRegularExpressionCompileResult
+        do {
+            result = WorkspaceTextEditorRegularExpressionCompileResult(
+                expression: try NSRegularExpression(pattern: pattern, options: options),
+                errorMessage: nil
+            )
+        } catch {
+            let message = (error as NSError).localizedFailureReason
+                ?? error.localizedDescription
+            result = WorkspaceTextEditorRegularExpressionCompileResult(
+                expression: nil,
+                errorMessage: "无效正则表达式：\(message)"
+            )
+        }
+        lock.lock()
+        cachedResults[key] = result
+        trimIfNeeded()
+        lock.unlock()
+        return result
+    }
+
+    private func trimIfNeeded() {
+        guard cachedResults.count > Self.maxEntryCount else {
+            return
+        }
+        cachedResults.removeAll(keepingCapacity: true)
+    }
+}
+
+private final class WorkspaceTextEditorSearchCache: @unchecked Sendable {
+    static let shared = WorkspaceTextEditorSearchCache()
+    private static let maxEntryCount = 192
+
+    private let lock = NSLock()
+    private var cachedResults: [WorkspaceTextEditorSearchCacheKey: WorkspaceTextEditorSearchMatchesResult] = [:]
+
+    func result(
+        query: String,
+        in content: NSString,
+        isCaseSensitive: Bool,
+        matchesWholeWords: Bool,
+        usesRegularExpression: Bool
+    ) -> WorkspaceTextEditorSearchMatchesResult {
+        guard !query.isEmpty, content.length > 0 else {
+            return WorkspaceTextEditorSearchMatchesResult()
+        }
+
+        let key = WorkspaceTextEditorSearchCacheKey(
+            content: workspaceTextEditorContentCacheKey(for: content),
+            query: query,
+            isCaseSensitive: isCaseSensitive,
+            matchesWholeWords: matchesWholeWords,
+            usesRegularExpression: usesRegularExpression
+        )
+        lock.lock()
+        if let cached = cachedResults[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        let result = workspaceTextEditorComputeSearchMatchesResult(
+            query: query,
+            in: content,
+            isCaseSensitive: isCaseSensitive,
+            matchesWholeWords: matchesWholeWords,
+            usesRegularExpression: usesRegularExpression
+        )
+        lock.lock()
+        cachedResults[key] = result
+        trimIfNeeded()
+        lock.unlock()
+        return result
+    }
+
+    private func trimIfNeeded() {
+        guard cachedResults.count > Self.maxEntryCount else {
+            return
+        }
+        cachedResults.removeAll(keepingCapacity: true)
+    }
 }
 
 struct WorkspaceTextEditorSearchSessionState: Equatable {
@@ -1080,7 +1206,6 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         }
         textView.isEditable = isEditable
         context.coordinator.applyDisplayOptionsIfNeeded(displayOptions, to: scrollView, textView: textView, force: textChanged)
-        context.coordinator.refreshEditorChrome()
         context.coordinator.applyDecorationsIfNeeded(
             syntaxStyle: syntaxStyle,
             highlights: highlights,
@@ -1092,6 +1217,9 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             usesRegularExpressionInSearch: usesRegularExpressionInSearch,
             force: textChanged
         )
+        if !textChanged {
+            context.coordinator.refreshEditorChrome()
+        }
         context.coordinator.applyFocusRequestIfNeeded(shouldRequestFocus)
         context.coordinator.applySyncedScrollIfNeeded()
         context.coordinator.scrollToRequestedLineIfNeeded()
@@ -1284,7 +1412,6 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             searchContentRevision += 1
             lastAppliedDecorationSignature = nil
             lastAppliedSearchHighlightSignature = nil
-            refreshEditorChrome()
             return true
         }
 
@@ -1311,7 +1438,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             latestSearchWholeWords = matchesSearchWholeWords
             latestSearchUsesRegularExpression = usesRegularExpressionInSearch
             let signature = WorkspaceTextEditorDecorationSignature(
-                text: textView.string,
+                contentRevision: searchContentRevision,
                 syntaxStyle: syntaxStyle,
                 highlights: highlights,
                 inlineHighlights: inlineHighlights
@@ -1359,7 +1486,6 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
                 usesRegularExpressionInSearch: latestSearchUsesRegularExpression,
                 force: force
             )
-            applySearchHighlightsIfNeeded(force: force)
         }
 
         private func configureDisplayOptions(
@@ -1397,7 +1523,6 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             searchContentRevision += 1
             lastAppliedDecorationSignature = nil
             lastAppliedSearchHighlightSignature = nil
-            refreshEditorChrome()
             updateSelectionText(in: textView)
             reapplyStoredDecorations(force: true)
         }
@@ -1592,7 +1717,6 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: selectionLocation, length: 0))
             textView.scrollRangeToVisible(NSRange(location: selectionLocation, length: 0))
             lastAppliedDecorationSignature = nil
-            refreshEditorChrome()
             reapplyStoredDecorations(force: true)
         }
 
@@ -1625,7 +1749,6 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             textView.scrollRangeToVisible(selectionRange)
             lineStartOffsets = WorkspaceTextEditorLineMetrics.lineStartOffsets(in: textView.string as NSString)
             lastAppliedDecorationSignature = nil
-            refreshEditorChrome()
             reapplyStoredDecorations(force: true)
         }
 
@@ -1808,6 +1931,13 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             guard let textView else {
                 return
             }
+            let searchResult = workspaceTextEditorSearchMatchesResult(
+                query: latestSearchQuery,
+                in: textView.string as NSString,
+                isCaseSensitive: latestSearchCaseSensitive,
+                matchesWholeWords: latestSearchWholeWords,
+                usesRegularExpression: latestSearchUsesRegularExpression
+            )
             let signature = workspaceTextEditorEffectiveSearchHighlightSignature(
                 contentRevision: searchContentRevision,
                 query: latestSearchQuery,
@@ -1817,19 +1947,16 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
                 selectedRange: textView.selectedRange()
             )
             guard force || lastAppliedSearchHighlightSignature != signature else {
-                updateSearchSessionState(in: textView)
+                updateSearchSessionState(in: textView, searchResult: searchResult)
                 return
             }
             applyTemporarySearchHighlights(
-                query: latestSearchQuery,
-                isCaseSensitive: latestSearchCaseSensitive,
-                matchesWholeWords: latestSearchWholeWords,
-                usesRegularExpression: latestSearchUsesRegularExpression,
+                searchResult: searchResult,
                 selectedRange: textView.selectedRange(),
                 to: textView
             )
             lastAppliedSearchHighlightSignature = signature
-            updateSearchSessionState(in: textView)
+            updateSearchSessionState(in: textView, searchResult: searchResult)
         }
 
         private func resolvedMarkupModel(in content: NSString) -> WorkspaceEditorMarkupModel {
@@ -1888,17 +2015,28 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             refreshEditorChrome(redrawTextView: false)
         }
 
-        private func updateSearchSessionState(in textView: NSTextView) {
+        private func updateSearchSessionState(
+            in textView: NSTextView,
+            searchResult: WorkspaceTextEditorSearchMatchesResult? = nil
+        ) {
             guard let searchSessionState else {
                 return
             }
-            let nextState = workspaceTextEditorSearchSessionState(
+            let resolvedSearchResult = searchResult ?? workspaceTextEditorSearchMatchesResult(
                 query: latestSearchQuery,
                 in: textView.string as NSString,
                 isCaseSensitive: latestSearchCaseSensitive,
                 matchesWholeWords: latestSearchWholeWords,
-                usesRegularExpression: latestSearchUsesRegularExpression,
-                selectedRange: textView.selectedRange()
+                usesRegularExpression: latestSearchUsesRegularExpression
+            )
+            let currentMatchIndex = resolvedSearchResult.ranges.firstIndex(where: {
+                NSEqualRanges($0, textView.selectedRange())
+            }).map { $0 + 1 }
+            let nextState = WorkspaceTextEditorSearchSessionState(
+                query: latestSearchQuery,
+                matchCount: resolvedSearchResult.ranges.count,
+                currentMatchIndex: currentMatchIndex,
+                errorMessage: resolvedSearchResult.errorMessage
             )
             if searchSessionState.wrappedValue != nextState {
                 searchSessionState.wrappedValue = nextState
@@ -1977,7 +2115,10 @@ private func applySyntaxHighlighting(
     let fullRange = NSRange(location: 0, length: content.length)
 
     let apply: (String, NSRegularExpression.Options, NSColor) -> Void = { pattern, options, color in
-        guard let expression = try? NSRegularExpression(pattern: pattern, options: options) else {
+        guard let expression = WorkspaceTextEditorRegularExpressionCache.shared
+            .result(pattern: pattern, options: options)
+            .expression
+        else {
             return
         }
         expression.enumerateMatches(in: fullString, options: [], range: fullRange) { result, _, _ in
@@ -2070,6 +2211,10 @@ private func applySyntaxHighlighting(
     }
 }
 
+private func workspaceTextEditorContentCacheKey(for content: NSString) -> WorkspaceTextEditorContentCacheKey {
+    WorkspaceTextEditorContentCacheKey(length: content.length, fingerprint: content.hash)
+}
+
 private func highlightColor(for kind: WorkspaceDiffEditorHighlightKind) -> NSColor {
     switch kind {
     case .added:
@@ -2101,16 +2246,30 @@ private func workspaceTextEditorRegularExpression(
     isCaseSensitive: Bool
 ) -> (expression: NSRegularExpression?, errorMessage: String?) {
     let options: NSRegularExpression.Options = isCaseSensitive ? [] : [.caseInsensitive]
-    do {
-        return (try NSRegularExpression(pattern: query, options: options), nil)
-    } catch {
-        let message = (error as NSError).localizedFailureReason
-            ?? error.localizedDescription
-        return (nil, "无效正则表达式：\(message)")
-    }
+    let result = WorkspaceTextEditorRegularExpressionCache.shared.result(
+        pattern: query,
+        options: options
+    )
+    return (result.expression, result.errorMessage)
 }
 
 func workspaceTextEditorSearchMatchesResult(
+    query: String,
+    in content: NSString,
+    isCaseSensitive: Bool,
+    matchesWholeWords: Bool,
+    usesRegularExpression: Bool
+) -> WorkspaceTextEditorSearchMatchesResult {
+    WorkspaceTextEditorSearchCache.shared.result(
+        query: query,
+        in: content,
+        isCaseSensitive: isCaseSensitive,
+        matchesWholeWords: matchesWholeWords,
+        usesRegularExpression: usesRegularExpression
+    )
+}
+
+private func workspaceTextEditorComputeSearchMatchesResult(
     query: String,
     in content: NSString,
     isCaseSensitive: Bool,
@@ -2214,10 +2373,7 @@ func workspaceTextEditorEffectiveSearchHighlightSignature(
 
 @MainActor
 private func applyTemporarySearchHighlights(
-    query: String,
-    isCaseSensitive: Bool,
-    matchesWholeWords: Bool,
-    usesRegularExpression: Bool,
+    searchResult: WorkspaceTextEditorSearchMatchesResult,
     selectedRange: NSRange,
     to textView: NSTextView
 ) {
@@ -2229,33 +2385,30 @@ private func applyTemporarySearchHighlights(
     let fullRange = NSRange(location: 0, length: content.length)
     layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: fullRange)
 
-    guard !query.isEmpty else {
+    guard !searchResult.ranges.isEmpty else {
         return
     }
 
-    let result = workspaceTextEditorSearchMatchesResult(
-        query: query,
-        in: content,
-        isCaseSensitive: isCaseSensitive,
-        matchesWholeWords: matchesWholeWords,
-        usesRegularExpression: usesRegularExpression
-    )
-    for match in result.ranges {
+    let selectedRangeIsMatch = searchResult.ranges.contains(where: { NSEqualRanges($0, selectedRange) })
+    for match in searchResult.ranges {
         layoutManager.addTemporaryAttribute(
             .backgroundColor,
-            value: workspaceTextEditorRangeMatchesQuery(
-                selectedRange,
-                query: query,
-                in: content,
-                isCaseSensitive: isCaseSensitive,
-                matchesWholeWords: matchesWholeWords,
-                usesRegularExpression: usesRegularExpression
-            ) && NSEqualRanges(match, selectedRange)
+            value: selectedRangeIsMatch && NSEqualRanges(match, selectedRange)
                 ? NSColor.systemOrange.withAlphaComponent(0.42)
                 : NSColor.systemYellow.withAlphaComponent(0.22),
             forCharacterRange: match
         )
     }
+}
+
+private func workspaceTextEditorRangeMatchesSearchResult(
+    _ range: NSRange,
+    searchResult: WorkspaceTextEditorSearchMatchesResult
+) -> Bool {
+    guard range.location != NSNotFound else {
+        return false
+    }
+    return searchResult.ranges.contains(where: { NSEqualRanges($0, range) })
 }
 
 func workspaceTextEditorMatchRanges(
@@ -2288,28 +2441,14 @@ func workspaceTextEditorRangeMatchesQuery(
     else {
         return false
     }
-    if matchesWholeWords, !workspaceTextEditorRangeIsWholeWord(range, in: content) {
-        return false
-    }
-    if usesRegularExpression {
-        guard let expression = workspaceTextEditorRegularExpression(
-            query: query,
-            isCaseSensitive: isCaseSensitive
-        ).expression else {
-            return false
-        }
-        let candidate = content.substring(with: range)
-        let candidateRange = NSRange(location: 0, length: (candidate as NSString).length)
-        guard let match = expression.firstMatch(in: candidate, options: [], range: candidateRange) else {
-            return false
-        }
-        return NSEqualRanges(match.range, candidateRange)
-    }
-    guard range.length == (query as NSString).length else {
-        return false
-    }
-    let candidate = content.substring(with: range)
-    return isCaseSensitive ? candidate == query : candidate.caseInsensitiveCompare(query) == .orderedSame
+    let result = workspaceTextEditorSearchMatchesResult(
+        query: query,
+        in: content,
+        isCaseSensitive: isCaseSensitive,
+        matchesWholeWords: matchesWholeWords,
+        usesRegularExpression: usesRegularExpression
+    )
+    return workspaceTextEditorRangeMatchesSearchResult(range, searchResult: result)
 }
 
 func workspaceTextEditorNextMatch(
@@ -2320,24 +2459,21 @@ func workspaceTextEditorNextMatch(
     matchesWholeWords: Bool,
     usesRegularExpression: Bool
 ) -> NSRange? {
-    let matches = workspaceTextEditorMatchRanges(
+    let searchResult = workspaceTextEditorSearchMatchesResult(
         query: query,
         in: content,
         isCaseSensitive: isCaseSensitive,
         matchesWholeWords: matchesWholeWords,
         usesRegularExpression: usesRegularExpression
     )
+    let matches = searchResult.ranges
     guard !matches.isEmpty else {
         return nil
     }
 
-    let anchor = workspaceTextEditorRangeMatchesQuery(
+    let anchor = workspaceTextEditorRangeMatchesSearchResult(
         selectedRange,
-        query: query,
-        in: content,
-        isCaseSensitive: isCaseSensitive,
-        matchesWholeWords: matchesWholeWords,
-        usesRegularExpression: usesRegularExpression
+        searchResult: searchResult
     ) ? NSMaxRange(selectedRange) : max(0, selectedRange.location)
     if let next = matches.first(where: { $0.location >= anchor }) {
         return next
@@ -2353,24 +2489,21 @@ func workspaceTextEditorPreviousMatch(
     matchesWholeWords: Bool,
     usesRegularExpression: Bool
 ) -> NSRange? {
-    let matches = workspaceTextEditorMatchRanges(
+    let searchResult = workspaceTextEditorSearchMatchesResult(
         query: query,
         in: content,
         isCaseSensitive: isCaseSensitive,
         matchesWholeWords: matchesWholeWords,
         usesRegularExpression: usesRegularExpression
     )
+    let matches = searchResult.ranges
     guard !matches.isEmpty else {
         return nil
     }
 
-    let anchor = workspaceTextEditorRangeMatchesQuery(
+    let anchor = workspaceTextEditorRangeMatchesSearchResult(
         selectedRange,
-        query: query,
-        in: content,
-        isCaseSensitive: isCaseSensitive,
-        matchesWholeWords: matchesWholeWords,
-        usesRegularExpression: usesRegularExpression
+        searchResult: searchResult
     ) ? selectedRange.location : max(0, selectedRange.location)
     if let previous = matches.last(where: { NSMaxRange($0) <= anchor }) {
         return previous

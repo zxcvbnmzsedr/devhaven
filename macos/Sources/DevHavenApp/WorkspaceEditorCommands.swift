@@ -22,39 +22,6 @@ struct WorkspaceEditorCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .textEditing) {
-            Button("查找…") {
-                editorCommandRouter?.startSearchAction()
-            }
-            .keyboardShortcut("f", modifiers: [.command])
-            .disabled(!isEnabled)
-
-            Button("替换…") {
-                editorCommandRouter?.showReplaceAction()
-            }
-            .keyboardShortcut("f", modifiers: [.command, .option])
-            .disabled(!isEnabled)
-
-            Button("查找下一个") {
-                editorCommandRouter?.navigateSearchNextAction()
-            }
-            .keyboardShortcut("g", modifiers: [.command])
-            .disabled(!isEnabled)
-
-            Button("查找上一个") {
-                editorCommandRouter?.navigateSearchPreviousAction()
-            }
-            .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(!isEnabled)
-
-            Divider()
-
-            Button("使用所选内容查找") {
-                editorCommandRouter?.useSelectionForSearchAction()
-            }
-            .disabled(!isEnabled)
-
-            Divider()
-
             Button("跳转到行…") {
                 editorCommandRouter?.goToLineAction()
             }
@@ -73,14 +40,6 @@ struct WorkspaceEditorCommands: Commands {
                 editorCommandRouter?.reloadAction()
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
-            .disabled(!isEnabled)
-
-            Divider()
-
-            Button("隐藏查找栏") {
-                editorCommandRouter?.closeSearchAction()
-            }
-            .keyboardShortcut(.escape, modifiers: [])
             .disabled(!isEnabled)
         }
     }

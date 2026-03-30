@@ -4,19 +4,36 @@ import XCTest
 final class WorkspaceTextEditorSearchTests: XCTestCase {
     func testBaseDecorationSignatureIgnoresSelectionChanges() {
         let first = WorkspaceTextEditorDecorationSignature(
-            text: "alpha beta",
+            contentRevision: 7,
             syntaxStyle: .swift,
             highlights: [],
             inlineHighlights: []
         )
         let second = WorkspaceTextEditorDecorationSignature(
-            text: "alpha beta",
+            contentRevision: 7,
             syntaxStyle: .swift,
             highlights: [],
             inlineHighlights: []
         )
 
         XCTAssertEqual(first, second)
+    }
+
+    func testBaseDecorationSignatureTracksContentRevisionChanges() {
+        let first = WorkspaceTextEditorDecorationSignature(
+            contentRevision: 7,
+            syntaxStyle: .swift,
+            highlights: [],
+            inlineHighlights: []
+        )
+        let second = WorkspaceTextEditorDecorationSignature(
+            contentRevision: 8,
+            syntaxStyle: .swift,
+            highlights: [],
+            inlineHighlights: []
+        )
+
+        XCTAssertNotEqual(first, second)
     }
 
     func testSearchHighlightSignatureTracksSelectionChangesSeparately() {

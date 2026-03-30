@@ -96,11 +96,9 @@ public struct WorkspaceFileSystemService: Sendable {
         }
 
         let modificationDate = (attributes[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate
-        return WorkspaceEditorDocumentSnapshot(
+        return makeTextDocumentSnapshot(
             filePath: normalizedPath,
-            kind: .text,
             text: text,
-            isEditable: true,
             modificationDate: modificationDate
         )
     }
@@ -111,7 +109,13 @@ public struct WorkspaceFileSystemService: Sendable {
         let parentURL = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true, attributes: nil)
         try text.write(to: fileURL, atomically: true, encoding: .utf8)
-        return try loadDocument(at: normalizedPath)
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let modificationDate = (attributes[.modificationDate] as? Date)?.timeIntervalSinceReferenceDate
+        return makeTextDocumentSnapshot(
+            filePath: normalizedPath,
+            text: text,
+            modificationDate: modificationDate
+        )
     }
 
     @discardableResult
@@ -217,6 +221,21 @@ public struct WorkspaceFileSystemService: Sendable {
             return nil
         }
         return modificationDate.timeIntervalSinceReferenceDate
+    }
+
+    private func makeTextDocumentSnapshot(
+        filePath: String,
+        text: String,
+        modificationDate: SwiftDate?
+    ) -> WorkspaceEditorDocumentSnapshot {
+        WorkspaceEditorDocumentSnapshot(
+            filePath: filePath,
+            kind: .text,
+            text: text,
+            isEditable: true,
+            modificationDate: modificationDate,
+            contentFingerprint: workspaceEditorContentFingerprint(text)
+        )
     }
 
     private func sanitizeFileSystemName(_ name: String) throws -> String {

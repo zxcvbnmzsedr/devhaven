@@ -19,6 +19,17 @@ public enum WorkspaceEditorTabOpeningPolicy: String, Equatable, Sendable {
     case pinned
 }
 
+public func workspaceEditorContentFingerprint(_ text: String) -> UInt64 {
+    var hash: UInt64 = 14_695_981_039_346_656_037
+    for byte in text.utf8 {
+        hash ^= UInt64(byte)
+        hash &*= 1_099_511_628_211
+    }
+    hash ^= UInt64(text.utf8.count)
+    hash &*= 1_099_511_628_211
+    return hash
+}
+
 public enum WorkspaceEditorSyntaxStyle: String, Equatable, Sendable {
     case plainText
     case swift
@@ -119,6 +130,45 @@ public struct WorkspaceEditorDisplayOptions: Codable, Equatable, Sendable {
     }
 }
 
+public struct WorkspaceEditorSearchPresentationState: Equatable, Sendable {
+    public var query: String
+    public var replacement: String
+    public var isPresented: Bool
+    public var showsReplace: Bool
+    public var isCaseSensitive: Bool
+    public var matchesWholeWords: Bool
+    public var usesRegularExpression: Bool
+    public var preservesReplacementCase: Bool
+
+    public init(
+        query: String = "",
+        replacement: String = "",
+        isPresented: Bool = false,
+        showsReplace: Bool = false,
+        isCaseSensitive: Bool = false,
+        matchesWholeWords: Bool = false,
+        usesRegularExpression: Bool = false,
+        preservesReplacementCase: Bool = false
+    ) {
+        self.query = query
+        self.replacement = replacement
+        self.isPresented = isPresented
+        self.showsReplace = showsReplace
+        self.isCaseSensitive = isCaseSensitive
+        self.matchesWholeWords = matchesWholeWords
+        self.usesRegularExpression = usesRegularExpression
+        self.preservesReplacementCase = preservesReplacementCase
+    }
+}
+
+public struct WorkspaceEditorRuntimeSessionState: Equatable, Sendable {
+    public var searchPresentation: WorkspaceEditorSearchPresentationState
+
+    public init(searchPresentation: WorkspaceEditorSearchPresentationState = .init()) {
+        self.searchPresentation = searchPresentation
+    }
+}
+
 public struct WorkspaceEditorGroupState: Codable, Identifiable, Equatable, Sendable {
     public var id: String
     public var tabIDs: [String]
@@ -163,6 +213,7 @@ public struct WorkspaceEditorDocumentSnapshot: Equatable, Sendable {
     public var isEditable: Bool
     public var message: String?
     public var modificationDate: SwiftDate?
+    public var contentFingerprint: UInt64?
 
     public init(
         filePath: String,
@@ -170,7 +221,8 @@ public struct WorkspaceEditorDocumentSnapshot: Equatable, Sendable {
         text: String = "",
         isEditable: Bool,
         message: String? = nil,
-        modificationDate: SwiftDate? = nil
+        modificationDate: SwiftDate? = nil,
+        contentFingerprint: UInt64? = nil
     ) {
         self.filePath = filePath
         self.kind = kind
@@ -178,6 +230,7 @@ public struct WorkspaceEditorDocumentSnapshot: Equatable, Sendable {
         self.isEditable = isEditable
         self.message = message
         self.modificationDate = modificationDate
+        self.contentFingerprint = contentFingerprint
     }
 }
 
@@ -198,6 +251,7 @@ public struct WorkspaceEditorTabState: Identifiable, Equatable, Sendable {
     public var externalChangeState: WorkspaceEditorExternalChangeState
     public var message: String?
     public var lastLoadedModificationDate: SwiftDate?
+    public var savedContentFingerprint: UInt64?
 
     public init(
         id: String,
@@ -215,7 +269,8 @@ public struct WorkspaceEditorTabState: Identifiable, Equatable, Sendable {
         isSaving: Bool = false,
         externalChangeState: WorkspaceEditorExternalChangeState = .inSync,
         message: String? = nil,
-        lastLoadedModificationDate: SwiftDate? = nil
+        lastLoadedModificationDate: SwiftDate? = nil,
+        savedContentFingerprint: UInt64? = nil
     ) {
         self.id = id
         self.identity = identity
@@ -233,6 +288,7 @@ public struct WorkspaceEditorTabState: Identifiable, Equatable, Sendable {
         self.externalChangeState = externalChangeState
         self.message = message
         self.lastLoadedModificationDate = lastLoadedModificationDate
+        self.savedContentFingerprint = savedContentFingerprint
     }
 }
 

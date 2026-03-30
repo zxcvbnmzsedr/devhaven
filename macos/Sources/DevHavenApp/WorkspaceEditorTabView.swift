@@ -1,7 +1,7 @@
 import SwiftUI
 import DevHavenCore
 
-private struct WorkspaceEditorSearchBarState: Equatable {
+struct WorkspaceEditorSearchBarState: Equatable {
     var query = ""
     var replacement = ""
     var isPresented = false
@@ -13,6 +13,34 @@ private struct WorkspaceEditorSearchBarState: Equatable {
 
     var effectiveQuery: String {
         isPresented ? query : ""
+    }
+}
+
+private extension WorkspaceEditorSearchBarState {
+    init(runtimeState: WorkspaceEditorSearchPresentationState) {
+        self.init(
+            query: runtimeState.query,
+            replacement: runtimeState.replacement,
+            isPresented: runtimeState.isPresented,
+            showsReplace: runtimeState.showsReplace,
+            isCaseSensitive: runtimeState.isCaseSensitive,
+            matchesWholeWords: runtimeState.matchesWholeWords,
+            usesRegularExpression: runtimeState.usesRegularExpression,
+            preservesReplacementCase: runtimeState.preservesReplacementCase
+        )
+    }
+
+    var runtimeState: WorkspaceEditorSearchPresentationState {
+        WorkspaceEditorSearchPresentationState(
+            query: query,
+            replacement: replacement,
+            isPresented: isPresented,
+            showsReplace: showsReplace,
+            isCaseSensitive: isCaseSensitive,
+            matchesWholeWords: matchesWholeWords,
+            usesRegularExpression: usesRegularExpression,
+            preservesReplacementCase: preservesReplacementCase
+        )
     }
 }
 
@@ -28,6 +56,15 @@ struct WorkspaceEditorTabView: View {
     @State private var selectedSearchSeed: String?
     @State private var goToLineDraft = ""
     @State private var isGoToLinePresented = false
+
+    init(viewModel: NativeAppViewModel, projectPath: String, tabID: String) {
+        self.viewModel = viewModel
+        self.projectPath = projectPath
+        self.tabID = tabID
+
+        let session = viewModel.workspaceEditorRuntimeSession(for: projectPath, tabID: tabID)
+        _searchBarState = State(initialValue: WorkspaceEditorSearchBarState(runtimeState: session.searchPresentation))
+    }
 
     var body: some View {
         if let tab = viewModel.workspaceEditorTabState(for: projectPath, tabID: tabID) {
@@ -49,9 +86,13 @@ struct WorkspaceEditorTabView: View {
             )
             .task(id: tabID) {
                 syncEditorCommandRouter()
-                await monitorExternalChanges()
+                restoreEditorSessionIfNeeded()
             }
             .onChange(of: tab.kind) { _, _ in
+                syncEditorCommandRouter()
+            }
+            .onChange(of: searchBarState) { _, nextValue in
+                persistEditorSession(searchBarState: nextValue)
                 syncEditorCommandRouter()
             }
             .onChange(of: selectedSearchSeed) { _, _ in
@@ -529,6 +570,19 @@ struct WorkspaceEditorTabView: View {
         viewModel.updateWorkspaceEditorDisplayOptions(nextOptions)
     }
 
+    private func persistEditorSession(searchBarState: WorkspaceEditorSearchBarState) {
+        var session = viewModel.workspaceEditorRuntimeSession(for: projectPath, tabID: tabID)
+        session.searchPresentation = searchBarState.runtimeState
+        viewModel.updateWorkspaceEditorRuntimeSession(session, tabID: tabID, in: projectPath)
+    }
+
+    private func restoreEditorSessionIfNeeded() {
+        guard searchBarState.isPresented else {
+            return
+        }
+        issueSearchRequest(.revealSearch)
+    }
+
     @ViewBuilder
     private var searchStatusView: some View {
         if let errorMessage = searchSessionState.errorMessage {
@@ -549,12 +603,5 @@ struct WorkspaceEditorTabView: View {
             return "\(currentMatchIndex) / \(searchSessionState.matchCount)"
         }
         return "\(searchSessionState.matchCount) 处匹配"
-    }
-
-    private func monitorExternalChanges() async {
-        while !Task.isCancelled {
-            viewModel.checkWorkspaceEditorTabExternalChange(tabID, in: projectPath)
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-        }
     }
 }

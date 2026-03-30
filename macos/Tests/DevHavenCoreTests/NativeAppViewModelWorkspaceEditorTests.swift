@@ -454,6 +454,56 @@ final class NativeAppViewModelWorkspaceEditorTests: XCTestCase {
         XCTAssertEqual(viewModel.snapshot.appState.settings.workspaceEditorDisplayOptions, nextOptions)
     }
 
+    @MainActor
+    func testDirtyFlagClearsWhenTextRevertsToSavedContent() throws {
+        let fileURL = projectURL.appendingPathComponent("Revert.swift")
+        let originalText = "struct Revert {}"
+        try originalText.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: homeURL))
+        viewModel.snapshot = NativeAppSnapshot(projects: [makeProject()])
+        viewModel.enterWorkspace(projectURL.path)
+        viewModel.openWorkspaceEditorTab(for: fileURL.path, in: projectURL.path)
+
+        let tabID = try XCTUnwrap(viewModel.activeWorkspaceEditorTabs.first?.id)
+
+        viewModel.updateWorkspaceEditorText("struct Revert { let dirty = true }", tabID: tabID, in: projectURL.path)
+        XCTAssertEqual(
+            viewModel.workspaceEditorTabState(for: projectURL.path, tabID: tabID)?.isDirty,
+            true
+        )
+
+        viewModel.updateWorkspaceEditorText(originalText, tabID: tabID, in: projectURL.path)
+        XCTAssertEqual(
+            viewModel.workspaceEditorTabState(for: projectURL.path, tabID: tabID)?.isDirty,
+            false
+        )
+    }
+
+    @MainActor
+    func testExternalFileChangeWatcherUpdatesEditorStateWithoutPolling() throws {
+        let fileURL = projectURL.appendingPathComponent("Watched.swift")
+        try "struct Watched {}".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: homeURL))
+        viewModel.snapshot = NativeAppSnapshot(projects: [makeProject()])
+        viewModel.enterWorkspace(projectURL.path)
+        viewModel.openWorkspaceEditorTab(for: fileURL.path, in: projectURL.path)
+        let tabID = try XCTUnwrap(viewModel.activeWorkspaceEditorTabs.first?.id)
+
+        try "struct Watched { let external = true }".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let updated = waitUntil(timeout: 1.0) { [self] in
+            viewModel.workspaceEditorTabState(for: self.projectURL.path, tabID: tabID)?.externalChangeState == .modifiedOnDisk
+        }
+
+        XCTAssertTrue(updated)
+        XCTAssertEqual(
+            viewModel.workspaceEditorTabState(for: projectURL.path, tabID: tabID)?.externalChangeState,
+            .modifiedOnDisk
+        )
+    }
+
     private func makeProject() -> Project {
         let now = Date().timeIntervalSinceReferenceDate
         return Project(
@@ -472,6 +522,22 @@ final class NativeAppViewModelWorkspaceEditorTests: XCTestCase {
             created: now,
             checked: now
         )
+    }
+
+    @MainActor
+    @discardableResult
+    private func waitUntil(
+        timeout: TimeInterval,
+        condition: @escaping @MainActor () -> Bool
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        return condition()
     }
 }
 

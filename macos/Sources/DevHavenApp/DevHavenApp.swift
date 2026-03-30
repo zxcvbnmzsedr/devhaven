@@ -94,7 +94,7 @@ struct DevHavenApp: App {
                 .disabled(viewModel.activeWorkspaceController?.selectedPane == nil)
             }
 
-            WorkspaceTerminalCommands()
+            WorkspaceSearchCommands()
             WorkspaceEditorCommands()
             WorkspaceProjectCommands(
                 shortcut: viewModel.snapshot.appState.settings.workspaceOpenProjectShortcut

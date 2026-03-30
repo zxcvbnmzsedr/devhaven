@@ -86,6 +86,36 @@ final class WorkspaceEditorTabEditingPersistenceTests: XCTestCase {
         XCTAssertEqual(textView.string, insertedText)
     }
 
+    @MainActor
+    func testSearchSessionStatePersistsPerTabInRuntimeSession() throws {
+        let expected = WorkspaceEditorSearchPresentationState(
+            query: "alpha",
+            replacement: "beta",
+            isPresented: true,
+            showsReplace: true,
+            isCaseSensitive: true,
+            matchesWholeWords: true,
+            usesRegularExpression: false,
+            preservesReplacementCase: true
+        )
+        let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: homeURL))
+        viewModel.snapshot = NativeAppSnapshot(projects: [makeProject()])
+        viewModel.enterWorkspace(projectURL.path)
+
+        let fileURL = projectURL.appendingPathComponent("Session.swift")
+        try "struct Session {}".write(to: fileURL, atomically: true, encoding: .utf8)
+        viewModel.openWorkspaceEditorTab(for: fileURL.path, in: projectURL.path)
+        let actualTabID = try XCTUnwrap(viewModel.activeWorkspaceEditorTabs.first?.id)
+
+        var session = viewModel.workspaceEditorRuntimeSession(for: projectURL.path, tabID: actualTabID)
+        session.searchPresentation = expected
+        viewModel.updateWorkspaceEditorRuntimeSession(session, tabID: actualTabID, in: projectURL.path)
+
+        let restored = viewModel.workspaceEditorRuntimeSession(for: projectURL.path, tabID: actualTabID)
+
+        XCTAssertEqual(restored.searchPresentation, expected)
+    }
+
     private func makeProject() -> Project {
         let now = Date().timeIntervalSinceReferenceDate
         return Project(

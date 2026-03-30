@@ -26,43 +26,9 @@ final class WorkspaceTerminalCommandRouter {
 }
 
 struct WorkspaceTerminalCommands: Commands {
-    @FocusedValue(\.workspaceTerminalCommandRouter) private var terminalCommandRouter
-    @FocusedValue(\.workspaceTerminalSearchActionsEnabled) private var terminalSearchActionsEnabled
-
     var body: some Commands {
         CommandGroup(after: .textEditing) {
-            Button("查找…") {
-                terminalCommandRouter?.startSearchAction()
-            }
-            .keyboardShortcut("f", modifiers: [.command])
-            .disabled(!(terminalSearchActionsEnabled ?? false))
-
-            Button("查找下一个") {
-                terminalCommandRouter?.navigateSearchNextAction()
-            }
-            .keyboardShortcut("g", modifiers: [.command])
-            .disabled(!(terminalSearchActionsEnabled ?? false))
-
-            Button("查找上一个") {
-                terminalCommandRouter?.navigateSearchPreviousAction()
-            }
-            .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(!(terminalSearchActionsEnabled ?? false))
-
-            Divider()
-
-            Button("隐藏查找栏") {
-                terminalCommandRouter?.endSearchAction()
-            }
-            .disabled(!(terminalSearchActionsEnabled ?? false))
-
-            Divider()
-
-            Button("使用所选内容查找") {
-                terminalCommandRouter?.searchSelectionAction()
-            }
-            .keyboardShortcut("e", modifiers: [.command])
-            .disabled(!(terminalSearchActionsEnabled ?? false))
+            EmptyView()
         }
     }
 }
