@@ -6,6 +6,17 @@ struct WorkspaceShellView: View {
     @State private var terminalCommandRouter = WorkspaceTerminalCommandRouter()
     @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
 
+    /// Combined hash of all tool-window properties that require a sync call,
+    /// so we can observe them with a single `.onChange` instead of five.
+    private var toolWindowSyncToken: Int {
+        var hasher = Hasher()
+        hasher.combine(viewModel.workspaceBottomToolWindowState.activeKind)
+        hasher.combine(viewModel.workspaceBottomToolWindowState.isVisible)
+        hasher.combine(viewModel.workspaceSideToolWindowState.activeKind)
+        hasher.combine(viewModel.workspaceSideToolWindowState.isVisible)
+        return hasher.finalize()
+    }
+
     var body: some View {
         workspaceContent
             .background(NativeTheme.window)
@@ -45,16 +56,7 @@ struct WorkspaceShellView: View {
                 warmActiveWorkspace()
                 viewModel.syncActiveWorkspaceToolWindowContext()
             }
-            .onChange(of: viewModel.workspaceBottomToolWindowState.activeKind) { _, _ in
-                viewModel.syncActiveWorkspaceToolWindowContext()
-            }
-            .onChange(of: viewModel.workspaceBottomToolWindowState.isVisible) { _, _ in
-                viewModel.syncActiveWorkspaceToolWindowContext()
-            }
-            .onChange(of: viewModel.workspaceSideToolWindowState.activeKind) { _, _ in
-                viewModel.syncActiveWorkspaceToolWindowContext()
-            }
-            .onChange(of: viewModel.workspaceSideToolWindowState.isVisible) { _, _ in
+            .onChange(of: toolWindowSyncToken) { _, _ in
                 viewModel.syncActiveWorkspaceToolWindowContext()
             }
             .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
@@ -84,26 +86,19 @@ struct WorkspaceShellView: View {
             uniqueKeysWithValues: viewModel.openWorkspaceProjects.map { ($0.path, $0) }
         )
         return ZStack {
-            ForEach(viewModel.openWorkspaceSessions) { session in
-                let project: Project? = if let workspaceRootContext = session.workspaceRootContext {
-                    .workspaceRoot(name: workspaceRootContext.workspaceName, path: session.projectPath)
-                } else if session.isQuickTerminal {
-                    .quickTerminal(at: session.projectPath)
-                } else {
-                    openWorkspaceProjectsByPath[session.projectPath]
-                }
-                if let project {
-                    WorkspaceHostView(
-                        viewModel: viewModel,
-                        project: project,
-                        workspace: session.controller,
-                        terminalSessionStore: terminalStoreRegistry.store(for: session.projectPath)
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(session.projectPath == viewModel.activeWorkspaceProjectPath ? 1 : 0)
-                    .allowsHitTesting(session.projectPath == viewModel.activeWorkspaceProjectPath)
-                    .accessibilityHidden(session.projectPath != viewModel.activeWorkspaceProjectPath)
-                }
+            if let session = displayedWorkspaceSession,
+               let project = displayedProject(
+                for: session,
+                openWorkspaceProjectsByPath: openWorkspaceProjectsByPath
+               ) {
+                WorkspaceHostView(
+                    viewModel: viewModel,
+                    project: project,
+                    workspace: session.controller,
+                    terminalSessionStore: terminalStoreRegistry.store(for: session.projectPath)
+                )
+                .id(session.projectPath)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .contentShape(Rectangle())
@@ -324,6 +319,27 @@ struct WorkspaceShellView: View {
     private var terminalSearchActionsEnabled: Bool {
         viewModel.workspaceFocusedArea == .terminal
             && viewModel.activeWorkspaceController?.selectedPane != nil
+    }
+
+    private var displayedWorkspaceSession: OpenWorkspaceSessionState? {
+        if let activeProjectPath = viewModel.activeWorkspaceProjectPath,
+           let activeSession = viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activeProjectPath }) {
+            return activeSession
+        }
+        return viewModel.openWorkspaceSessions.first
+    }
+
+    private func displayedProject(
+        for session: OpenWorkspaceSessionState,
+        openWorkspaceProjectsByPath: [String: Project]
+    ) -> Project? {
+        if let workspaceRootContext = session.workspaceRootContext {
+            return .workspaceRoot(name: workspaceRootContext.workspaceName, path: session.projectPath)
+        }
+        if session.isQuickTerminal {
+            return .quickTerminal(at: session.projectPath)
+        }
+        return openWorkspaceProjectsByPath[session.projectPath]
     }
 
     private func syncTerminalCommandRouter() {

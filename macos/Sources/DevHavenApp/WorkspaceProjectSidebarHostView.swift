@@ -2,15 +2,24 @@ import SwiftUI
 import DevHavenCore
 
 private struct WorktreeDeleteRequest: Identifiable, Equatable {
-    let rootProjectPath: String
-    let worktreePath: String
+    let presentation: WorkspaceWorktreeDeletePresentation
 
-    var id: String { "\(rootProjectPath)|\(worktreePath)" }
+    var rootProjectPath: String { presentation.rootProjectPath }
+    var worktreePath: String { presentation.worktreePath }
+    var id: String { presentation.id }
 }
 
 private struct WorkspaceDialogProject: Identifiable {
     let project: Project
     var id: String { project.path }
+}
+
+private struct DeferredWorktreeCreateRequest: Equatable {
+    let rootProjectPath: String
+    let branch: String
+    let createBranch: Bool
+    let baseBranch: String?
+    let autoOpen: Bool
 }
 
 private struct WorkspaceAlignmentEditorContext: Identifiable {
@@ -37,6 +46,7 @@ struct WorkspaceProjectSidebarHostView: View {
     @StateObject private var sidebarProjectionStore = WorkspaceSidebarProjectionStore()
     @State private var isProjectPickerPresented = false
     @State private var worktreeDialogProjectPath: String?
+    @State private var deferredWorktreeCreateRequest: DeferredWorktreeCreateRequest?
     @State private var pendingDeleteRequest: WorktreeDeleteRequest?
     @State private var alignmentEditorContext: WorkspaceAlignmentEditorContext?
     @State private var alignmentEditorIsSubmitting = false
@@ -94,7 +104,13 @@ struct WorkspaceProjectSidebarHostView: View {
                 }
             },
             onRequestDeleteWorktree: { rootProjectPath, worktreePath in
-                pendingDeleteRequest = WorktreeDeleteRequest(rootProjectPath: rootProjectPath, worktreePath: worktreePath)
+                guard let presentation = viewModel.workspaceWorktreeDeletePresentation(
+                    for: worktreePath,
+                    from: rootProjectPath
+                ) else {
+                    return
+                }
+                pendingDeleteRequest = WorktreeDeleteRequest(presentation: presentation)
             },
             onFocusNotification: viewModel.focusWorkspaceNotification,
             onCloseProject: viewModel.closeWorkspaceProject,
@@ -208,8 +224,14 @@ struct WorkspaceProjectSidebarHostView: View {
                 loadWorktrees: { try await viewModel.listProjectWorktrees(for: $0) },
                 managedPathPreview: { try viewModel.managedWorktreePathPreview(for: $0, branch: $1) },
                 onCreateWorktree: { branch, createBranch, baseBranch, autoOpen in
-                    try viewModel.startCreateWorkspaceWorktree(
+                    try viewModel.validateStartCreateWorkspaceWorktree(
                         from: dialogProject.project.path,
+                        branch: branch,
+                        createBranch: createBranch,
+                        baseBranch: baseBranch
+                    )
+                    deferredWorktreeCreateRequest = DeferredWorktreeCreateRequest(
+                        rootProjectPath: dialogProject.project.path,
                         branch: branch,
                         createBranch: createBranch,
                         baseBranch: baseBranch,
@@ -227,6 +249,26 @@ struct WorkspaceProjectSidebarHostView: View {
                 onClose: { worktreeDialogProjectPath = nil }
             )
             .preferredColorScheme(.dark)
+        }
+        .onChange(of: worktreeDialogProjectPath) { _, newValue in
+            guard newValue == nil, let request = deferredWorktreeCreateRequest else {
+                return
+            }
+            deferredWorktreeCreateRequest = nil
+            Task { @MainActor in
+                do {
+                    // 先关闭 `.sheet`，再启动创建任务；否则全局 overlay 会被 sheet 遮住，用户看不到进度面板。
+                    try viewModel.startCreateWorkspaceWorktree(
+                        from: request.rootProjectPath,
+                        branch: request.branch,
+                        createBranch: request.createBranch,
+                        baseBranch: request.baseBranch,
+                        autoOpen: request.autoOpen
+                    )
+                } catch {
+                    viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
         }
         .sheet(item: $alignmentEditorContext) { context in
             WorkspaceAlignmentEditorSheet(
@@ -260,14 +302,14 @@ struct WorkspaceProjectSidebarHostView: View {
             .preferredColorScheme(.dark)
         }
         .confirmationDialog(
-            "删除 worktree",
+            pendingDeleteRequest?.presentation.title ?? "删除 worktree",
             isPresented: Binding(
                 get: { pendingDeleteRequest != nil },
                 set: { if !$0 { pendingDeleteRequest = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("删除", role: .destructive) {
+            Button(pendingDeleteRequest?.presentation.actionTitle ?? "删除", role: .destructive) {
                 guard let pendingDeleteRequest else {
                     return
                 }
@@ -288,7 +330,7 @@ struct WorkspaceProjectSidebarHostView: View {
             }
         } message: {
             if let pendingDeleteRequest {
-                Text("将删除 \(pendingDeleteRequest.worktreePath)，并丢弃其中未提交修改与未跟踪文件。若该 worktree 由 DevHaven 创建，还会尝试删除对应本地分支。")
+                Text(pendingDeleteRequest.presentation.message)
             }
         }
         .alert(
@@ -481,7 +523,10 @@ struct WorkspaceProjectSidebarHostView: View {
     private func workspaceAlignmentProjectName(for path: String) -> String {
         sidebarProjectionStore.projection.workspaceAlignmentProjectOptions
             .first(where: { $0.path == path })?.name
-        ?? URL(fileURLWithPath: path).lastPathComponent
+        ?? {
+            let projectName = (path as NSString).lastPathComponent
+            return projectName.isEmpty ? path : projectName
+        }()
     }
 
     private func workspaceAlignmentDefaultAlias(for path: String) -> String {

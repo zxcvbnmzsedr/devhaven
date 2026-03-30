@@ -13,8 +13,9 @@ struct WorkspaceHostView: View {
 
     var body: some View {
         let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
-        let presentedTabs = viewModel.workspacePresentedTabs(for: project.path)
-        let selectedPresentedTab = viewModel.workspaceSelectedPresentedTab(for: project.path)
+        let presentedTabSnapshot = viewModel.workspacePresentedTabSnapshot(for: project.path)
+        let presentedTabs = presentedTabSnapshot.items
+        let selectedPresentedTab = presentedTabSnapshot.selection
         let runToolbarState = viewModel.workspaceRunToolbarState(for: project.path)
 
         VStack(alignment: .leading, spacing: chromePolicy.showsWorkspaceHeader ? 16 : 0) {
@@ -364,9 +365,11 @@ struct WorkspaceHostView: View {
         let terminalTabs = workspace.tabs
         return ZStack {
             ForEach(terminalTabs) { tab in
+                let isSelectedTab = tab.id == workspace.selectedTabId
+                    && (viewModel.activeWorkspaceProjectPath == nil || isWorkspaceVisible)
                 WorkspaceSplitTreeView(
                     tab: tab,
-                    isTabSelected: tab.id == workspace.selectedTabId,
+                    isTabSelected: isSelectedTab,
                     surfaceModelForPane: surfaceModel,
                     surfaceActivityForPane: surfaceActivity,
                     onFocusPane: { workspace.focusPane($0) },
@@ -415,9 +418,9 @@ struct WorkspaceHostView: View {
                     }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .opacity(tab.id == workspace.selectedTabId ? 1 : 0)
-                .allowsHitTesting(tab.id == workspace.selectedTabId)
-                .accessibilityHidden(tab.id != workspace.selectedTabId)
+                .opacity(isSelectedTab ? 1 : 0)
+                .allowsHitTesting(isSelectedTab)
+                .accessibilityHidden(!isSelectedTab)
             }
         }
     }

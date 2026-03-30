@@ -241,7 +241,10 @@ struct WorkspaceAlignmentEditorSheet: View {
     }
 
     private func projectName(for path: String) -> String {
-        availableProjects.first(where: { $0.path == path })?.name ?? URL(fileURLWithPath: path).lastPathComponent
+        availableProjects.first(where: { $0.path == path })?.name ?? {
+            let projectName = (path as NSString).lastPathComponent
+            return projectName.isEmpty ? path : projectName
+        }()
     }
 
     private func projectToggleLabel(_ project: Project) -> some View {
@@ -490,7 +493,10 @@ struct WorkspaceAlignmentAddProjectsSheet: View {
     }
 
     private func projectName(for path: String) -> String {
-        availableProjects.first(where: { $0.path == path })?.name ?? URL(fileURLWithPath: path).lastPathComponent
+        availableProjects.first(where: { $0.path == path })?.name ?? {
+            let projectName = (path as NSString).lastPathComponent
+            return projectName.isEmpty ? path : projectName
+        }()
     }
 
     private func makeDefaultMemberEntry(for projectPath: String) -> WorkspaceAlignmentMemberFormEntry {
