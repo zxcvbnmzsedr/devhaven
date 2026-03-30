@@ -17,6 +17,8 @@ struct WorkspaceGitIdeaLogView: View {
                     direction: .horizontal,
                     ratio: branchesPanelRatio,
                     onRatioChange: { branchesPanelRatio = $0 },
+                    minLeadingSize: 220,
+                    minTrailingSize: 420,
                     leading: {
                         WorkspaceGitIdeaLogBranchesPanelView(
                             viewModel: viewModel,
@@ -74,6 +76,8 @@ struct WorkspaceGitIdeaLogView: View {
             direction: .horizontal,
             ratio: rightSidebarRatio,
             onRatioChange: { rightSidebarRatio = $0 },
+            minLeadingSize: 420,
+            minTrailingSize: 280,
             leading: {
                 mainFramePrimaryColumn
             },

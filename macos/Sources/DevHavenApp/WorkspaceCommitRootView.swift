@@ -13,6 +13,8 @@ struct WorkspaceCommitRootView: View {
             direction: .vertical,
             ratio: topAreaRatio,
             onRatioChange: { topAreaRatio = $0 },
+            minLeadingSize: 180,
+            minTrailingSize: 220,
             onEqualize: { topAreaRatio = 0.7 }
         ) {
             WorkspaceCommitChangesBrowserView(

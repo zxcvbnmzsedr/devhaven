@@ -11,6 +11,8 @@ struct WorkspaceGitIdeaLogRightSidebarView: View {
             direction: .vertical,
             ratio: detailsRatio,
             onRatioChange: { detailsRatio = $0 },
+            minLeadingSize: 180,
+            minTrailingSize: 160,
             leading: {
                 WorkspaceGitIdeaLogChangesView(viewModel: viewModel, onOpenDiff: onOpenDiff)
                     .background(NativeTheme.window)
