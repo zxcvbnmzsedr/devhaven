@@ -116,17 +116,23 @@ public struct WorkspacePresentedTabItem: Identifiable, Equatable, Sendable {
     public var title: String
     public var selection: WorkspacePresentedTabSelection
     public var isSelected: Bool
+    public var isPinned: Bool
+    public var isPreview: Bool
 
     public init(
         id: String,
         title: String,
         selection: WorkspacePresentedTabSelection,
-        isSelected: Bool
+        isSelected: Bool,
+        isPinned: Bool = false,
+        isPreview: Bool = false
     ) {
         self.id = id
         self.title = title
         self.selection = selection
         self.isSelected = isSelected
+        self.isPinned = isPinned
+        self.isPreview = isPreview
     }
 }
 

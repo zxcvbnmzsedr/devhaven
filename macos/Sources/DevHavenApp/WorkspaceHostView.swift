@@ -32,15 +32,35 @@ struct WorkspaceHostView: View {
                     onCloseTab: { selection in
                         closePresentedTab(selection)
                     },
+                    onPromoteEditorPreview: { tabID in
+                        viewModel.promoteWorkspaceEditorTabToRegular(tabID, in: project.path)
+                    },
+                    onSetEditorPinned: { tabID, isPinned in
+                        viewModel.setWorkspaceEditorTabPinned(isPinned, tabID: tabID, in: project.path)
+                    },
+                    onCloseOtherEditorTabs: { tabID in
+                        viewModel.closeOtherWorkspaceEditorTabs(keeping: tabID, in: project.path)
+                    },
+                    onCloseEditorTabsToRight: { tabID in
+                        viewModel.closeWorkspaceEditorTabsToRight(of: tabID, in: project.path)
+                    },
                     onCreateTab: {
                         let tab = workspace.createTab()
                         viewModel.selectWorkspacePresentedTab(.terminal(tab.id), in: project.path)
                     },
                     onSplitHorizontally: {
-                        _ = workspace.splitFocusedPane(direction: .down)
+                        if case .editor = selectedPresentedTab {
+                            viewModel.splitWorkspaceEditorActiveGroup(axis: .vertical, in: project.path)
+                        } else {
+                            _ = workspace.splitFocusedPane(direction: .down)
+                        }
                     },
                     onSplitVertically: {
-                        _ = workspace.splitFocusedPane(direction: .right)
+                        if case .editor = selectedPresentedTab {
+                            viewModel.splitWorkspaceEditorActiveGroup(axis: .horizontal, in: project.path)
+                        } else {
+                            _ = workspace.splitFocusedPane(direction: .right)
+                        }
                     }
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -81,6 +101,18 @@ struct WorkspaceHostView: View {
             WorkspaceRunConfigurationSheet(
                 viewModel: viewModel,
                 project: project
+            )
+        }
+        .alert(item: pendingEditorCloseRequestBinding) { request in
+            Alert(
+                title: Text("关闭未保存文件？"),
+                message: Text(editorCloseRequestMessage(request)),
+                primaryButton: .destructive(Text("直接关闭")) {
+                    viewModel.confirmWorkspaceEditorCloseRequest()
+                },
+                secondaryButton: .cancel {
+                    viewModel.dismissWorkspaceEditorCloseRequest()
+                }
             )
         }
         .background {
@@ -244,18 +276,57 @@ struct WorkspaceHostView: View {
         Set(workspace.tabs.flatMap(\.leaves).map(\.id))
     }
 
+    private var pendingEditorCloseRequestBinding: Binding<WorkspaceEditorCloseRequest?> {
+        Binding(
+            get: {
+                guard let request = viewModel.workspacePendingEditorCloseRequest,
+                      request.projectPath == project.path
+                else {
+                    return nil
+                }
+                return request
+            },
+            set: { nextValue in
+                if nextValue == nil {
+                    viewModel.dismissWorkspaceEditorCloseRequest()
+                }
+            }
+        )
+    }
+
     private func canSplit(for selection: WorkspacePresentedTabSelection?) -> Bool {
-        guard case .terminal = selection else {
+        switch selection {
+        case .terminal:
+            return workspace.selectedPane != nil
+        case .editor:
+            return true
+        case .diff, .none:
             return false
         }
-        return workspace.selectedPane != nil
+    }
+
+    private func editorCloseRequestMessage(_ request: WorkspaceEditorCloseRequest) -> String {
+        var message = "文件“\(request.title)”还有未保存修改。直接关闭会丢失当前编辑内容。"
+        if request.externalChangeState == .modifiedOnDisk {
+            message += "\n\n磁盘上的原文件也已经发生变化。"
+        } else if request.externalChangeState == .removedOnDisk {
+            message += "\n\n磁盘上的原文件已经被删除。"
+        }
+        return message
     }
 
     @ViewBuilder
     private func workspacePresentedContent(_ selection: WorkspacePresentedTabSelection?) -> some View {
         switch selection {
         case let .editor(editorTabID):
-            if viewModel.workspaceEditorTabState(for: project.path, tabID: editorTabID) != nil {
+            if let presentation = viewModel.workspaceEditorPresentationState(for: project.path),
+               presentation.groups.count > 1 {
+                WorkspaceEditorSplitContentView(
+                    viewModel: viewModel,
+                    projectPath: project.path,
+                    presentation: presentation
+                )
+            } else if viewModel.workspaceEditorTabState(for: project.path, tabID: editorTabID) != nil {
                 WorkspaceEditorTabView(
                     viewModel: viewModel,
                     projectPath: project.path,

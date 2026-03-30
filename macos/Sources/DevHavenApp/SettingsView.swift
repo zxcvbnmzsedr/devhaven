@@ -53,6 +53,7 @@ struct SettingsView: View {
 
     @State private var gitIdentities: [GitIdentity]
     @State private var workspaceOpenProjectShortcut: AppMenuShortcut
+    @State private var workspaceEditorDisplayOptions: WorkspaceEditorDisplayOptions
     @State private var updateChannel: UpdateChannel
     @State private var updateAutomaticallyChecks: Bool
     @State private var updateAutomaticallyDownloads: Bool
@@ -91,6 +92,7 @@ struct SettingsView: View {
         self.onCopyUpdateDiagnostics = onCopyUpdateDiagnostics
         _gitIdentities = State(initialValue: settings.gitIdentities)
         _workspaceOpenProjectShortcut = State(initialValue: settings.workspaceOpenProjectShortcut)
+        _workspaceEditorDisplayOptions = State(initialValue: settings.workspaceEditorDisplayOptions)
         _updateChannel = State(initialValue: settings.updateChannel)
         _updateAutomaticallyChecks = State(initialValue: settings.updateAutomaticallyChecks)
         _updateAutomaticallyDownloads = State(initialValue: settings.updateAutomaticallyDownloads)
@@ -252,6 +254,36 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(NativeTheme.textSecondary)
                 }
+            }
+
+            settingsCard(title: "编辑器显示", description: "配置普通文件编辑器的默认显示选项，尽量贴近 IDEA 的常用 view options。") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("显示行号", isOn: $workspaceEditorDisplayOptions.showsLineNumbers)
+                    Toggle("高亮当前行", isOn: $workspaceEditorDisplayOptions.highlightsCurrentLine)
+                    Toggle("软换行", isOn: $workspaceEditorDisplayOptions.usesSoftWraps)
+                    Toggle("显示空白字符", isOn: $workspaceEditorDisplayOptions.showsWhitespaceCharacters)
+                    Toggle("显示右边界", isOn: $workspaceEditorDisplayOptions.showsRightMargin)
+
+                    if workspaceEditorDisplayOptions.showsRightMargin {
+                        HStack(spacing: 12) {
+                            Text("右边界列")
+                                .font(.caption)
+                                .foregroundStyle(NativeTheme.textSecondary)
+
+                            Stepper(
+                                value: $workspaceEditorDisplayOptions.rightMarginColumn,
+                                in: 40...240,
+                                step: 4
+                            ) {
+                                Text("\(workspaceEditorDisplayOptions.rightMarginColumn)")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(NativeTheme.textPrimary)
+                            }
+                            .labelsHidden()
+                        }
+                    }
+                }
+                .toggleStyle(.switch)
             }
 
             settingsCard(title: "仓库边界", description: "3.0.0 起 GitHub Release 只发布 macOS 原生 `.app`。") {
@@ -501,6 +533,7 @@ struct SettingsView: View {
     private var nextSettings: AppSettings {
         AppSettings(
             editorOpenTool: originalSettings.editorOpenTool,
+            workspaceEditorDisplayOptions: workspaceEditorDisplayOptions,
             terminalOpenTool: originalSettings.terminalOpenTool,
             terminalUseWebglRenderer: originalSettings.terminalUseWebglRenderer,
             terminalTheme: originalSettings.terminalTheme,
@@ -532,6 +565,7 @@ struct SettingsView: View {
                 || !$0.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
             || workspaceOpenProjectShortcut != originalSettings.workspaceOpenProjectShortcut
+            || workspaceEditorDisplayOptions != originalSettings.workspaceEditorDisplayOptions
             || updateChannel != originalSettings.updateChannel
             || updateAutomaticallyChecks != originalSettings.updateAutomaticallyChecks
             || updateAutomaticallyDownloads != originalSettings.updateAutomaticallyDownloads

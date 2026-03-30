@@ -33,6 +33,11 @@ private struct DisplayProjectLookupKey: Hashable {
     let rootProjectPath: String?
 }
 
+private struct WorkspaceEditorBatchCloseState {
+    let projectPath: String
+    let remainingTabIDs: [String]
+}
+
 @MainActor
 @Observable
 public final class NativeAppViewModel {
@@ -58,6 +63,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var projectDocumentLoadRevision = 0
     @ObservationIgnored private var isAgentSignalObservationStarted = false
     @ObservationIgnored private var displayProjectCacheByLookupKey: [DisplayProjectLookupKey: Project?] = [:]
+    @ObservationIgnored private var workspacePendingEditorBatchCloseState: WorkspaceEditorBatchCloseState?
 
     public enum DirectoryFilter: Equatable, Sendable {
         case all
@@ -135,8 +141,10 @@ public final class NativeAppViewModel {
     public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
     public var workspaceBottomToolWindowState: WorkspaceBottomToolWindowState
     public var workspaceFocusedArea: WorkspaceFocusedArea
+    public var workspacePendingEditorCloseRequest: WorkspaceEditorCloseRequest?
     private var workspaceProjectTreeStatesByProjectPath: [String: WorkspaceProjectTreeState]
     private var workspaceEditorTabsByProjectPath: [String: [WorkspaceEditorTabState]]
+    private var workspaceEditorPresentationByProjectPath: [String: WorkspaceEditorPresentationState]
     private var workspaceDiffTabsByProjectPath: [String: [WorkspaceDiffTabState]]
     private var workspaceSelectedPresentedTabByProjectPath: [String: WorkspacePresentedTabSelection]
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState] {
@@ -239,8 +247,11 @@ public final class NativeAppViewModel {
         self.workspaceSideToolWindowState = WorkspaceSideToolWindowState()
         self.workspaceBottomToolWindowState = WorkspaceBottomToolWindowState()
         self.workspaceFocusedArea = .terminal
+        self.workspacePendingEditorCloseRequest = nil
+        self.workspacePendingEditorBatchCloseState = nil
         self.workspaceProjectTreeStatesByProjectPath = [:]
         self.workspaceEditorTabsByProjectPath = [:]
+        self.workspaceEditorPresentationByProjectPath = [:]
         self.workspaceDiffTabsByProjectPath = [:]
         self.workspaceSelectedPresentedTabByProjectPath = [:]
         self.attentionStateByProjectPath = [:]
@@ -948,6 +959,13 @@ public final class NativeAppViewModel {
         return workspaceEditorTabsByProjectPath[activeWorkspaceProjectPath] ?? []
     }
 
+    public var activeWorkspaceEditorPresentationState: WorkspaceEditorPresentationState? {
+        guard let activeWorkspaceProjectPath else {
+            return nil
+        }
+        return workspaceEditorPresentationState(for: activeWorkspaceProjectPath)
+    }
+
     public var activeWorkspaceProjectTreeState: WorkspaceProjectTreeState? {
         guard let activeWorkspaceProjectPath else {
             return nil
@@ -970,7 +988,9 @@ public final class NativeAppViewModel {
                 id: tab.id,
                 title: tab.isDirty ? "● \(tab.title)" : tab.title,
                 selection: .editor(tab.id),
-                isSelected: selected == .editor(tab.id)
+                isSelected: selected == .editor(tab.id),
+                isPinned: tab.isPinned,
+                isPreview: tab.isPreview
             )
         }
         let diffTabs = (workspaceDiffTabsByProjectPath[projectPath] ?? []).map { tab in
@@ -982,6 +1002,10 @@ public final class NativeAppViewModel {
             )
         }
         return terminalTabs + editorTabs + diffTabs
+    }
+
+    public func workspaceEditorPresentationState(for projectPath: String) -> WorkspaceEditorPresentationState? {
+        resolvedWorkspaceEditorPresentationState(for: projectPath)
     }
 
     public func workspaceSelectedPresentedTab(for projectPath: String) -> WorkspacePresentedTabSelection? {
@@ -1176,7 +1200,8 @@ public final class NativeAppViewModel {
                 activeProjectPath: activeWorkspaceProjectPath,
                 selectedProjectPath: selectedProjectPath,
                 sessions: openWorkspaceSessions,
-                paneSnapshotProvider: workspacePaneSnapshotProvider
+                paneSnapshotProvider: workspacePaneSnapshotProvider,
+                editorRestoreProvider: workspaceEditorRestoreState(for:)
             )
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -1624,41 +1649,65 @@ public final class NativeAppViewModel {
         }
     }
 
-    public func openWorkspaceEditorTab(for filePath: String, in projectPath: String? = nil) {
+    public func openWorkspaceEditorTab(
+        for filePath: String,
+        in projectPath: String? = nil,
+        openingPolicy: WorkspaceEditorTabOpeningPolicy = .regular
+    ) {
         guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
             return
         }
 
         let normalizedFilePath = normalizePathForCompare(filePath)
-        if let existing = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: {
+        var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath] ?? []
+
+        if let existingIndex = tabs.firstIndex(where: {
             normalizePathForCompare($0.filePath) == normalizedFilePath
         }) {
-            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(existing.id)
-            workspaceFocusedArea = .editorTab(existing.id)
-            selectWorkspaceProjectTreeNode(existing.filePath, in: resolvedProjectPath)
+            let existingTabID = tabs[existingIndex].id
+            var existingTab = tabs.remove(at: existingIndex)
+            let previousPinnedState = existingTab.isPinned
+            applyWorkspaceEditorOpeningPolicy(openingPolicy, to: &existingTab)
+            reinsertWorkspaceEditorTab(
+                existingTab,
+                into: &tabs,
+                preferredIndex: previousPinnedState == existingTab.isPinned ? existingIndex : nil
+            )
+            workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+            if openingPolicy == .preview, !existingTab.isPinned {
+                assignWorkspaceEditorTab(existingTabID, toActiveGroupIn: resolvedProjectPath)
+            }
+            activateWorkspaceEditorTab(existingTabID, in: resolvedProjectPath)
+            scheduleWorkspaceRestoreAutosave()
             return
         }
 
         do {
             let document = try workspaceFileSystemService.loadDocument(at: normalizedFilePath)
-            let tab = WorkspaceEditorTabState(
-                id: "workspace-editor:\(UUID().uuidString.lowercased())",
-                identity: normalizedFilePath,
+            let reusedPreviewIndex = openingPolicy == .preview
+                ? tabs.firstIndex(where: { $0.isPreview && !$0.isPinned })
+                : nil
+            let tabID = reusedPreviewIndex.flatMap { tabs.indices.contains($0) ? tabs[$0].id : nil }
+                ?? "workspace-editor:\(UUID().uuidString.lowercased())"
+            let tab = makeWorkspaceEditorTabState(
+                tabID: tabID,
                 projectPath: resolvedProjectPath,
                 filePath: normalizedFilePath,
-                title: URL(fileURLWithPath: normalizedFilePath).lastPathComponent,
-                kind: document.kind,
-                text: document.text,
-                isEditable: document.isEditable,
-                externalChangeState: .inSync,
-                message: document.message,
-                lastLoadedModificationDate: document.modificationDate
+                document: document,
+                openingPolicy: openingPolicy
             )
-            workspaceEditorTabsByProjectPath[resolvedProjectPath, default: []].append(tab)
-            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(tab.id)
-            workspaceFocusedArea = .editorTab(tab.id)
-            selectWorkspaceProjectTreeNode(normalizedFilePath, in: resolvedProjectPath)
+
+            if let reusedPreviewIndex {
+                tabs[reusedPreviewIndex] = tab
+            } else {
+                reinsertWorkspaceEditorTab(tab, into: &tabs)
+            }
+
+            workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+            assignWorkspaceEditorTab(tab.id, toActiveGroupIn: resolvedProjectPath)
+            activateWorkspaceEditorTab(tab.id, in: resolvedProjectPath)
             errorMessage = nil
+            scheduleWorkspaceRestoreAutosave()
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -1769,9 +1818,16 @@ public final class NativeAppViewModel {
             return
         }
 
+        let shouldPromotePreviewTab = tabs[index].isPreview && tabs[index].text != text
         tabs[index].text = text
         tabs[index].isDirty = tabs[index].kind == .text
+        if shouldPromotePreviewTab {
+            tabs[index].isPreview = false
+        }
         workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+        if shouldPromotePreviewTab {
+            scheduleWorkspaceRestoreAutosave()
+        }
     }
 
     public func checkWorkspaceEditorTabExternalChange(_ tabID: String, in projectPath: String? = nil) {
@@ -1901,8 +1957,106 @@ public final class NativeAppViewModel {
     }
 
     public func closeWorkspaceEditorTab(_ tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return
+        }
+        closeWorkspaceEditorTabs([tabID], in: resolvedProjectPath)
+    }
+
+    public func closeOtherWorkspaceEditorTabs(keeping tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath]
+        else {
+            return
+        }
+        let tabIDsToClose = tabs.map(\.id).filter { $0 != tabID }
+        closeWorkspaceEditorTabs(tabIDsToClose, in: resolvedProjectPath)
+    }
+
+    public func closeWorkspaceEditorTabsToRight(of tabID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
+              let index = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return
+        }
+        let tabIDsToClose = tabs.suffix(from: index + 1).map(\.id)
+        closeWorkspaceEditorTabs(tabIDsToClose, in: resolvedProjectPath)
+    }
+
+    public func promoteWorkspaceEditorTabToRegular(_ tabID: String, in projectPath: String? = nil) {
         guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
               var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
+              let index = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return
+        }
+
+        guard tabs[index].isPreview else {
+            return
+        }
+
+        tabs[index].isPreview = false
+        workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func setWorkspaceEditorTabPinned(
+        _ isPinned: Bool,
+        tabID: String,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
+              let index = tabs.firstIndex(where: { $0.id == tabID })
+        else {
+            return
+        }
+
+        var tab = tabs.remove(at: index)
+        let previousPinnedState = tab.isPinned
+        let previousPreviewState = tab.isPreview
+
+        tab.isPinned = isPinned
+        if isPinned {
+            tab.isPreview = false
+        }
+
+        guard previousPinnedState != tab.isPinned || previousPreviewState != tab.isPreview else {
+            tabs.insert(tab, at: min(index, tabs.count))
+            workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+            return
+        }
+
+        let preferredIndex: Int? = isPinned ? nil : firstUnpinnedWorkspaceEditorInsertionIndex(in: tabs)
+        reinsertWorkspaceEditorTab(tab, into: &tabs, preferredIndex: preferredIndex)
+        workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func confirmWorkspaceEditorCloseRequest() {
+        guard let request = workspacePendingEditorCloseRequest else {
+            return
+        }
+        workspacePendingEditorCloseRequest = nil
+        forceCloseWorkspaceEditorTab(request.tabID, in: request.projectPath)
+        guard let batchCloseState = workspacePendingEditorBatchCloseState,
+              batchCloseState.projectPath == request.projectPath
+        else {
+            workspacePendingEditorBatchCloseState = nil
+            return
+        }
+        workspacePendingEditorBatchCloseState = nil
+        closeWorkspaceEditorTabs(batchCloseState.remainingTabIDs, in: batchCloseState.projectPath)
+    }
+
+    public func dismissWorkspaceEditorCloseRequest() {
+        workspacePendingEditorCloseRequest = nil
+        workspacePendingEditorBatchCloseState = nil
+    }
+
+    private func forceCloseWorkspaceEditorTab(_ tabID: String, in resolvedProjectPath: String) {
+        guard var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
               let removedIndex = tabs.firstIndex(where: { $0.id == tabID })
         else {
             return
@@ -1912,17 +2066,28 @@ public final class NativeAppViewModel {
         let isClosingSelectedTab = resolvedWorkspacePresentedTabSelection(for: resolvedProjectPath) == .editor(tabID)
         tabs.remove(at: removedIndex)
         workspaceEditorTabsByProjectPath[resolvedProjectPath] = tabs
+        workspaceEditorPresentationByProjectPath[resolvedProjectPath] = removingWorkspaceEditorTab(
+            tabID,
+            from: resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
+            projectPath: resolvedProjectPath
+        )
+        if let treeState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath],
+           treeState.selectedPath == removedTab.filePath {
+            selectWorkspaceProjectTreeNode(nil, in: resolvedProjectPath)
+        }
 
         guard isClosingSelectedTab else {
+            scheduleWorkspaceRestoreAutosave()
             return
         }
 
-        if tabs.indices.contains(removedIndex) {
-            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(tabs[removedIndex].id)
-            workspaceFocusedArea = .editorTab(tabs[removedIndex].id)
-        } else if let previous = tabs.last {
-            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(previous.id)
-            workspaceFocusedArea = .editorTab(previous.id)
+        if let nextEditorTabID = preferredWorkspaceEditorTabAfterClosing(
+            tabID,
+            removedIndex: removedIndex,
+            in: resolvedProjectPath,
+            remainingTabs: tabs
+        ) {
+            activateWorkspaceEditorTab(nextEditorTabID, in: resolvedProjectPath)
         } else if let diffTab = (workspaceDiffTabsByProjectPath[resolvedProjectPath] ?? []).last {
             workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(diffTab.id)
             workspaceFocusedArea = .diffTab(diffTab.id)
@@ -1936,9 +2101,37 @@ public final class NativeAppViewModel {
             workspaceFocusedArea = .terminal
         }
 
-        if let treeState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath],
-           treeState.selectedPath == removedTab.filePath {
-            selectWorkspaceProjectTreeNode(nil, in: resolvedProjectPath)
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    private func closeWorkspaceEditorTabs(_ tabIDs: [String], in resolvedProjectPath: String) {
+        workspacePendingEditorBatchCloseState = nil
+
+        for (index, tabID) in tabIDs.enumerated() {
+            guard let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID }) else {
+                continue
+            }
+
+            guard !tab.isDirty else {
+                workspacePendingEditorCloseRequest = WorkspaceEditorCloseRequest(
+                    projectPath: resolvedProjectPath,
+                    tabID: tabID,
+                    title: tab.title,
+                    filePath: tab.filePath,
+                    isDirty: tab.isDirty,
+                    externalChangeState: tab.externalChangeState
+                )
+                let remainingTabIDs = Array(tabIDs.suffix(from: index + 1))
+                workspacePendingEditorBatchCloseState = remainingTabIDs.isEmpty
+                    ? nil
+                    : WorkspaceEditorBatchCloseState(
+                        projectPath: resolvedProjectPath,
+                        remainingTabIDs: remainingTabIDs
+                    )
+                return
+            }
+
+            forceCloseWorkspaceEditorTab(tabID, in: resolvedProjectPath)
         }
     }
 
@@ -2151,8 +2344,7 @@ public final class NativeAppViewModel {
             guard let editorTab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID }) else {
                 return
             }
-            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .editor(tabID)
-            workspaceFocusedArea = .editorTab(tabID)
+            activateWorkspaceEditorTab(tabID, in: resolvedProjectPath)
             selectWorkspaceProjectTreeNode(editorTab.filePath, in: resolvedProjectPath)
         case let .diff(tabID):
             guard workspaceDiffTabsByProjectPath[resolvedProjectPath]?.contains(where: { $0.id == tabID }) == true else {
@@ -2161,6 +2353,159 @@ public final class NativeAppViewModel {
             workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .diff(tabID)
             workspaceFocusedArea = .diffTab(tabID)
         }
+
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func splitWorkspaceEditorActiveGroup(
+        axis: WorkspaceSplitAxis,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              workspaceEditorTabsByProjectPath[resolvedProjectPath]?.isEmpty == false
+        else {
+            return
+        }
+
+        var presentation = resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath)
+            ?? WorkspaceEditorPresentationState()
+        if presentation.groups.isEmpty {
+            presentation = makeDefaultWorkspaceEditorPresentationState(
+                tabs: workspaceEditorTabsByProjectPath[resolvedProjectPath] ?? []
+            )
+        }
+
+        let activeGroupID = presentation.activeGroupID ?? presentation.groups.first?.id
+        guard let activeGroupID,
+              let activeGroupIndex = presentation.groups.firstIndex(where: { $0.id == activeGroupID })
+        else {
+            return
+        }
+
+        if presentation.groups.count == 1 {
+            let newGroup = WorkspaceEditorGroupState(
+                id: "workspace-editor-group:\(UUID().uuidString.lowercased())"
+            )
+            presentation.groups.insert(newGroup, at: activeGroupIndex + 1)
+            presentation.activeGroupID = newGroup.id
+            presentation.splitAxis = axis
+            presentation.splitRatio = WorkspaceEditorPresentationState.defaultSplitRatio
+        } else {
+            presentation.activeGroupID = presentation.groups[min(activeGroupIndex + 1, presentation.groups.count - 1)].id
+            presentation.splitAxis = axis
+        }
+
+        workspaceEditorPresentationByProjectPath[resolvedProjectPath] = normalizedWorkspaceEditorPresentationState(
+            presentation,
+            projectPath: resolvedProjectPath
+        )
+        if let selectedTabID = presentation.groups.first(where: { $0.id == presentation.activeGroupID })?.selectedTabID {
+            activateWorkspaceEditorTab(selectedTabID, in: resolvedProjectPath)
+        }
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func selectWorkspaceEditorGroup(_ groupID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var presentation = resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
+              let groupIndex = presentation.groups.firstIndex(where: { $0.id == groupID })
+        else {
+            return
+        }
+
+        presentation.activeGroupID = presentation.groups[groupIndex].id
+        workspaceEditorPresentationByProjectPath[resolvedProjectPath] = normalizedWorkspaceEditorPresentationState(
+            presentation,
+            projectPath: resolvedProjectPath
+        )
+        if let selectedTabID = presentation.groups[groupIndex].selectedTabID {
+            activateWorkspaceEditorTab(selectedTabID, in: resolvedProjectPath)
+        }
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func moveWorkspaceEditorTab(
+        _ tabID: String,
+        toGroup groupID: String,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              workspaceEditorTabsByProjectPath[resolvedProjectPath]?.contains(where: { $0.id == tabID }) == true,
+              var presentation = resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
+              let targetGroupIndex = presentation.groups.firstIndex(where: { $0.id == groupID })
+        else {
+            return
+        }
+
+        for index in presentation.groups.indices {
+            presentation.groups[index].tabIDs.removeAll(where: { $0 == tabID })
+            if presentation.groups[index].selectedTabID == tabID {
+                presentation.groups[index].selectedTabID = presentation.groups[index].tabIDs.last
+            }
+        }
+
+        presentation.groups[targetGroupIndex].tabIDs.append(tabID)
+        presentation.groups[targetGroupIndex].selectedTabID = tabID
+        presentation.activeGroupID = presentation.groups[targetGroupIndex].id
+        workspaceEditorPresentationByProjectPath[resolvedProjectPath] = normalizedWorkspaceEditorPresentationState(
+            presentation,
+            projectPath: resolvedProjectPath
+        )
+        activateWorkspaceEditorTab(tabID, in: resolvedProjectPath)
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func closeWorkspaceEditorGroup(_ groupID: String, in projectPath: String? = nil) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var presentation = resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
+              presentation.groups.count > 1,
+              let closingGroupIndex = presentation.groups.firstIndex(where: { $0.id == groupID })
+        else {
+            return
+        }
+
+        let fallbackGroupIndex = closingGroupIndex == 0 ? 1 : 0
+        let movedTabIDs = presentation.groups[closingGroupIndex].tabIDs
+        for tabID in movedTabIDs where !presentation.groups[fallbackGroupIndex].tabIDs.contains(tabID) {
+            presentation.groups[fallbackGroupIndex].tabIDs.append(tabID)
+        }
+        if presentation.groups[fallbackGroupIndex].selectedTabID == nil {
+            presentation.groups[fallbackGroupIndex].selectedTabID = presentation.groups[closingGroupIndex].selectedTabID
+                ?? movedTabIDs.last
+        }
+        presentation.groups.remove(at: closingGroupIndex)
+        presentation.activeGroupID = presentation.groups.indices.contains(fallbackGroupIndex)
+            ? presentation.groups[fallbackGroupIndex].id
+            : presentation.groups.last?.id
+        presentation.splitAxis = presentation.groups.count > 1 ? presentation.splitAxis : nil
+        workspaceEditorPresentationByProjectPath[resolvedProjectPath] = normalizedWorkspaceEditorPresentationState(
+            presentation,
+            projectPath: resolvedProjectPath
+        )
+
+        if let selectedEditorTabID = activeWorkspaceSelectedEditorTabID,
+           workspaceEditorTabsByProjectPath[resolvedProjectPath]?.contains(where: { $0.id == selectedEditorTabID }) == true {
+            activateWorkspaceEditorTab(selectedEditorTabID, in: resolvedProjectPath)
+        } else if let nextTabID = presentation.groups.last?.selectedTabID ?? presentation.groups.last?.tabIDs.last {
+            activateWorkspaceEditorTab(nextTabID, in: resolvedProjectPath)
+        }
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func updateWorkspaceEditorSplitRatio(
+        _ ratio: Double,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              var presentation = resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
+              presentation.groups.count > 1
+        else {
+            return
+        }
+
+        presentation.splitRatio = min(max(ratio, 0.15), 0.85)
+        workspaceEditorPresentationByProjectPath[resolvedProjectPath] = presentation
+        scheduleWorkspaceRestoreAutosave()
     }
 
     public func closeWorkspaceDiffTab(_ tabID: String, in projectPath: String? = nil) {
@@ -2976,6 +3321,19 @@ public final class NativeAppViewModel {
         saveSettings(nextSettings)
     }
 
+    public var workspaceEditorDisplayOptions: WorkspaceEditorDisplayOptions {
+        snapshot.appState.settings.workspaceEditorDisplayOptions
+    }
+
+    public func updateWorkspaceEditorDisplayOptions(_ options: WorkspaceEditorDisplayOptions) {
+        guard snapshot.appState.settings.workspaceEditorDisplayOptions != options else {
+            return
+        }
+        var nextSettings = snapshot.appState.settings
+        nextSettings.workspaceEditorDisplayOptions = options
+        saveSettings(nextSettings)
+    }
+
     public func dismissError() {
         errorMessage = nil
     }
@@ -3478,7 +3836,8 @@ public final class NativeAppViewModel {
             activeProjectPath: activeWorkspaceProjectPath,
             selectedProjectPath: selectedProjectPath,
             sessions: openWorkspaceSessions,
-            paneSnapshotProvider: workspacePaneSnapshotProvider
+            paneSnapshotProvider: workspacePaneSnapshotProvider,
+            editorRestoreProvider: workspaceEditorRestoreState(for:)
         )
     }
 
@@ -3526,6 +3885,7 @@ public final class NativeAppViewModel {
 
         openWorkspaceSessions = restoredSessions
         syncAttentionStateWithOpenSessions()
+        restoreWorkspaceEditorPresentation(from: restoredSnapshot)
 
         let restoredActiveProjectPath = restoredSnapshot.activeProjectPath.flatMap { candidate in
             openWorkspaceProjectPaths.contains(candidate) ? candidate : nil
@@ -3542,6 +3902,10 @@ public final class NativeAppViewModel {
         if let restoredActiveProjectPath,
            let paneID = workspaceController(for: restoredActiveProjectPath)?.selectedPane?.id {
             markWorkspaceNotificationsRead(projectPath: restoredActiveProjectPath, paneID: paneID)
+        }
+        if let restoredActiveProjectPath {
+            let selection = resolvedWorkspacePresentedTabSelection(for: restoredActiveProjectPath)
+            workspaceFocusedArea = selection.map(defaultFocusedArea(for:)) ?? .terminal
         }
         isDetailPanelPresented = false
     }
@@ -3816,6 +4180,7 @@ public final class NativeAppViewModel {
         let sourcePrefix = normalizePathForCompare(sourcePath)
         let destinationPrefix = normalizePathForCompare(destinationPath)
 
+        var didRemap = false
         for index in tabs.indices {
             guard tabs[index].filePath == sourcePrefix || tabs[index].filePath.hasPrefix(sourcePrefix + "/") else {
                 continue
@@ -3828,6 +4193,7 @@ public final class NativeAppViewModel {
             tabs[index].filePath = remappedPath
             tabs[index].identity = remappedPath
             tabs[index].title = URL(fileURLWithPath: remappedPath).lastPathComponent
+            didRemap = true
         }
         workspaceEditorTabsByProjectPath[projectPath] = tabs
 
@@ -3835,6 +4201,10 @@ public final class NativeAppViewModel {
            case let .editor(tabID) = selection,
            tabs.contains(where: { $0.id == tabID }) {
             workspaceFocusedArea = .editorTab(tabID)
+        }
+
+        if didRemap {
+            scheduleWorkspaceRestoreAutosave()
         }
     }
 
@@ -3847,7 +4217,387 @@ public final class NativeAppViewModel {
             .filter { $0.filePath == normalizedPath || $0.filePath.hasPrefix(normalizedPath + "/") }
             .map(\.id)
         for tabID in tabIDsToClose {
-            closeWorkspaceEditorTab(tabID, in: projectPath)
+            forceCloseWorkspaceEditorTab(tabID, in: projectPath)
+        }
+    }
+
+    private func makeWorkspaceEditorTabState(
+        tabID: String,
+        projectPath: String,
+        filePath: String,
+        document: WorkspaceEditorDocumentSnapshot,
+        openingPolicy: WorkspaceEditorTabOpeningPolicy
+    ) -> WorkspaceEditorTabState {
+        WorkspaceEditorTabState(
+            id: tabID,
+            identity: filePath,
+            projectPath: projectPath,
+            filePath: filePath,
+            title: URL(fileURLWithPath: filePath).lastPathComponent,
+            isPinned: openingPolicy == .pinned,
+            isPreview: openingPolicy == .preview,
+            kind: document.kind,
+            text: document.text,
+            isEditable: document.isEditable,
+            externalChangeState: .inSync,
+            message: document.message,
+            lastLoadedModificationDate: document.modificationDate
+        )
+    }
+
+    private func applyWorkspaceEditorOpeningPolicy(
+        _ openingPolicy: WorkspaceEditorTabOpeningPolicy,
+        to tab: inout WorkspaceEditorTabState
+    ) {
+        switch openingPolicy {
+        case .preview:
+            break
+        case .regular:
+            tab.isPreview = false
+        case .pinned:
+            tab.isPinned = true
+            tab.isPreview = false
+        }
+    }
+
+    private func reinsertWorkspaceEditorTab(
+        _ tab: WorkspaceEditorTabState,
+        into tabs: inout [WorkspaceEditorTabState],
+        preferredIndex: Int? = nil
+    ) {
+        if tab.isPinned {
+            tabs.insert(tab, at: pinnedWorkspaceEditorInsertionIndex(in: tabs))
+            return
+        }
+
+        if let preferredIndex {
+            let clampedIndex = min(max(preferredIndex, firstUnpinnedWorkspaceEditorInsertionIndex(in: tabs)), tabs.count)
+            tabs.insert(tab, at: clampedIndex)
+            return
+        }
+
+        tabs.append(tab)
+    }
+
+    private func pinnedWorkspaceEditorInsertionIndex(in tabs: [WorkspaceEditorTabState]) -> Int {
+        tabs.lastIndex(where: \.isPinned).map { $0 + 1 } ?? 0
+    }
+
+    private func firstUnpinnedWorkspaceEditorInsertionIndex(in tabs: [WorkspaceEditorTabState]) -> Int {
+        tabs.firstIndex(where: { !$0.isPinned }) ?? tabs.count
+    }
+
+    private func makeDefaultWorkspaceEditorPresentationState(
+        tabs: [WorkspaceEditorTabState]
+    ) -> WorkspaceEditorPresentationState {
+        guard !tabs.isEmpty else {
+            return WorkspaceEditorPresentationState()
+        }
+
+        let defaultGroup = WorkspaceEditorGroupState(
+            id: "workspace-editor-group:default",
+            tabIDs: tabs.map(\.id),
+            selectedTabID: tabs.last?.id
+        )
+        return WorkspaceEditorPresentationState(
+            groups: [defaultGroup],
+            activeGroupID: defaultGroup.id
+        )
+    }
+
+    private func normalizedWorkspaceEditorPresentationState(
+        _ presentation: WorkspaceEditorPresentationState?,
+        availableTabs: [WorkspaceEditorTabState]
+    ) -> WorkspaceEditorPresentationState? {
+        guard !availableTabs.isEmpty else {
+            return nil
+        }
+
+        let availableTabIDs = availableTabs.map(\.id)
+        let availableTabIDSet = Set(availableTabIDs)
+        let sourcePresentation = presentation ?? makeDefaultWorkspaceEditorPresentationState(tabs: availableTabs)
+
+        var seen = Set<String>()
+        var normalizedGroups: [WorkspaceEditorGroupState] = sourcePresentation.groups.map { group in
+            var filteredTabIDs: [String] = []
+            filteredTabIDs.reserveCapacity(group.tabIDs.count)
+            for tabID in group.tabIDs where availableTabIDSet.contains(tabID) {
+                guard seen.insert(tabID).inserted else {
+                    continue
+                }
+                filteredTabIDs.append(tabID)
+            }
+            return WorkspaceEditorGroupState(
+                id: group.id,
+                tabIDs: filteredTabIDs,
+                selectedTabID: group.selectedTabID
+            )
+        }
+
+        if normalizedGroups.count > 2 {
+            var mergedGroups = Array(normalizedGroups.prefix(2))
+            for group in normalizedGroups.dropFirst(2) {
+                for tabID in group.tabIDs where !mergedGroups[1].tabIDs.contains(tabID) {
+                    mergedGroups[1].tabIDs.append(tabID)
+                }
+                if mergedGroups[1].selectedTabID == nil {
+                    mergedGroups[1].selectedTabID = group.selectedTabID
+                }
+            }
+            normalizedGroups = mergedGroups
+        }
+
+        if normalizedGroups.isEmpty {
+            normalizedGroups = makeDefaultWorkspaceEditorPresentationState(tabs: availableTabs).groups
+        }
+
+        let preferredActiveGroupID = sourcePresentation.activeGroupID
+        let activeGroupIndex = normalizedGroups.firstIndex(where: { $0.id == preferredActiveGroupID })
+            ?? normalizedGroups.firstIndex(where: { !$0.tabIDs.isEmpty })
+            ?? 0
+
+        let unassignedTabIDs = availableTabIDs.filter { !seen.contains($0) }
+        if !unassignedTabIDs.isEmpty {
+            normalizedGroups[activeGroupIndex].tabIDs.append(contentsOf: unassignedTabIDs)
+        }
+
+        for index in normalizedGroups.indices {
+            let selectedTabID = normalizedGroups[index].selectedTabID
+            if let selectedTabID,
+               normalizedGroups[index].tabIDs.contains(selectedTabID) {
+                continue
+            }
+            normalizedGroups[index].selectedTabID = normalizedGroups[index].tabIDs.last
+        }
+
+        return WorkspaceEditorPresentationState(
+            groups: normalizedGroups,
+            activeGroupID: normalizedGroups[activeGroupIndex].id,
+            splitAxis: normalizedGroups.count > 1 ? (sourcePresentation.splitAxis ?? .horizontal) : nil,
+            splitRatio: sourcePresentation.splitRatio
+        )
+    }
+
+    private func normalizedWorkspaceEditorPresentationState(
+        _ presentation: WorkspaceEditorPresentationState?,
+        projectPath: String
+    ) -> WorkspaceEditorPresentationState? {
+        normalizedWorkspaceEditorPresentationState(
+            presentation,
+            availableTabs: workspaceEditorTabsByProjectPath[projectPath] ?? []
+        )
+    }
+
+    private func resolvedWorkspaceEditorPresentationState(for projectPath: String) -> WorkspaceEditorPresentationState? {
+        normalizedWorkspaceEditorPresentationState(
+            workspaceEditorPresentationByProjectPath[projectPath],
+            projectPath: projectPath
+        )
+    }
+
+    private func workspaceEditorPresentationStateForRestore(projectPath: String) -> WorkspaceEditorPresentationState? {
+        let persistentTabs = (workspaceEditorTabsByProjectPath[projectPath] ?? []).filter { !$0.isPreview }
+        return normalizedWorkspaceEditorPresentationState(
+            workspaceEditorPresentationByProjectPath[projectPath],
+            availableTabs: persistentTabs
+        )
+    }
+
+    private func activateWorkspaceEditorTab(_ tabID: String, in projectPath: String) {
+        guard let editorTab = workspaceEditorTabsByProjectPath[projectPath]?.first(where: { $0.id == tabID }) else {
+            return
+        }
+
+        var presentation = resolvedWorkspaceEditorPresentationState(for: projectPath)
+            ?? makeDefaultWorkspaceEditorPresentationState(tabs: workspaceEditorTabsByProjectPath[projectPath] ?? [])
+        if let groupIndex = presentation.groups.firstIndex(where: { $0.tabIDs.contains(tabID) }) {
+            presentation.activeGroupID = presentation.groups[groupIndex].id
+            presentation.groups[groupIndex].selectedTabID = tabID
+        } else {
+            presentation = makeDefaultWorkspaceEditorPresentationState(
+                tabs: workspaceEditorTabsByProjectPath[projectPath] ?? []
+            )
+            if let groupIndex = presentation.groups.firstIndex(where: { $0.tabIDs.contains(tabID) }) {
+                presentation.activeGroupID = presentation.groups[groupIndex].id
+                presentation.groups[groupIndex].selectedTabID = tabID
+            }
+        }
+
+        workspaceEditorPresentationByProjectPath[projectPath] = normalizedWorkspaceEditorPresentationState(
+            presentation,
+            projectPath: projectPath
+        )
+        workspaceSelectedPresentedTabByProjectPath[projectPath] = .editor(tabID)
+        workspaceFocusedArea = .editorTab(tabID)
+        selectWorkspaceProjectTreeNode(editorTab.filePath, in: projectPath)
+    }
+
+    private func assignWorkspaceEditorTab(_ tabID: String, toActiveGroupIn projectPath: String) {
+        guard workspaceEditorTabsByProjectPath[projectPath]?.contains(where: { $0.id == tabID }) == true else {
+            return
+        }
+
+        var presentation = resolvedWorkspaceEditorPresentationState(for: projectPath)
+            ?? makeDefaultWorkspaceEditorPresentationState(tabs: workspaceEditorTabsByProjectPath[projectPath] ?? [])
+        if presentation.groups.isEmpty {
+            presentation = makeDefaultWorkspaceEditorPresentationState(
+                tabs: workspaceEditorTabsByProjectPath[projectPath] ?? []
+            )
+        }
+
+        let activeGroupIndex = presentation.groups.firstIndex(where: { $0.id == presentation.activeGroupID }) ?? 0
+        for index in presentation.groups.indices {
+            presentation.groups[index].tabIDs.removeAll(where: { $0 == tabID })
+            if presentation.groups[index].selectedTabID == tabID {
+                presentation.groups[index].selectedTabID = presentation.groups[index].tabIDs.last
+            }
+        }
+        presentation.groups[activeGroupIndex].tabIDs.append(tabID)
+        presentation.groups[activeGroupIndex].selectedTabID = tabID
+        presentation.activeGroupID = presentation.groups[activeGroupIndex].id
+
+        workspaceEditorPresentationByProjectPath[projectPath] = normalizedWorkspaceEditorPresentationState(
+            presentation,
+            projectPath: projectPath
+        )
+    }
+
+    private func removingWorkspaceEditorTab(
+        _ tabID: String,
+        from presentation: WorkspaceEditorPresentationState?,
+        projectPath: String
+    ) -> WorkspaceEditorPresentationState? {
+        guard var presentation else {
+            return normalizedWorkspaceEditorPresentationState(nil, projectPath: projectPath)
+        }
+
+        for index in presentation.groups.indices {
+            presentation.groups[index].tabIDs.removeAll(where: { $0 == tabID })
+            if presentation.groups[index].selectedTabID == tabID {
+                presentation.groups[index].selectedTabID = presentation.groups[index].tabIDs.last
+            }
+        }
+        return normalizedWorkspaceEditorPresentationState(presentation, projectPath: projectPath)
+    }
+
+    private func preferredWorkspaceEditorTabAfterClosing(
+        _ tabID: String,
+        removedIndex: Int,
+        in projectPath: String,
+        remainingTabs: [WorkspaceEditorTabState]
+    ) -> String? {
+        if let presentation = resolvedWorkspaceEditorPresentationState(for: projectPath),
+           let activeGroup = presentation.groups.first(where: { $0.id == presentation.activeGroupID }) {
+            if let selectedTabID = activeGroup.selectedTabID {
+                return selectedTabID
+            }
+            if let firstTabID = activeGroup.tabIDs.last {
+                return firstTabID
+            }
+        }
+
+        if remainingTabs.indices.contains(removedIndex) {
+            return remainingTabs[removedIndex].id
+        }
+        return remainingTabs.last?.id
+    }
+
+    private func workspaceEditorRestoreState(for projectPath: String) -> WorkspaceEditorRestoreState {
+        let tabs = (workspaceEditorTabsByProjectPath[projectPath] ?? [])
+            .filter { !$0.isPreview }
+            .map {
+                WorkspaceEditorTabRestoreSnapshot(
+                    id: $0.id,
+                    filePath: $0.filePath,
+                    title: $0.title,
+                    isPinned: $0.isPinned
+                )
+            }
+
+        return WorkspaceEditorRestoreState(
+            tabs: tabs,
+            selectedPresentedTab: workspaceRestorePresentedTabSelection(for: projectPath),
+            presentation: workspaceEditorPresentationStateForRestore(projectPath: projectPath)
+        )
+    }
+
+    private func workspaceRestorePresentedTabSelection(for projectPath: String) -> WorkspaceRestorePresentedTabSelection? {
+        guard let selection = resolvedWorkspacePresentedTabSelection(for: projectPath) else {
+            return nil
+        }
+
+        switch selection {
+        case let .terminal(tabID):
+            return .terminal(tabID)
+        case let .editor(tabID):
+            guard let editorTab = workspaceEditorTabsByProjectPath[projectPath]?.first(where: { $0.id == tabID }),
+                  !editorTab.isPreview
+            else {
+                return nil
+            }
+            return .editor(tabID)
+        case .diff:
+            return nil
+        }
+    }
+
+    private func restoreWorkspaceEditorPresentation(from snapshot: WorkspaceRestoreSnapshot) {
+        let restoredProjectPaths = Set(openWorkspaceProjectPaths)
+        workspacePendingEditorCloseRequest = nil
+        workspacePendingEditorBatchCloseState = nil
+        for projectPath in restoredProjectPaths {
+            workspaceEditorTabsByProjectPath[projectPath] = []
+            workspaceEditorPresentationByProjectPath[projectPath] = nil
+            workspaceSelectedPresentedTabByProjectPath[projectPath] = nil
+        }
+
+        for sessionSnapshot in snapshot.sessions where restoredProjectPaths.contains(sessionSnapshot.projectPath) {
+            let projectPath = sessionSnapshot.projectPath
+            var restoredTabs: [WorkspaceEditorTabState] = []
+            for tabSnapshot in sessionSnapshot.editorTabs {
+                let normalizedFilePath = normalizePathForCompare(tabSnapshot.filePath)
+                guard let document = try? workspaceFileSystemService.loadDocument(at: normalizedFilePath) else {
+                    continue
+                }
+                reinsertWorkspaceEditorTab(
+                    WorkspaceEditorTabState(
+                    id: tabSnapshot.id,
+                    identity: normalizedFilePath,
+                    projectPath: projectPath,
+                    filePath: normalizedFilePath,
+                    title: tabSnapshot.title,
+                    isPinned: tabSnapshot.isPinned,
+                    isPreview: false,
+                    kind: document.kind,
+                    text: document.text,
+                    isEditable: document.isEditable,
+                    externalChangeState: .inSync,
+                    message: document.message,
+                    lastLoadedModificationDate: document.modificationDate
+                    ),
+                    into: &restoredTabs
+                )
+            }
+            workspaceEditorTabsByProjectPath[projectPath] = restoredTabs
+            workspaceEditorPresentationByProjectPath[projectPath] = normalizedWorkspaceEditorPresentationState(
+                sessionSnapshot.editorPresentation
+                    ?? makeDefaultWorkspaceEditorPresentationState(tabs: restoredTabs),
+                projectPath: projectPath
+            )
+
+            guard let selectedPresentedTab = sessionSnapshot.selectedPresentedTab else {
+                continue
+            }
+
+            switch selectedPresentedTab {
+            case let .terminal(tabID):
+                workspaceSelectedPresentedTabByProjectPath[projectPath] = .terminal(tabID)
+            case let .editor(tabID):
+                guard workspaceEditorTabsByProjectPath[projectPath]?.contains(where: { $0.id == tabID }) == true else {
+                    continue
+                }
+                workspaceSelectedPresentedTabByProjectPath[projectPath] = .editor(tabID)
+            }
         }
     }
 
@@ -4351,6 +5101,7 @@ private func updateWorkspaceEditorTab(
     private func clearWorkspaceRuntimePresentationState(for paths: Set<String>) {
         for path in paths {
             workspaceEditorTabsByProjectPath[path] = nil
+            workspaceEditorPresentationByProjectPath[path] = nil
             for tab in workspaceDiffTabsByProjectPath[path] ?? [] {
                 workspaceDiffTabViewModels[tab.id] = nil
             }

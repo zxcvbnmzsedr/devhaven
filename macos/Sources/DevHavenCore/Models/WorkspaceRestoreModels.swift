@@ -29,6 +29,22 @@ public struct WorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
 }
 
 public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
+    enum CodingKeys: String, CodingKey {
+        case projectPath
+        case rootProjectPath
+        case isQuickTerminal
+        case workspaceRootContext
+        case workspaceAlignmentGroupID
+        case workspaceId
+        case selectedTabId
+        case selectedPresentedTab
+        case nextTabNumber
+        case nextPaneNumber
+        case editorTabs
+        case editorPresentation
+        case tabs
+    }
+
     public var projectPath: String
     public var rootProjectPath: String
     public var isQuickTerminal: Bool
@@ -36,8 +52,11 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
     public var workspaceAlignmentGroupID: String?
     public var workspaceId: String
     public var selectedTabId: String?
+    public var selectedPresentedTab: WorkspaceRestorePresentedTabSelection?
     public var nextTabNumber: Int
     public var nextPaneNumber: Int
+    public var editorTabs: [WorkspaceEditorTabRestoreSnapshot]
+    public var editorPresentation: WorkspaceEditorPresentationState?
     public var tabs: [WorkspaceTabRestoreSnapshot]
 
     public init(
@@ -48,8 +67,11 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
         workspaceAlignmentGroupID: String? = nil,
         workspaceId: String,
         selectedTabId: String?,
+        selectedPresentedTab: WorkspaceRestorePresentedTabSelection? = nil,
         nextTabNumber: Int,
         nextPaneNumber: Int,
+        editorTabs: [WorkspaceEditorTabRestoreSnapshot] = [],
+        editorPresentation: WorkspaceEditorPresentationState? = nil,
         tabs: [WorkspaceTabRestoreSnapshot]
     ) {
         self.projectPath = projectPath
@@ -59,9 +81,111 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
         self.workspaceAlignmentGroupID = workspaceAlignmentGroupID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.workspaceId = workspaceId
         self.selectedTabId = selectedTabId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.selectedPresentedTab = selectedPresentedTab
         self.nextTabNumber = max(nextTabNumber, 1)
         self.nextPaneNumber = max(nextPaneNumber, 1)
+        self.editorTabs = editorTabs
+        self.editorPresentation = editorPresentation
         self.tabs = tabs
+    }
+
+}
+
+extension ProjectWorkspaceRestoreSnapshot {
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            projectPath: try container.decode(String.self, forKey: .projectPath),
+            rootProjectPath: try container.decode(String.self, forKey: .rootProjectPath),
+            isQuickTerminal: try container.decode(Bool.self, forKey: .isQuickTerminal),
+            workspaceRootContext: try container.decodeIfPresent(WorkspaceRootSessionContext.self, forKey: .workspaceRootContext),
+            workspaceAlignmentGroupID: try container.decodeIfPresent(String.self, forKey: .workspaceAlignmentGroupID),
+            workspaceId: try container.decode(String.self, forKey: .workspaceId),
+            selectedTabId: try container.decodeIfPresent(String.self, forKey: .selectedTabId),
+            selectedPresentedTab: try container.decodeIfPresent(WorkspaceRestorePresentedTabSelection.self, forKey: .selectedPresentedTab),
+            nextTabNumber: try container.decode(Int.self, forKey: .nextTabNumber),
+            nextPaneNumber: try container.decode(Int.self, forKey: .nextPaneNumber),
+            editorTabs: try container.decodeIfPresent([WorkspaceEditorTabRestoreSnapshot].self, forKey: .editorTabs) ?? [],
+            editorPresentation: try container.decodeIfPresent(WorkspaceEditorPresentationState.self, forKey: .editorPresentation),
+            tabs: try container.decode([WorkspaceTabRestoreSnapshot].self, forKey: .tabs)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(projectPath, forKey: .projectPath)
+        try container.encode(rootProjectPath, forKey: .rootProjectPath)
+        try container.encode(isQuickTerminal, forKey: .isQuickTerminal)
+        try container.encodeIfPresent(workspaceRootContext, forKey: .workspaceRootContext)
+        try container.encodeIfPresent(workspaceAlignmentGroupID, forKey: .workspaceAlignmentGroupID)
+        try container.encode(workspaceId, forKey: .workspaceId)
+        try container.encodeIfPresent(selectedTabId, forKey: .selectedTabId)
+        try container.encodeIfPresent(selectedPresentedTab, forKey: .selectedPresentedTab)
+        try container.encode(nextTabNumber, forKey: .nextTabNumber)
+        try container.encode(nextPaneNumber, forKey: .nextPaneNumber)
+        try container.encode(editorTabs, forKey: .editorTabs)
+        try container.encodeIfPresent(editorPresentation, forKey: .editorPresentation)
+        try container.encode(tabs, forKey: .tabs)
+    }
+}
+
+public enum WorkspaceRestorePresentedTabSelection: Equatable, Sendable {
+    case terminal(String)
+    case editor(String)
+}
+
+extension WorkspaceRestorePresentedTabSelection: Codable {
+    enum CodingKeys: String, CodingKey {
+        case type
+        case id
+    }
+
+    enum SelectionType: String, Codable {
+        case terminal
+        case editor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(SelectionType.self, forKey: .type)
+        let id = try container.decode(String.self, forKey: .id)
+        switch type {
+        case .terminal:
+            self = .terminal(id)
+        case .editor:
+            self = .editor(id)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .terminal(id):
+            try container.encode(SelectionType.terminal, forKey: .type)
+            try container.encode(id, forKey: .id)
+        case let .editor(id):
+            try container.encode(SelectionType.editor, forKey: .type)
+            try container.encode(id, forKey: .id)
+        }
+    }
+}
+
+public struct WorkspaceEditorTabRestoreSnapshot: Codable, Equatable, Sendable {
+    public var id: String
+    public var filePath: String
+    public var title: String
+    public var isPinned: Bool
+
+    public init(
+        id: String,
+        filePath: String,
+        title: String,
+        isPinned: Bool
+    ) {
+        self.id = id
+        self.filePath = filePath
+        self.title = title
+        self.isPinned = isPinned
     }
 }
 

@@ -120,9 +120,21 @@ struct WorkspaceProjectToolWindowHostView: View {
                     onToggleDirectory: { path in
                         viewModel.toggleWorkspaceProjectTreeDirectory(path, in: project.path)
                     },
-                    onOpenFile: { filePath in
-                        viewModel.openWorkspaceEditorTab(for: filePath, in: project.path)
+                    onPreviewFile: { filePath in
+                        viewModel.openWorkspaceEditorTab(
+                            for: filePath,
+                            in: project.path,
+                            openingPolicy: .preview
+                        )
                     },
+                    onOpenFile: { filePath in
+                        viewModel.openWorkspaceEditorTab(
+                            for: filePath,
+                            in: project.path,
+                            openingPolicy: .regular
+                        )
+                    },
+                    isKeyboardCaptureEnabled: viewModel.workspaceFocusedArea == .sideToolWindow(.project),
                     onRefreshNode: { path in
                         viewModel.refreshWorkspaceProjectTreeNode(path, in: project.path)
                     },
@@ -206,5 +218,10 @@ private extension FileManager {
     func directoryExists(atPath path: String) -> Bool {
         var isDirectory: ObjCBool = false
         return fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    func regularFileExists(atPath path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileExists(atPath: path, isDirectory: &isDirectory) && !isDirectory.boolValue
     }
 }
