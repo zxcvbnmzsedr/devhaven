@@ -138,11 +138,15 @@ struct WorkspaceGitIdeaLogDetailsView: View {
         }
     }
 
-    private func formattedTimestamp(_ timestamp: TimeInterval) -> String {
+    private static let timestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "yyyy/MM/dd HH:mm"
-        return formatter.string(from: Date(timeIntervalSince1970: timestamp))
+        return formatter
+    }()
+
+    private func formattedTimestamp(_ timestamp: TimeInterval) -> String {
+        Self.timestampFormatter.string(from: Date(timeIntervalSince1970: timestamp))
     }
 
     private func branchReferenceItems(for detail: WorkspaceGitCommitDetail) -> [String] {

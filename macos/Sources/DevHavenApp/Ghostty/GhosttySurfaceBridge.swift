@@ -32,7 +32,17 @@ final class GhosttySurfaceBridge {
     var onContentInvalidated: (() -> Void)?
     var onCloseRequest: ((Bool) -> Void)?
 
+    /// Minimum interval between content invalidation callbacks to avoid
+    /// flooding the snapshot chain during high-frequency Ghostty wakeups.
+    private static let contentInvalidationThrottleInterval: TimeInterval = 0.2
+    private var lastContentInvalidationTime: CFAbsoluteTime = 0
+
     func invalidateRenderedContent() {
+        let now = CFAbsoluteTimeGetCurrent()
+        guard now - lastContentInvalidationTime >= Self.contentInvalidationThrottleInterval else {
+            return
+        }
+        lastContentInvalidationTime = now
         onContentInvalidated?()
     }
 

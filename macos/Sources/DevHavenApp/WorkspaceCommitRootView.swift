@@ -6,7 +6,7 @@ struct WorkspaceCommitRootView: View {
     let onSyncDiffIfNeeded: (WorkspaceCommitChange) -> Void
     let onOpenDiff: (WorkspaceCommitChange) -> Void
     @State private var topAreaRatio: Double = 0.7
-    private let autoRefreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var autoRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         WorkspaceSplitView(

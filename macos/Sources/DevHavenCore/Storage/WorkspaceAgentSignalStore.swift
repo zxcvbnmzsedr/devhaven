@@ -16,6 +16,7 @@ public final class WorkspaceAgentSignalStore {
     private var monitorSource: DispatchSourceFileSystemObject?
     private var monitorFileDescriptor: Int32 = -1
     private var sweepTimer: DispatchSourceTimer?
+    private var directoryDidChange = false
 
     public let baseDirectoryURL: URL
     public var onSignalsChange: ChangeHandler?
@@ -85,9 +86,11 @@ public final class WorkspaceAgentSignalStore {
 
         if sweepTimer == nil {
             let timer = DispatchSource.makeTimerSource(queue: queue)
-            timer.schedule(deadline: .now() + 5, repeating: 5)
+            timer.schedule(deadline: .now() + 10, repeating: 10)
             timer.setEventHandler { [weak self] in
                 guard let self else { return }
+                guard self.directoryDidChange else { return }
+                self.directoryDidChange = false
                 do {
                     try self.sweepStaleSignals(now: Date())
                 } catch {
@@ -139,6 +142,7 @@ public final class WorkspaceAgentSignalStore {
     }
 
     private func reloadAfterDirectoryEvent() {
+        directoryDidChange = true
         do {
             let snapshots = try reload(now: Date())
             notifyChange(snapshots)

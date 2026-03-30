@@ -1781,18 +1781,16 @@ public final class NativeAppViewModel {
     }
 
     public func syncActiveWorkspaceToolWindowContext() {
+        var neededKinds = Set<WorkspaceToolWindowKind>()
         if workspaceSideToolWindowState.isVisible,
            let kind = workspaceSideToolWindowState.activeKind {
-            switch kind {
-            case .commit:
-                prepareActiveWorkspaceCommitViewModel()
-            case .git:
-                prepareActiveWorkspaceGitViewModel()
-            }
+            neededKinds.insert(kind)
         }
-
         if workspaceBottomToolWindowState.isVisible,
            let kind = workspaceBottomToolWindowState.activeKind {
+            neededKinds.insert(kind)
+        }
+        for kind in neededKinds {
             switch kind {
             case .commit:
                 prepareActiveWorkspaceCommitViewModel()
@@ -3620,11 +3618,15 @@ public final class NativeAppViewModel {
         return fileName.isEmpty ? path : fileName
     }
 
-    private func gitDiffTimestampText(_ timestamp: TimeInterval) -> String {
+    private static let gitDiffTimestampFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return formatter.string(from: Date(timeIntervalSince1970: timestamp))
+        return formatter
+    }()
+
+    private func gitDiffTimestampText(_ timestamp: TimeInterval) -> String {
+        Self.gitDiffTimestampFormatter.string(from: Date(timeIntervalSince1970: timestamp))
     }
 
     private func activeWorkspaceCommitDiffPreviewRequest(
