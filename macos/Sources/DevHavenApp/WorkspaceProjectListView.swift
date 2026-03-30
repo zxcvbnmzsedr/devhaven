@@ -214,7 +214,7 @@ private struct ProjectGroupView: View {
     }
 
     private var projectMainContent: some View {
-        let dirName = URL(fileURLWithPath: group.rootProject.path).lastPathComponent
+        let dirName = (group.rootProject.path as NSString).lastPathComponent
         let showSubtitle = dirName != group.rootProject.name
         let agentAccessory = WorkspaceAgentStatusAccessory(agentState: group.agentState, agentKind: group.agentKind)
 

@@ -523,7 +523,10 @@ struct WorkspaceProjectSidebarHostView: View {
     private func workspaceAlignmentProjectName(for path: String) -> String {
         sidebarProjectionStore.projection.workspaceAlignmentProjectOptions
             .first(where: { $0.path == path })?.name
-        ?? URL(fileURLWithPath: path).lastPathComponent
+        ?? {
+            let projectName = (path as NSString).lastPathComponent
+            return projectName.isEmpty ? path : projectName
+        }()
     }
 
     private func workspaceAlignmentDefaultAlias(for path: String) -> String {

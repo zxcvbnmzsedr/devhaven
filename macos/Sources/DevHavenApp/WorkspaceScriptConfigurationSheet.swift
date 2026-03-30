@@ -686,11 +686,14 @@ struct WorkspaceRunConfigurationSheet: View {
 
         case .remoteLogViewer:
             let server = configuration.remoteServer.nilIfEmpty ?? "未命名主机"
-            let logName = configuration.remoteLogPath.nilIfEmpty
-                .map { URL(fileURLWithPath: $0).lastPathComponent }
+            let logName: String? = configuration.remoteLogPath.nilIfEmpty
+                .map { path in
+                    let logName = (path as NSString).lastPathComponent
+                    return logName.isEmpty ? path : logName
+                }
                 .flatMap { $0.isEmpty ? nil : $0 }
 
-            if let logName {
+            if let logName = logName {
                 return "远程日志 · \(server) · \(logName)"
             }
             return "远程日志 · \(server)"

@@ -13,8 +13,9 @@ struct WorkspaceHostView: View {
 
     var body: some View {
         let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
-        let presentedTabs = viewModel.workspacePresentedTabs(for: project.path)
-        let selectedPresentedTab = viewModel.workspaceSelectedPresentedTab(for: project.path)
+        let presentedTabSnapshot = viewModel.workspacePresentedTabSnapshot(for: project.path)
+        let presentedTabs = presentedTabSnapshot.items
+        let selectedPresentedTab = presentedTabSnapshot.selection
         let runToolbarState = viewModel.workspaceRunToolbarState(for: project.path)
 
         VStack(alignment: .leading, spacing: chromePolicy.showsWorkspaceHeader ? 16 : 0) {

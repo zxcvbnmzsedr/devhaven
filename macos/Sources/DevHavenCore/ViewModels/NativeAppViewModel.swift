@@ -52,6 +52,16 @@ private struct DisplayProjectLookupKey: Hashable {
     let rootProjectPath: String?
 }
 
+private struct WorkspaceSidebarProjectionCacheEntry {
+    let revision: Int
+    let state: WorkspaceSidebarProjectionState
+}
+
+private struct WorkspaceAlignmentGroupsCacheEntry {
+    let revision: Int
+    let groups: [WorkspaceAlignmentGroupProjection]
+}
+
 @MainActor
 @Observable
 public final class NativeAppViewModel {
@@ -77,6 +87,10 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var projectDocumentLoadRevision = 0
     @ObservationIgnored private var isAgentSignalObservationStarted = false
     @ObservationIgnored private var displayProjectCacheByLookupKey: [DisplayProjectLookupKey: Project?] = [:]
+    @ObservationIgnored private var projectsByNormalizedPath: [String: Project] = [:]
+    @ObservationIgnored private var workspaceSessionIndexByNormalizedPath: [String: Int] = [:]
+    @ObservationIgnored private var workspaceSidebarProjectionCache: WorkspaceSidebarProjectionCacheEntry?
+    @ObservationIgnored private var workspaceAlignmentGroupsCache: WorkspaceAlignmentGroupsCacheEntry?
 
     public enum DirectoryFilter: Equatable, Sendable {
         case all
@@ -132,11 +146,22 @@ public final class NativeAppViewModel {
         public var id: String { projectPath }
     }
 
+    public struct WorkspacePresentedTabSnapshot: Equatable, Sendable {
+        public let items: [WorkspacePresentedTabItem]
+        public let selection: WorkspacePresentedTabSelection?
+
+        public init(items: [WorkspacePresentedTabItem], selection: WorkspacePresentedTabSelection?) {
+            self.items = items
+            self.selection = selection
+        }
+    }
+
     public var snapshot: NativeAppSnapshot {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: snapshot)
             if oldValue.projects != snapshot.projects {
                 displayProjectCacheByLookupKey.removeAll()
+                rebuildProjectLookupIndex()
             }
         }
     }
@@ -144,6 +169,7 @@ public final class NativeAppViewModel {
     public var openWorkspaceSessions: [OpenWorkspaceSessionState] {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: openWorkspaceSessions)
+            rebuildWorkspaceSessionIndex()
         }
     }
     public var activeWorkspaceProjectPath: String? {
@@ -296,6 +322,8 @@ public final class NativeAppViewModel {
         self.todoItems = []
         self.readmeFallback = nil
         self.hasLoadedInitialData = false
+        self.rebuildProjectLookupIndex()
+        self.rebuildWorkspaceSessionIndex()
 
         resolvedRunManager.onEvent = { [weak self] event in
             self?.handleWorkspaceRunManagerEvent(event)
@@ -359,9 +387,10 @@ public final class NativeAppViewModel {
     public var workspaceSidebarGroups: [WorkspaceSidebarProjectGroup] {
         let showsInAppNotifications = snapshot.appState.settings.workspaceInAppNotificationsEnabled
         let moveNotifiedWorktreeToTop = snapshot.appState.settings.moveNotifiedWorktreeToTop
+        let projectsByNormalizedPath = self.projectsByNormalizedPath
 
         var groups: [WorkspaceSidebarProjectGroup] = openWorkspaceRootProjectPaths.compactMap { rootPath in
-            guard let rootProject = snapshot.projects.first(where: { $0.path == rootPath }) else {
+            guard let rootProject = projectsByNormalizedPath[rootPath] else {
                 return nil
             }
             let worktrees = orderedSidebarWorktreeItems(
@@ -435,14 +464,26 @@ public final class NativeAppViewModel {
     }
 
     public var workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection] {
-        snapshot.appState.workspaceAlignmentGroups.map { definition in
-            let aliasByProjectPath = resolvedWorkspaceAlignmentAliases(for: definition)
+        if let cache = workspaceAlignmentGroupsCache,
+           cache.revision == workspaceSidebarProjectionRevision {
+            return cache.groups
+        }
+
+        let projectsByNormalizedPath = self.projectsByNormalizedPath
+        let groups = snapshot.appState.workspaceAlignmentGroups.map { definition in
+            let aliasByProjectPath = resolvedWorkspaceAlignmentAliases(
+                for: definition,
+                projectsByNormalizedPath: projectsByNormalizedPath
+            )
             let members = definition.effectiveMembers.map { memberDefinition in
                 let normalizedProjectPath = normalizePathForCompare(memberDefinition.projectPath)
-                let status = workspaceAlignmentStatusByKey[workspaceAlignmentStatusKey(groupID: definition.id, projectPath: memberDefinition.projectPath)] ?? .checking
-                let project = snapshot.projects.first(where: {
-                    normalizePathForCompare($0.path) == normalizePathForCompare(memberDefinition.projectPath)
-                })
+                let status = workspaceAlignmentStatusByKey[
+                    workspaceAlignmentStatusKey(
+                        groupID: definition.id,
+                        projectPath: memberDefinition.projectPath
+                    )
+                ] ?? .checking
+                let project = projectsByNormalizedPath[normalizedProjectPath]
                 let openTarget = workspaceAlignmentOpenTarget(
                     for: normalizedProjectPath,
                     targetBranch: memberDefinition.targetBranch,
@@ -451,8 +492,8 @@ public final class NativeAppViewModel {
                 return WorkspaceAlignmentMemberProjection(
                     groupID: definition.id,
                     projectPath: normalizedProjectPath,
-                    alias: aliasByProjectPath[normalizedProjectPath] ?? URL(fileURLWithPath: normalizedProjectPath).lastPathComponent,
-                    projectName: project?.name ?? URL(fileURLWithPath: memberDefinition.projectPath).lastPathComponent,
+                    alias: aliasByProjectPath[normalizedProjectPath] ?? pathLastComponent(normalizedProjectPath),
+                    projectName: project?.name ?? pathLastComponent(memberDefinition.projectPath),
                     targetBranch: memberDefinition.targetBranch,
                     branchLabel: workspaceAlignmentBranchLabel(
                         for: normalizedProjectPath,
@@ -466,15 +507,30 @@ public final class NativeAppViewModel {
             }
             return WorkspaceAlignmentGroupProjection(definition: definition, members: members)
         }
+        workspaceAlignmentGroupsCache = WorkspaceAlignmentGroupsCacheEntry(
+            revision: workspaceSidebarProjectionRevision,
+            groups: groups
+        )
+        return groups
     }
 
     public func workspaceSidebarProjectionState() -> WorkspaceSidebarProjectionState {
-        WorkspaceSidebarProjectionState(
+        if let cache = workspaceSidebarProjectionCache,
+           cache.revision == workspaceSidebarProjectionRevision {
+            return cache.state
+        }
+
+        let state = WorkspaceSidebarProjectionState(
             groups: workspaceSidebarGroups,
             availableProjects: availableWorkspaceProjects,
             workspaceAlignmentGroups: workspaceAlignmentGroups,
             workspaceAlignmentProjectOptions: workspaceAlignmentProjectOptions
         )
+        workspaceSidebarProjectionCache = WorkspaceSidebarProjectionCacheEntry(
+            revision: workspaceSidebarProjectionRevision,
+            state: state
+        )
+        return state
     }
 
     func workspaceAttentionState(for projectPath: String) -> WorkspaceAttentionState? {
@@ -896,12 +952,10 @@ public final class NativeAppViewModel {
     }
 
     public var activeWorkspaceRootProject: Project? {
-        guard let activeWorkspaceRootProjectPath else {
+        guard let normalizedRootProjectPath = normalizedOptionalPathForCompare(activeWorkspaceRootProjectPath) else {
             return nil
         }
-        return snapshot.projects.first(where: {
-            normalizePathForCompare($0.path) == normalizePathForCompare(activeWorkspaceRootProjectPath)
-        })
+        return projectsByNormalizedPath[normalizedRootProjectPath]
     }
 
     public var activeWorkspaceGitRepositoryContext: WorkspaceGitRepositoryContext? {
@@ -958,9 +1012,10 @@ public final class NativeAppViewModel {
         return workspaceDiffTabsByProjectPath[activeWorkspaceProjectPath] ?? []
     }
 
-    public func workspacePresentedTabs(for projectPath: String) -> [WorkspacePresentedTabItem] {
-        let selected = resolvedWorkspacePresentedTabSelection(for: projectPath)
-        let terminalTabs = workspaceController(for: projectPath)?.tabs.map { tab in
+    public func workspacePresentedTabSnapshot(for projectPath: String) -> WorkspacePresentedTabSnapshot {
+        let controller = workspaceController(for: projectPath)
+        let selected = resolvedWorkspacePresentedTabSelection(for: projectPath, controller: controller)
+        let terminalTabs = controller?.tabs.map { tab in
             WorkspacePresentedTabItem(
                 id: tab.id,
                 title: tab.title,
@@ -976,11 +1031,18 @@ public final class NativeAppViewModel {
                 isSelected: selected == .diff(tab.id)
             )
         }
-        return terminalTabs + diffTabs
+        return WorkspacePresentedTabSnapshot(
+            items: terminalTabs + diffTabs,
+            selection: selected
+        )
+    }
+
+    public func workspacePresentedTabs(for projectPath: String) -> [WorkspacePresentedTabItem] {
+        workspacePresentedTabSnapshot(for: projectPath).items
     }
 
     public func workspaceSelectedPresentedTab(for projectPath: String) -> WorkspacePresentedTabSelection? {
-        resolvedWorkspacePresentedTabSelection(for: projectPath)
+        workspacePresentedTabSnapshot(for: projectPath).selection
     }
 
     public func workspaceDiffTabViewModel(for projectPath: String, tabID: String) -> WorkspaceDiffTabViewModel? {
@@ -1034,7 +1096,7 @@ public final class NativeAppViewModel {
             contentsOf: snapshot.appState.directories.map { directory in
                 DirectoryRow(
                     filter: .directory(directory),
-                    title: URL(fileURLWithPath: directory).lastPathComponent,
+                    title: pathLastComponent(directory),
                     count: visibleProjects.filter { $0.path.hasPrefix(directory) }.count
                 )
             }
@@ -1122,7 +1184,7 @@ public final class NativeAppViewModel {
             if let project = snapshot.projects.first(where: { $0.path == path }) {
                 return RecycleBinItem(path: path, name: project.name, missing: false)
             }
-            return RecycleBinItem(path: path, name: URL(fileURLWithPath: path).lastPathComponent, missing: true)
+            return RecycleBinItem(path: path, name: pathLastComponent(path), missing: true)
         }
     }
 
@@ -1257,12 +1319,14 @@ public final class NativeAppViewModel {
     }
 
     public func selectProject(_ path: String?) {
-        if path == selectedProjectPath, isDetailPanelPresented == (path != nil) {
+        let resolvedPath = canonicalWorkspaceSessionPath(for: path) ?? normalizedOptionalPathForCompare(path)
+
+        if resolvedPath == selectedProjectPath, isDetailPanelPresented == (resolvedPath != nil) {
             return
         }
-        if let path {
-            if activeWorkspaceProjectPath != nil, openWorkspaceProjectPaths.contains(path) {
-                activeWorkspaceProjectPath = path
+        if let resolvedPath {
+            if activeWorkspaceProjectPath != nil, workspaceSession(for: resolvedPath) != nil {
+                activeWorkspaceProjectPath = resolvedPath
                 isDetailPanelPresented = false
             } else {
                 isDetailPanelPresented = true
@@ -1270,16 +1334,17 @@ public final class NativeAppViewModel {
         } else {
             isDetailPanelPresented = false
         }
-        selectedProjectPath = path
+        selectedProjectPath = resolvedPath
         scheduleSelectedProjectDocumentRefresh()
         scheduleWorkspaceRestoreAutosave()
     }
 
     public func enterWorkspace(_ path: String) {
-        selectedProjectPath = path
-        promoteWorkspaceSessionIfNeeded(for: path, rootProjectPath: path)
-        openWorkspaceSessionIfNeeded(for: path, rootProjectPath: path)
-        activeWorkspaceProjectPath = path
+        let normalizedPath = normalizePathForCompare(path)
+        selectedProjectPath = normalizedPath
+        promoteWorkspaceSessionIfNeeded(for: normalizedPath, rootProjectPath: normalizedPath)
+        openWorkspaceSessionIfNeeded(for: normalizedPath, rootProjectPath: normalizedPath)
+        activeWorkspaceProjectPath = canonicalWorkspaceSessionPath(for: normalizedPath) ?? normalizedPath
         isDetailPanelPresented = false
         if let controller = activeWorkspaceController {
             workspaceLaunchDiagnostics.recordEntryRequested(
@@ -1293,12 +1358,12 @@ public final class NativeAppViewModel {
 
     public func enterOrResumeWorkspace() {
         if let activeWorkspaceProjectPath,
-           openWorkspaceProjectPaths.contains(activeWorkspaceProjectPath) {
+           workspaceSession(for: activeWorkspaceProjectPath) != nil {
             activateWorkspaceProject(activeWorkspaceProjectPath)
             return
         }
         if let selectedProjectPath,
-           openWorkspaceProjectPaths.contains(selectedProjectPath) {
+           workspaceSession(for: selectedProjectPath) != nil {
             activateWorkspaceProject(selectedProjectPath)
             return
         }
@@ -1317,18 +1382,18 @@ public final class NativeAppViewModel {
     }
 
     public func activateWorkspaceProject(_ path: String) {
-        guard openWorkspaceProjectPaths.contains(path) else {
+        guard let canonicalPath = canonicalWorkspaceSessionPath(for: path) else {
             return
         }
-        activeWorkspaceProjectPath = path
-        if !isQuickTerminalSessionPath(path) {
-            selectedProjectPath = path
+        activeWorkspaceProjectPath = canonicalPath
+        if !isQuickTerminalSessionPath(canonicalPath) {
+            selectedProjectPath = canonicalPath
         }
-        if let paneID = workspaceController(for: path)?.selectedPane?.id {
-            markWorkspaceNotificationsRead(projectPath: path, paneID: paneID)
+        if let paneID = workspaceController(for: canonicalPath)?.selectedPane?.id {
+            markWorkspaceNotificationsRead(projectPath: canonicalPath, paneID: paneID)
         }
         isDetailPanelPresented = false
-        if !isQuickTerminalSessionPath(path) {
+        if !isQuickTerminalSessionPath(canonicalPath) {
             scheduleSelectedProjectDocumentRefresh()
         }
         scheduleWorkspaceRestoreAutosave()
@@ -3327,37 +3392,39 @@ public final class NativeAppViewModel {
         else {
             return false
         }
-        return normalizePathForCompare(session.rootProjectPath) == normalizePathForCompare(rootProjectPath)
+        return session.rootProjectPath == normalizePathForCompare(rootProjectPath)
     }
 
     private func workspaceSessionIndex(for path: String) -> Int? {
-        let normalizedPath = normalizePathForCompare(path)
-        return openWorkspaceSessions.firstIndex(where: {
-            normalizePathForCompare($0.projectPath) == normalizedPath
-        })
+        workspaceSessionIndexByNormalizedPath[normalizePathForCompare(path)]
     }
 
     private func workspaceSession(for path: String?) -> OpenWorkspaceSessionState? {
-        guard let path else {
+        guard let normalizedPath = normalizedOptionalPathForCompare(path),
+              let index = workspaceSessionIndexByNormalizedPath[normalizedPath],
+              openWorkspaceSessions.indices.contains(index)
+        else {
             return nil
         }
-        let normalizedPath = normalizePathForCompare(path)
-        return openWorkspaceSessions.first(where: {
-            normalizePathForCompare($0.projectPath) == normalizedPath
-        })
+        return openWorkspaceSessions[index]
     }
 
     private func canonicalWorkspaceSessionPath(
         for path: String?,
         in sessions: [OpenWorkspaceSessionState]? = nil
     ) -> String? {
-        guard let path else {
+        guard let normalizedPath = normalizedOptionalPathForCompare(path) else {
             return nil
         }
-        let normalizedPath = normalizePathForCompare(path)
-        return (sessions ?? openWorkspaceSessions).first(where: {
-            normalizePathForCompare($0.projectPath) == normalizedPath
-        })?.projectPath
+        if let sessions {
+            return sessions.first(where: { $0.projectPath == normalizedPath })?.projectPath
+        }
+        guard let index = workspaceSessionIndexByNormalizedPath[normalizedPath],
+              openWorkspaceSessions.indices.contains(index)
+        else {
+            return nil
+        }
+        return openWorkspaceSessions[index].projectPath
     }
 
     private func promoteWorkspaceSessionIfNeeded(for path: String, rootProjectPath: String) {
@@ -3394,15 +3461,19 @@ public final class NativeAppViewModel {
         workspaceSession(for: path)?.isQuickTerminal ?? false
     }
 
-    private func resolvedWorkspacePresentedTabSelection(for projectPath: String) -> WorkspacePresentedTabSelection? {
-        let terminalTabID = workspaceController(for: projectPath)?.selectedTabId
-            ?? workspaceController(for: projectPath)?.selectedTab?.id
+    private func resolvedWorkspacePresentedTabSelection(
+        for projectPath: String,
+        controller: GhosttyWorkspaceController? = nil
+    ) -> WorkspacePresentedTabSelection? {
+        let controller = controller ?? workspaceController(for: projectPath)
+        let terminalTabID = controller?.selectedTabId
+            ?? controller?.selectedTab?.id
         let diffTabs = workspaceDiffTabsByProjectPath[projectPath] ?? []
 
         if let stored = workspaceSelectedPresentedTabByProjectPath[projectPath] {
             switch stored {
             case let .terminal(tabID):
-                if workspaceController(for: projectPath)?.tabs.contains(where: { $0.id == tabID }) == true {
+                if controller?.tabs.contains(where: { $0.id == tabID }) == true {
                     return .terminal(tabID)
                 }
             case let .diff(tabID):
@@ -4134,14 +4205,14 @@ public final class NativeAppViewModel {
             if member.targetBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let projectName = snapshot.projects.first(where: {
                     normalizePathForCompare($0.path) == normalizePathForCompare(member.projectPath)
-                })?.name ?? URL(fileURLWithPath: member.projectPath).lastPathComponent
+                })?.name ?? pathLastComponent(member.projectPath)
                 throw NativeWorktreeError.invalidBranch("请为 \(projectName) 填写目标 branch")
             }
             if member.baseBranchMode == .specified,
                (member.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
                 let projectName = snapshot.projects.first(where: {
                     normalizePathForCompare($0.path) == normalizePathForCompare(member.projectPath)
-                })?.name ?? URL(fileURLWithPath: member.projectPath).lastPathComponent
+                })?.name ?? pathLastComponent(member.projectPath)
                 throw NativeWorktreeError.invalidBaseBranch("请为 \(projectName) 填写基线分支")
             }
         }
@@ -4149,17 +4220,17 @@ public final class NativeAppViewModel {
 
     private func buildWorkspaceAlignmentMemberAliases(
         for projectPaths: [String],
-        existing: [String: String]
+        existing: [String: String],
+        projectsByNormalizedPath: [String: Project]? = nil
     ) -> [String: String] {
         let normalizedPaths = normalizePathList(projectPaths)
+        let projectsByNormalizedPath = projectsByNormalizedPath ?? self.projectsByNormalizedPath
         var aliases = [String: String]()
         var usedAliases = Set<String>()
 
         for path in normalizedPaths {
-            let preferredAlias = existing[normalizePathForCompare(path)]
-            let projectName = snapshot.projects.first(where: {
-                normalizePathForCompare($0.path) == normalizePathForCompare(path)
-            })?.name ?? URL(fileURLWithPath: path).lastPathComponent
+            let preferredAlias = existing[path]
+            let projectName = projectsByNormalizedPath[path]?.name ?? pathLastComponent(path)
             let alias = uniqueWorkspaceAlignmentAlias(
                 preferredAlias ?? projectName,
                 usedAliases: &usedAliases
@@ -4171,11 +4242,13 @@ public final class NativeAppViewModel {
     }
 
     private func resolvedWorkspaceAlignmentAliases(
-        for definition: WorkspaceAlignmentGroupDefinition
+        for definition: WorkspaceAlignmentGroupDefinition,
+        projectsByNormalizedPath: [String: Project]? = nil
     ) -> [String: String] {
         buildWorkspaceAlignmentMemberAliases(
             for: definition.effectiveMembers.map(\.projectPath),
-            existing: definition.memberAliases
+            existing: definition.memberAliases,
+            projectsByNormalizedPath: projectsByNormalizedPath
         )
     }
 
@@ -4261,9 +4334,7 @@ public final class NativeAppViewModel {
         }
 
         let normalizedProjectPath = normalizePathForCompare(projectPath)
-        guard let rootProject = snapshot.projects.first(where: {
-            normalizePathForCompare($0.path) == normalizedProjectPath
-        }) else {
+        guard let rootProject = projectsByNormalizedPath[normalizedProjectPath] else {
             return .project(projectPath: projectPath)
         }
 
@@ -4668,6 +4739,26 @@ public final class NativeAppViewModel {
         workspaceSidebarProjectionRevision &+= 1
     }
 
+    private func rebuildProjectLookupIndex() {
+        projectsByNormalizedPath = snapshot.projects.reduce(into: [:]) { result, project in
+            let normalizedPath = normalizePathForCompare(project.path)
+            guard !normalizedPath.isEmpty else {
+                return
+            }
+            result[normalizedPath] = project
+        }
+    }
+
+    private func rebuildWorkspaceSessionIndex() {
+        workspaceSessionIndexByNormalizedPath = openWorkspaceSessions.enumerated().reduce(into: [:]) { result, element in
+            let normalizedPath = normalizePathForCompare(element.element.projectPath)
+            guard !normalizedPath.isEmpty else {
+                return
+            }
+            result[normalizedPath] = element.offset
+        }
+    }
+
     private func applyAgentSignal(
         _ signal: WorkspaceAgentSessionSignal,
         to attention: inout WorkspaceAttentionState
@@ -4719,21 +4810,22 @@ public final class NativeAppViewModel {
             return cachedProject
         }
 
+        let normalizedPath = normalizePathForCompare(path)
         let resolvedProject: Project?
-        if let project = snapshot.projects.first(where: { $0.path == path }) {
+        if let project = projectsByNormalizedPath[normalizedPath] {
             resolvedProject = project
         } else {
             let rootProject: Project?
             if let rootProjectPath {
-                rootProject = snapshot.projects.first(where: { $0.path == rootProjectPath })
+                rootProject = normalizedOptionalPathForCompare(rootProjectPath).flatMap { projectsByNormalizedPath[$0] }
             } else {
                 rootProject = snapshot.projects.first(where: { project in
-                    project.worktrees.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(path) })
+                    project.worktrees.contains(where: { normalizePathForCompare($0.path) == normalizedPath })
                 })
             }
 
             if let rootProject,
-               let worktree = rootProject.worktrees.first(where: { normalizePathForCompare($0.path) == normalizePathForCompare(path) }) {
+               let worktree = rootProject.worktrees.first(where: { normalizePathForCompare($0.path) == normalizedPath }) {
                 resolvedProject = buildWorktreeVirtualProject(sourceProject: rootProject, worktree: worktree)
             } else {
                 resolvedProject = nil
@@ -4960,6 +5052,19 @@ private func normalizePathList(_ paths: [String]) -> [String] {
         .map(normalizePathForCompare)
         .filter { !$0.isEmpty }
         .filter { seen.insert($0).inserted }
+}
+
+private func normalizedOptionalPathForCompare(_ path: String?) -> String? {
+    guard let path else {
+        return nil
+    }
+    let normalizedPath = normalizePathForCompare(path)
+    return normalizedPath.isEmpty ? nil : normalizedPath
+}
+
+private func pathLastComponent(_ path: String) -> String {
+    let lastComponent = (path as NSString).lastPathComponent
+    return lastComponent.isEmpty ? path : lastComponent
 }
 
 private enum ProjectImportError: LocalizedError {
@@ -5298,7 +5403,7 @@ private func createWorktreeProjectID(path: String) -> String {
 }
 
 private func resolveWorktreeName(_ path: String) -> String {
-    URL(fileURLWithPath: path).lastPathComponent
+    pathLastComponent(path)
 }
 
 private func buildReadyWorktree(path: String, branch: String, now: SwiftDate) -> ProjectWorktree {

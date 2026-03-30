@@ -286,9 +286,11 @@ private struct WorkspaceAlignmentMemberRow: View {
     private var openTargetText: String {
         switch member.openTarget {
         case let .project(projectPath):
-            return URL(fileURLWithPath: projectPath).lastPathComponent
+            let projectName = (projectPath as NSString).lastPathComponent
+            return projectName.isEmpty ? projectPath : projectName
         case let .worktree(_, worktreePath):
-            return URL(fileURLWithPath: worktreePath).lastPathComponent
+            let worktreeName = (worktreePath as NSString).lastPathComponent
+            return worktreeName.isEmpty ? worktreePath : worktreeName
         }
     }
 
