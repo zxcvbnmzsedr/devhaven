@@ -53,6 +53,10 @@ struct GhosttyTerminalView: View {
 
     var body: some View {
         GhosttySurfaceRepresentable(model: model, isFocused: isFocused)
+            // 终端内容会高频刷新（例如 agent spinner / elapsed time），
+            // 若继续参与 SwiftUI accessibility graph，主线程会放大
+            // AccessibilityViewGraph / PropertiesTransform 的更新成本。
+            .accessibilityHidden(true)
             .onChange(of: isFocused) { _, focused in
                 model.syncPreferredFocusTransition(preferredFocus: focused)
             }
