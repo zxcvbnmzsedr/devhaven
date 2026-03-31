@@ -58,6 +58,8 @@ final class GhosttyTerminalSurfaceView: NSView {
         self.bridge = bridge
         self.extraEnvironment = extraEnvironment
         super.init(frame: NSRect(x: 0, y: 0, width: 960, height: 640))
+        setAccessibilityElement(false)
+        setAccessibilityHidden(true)
 
         do {
             let callbackContext = GhosttySurfaceCallbackContext(bridge: bridge)

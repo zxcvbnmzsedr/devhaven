@@ -32,6 +32,10 @@ final class GhosttySurfaceScrollView: NSView {
         documentView = NSView(frame: .zero)
         scrollView.documentView = documentView
         super.init(frame: .zero)
+        configureAccessibilityTreeExclusion(for: self)
+        configureAccessibilityTreeExclusion(for: scrollView)
+        configureAccessibilityTreeExclusion(for: documentView)
+        configureAccessibilityTreeExclusion(for: surfaceView)
 
         addSubview(scrollView)
         documentView.addSubview(surfaceView)
@@ -114,6 +118,7 @@ final class GhosttySurfaceScrollView: NSView {
         }
         surfaceView.removeFromSuperview()
         surfaceView = newSurfaceView
+        configureAccessibilityTreeExclusion(for: newSurfaceView)
         documentView.addSubview(newSurfaceView)
         bindScrollWrapperIfNeeded(to: newSurfaceView)
         needsSurfaceAttachmentCallback = true
@@ -143,6 +148,11 @@ final class GhosttySurfaceScrollView: NSView {
     private func bindScrollWrapperIfNeeded(to view: NSView) {
         guard let surfaceView = view as? GhosttyTerminalSurfaceView else { return }
         surfaceView.scrollWrapper = self
+    }
+
+    private func configureAccessibilityTreeExclusion(for view: NSView) {
+        view.setAccessibilityElement(false)
+        view.setAccessibilityHidden(true)
     }
 
     private func handleScrollChange() {
