@@ -53,6 +53,9 @@ struct WorkspaceTerminalPaneView: View {
         .onChange(of: surfaceActivity) { _, _ in
             syncSurfaceActivity()
         }
+        .onDisappear {
+            model.syncSurfaceActivity(isVisible: false, isFocused: false)
+        }
     }
 
     private var surfaceHost: some View {
