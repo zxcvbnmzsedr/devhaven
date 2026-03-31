@@ -6,7 +6,7 @@
 
 ### The macOS developer workspace for people who live in the terminal
 
-[![Version](https://img.shields.io/badge/version-3.1.3-blue)](https://github.com/zxcvbnmzsedr/DevHaven/releases)
+[![Version](https://img.shields.io/badge/version-3.1.4-blue)](https://github.com/zxcvbnmzsedr/DevHaven/releases)
 [![License](https://img.shields.io/badge/license-GPL--3.0-green)](./LICENSE)
 [![Platform](https://img.shields.io/badge/macOS-14.0%2B-black)](https://developer.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-6.0-orange)](https://www.swift.org/)
