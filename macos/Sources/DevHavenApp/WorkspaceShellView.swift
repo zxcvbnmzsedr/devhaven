@@ -318,7 +318,7 @@ struct WorkspaceShellView: View {
 
     private var terminalSearchActionsEnabled: Bool {
         viewModel.workspaceFocusedArea == .terminal
-            && viewModel.activeWorkspaceController?.selectedPane != nil
+            && viewModel.activeWorkspaceHasSelectedPane
     }
 
     private var displayedWorkspaceSession: OpenWorkspaceSessionState? {

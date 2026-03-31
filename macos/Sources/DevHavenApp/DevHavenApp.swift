@@ -91,7 +91,7 @@ struct DevHavenApp: App {
                     _ = viewModel.activeWorkspaceController?.splitFocusedPane(direction: .right)
                 }
                 .keyboardShortcut("d", modifiers: [.command])
-                .disabled(viewModel.activeWorkspaceController?.selectedPane == nil)
+                .disabled(!viewModel.activeWorkspaceHasSelectedPane)
             }
 
             WorkspaceSearchCommands()
