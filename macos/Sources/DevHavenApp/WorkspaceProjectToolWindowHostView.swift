@@ -101,12 +101,15 @@ struct WorkspaceProjectToolWindowHostView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let project = viewModel.activeWorkspaceProject {
+        if let project = viewModel.activeWorkspaceProjectTreeProject {
             if let treeState = viewModel.activeWorkspaceProjectTreeState,
+               let displayProjection = viewModel.activeWorkspaceProjectTreeDisplayProjection,
                treeState.rootProjectPath == project.path {
                 WorkspaceProjectTreeView(
                     project: project,
                     treeState: treeState,
+                    displayProjection: displayProjection,
+                    isRefreshing: viewModel.activeWorkspaceProjectTreeIsRefreshing,
                     onRefresh: { viewModel.refreshWorkspaceProjectTree(for: project.path) },
                     onCreateFile: { targetPath in
                         creationContext = WorkspaceProjectCreationContext(kind: .file, targetPath: targetPath)
@@ -121,18 +124,10 @@ struct WorkspaceProjectToolWindowHostView: View {
                         viewModel.toggleWorkspaceProjectTreeDirectory(path, in: project.path)
                     },
                     onPreviewFile: { filePath in
-                        viewModel.openWorkspaceEditorTab(
-                            for: filePath,
-                            in: project.path,
-                            openingPolicy: .preview
-                        )
+                        viewModel.previewWorkspaceProjectTreeNode(filePath, in: project.path)
                     },
                     onOpenFile: { filePath in
-                        viewModel.openWorkspaceEditorTab(
-                            for: filePath,
-                            in: project.path,
-                            openingPolicy: .regular
-                        )
+                        viewModel.openWorkspaceProjectTreeNode(filePath, in: project.path)
                     },
                     isKeyboardCaptureEnabled: viewModel.workspaceFocusedArea == .sideToolWindow(.project),
                     onRefreshNode: { path in

@@ -27,7 +27,7 @@ final class NativeAppViewModelProjectTreeTests: XCTestCase {
     }
 
     @MainActor
-    func testProjectTreeCompactsJavaPackagesAfterExpandingSourceRoot() throws {
+    func testProjectTreeCompactsJavaPackagesAfterExpandingSourceRoot() async throws {
         let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: homeURL))
         try createDirectory("src/main/java/com/example/service/user/api")
         try createDirectory("src/main/resources/com/example")
@@ -51,6 +51,11 @@ final class NativeAppViewModelProjectTreeTests: XCTestCase {
         viewModel.enterWorkspace(projectURL.path)
         viewModel.prepareActiveWorkspaceProjectTreeState()
 
+        let initialTreeLoaded = await waitUntil(timeout: 1) {
+            viewModel.activeWorkspaceProjectTreeState != nil
+        }
+        XCTAssertTrue(initialTreeLoaded)
+
         let srcPath = projectURL.appendingPathComponent("src", isDirectory: true).path
         let mainPath = projectURL.appendingPathComponent("src/main", isDirectory: true).path
         let javaPath = projectURL.appendingPathComponent("src/main/java", isDirectory: true).path
@@ -58,6 +63,16 @@ final class NativeAppViewModelProjectTreeTests: XCTestCase {
         viewModel.toggleWorkspaceProjectTreeDirectory(srcPath, in: projectURL.path)
         viewModel.toggleWorkspaceProjectTreeDirectory(mainPath, in: projectURL.path)
         viewModel.toggleWorkspaceProjectTreeDirectory(javaPath, in: projectURL.path)
+
+        let javaExpanded = await waitUntil(timeout: 1) {
+            guard let treeState = viewModel.activeWorkspaceProjectTreeState,
+                  let javaDisplayNode = treeState.displayNode(for: javaPath)
+            else {
+                return false
+            }
+            return javaDisplayNode.children.map(\.name) == ["com.example.service"]
+        }
+        XCTAssertTrue(javaExpanded)
 
         let treeState = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeState)
         let mainDisplayNode = try XCTUnwrap(treeState.displayNode(for: mainPath))
@@ -78,13 +93,23 @@ final class NativeAppViewModelProjectTreeTests: XCTestCase {
 
         viewModel.toggleWorkspaceProjectTreeDirectory(serviceNode.path, in: projectURL.path)
 
+        let serviceExpanded = await waitUntil(timeout: 1) {
+            guard let treeState = viewModel.activeWorkspaceProjectTreeState,
+                  let expandedServiceNode = treeState.displayNode(for: serviceNode.path)
+            else {
+                return false
+            }
+            return expandedServiceNode.children.map(\.name) == ["user.api", "App.java"]
+        }
+        XCTAssertTrue(serviceExpanded)
+
         let expandedTreeState = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeState)
         let expandedServiceNode = try XCTUnwrap(expandedTreeState.displayNode(for: serviceNode.path))
         XCTAssertEqual(expandedServiceNode.children.map(\.name), ["user.api", "App.java"])
     }
 
     @MainActor
-    func testProjectTreeCompactsJavaPackagesInsideNestedModule() throws {
+    func testProjectTreeCompactsJavaPackagesInsideNestedModule() async throws {
         let viewModel = NativeAppViewModel(store: LegacyCompatStore(homeDirectoryURL: homeURL))
         let moduleURL = projectURL.appendingPathComponent("whale-module-ai", isDirectory: true)
         try FileManager.default.createDirectory(at: moduleURL, withIntermediateDirectories: true)
@@ -102,6 +127,11 @@ final class NativeAppViewModelProjectTreeTests: XCTestCase {
         viewModel.enterWorkspace(projectURL.path)
         viewModel.prepareActiveWorkspaceProjectTreeState()
 
+        let initialTreeLoaded = await waitUntil(timeout: 1) {
+            viewModel.activeWorkspaceProjectTreeState != nil
+        }
+        XCTAssertTrue(initialTreeLoaded)
+
         let modulePath = moduleURL.path
         let srcPath = moduleURL.appendingPathComponent("src", isDirectory: true).path
         let mainPath = moduleURL.appendingPathComponent("src/main", isDirectory: true).path
@@ -111,6 +141,16 @@ final class NativeAppViewModelProjectTreeTests: XCTestCase {
         viewModel.toggleWorkspaceProjectTreeDirectory(srcPath, in: projectURL.path)
         viewModel.toggleWorkspaceProjectTreeDirectory(mainPath, in: projectURL.path)
         viewModel.toggleWorkspaceProjectTreeDirectory(javaPath, in: projectURL.path)
+
+        let nestedJavaExpanded = await waitUntil(timeout: 1) {
+            guard let treeState = viewModel.activeWorkspaceProjectTreeState,
+                  let javaDisplayNode = treeState.displayNode(for: javaPath)
+            else {
+                return false
+            }
+            return javaDisplayNode.children.map(\.name) == ["com.whale.server.module.ai"]
+        }
+        XCTAssertTrue(nestedJavaExpanded)
 
         let treeState = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeState)
         let javaDisplayNode = try XCTUnwrap(treeState.displayNode(for: javaPath))
@@ -142,6 +182,21 @@ final class NativeAppViewModelProjectTreeTests: XCTestCase {
             created: now,
             checked: now
         )
+    }
+
+    @MainActor
+    private func waitUntil(
+        timeout: TimeInterval,
+        condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
     }
 }
 

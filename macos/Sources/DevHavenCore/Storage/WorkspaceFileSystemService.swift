@@ -8,13 +8,14 @@ public struct WorkspaceFileSystemService: Sendable {
     public func listDirectory(at directoryPath: String) throws -> [WorkspaceProjectTreeNode] {
         let normalizedPath = normalizeWorkspaceFileSystemPath(directoryPath)
         let directoryURL = URL(fileURLWithPath: normalizedPath, isDirectory: true)
+        let listingDirectoryURL = resolvedDirectoryListingURL(for: normalizedPath) ?? directoryURL
         let keys: [URLResourceKey] = [
             .isDirectoryKey,
             .isSymbolicLinkKey,
             .isRegularFileKey,
         ]
         let entries = try FileManager.default.contentsOfDirectory(
-            at: directoryURL,
+            at: listingDirectoryURL,
             includingPropertiesForKeys: keys,
             options: [.skipsPackageDescendants]
         )
@@ -26,18 +27,27 @@ public struct WorkspaceFileSystemService: Sendable {
                     return nil
                 }
                 let kind: WorkspaceProjectTreeNodeKind
+                let resolvedKind: WorkspaceProjectTreeNodeKind?
                 if values.isSymbolicLink == true {
                     kind = .symlink
+                    resolvedKind = symlinkDestinationKind(at: entryURL.path)
                 } else if values.isDirectory == true {
                     kind = .directory
+                    resolvedKind = nil
                 } else {
                     kind = .file
+                    resolvedKind = nil
                 }
+                let displayEntryURL = directoryURL.appendingPathComponent(
+                    entryURL.lastPathComponent,
+                    isDirectory: kind == .directory || resolvedKind == .directory
+                )
                 return WorkspaceProjectTreeNode(
-                    path: entryURL.standardizedFileURL.path,
+                    path: displayEntryURL.standardizedFileURL.path,
                     parentPath: normalizedPath,
                     name: entryURL.lastPathComponent,
                     kind: kind,
+                    resolvedKind: resolvedKind,
                     isHidden: entryURL.lastPathComponent.hasPrefix(".")
                 )
             }
@@ -213,6 +223,38 @@ public struct WorkspaceFileSystemService: Sendable {
         URL(fileURLWithPath: normalizeWorkspaceFileSystemPath(path)).lastPathComponent
     }
 
+    public func symlinkDestinationPath(at path: String) -> String? {
+        let normalizedPath = normalizeWorkspaceFileSystemPath(path)
+        guard itemKind(at: normalizedPath) == .symlink else {
+            return nil
+        }
+        let resolvedPath = URL(fileURLWithPath: normalizedPath).resolvingSymlinksInPath().standardizedFileURL.path
+        guard resolvedPath != normalizedPath || FileManager.default.fileExists(atPath: resolvedPath) else {
+            return nil
+        }
+        return resolvedPath
+    }
+
+    public func symlinkDestinationKind(at path: String) -> WorkspaceProjectTreeNodeKind? {
+        guard let destinationPath = symlinkDestinationPath(at: path) else {
+            return nil
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: destinationPath, isDirectory: &isDirectory) else {
+            return nil
+        }
+        return isDirectory.boolValue ? .directory : .file
+    }
+
+    private func resolvedDirectoryListingURL(for path: String) -> URL? {
+        guard symlinkDestinationKind(at: path) == .directory,
+              let destinationPath = symlinkDestinationPath(at: path)
+        else {
+            return nil
+        }
+        return URL(fileURLWithPath: destinationPath, isDirectory: true)
+    }
+
     public func modificationDate(at path: String) -> SwiftDate? {
         let normalizedPath = normalizeWorkspaceFileSystemPath(path)
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: normalizedPath),
@@ -262,12 +304,16 @@ public struct WorkspaceFileSystemService: Sendable {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
         let values = try url.resourceValues(forKeys: keys)
         let kind: WorkspaceProjectTreeNodeKind
+        let resolvedKind: WorkspaceProjectTreeNodeKind?
         if values.isSymbolicLink == true {
             kind = .symlink
+            resolvedKind = symlinkDestinationKind(at: url.path)
         } else if values.isDirectory == true {
             kind = .directory
+            resolvedKind = nil
         } else {
             kind = .file
+            resolvedKind = nil
         }
 
         return WorkspaceProjectTreeNode(
@@ -275,6 +321,7 @@ public struct WorkspaceFileSystemService: Sendable {
             parentPath: parentPath,
             name: url.lastPathComponent,
             kind: kind,
+            resolvedKind: resolvedKind,
             isHidden: url.lastPathComponent.hasPrefix(".")
         )
     }
@@ -299,8 +346,8 @@ private func workspaceProjectTreeNodeComparator(
     lhs: WorkspaceProjectTreeNode,
     rhs: WorkspaceProjectTreeNode
 ) -> Bool {
-    if lhs.isDirectory != rhs.isDirectory {
-        return lhs.isDirectory && !rhs.isDirectory
+    if lhs.sortsAsDirectory != rhs.sortsAsDirectory {
+        return lhs.sortsAsDirectory && !rhs.sortsAsDirectory
     }
     return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
 }

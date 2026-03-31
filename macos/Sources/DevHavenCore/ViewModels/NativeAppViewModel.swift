@@ -58,6 +58,11 @@ private struct WorkspaceSidebarProjectionCacheEntry {
     let state: WorkspaceSidebarProjectionState
 }
 
+private struct WorkspaceProjectTreeProjectionCacheEntry {
+    let revision: Int
+    let projection: WorkspaceProjectTreeDisplayProjection
+}
+
 private struct WorkspaceAlignmentGroupsCacheEntry {
     let revision: Int
     let groups: [WorkspaceAlignmentGroupProjection]
@@ -66,6 +71,19 @@ private struct WorkspaceAlignmentGroupsCacheEntry {
 private struct WorkspaceEditorBatchCloseState {
     let projectPath: String
     let remainingTabIDs: [String]
+}
+
+private struct WorkspaceProjectTreeDirectoryLoadResult: Sendable {
+    let directoryPath: String
+    let childrenByDirectoryPath: [String: [WorkspaceProjectTreeNode]]
+
+    var directChildCount: Int {
+        childrenByDirectoryPath[directoryPath]?.count ?? 0
+    }
+
+    var loadedDirectoryCount: Int {
+        childrenByDirectoryPath.count
+    }
 }
 
 private final class WorkspaceDirectoryWatcher {
@@ -119,6 +137,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let projectCatalogRefresher: @Sendable (ProjectCatalogRefreshRequest) async throws -> [Project]
     @ObservationIgnored private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
     @ObservationIgnored private let projectImportDiagnostics: ProjectImportDiagnostics
+    @ObservationIgnored private let workspaceProjectTreeDiagnostics: WorkspaceProjectTreeDiagnostics
     @ObservationIgnored private let terminalCommandRunner: @Sendable (String, [String]) throws -> Void
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
     @ObservationIgnored private let worktreeEnvironmentService: any NativeWorktreeEnvironmentServicing
@@ -139,9 +158,12 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var cachedCodexDisplayCandidates: [WorkspaceAgentDisplayCandidate] = []
     @ObservationIgnored private var workspacePendingEditorBatchCloseState: WorkspaceEditorBatchCloseState?
     @ObservationIgnored private var workspaceEditorDirectoryWatchersByProjectPath: [String: [String: WorkspaceDirectoryWatcher]] = [:]
+    @ObservationIgnored private var workspaceProjectTreeRefreshTasksByProjectPath: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var workspaceProjectTreeRefreshGenerationByProjectPath: [String: Int] = [:]
     @ObservationIgnored private var projectsByNormalizedPath: [String: Project] = [:]
     @ObservationIgnored private var workspaceSessionIndexByNormalizedPath: [String: Int] = [:]
     @ObservationIgnored private var workspaceSidebarProjectionCache: WorkspaceSidebarProjectionCacheEntry?
+    @ObservationIgnored private var workspaceProjectTreeProjectionCacheByProjectPath: [String: WorkspaceProjectTreeProjectionCacheEntry] = [:]
     @ObservationIgnored private var workspaceAlignmentGroupsCache: WorkspaceAlignmentGroupsCacheEntry?
     @ObservationIgnored private var workspaceToastDismissTask: Task<Void, Never>?
 
@@ -285,6 +307,7 @@ public final class NativeAppViewModel {
     public var gitStatisticsProgressText: String?
     public var isProjectDocumentLoading: Bool
     public var errorMessage: String?
+    public private(set) var workspaceProjectTreeRefreshingProjectPaths: Set<String>
     public private(set) var workspaceToastMessage: String?
     public var isDashboardPresented: Bool
     public var isSettingsPresented: Bool
@@ -306,6 +329,7 @@ public final class NativeAppViewModel {
         projectCatalogRefresher: (@Sendable (ProjectCatalogRefreshRequest) async throws -> [Project])? = nil,
         workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics = .shared,
         projectImportDiagnostics: ProjectImportDiagnostics = .shared,
+        workspaceProjectTreeDiagnostics: WorkspaceProjectTreeDiagnostics = .shared,
         terminalCommandRunner: (@Sendable (String, [String]) throws -> Void)? = nil,
         worktreeService: (any NativeWorktreeServicing)? = nil,
         worktreeEnvironmentService: (any NativeWorktreeEnvironmentServicing)? = nil,
@@ -324,6 +348,7 @@ public final class NativeAppViewModel {
         self.projectCatalogRefresher = projectCatalogRefresher ?? rebuildProjectCatalogSnapshot
         self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
         self.projectImportDiagnostics = projectImportDiagnostics
+        self.workspaceProjectTreeDiagnostics = workspaceProjectTreeDiagnostics
         self.terminalCommandRunner = terminalCommandRunner ?? Self.runTerminalCommand
         self.worktreeService = worktreeService ?? NativeGitWorktreeService()
         self.worktreeEnvironmentService = worktreeEnvironmentService ?? NativeWorktreeEnvironmentService()
@@ -382,6 +407,7 @@ public final class NativeAppViewModel {
         self.gitStatisticsProgressText = nil
         self.isProjectDocumentLoading = false
         self.errorMessage = nil
+        self.workspaceProjectTreeRefreshingProjectPaths = []
         self.workspaceToastMessage = nil
         self.isDashboardPresented = false
         self.isSettingsPresented = false
@@ -431,6 +457,18 @@ public final class NativeAppViewModel {
             return nil
         }
         return resolveDisplayProject(for: activeWorkspaceProjectPath)
+    }
+
+    public var activeWorkspaceProjectTreeProject: Project? {
+        if let activeWorkspaceProject {
+            return activeWorkspaceProject
+        }
+        guard let session = activeWorkspaceSession,
+              let workspaceRootContext = session.workspaceRootContext
+        else {
+            return nil
+        }
+        return .workspaceRoot(name: workspaceRootContext.workspaceName, path: session.projectPath)
     }
 
     public var openWorkspaceProjectPaths: [String] {
@@ -1029,11 +1067,15 @@ public final class NativeAppViewModel {
     }
 
     public var activeWorkspaceController: GhosttyWorkspaceController? {
-        workspaceController(for: activeWorkspaceProjectPath)
+        activeWorkspaceSession?.controller
     }
 
     public var activeWorkspaceRootProjectPath: String? {
-        workspaceSession(for: activeWorkspaceProjectPath)?.rootProjectPath
+        activeWorkspaceSession?.rootProjectPath
+    }
+
+    public var activeWorkspaceHasSelectedPane: Bool {
+        activeWorkspaceSession?.controller.selectedPane != nil
     }
 
     public var activeWorkspaceRootProject: Project? {
@@ -1116,6 +1158,25 @@ public final class NativeAppViewModel {
             return nil
         }
         return workspaceProjectTreeStatesByProjectPath[activeWorkspaceProjectPath]
+    }
+
+    public var activeWorkspaceProjectTreeDisplayProjection: WorkspaceProjectTreeDisplayProjection? {
+        guard let activeWorkspaceProjectPath,
+              let state = workspaceProjectTreeStatesByProjectPath[activeWorkspaceProjectPath]
+        else {
+            return nil
+        }
+        return workspaceProjectTreeDisplayProjection(
+            for: activeWorkspaceProjectPath,
+            state: state
+        )
+    }
+
+    public var activeWorkspaceProjectTreeIsRefreshing: Bool {
+        guard let activeWorkspaceProjectPath else {
+            return false
+        }
+        return workspaceProjectTreeRefreshingProjectPaths.contains(activeWorkspaceProjectPath)
     }
 
     public func workspacePresentedTabSnapshot(for projectPath: String) -> WorkspacePresentedTabSnapshot {
@@ -1237,11 +1298,11 @@ public final class NativeAppViewModel {
     }
 
     public var isWorkspacePresented: Bool {
-        activeWorkspaceProjectPath != nil && activeWorkspaceController != nil
+        activeWorkspaceSession != nil
     }
 
     public var canSplitActiveWorkspace: Bool {
-        activeWorkspaceController?.selectedPane != nil
+        activeWorkspaceHasSelectedPane
     }
 
     public var directoryRows: [DirectoryRow] {
@@ -1842,11 +1903,12 @@ public final class NativeAppViewModel {
     }
 
     public func prepareActiveWorkspaceProjectTreeState() {
-        guard let activeWorkspaceProject else {
+        guard let activeWorkspaceProjectTreeProject else {
             return
         }
-        if workspaceProjectTreeStatesByProjectPath[activeWorkspaceProject.path] == nil {
-            refreshWorkspaceProjectTree(for: activeWorkspaceProject.path)
+        if workspaceProjectTreeStatesByProjectPath[activeWorkspaceProjectTreeProject.path] == nil,
+           !workspaceProjectTreeRefreshingProjectPaths.contains(activeWorkspaceProjectTreeProject.path) {
+            refreshWorkspaceProjectTree(for: activeWorkspaceProjectTreeProject.path)
         }
     }
 
@@ -1854,20 +1916,10 @@ public final class NativeAppViewModel {
         guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
             return
         }
-
-        let existingState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
-        do {
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = try rebuildWorkspaceProjectTree(
-                for: resolvedProjectPath,
-                preserving: existingState
-            )
-            errorMessage = nil
-        } catch {
-            var fallbackState = existingState ?? WorkspaceProjectTreeState(rootProjectPath: resolvedProjectPath)
-            fallbackState.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = fallbackState
-            errorMessage = fallbackState.errorMessage
-        }
+        scheduleWorkspaceProjectTreeRefresh(
+            for: resolvedProjectPath,
+            preserving: workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+        )
     }
 
     public func refreshWorkspaceProjectTreeNode(_ path: String?, in projectPath: String? = nil) {
@@ -1875,10 +1927,11 @@ public final class NativeAppViewModel {
             return
         }
         // 首版先走整棵树重建，优先保证 rename/delete/create 后路径映射与展开态一致。
-        refreshWorkspaceProjectTree(for: resolvedProjectPath)
-        if let path {
-            selectWorkspaceProjectTreeNode(path, in: resolvedProjectPath)
-        }
+        scheduleWorkspaceProjectTreeRefresh(
+            for: resolvedProjectPath,
+            preserving: workspaceProjectTreeStatesByProjectPath[resolvedProjectPath],
+            preferredSelectionPath: path
+        )
     }
 
     public func selectWorkspaceProjectTreeNode(_ path: String?, in projectPath: String? = nil) {
@@ -1898,30 +1951,300 @@ public final class NativeAppViewModel {
             return
         }
 
-        let normalizedDirectoryPath = state.canonicalDisplayPath(for: directoryPath)
+        let projection = workspaceProjectTreeDisplayProjection(
+            for: resolvedProjectPath,
+            state: state
+        )
+        let normalizedDirectoryPath = projection.aliasMap[normalizePathForCompare(directoryPath)]
             ?? normalizePathForCompare(directoryPath)
 
         if state.expandedDirectoryPaths.contains(normalizedDirectoryPath) {
             state.expandedDirectoryPaths.remove(normalizedDirectoryPath)
+            state.loadingDirectoryPaths.remove(normalizedDirectoryPath)
             workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
+            workspaceProjectTreeDiagnostics.recordDirectoryCollapsed(
+                projectPath: resolvedProjectPath,
+                directoryPath: normalizedDirectoryPath,
+                revision: state.revision,
+                expandedCount: state.expandedDirectoryPaths.count
+            )
             return
         }
 
-        do {
-            state.expandedDirectoryPaths.insert(normalizedDirectoryPath)
-            try loadWorkspaceProjectTreeChildren(
-                for: normalizedDirectoryPath,
-                projectRootPath: resolvedProjectPath,
-                into: &state
-            )
+        state.expandedDirectoryPaths.insert(normalizedDirectoryPath)
+        if let existingChildren = state.childrenByDirectoryPath[normalizedDirectoryPath] {
             state.errorMessage = nil
             workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state.canonicalizedForDisplay()
             errorMessage = nil
-        } catch {
-            state.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
-            errorMessage = state.errorMessage
+            preloadWorkspaceProjectTreeVisibleChainsIfNeeded(
+                for: normalizedDirectoryPath,
+                projectRootPath: resolvedProjectPath,
+                children: existingChildren
+            )
+            return
         }
+
+        state.loadingDirectoryPaths.insert(normalizedDirectoryPath)
+        state.errorMessage = nil
+        let loadingRevision = state.revision
+        workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
+        errorMessage = nil
+        workspaceProjectTreeDiagnostics.recordDirectoryLoadStarted(
+            projectPath: resolvedProjectPath,
+            directoryPath: normalizedDirectoryPath,
+            revision: loadingRevision
+        )
+
+        let projectRootPath = resolvedProjectPath
+        let fileSystemService = workspaceFileSystemService
+        let startTime = ProcessInfo.processInfo.systemUptime
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let result = try Self.loadWorkspaceProjectTreeChildrenSnapshot(
+                    service: fileSystemService,
+                    directoryPath: normalizedDirectoryPath,
+                    projectRootPath: projectRootPath
+                )
+                await MainActor.run {
+                    guard let self,
+                          var latestState = self.workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+                    else {
+                        return
+                    }
+                    latestState.loadingDirectoryPaths.remove(normalizedDirectoryPath)
+                    for (path, children) in result.childrenByDirectoryPath {
+                        latestState.childrenByDirectoryPath[path] = children
+                    }
+                    latestState.errorMessage = nil
+                    latestState.advanceStructureRevision()
+                    let finalizedState = latestState.canonicalizedForDisplay()
+                    self.workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = finalizedState
+                    self.errorMessage = nil
+                    self.workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
+                        projectPath: resolvedProjectPath,
+                        directoryPath: normalizedDirectoryPath,
+                        revision: finalizedState.revision,
+                        durationMs: elapsedMilliseconds(since: startTime),
+                        loadedDirectoryCount: result.loadedDirectoryCount,
+                        directChildCount: result.directChildCount,
+                        status: "success",
+                        errorDescription: nil
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self,
+                          var latestState = self.workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
+                    else {
+                        return
+                    }
+                    latestState.loadingDirectoryPaths.remove(normalizedDirectoryPath)
+                    latestState.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    self.workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = latestState
+                    self.errorMessage = latestState.errorMessage
+                    self.workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
+                        projectPath: resolvedProjectPath,
+                        directoryPath: normalizedDirectoryPath,
+                        revision: latestState.revision,
+                        durationMs: elapsedMilliseconds(since: startTime),
+                        loadedDirectoryCount: 0,
+                        directChildCount: 0,
+                        status: "failed",
+                        errorDescription: latestState.errorMessage
+                    )
+                }
+            }
+        }
+    }
+
+    private func preloadWorkspaceProjectTreeVisibleChainsIfNeeded(
+        for directoryPath: String,
+        projectRootPath: String,
+        children: [WorkspaceProjectTreeNode]
+    ) {
+        let fileSystemService = workspaceFileSystemService
+        let startRevision = workspaceProjectTreeStatesByProjectPath[projectRootPath]?.revision ?? 0
+        let startTime = ProcessInfo.processInfo.systemUptime
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else {
+                return
+            }
+            guard let result = try? Self.preloadWorkspaceProjectTreeVisibleChainsSnapshot(
+                service: fileSystemService,
+                children: children,
+                projectRootPath: projectRootPath
+            ), !result.isEmpty else {
+                return
+            }
+
+            await MainActor.run {
+                guard var latestState = self.workspaceProjectTreeStatesByProjectPath[projectRootPath] else {
+                    return
+                }
+                var didMerge = false
+                for (path, loadedChildren) in result where latestState.childrenByDirectoryPath[path] != loadedChildren {
+                    latestState.childrenByDirectoryPath[path] = loadedChildren
+                    didMerge = true
+                }
+                guard didMerge else {
+                    return
+                }
+                latestState.advanceStructureRevision()
+                let finalizedState = latestState.canonicalizedForDisplay()
+                self.workspaceProjectTreeStatesByProjectPath[projectRootPath] = finalizedState
+                self.workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
+                    projectPath: projectRootPath,
+                    directoryPath: directoryPath,
+                    revision: max(startRevision, finalizedState.revision),
+                    durationMs: elapsedMilliseconds(since: startTime),
+                    loadedDirectoryCount: result.count,
+                    directChildCount: children.count,
+                    status: "success",
+                    errorDescription: nil
+                )
+            }
+        }
+    }
+
+    private func scheduleWorkspaceProjectTreeRefresh(
+        for projectPath: String,
+        preserving state: WorkspaceProjectTreeState?,
+        preferredSelectionPath: String? = nil
+    ) {
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        let nextGeneration = (workspaceProjectTreeRefreshGenerationByProjectPath[normalizedProjectPath] ?? 0) &+ 1
+        workspaceProjectTreeRefreshGenerationByProjectPath[normalizedProjectPath] = nextGeneration
+        workspaceProjectTreeRefreshingProjectPaths.insert(normalizedProjectPath)
+        workspaceProjectTreeRefreshTasksByProjectPath[normalizedProjectPath]?.cancel()
+
+        let fileSystemService = workspaceFileSystemService
+        let startTime = ProcessInfo.processInfo.systemUptime
+        workspaceProjectTreeRefreshTasksByProjectPath[normalizedProjectPath] = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let rebuiltState = try Self.buildWorkspaceProjectTreeStateSnapshot(
+                    service: fileSystemService,
+                    projectPath: normalizedProjectPath,
+                    preserving: state
+                )
+                await MainActor.run {
+                    guard let self else {
+                        return
+                    }
+                    self.finishWorkspaceProjectTreeRefresh(
+                        for: normalizedProjectPath,
+                        generation: nextGeneration,
+                        rebuiltState: rebuiltState,
+                        preferredSelectionPath: preferredSelectionPath,
+                        startTime: startTime
+                    )
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    guard let self else {
+                        return
+                    }
+                    self.finishWorkspaceProjectTreeRefreshCancellation(
+                        for: normalizedProjectPath,
+                        generation: nextGeneration
+                    )
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else {
+                        return
+                    }
+                    self.finishWorkspaceProjectTreeRefreshFailure(
+                        for: normalizedProjectPath,
+                        generation: nextGeneration,
+                        preserving: state,
+                        error: error
+                    )
+                }
+            }
+        }
+    }
+
+    private func finishWorkspaceProjectTreeRefresh(
+        for projectPath: String,
+        generation: Int,
+        rebuiltState: WorkspaceProjectTreeState,
+        preferredSelectionPath: String?,
+        startTime: TimeInterval
+    ) {
+        guard workspaceProjectTreeRefreshGenerationByProjectPath[projectPath] == generation else {
+            return
+        }
+
+        var finalState = rebuiltState
+        if let latestState = workspaceProjectTreeStatesByProjectPath[projectPath] {
+            finalState.expandedDirectoryPaths = latestState.expandedDirectoryPaths
+                .filter { normalizePathForCompare($0) != normalizePathForCompare(projectPath) }
+                .filter { workspaceFileSystemService.directoryExists(at: $0) }
+            finalState.loadingDirectoryPaths = latestState.loadingDirectoryPaths
+            for (path, children) in latestState.childrenByDirectoryPath {
+                guard normalizePathForCompare(path) != normalizePathForCompare(projectPath) else {
+                    continue
+                }
+                finalState.childrenByDirectoryPath[path] = children
+            }
+            if preferredSelectionPath == nil,
+               let latestSelectedPath = latestState.selectedPath,
+               FileManager.default.fileExists(atPath: latestSelectedPath) {
+                finalState.selectedPath = latestSelectedPath
+            }
+        }
+        if let preferredSelectionPath {
+            finalState.selectedPath = finalState.canonicalDisplayPath(for: preferredSelectionPath)
+            if finalState.selectedPath == nil,
+               FileManager.default.fileExists(atPath: preferredSelectionPath) {
+                finalState.selectedPath = normalizePathForCompare(preferredSelectionPath)
+            }
+        }
+        finalState = finalState.canonicalizedForDisplay()
+        finalState.errorMessage = nil
+        workspaceProjectTreeStatesByProjectPath[projectPath] = finalState
+        workspaceProjectTreeRefreshingProjectPaths.remove(projectPath)
+        workspaceProjectTreeRefreshTasksByProjectPath[projectPath] = nil
+        errorMessage = nil
+        workspaceProjectTreeDiagnostics.recordTreeRebuilt(
+            projectPath: projectPath,
+            revision: finalState.revision,
+            durationMs: elapsedMilliseconds(since: startTime),
+            rootCount: finalState.rootNodes.count,
+            expandedCount: finalState.expandedDirectoryPaths.count
+        )
+    }
+
+    private func finishWorkspaceProjectTreeRefreshFailure(
+        for projectPath: String,
+        generation: Int,
+        preserving state: WorkspaceProjectTreeState?,
+        error: Error
+    ) {
+        guard workspaceProjectTreeRefreshGenerationByProjectPath[projectPath] == generation else {
+            return
+        }
+
+        var fallbackState = workspaceProjectTreeStatesByProjectPath[projectPath]
+            ?? state
+            ?? WorkspaceProjectTreeState(rootProjectPath: projectPath)
+        fallbackState.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        workspaceProjectTreeStatesByProjectPath[projectPath] = fallbackState
+        workspaceProjectTreeRefreshingProjectPaths.remove(projectPath)
+        workspaceProjectTreeRefreshTasksByProjectPath[projectPath] = nil
+        errorMessage = fallbackState.errorMessage
+    }
+
+    private func finishWorkspaceProjectTreeRefreshCancellation(
+        for projectPath: String,
+        generation: Int
+    ) {
+        guard workspaceProjectTreeRefreshGenerationByProjectPath[projectPath] == generation else {
+            return
+        }
+
+        workspaceProjectTreeRefreshingProjectPaths.remove(projectPath)
+        workspaceProjectTreeRefreshTasksByProjectPath[projectPath] = nil
     }
 
     public func openWorkspaceEditorTab(
@@ -1993,6 +2316,48 @@ public final class NativeAppViewModel {
         }
     }
 
+    public func previewWorkspaceProjectTreeNode(
+        _ path: String,
+        in projectPath: String? = nil
+    ) {
+        guard let itemKind = workspaceFileSystemService.itemKind(at: path) else {
+            return
+        }
+
+        switch itemKind {
+        case .directory:
+            return
+        case .file:
+            openWorkspaceEditorTab(for: path, in: projectPath, openingPolicy: .preview)
+        case .symlink:
+            if workspaceFileSystemService.symlinkDestinationKind(at: path) == .directory {
+                return
+            }
+            openWorkspaceEditorTab(for: path, in: projectPath, openingPolicy: .preview)
+        }
+    }
+
+    public func openWorkspaceProjectTreeNode(
+        _ path: String,
+        in projectPath: String? = nil
+    ) {
+        guard let itemKind = workspaceFileSystemService.itemKind(at: path) else {
+            return
+        }
+
+        switch itemKind {
+        case .directory:
+            return
+        case .file:
+            openWorkspaceEditorTab(for: path, in: projectPath, openingPolicy: .regular)
+        case .symlink:
+            if workspaceFileSystemService.symlinkDestinationKind(at: path) == .directory {
+                return
+            }
+            openWorkspaceEditorTab(for: path, in: projectPath, openingPolicy: .regular)
+        }
+    }
+
     public func createWorkspaceProjectTreeItem(
         named name: String,
         isDirectory: Bool,
@@ -2016,9 +2381,10 @@ public final class NativeAppViewModel {
                 ?? WorkspaceProjectTreeState(rootProjectPath: resolvedProjectPath)
             preservedState.expandedDirectoryPaths.insert(parentDirectoryPath)
             preservedState.selectedPath = createdNode.path
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = try rebuildWorkspaceProjectTree(
+            scheduleWorkspaceProjectTreeRefresh(
                 for: resolvedProjectPath,
-                preserving: preservedState
+                preserving: preservedState,
+                preferredSelectionPath: createdNode.path
             )
             if createdNode.isDirectory {
                 selectWorkspaceProjectTreeNode(createdNode.path, in: resolvedProjectPath)
@@ -2056,9 +2422,10 @@ public final class NativeAppViewModel {
                 with: renamedNode.path
             ) ?? WorkspaceProjectTreeState(rootProjectPath: resolvedProjectPath)
             preservedState.selectedPath = renamedNode.path
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = try rebuildWorkspaceProjectTree(
+            scheduleWorkspaceProjectTreeRefresh(
                 for: resolvedProjectPath,
-                preserving: preservedState
+                preserving: preservedState,
+                preferredSelectionPath: renamedNode.path
             )
             errorMessage = nil
         } catch {
@@ -2080,9 +2447,10 @@ public final class NativeAppViewModel {
             closeWorkspaceEditorTabsUnderPath(normalizedPath, in: resolvedProjectPath)
             var preservedState = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
             preservedState?.selectedPath = nil
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = try rebuildWorkspaceProjectTree(
+            scheduleWorkspaceProjectTreeRefresh(
                 for: resolvedProjectPath,
-                preserving: preservedState
+                preserving: preservedState,
+                preferredSelectionPath: nil
             )
             errorMessage = nil
         } catch {
@@ -4516,41 +4884,11 @@ public final class NativeAppViewModel {
         for projectPath: String,
         preserving existingState: WorkspaceProjectTreeState?
     ) throws -> WorkspaceProjectTreeState {
-        let normalizedProjectPath = normalizePathForCompare(projectPath)
-        var nextState = existingState ?? WorkspaceProjectTreeState(rootProjectPath: normalizedProjectPath)
-        let rootNodes = try workspaceFileSystemService.listDirectory(at: normalizedProjectPath)
-        nextState.rootProjectPath = normalizedProjectPath
-        nextState.rootNodes = rootNodes
-        nextState.childrenByDirectoryPath[normalizedProjectPath] = rootNodes
-        try preloadVisibleWorkspaceProjectTreeDisplayChains(
-            forChildren: rootNodes,
-            projectRootPath: normalizedProjectPath,
-            into: &nextState
+        try Self.buildWorkspaceProjectTreeStateSnapshot(
+            service: workspaceFileSystemService,
+            projectPath: projectPath,
+            preserving: existingState
         )
-        nextState.errorMessage = nil
-
-        let expandedPaths = (existingState?.expandedDirectoryPaths ?? [])
-            .filter { normalizePathForCompare($0) != normalizedProjectPath }
-            .filter { workspaceFileSystemService.directoryExists(at: $0) }
-
-        nextState.expandedDirectoryPaths = Set(expandedPaths)
-        nextState.loadingDirectoryPaths = []
-        for directoryPath in expandedPaths {
-            try loadWorkspaceProjectTreeChildren(
-                for: directoryPath,
-                projectRootPath: normalizedProjectPath,
-                into: &nextState
-            )
-        }
-
-        if let selectedPath = existingState?.selectedPath,
-           FileManager.default.fileExists(atPath: selectedPath) {
-            nextState.selectedPath = selectedPath
-        } else {
-            nextState.selectedPath = nil
-        }
-
-        return nextState.canonicalizedForDisplay()
     }
 
     private func rebuildWorkspaceProjectTree(
@@ -4570,7 +4908,12 @@ public final class NativeAppViewModel {
         switch workspaceFileSystemService.itemKind(at: targetPath) {
         case .directory:
             return normalizePathForCompare(targetPath)
-        case .file, .symlink:
+        case .symlink:
+            if workspaceFileSystemService.symlinkDestinationKind(at: targetPath) == .directory {
+                return normalizePathForCompare(targetPath)
+            }
+            return workspaceFileSystemService.parentDirectoryPath(for: targetPath)
+        case .file:
             return workspaceFileSystemService.parentDirectoryPath(for: targetPath)
         case .none:
             return projectPath
@@ -4649,6 +4992,158 @@ public final class NativeAppViewModel {
             let currentPath = normalizePathForCompare(currentNode.path)
             let children = try workspaceFileSystemService.listDirectory(at: currentPath)
             state.childrenByDirectoryPath[currentPath] = children
+            guard let nextNode = WorkspaceProjectTreeJavaPackageSupport.compactedChildDirectory(
+                children: children,
+                sourceRootPath: sourceRootPath
+            ) else {
+                return
+            }
+            currentNode = nextNode
+        }
+    }
+
+    private func workspaceProjectTreeDisplayProjection(
+        for projectPath: String,
+        state: WorkspaceProjectTreeState
+    ) -> WorkspaceProjectTreeDisplayProjection {
+        if let cache = workspaceProjectTreeProjectionCacheByProjectPath[projectPath],
+           cache.revision == state.revision {
+            return cache.projection
+        }
+
+        let startTime = ProcessInfo.processInfo.systemUptime
+        let projection = state.displayProjection
+        workspaceProjectTreeProjectionCacheByProjectPath[projectPath] = WorkspaceProjectTreeProjectionCacheEntry(
+            revision: state.revision,
+            projection: projection
+        )
+        workspaceProjectTreeDiagnostics.recordProjectionBuilt(
+            projectPath: projectPath,
+            revision: state.revision,
+            durationMs: elapsedMilliseconds(since: startTime),
+            rootCount: projection.rootNodes.count,
+            aliasCount: projection.aliasMap.count
+        )
+        return projection
+    }
+
+    nonisolated private static func loadWorkspaceProjectTreeChildrenSnapshot(
+        service: WorkspaceFileSystemService,
+        directoryPath: String,
+        projectRootPath: String
+    ) throws -> WorkspaceProjectTreeDirectoryLoadResult {
+        let normalizedDirectoryPath = normalizePathForCompare(directoryPath)
+        let normalizedProjectRootPath = normalizePathForCompare(projectRootPath)
+        let children = try service.listDirectory(at: normalizedDirectoryPath)
+        var loadedChildrenByDirectoryPath: [String: [WorkspaceProjectTreeNode]] = [
+            normalizedDirectoryPath: children
+        ]
+
+        for child in children where child.isDirectory {
+            try preloadWorkspaceProjectTreeDisplayChain(
+                service: service,
+                startingAt: child,
+                projectRootPath: normalizedProjectRootPath,
+                into: &loadedChildrenByDirectoryPath
+            )
+        }
+
+        return WorkspaceProjectTreeDirectoryLoadResult(
+            directoryPath: normalizedDirectoryPath,
+            childrenByDirectoryPath: loadedChildrenByDirectoryPath
+        )
+    }
+
+    nonisolated private static func buildWorkspaceProjectTreeStateSnapshot(
+        service: WorkspaceFileSystemService,
+        projectPath: String,
+        preserving existingState: WorkspaceProjectTreeState?
+    ) throws -> WorkspaceProjectTreeState {
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        var nextState = existingState ?? WorkspaceProjectTreeState(rootProjectPath: normalizedProjectPath)
+        nextState.advanceStructureRevision()
+
+        let rootNodes = try service.listDirectory(at: normalizedProjectPath)
+        nextState.rootProjectPath = normalizedProjectPath
+        nextState.rootNodes = rootNodes
+        nextState.childrenByDirectoryPath[normalizedProjectPath] = rootNodes
+
+        let rootProjectionChildren = try preloadWorkspaceProjectTreeVisibleChainsSnapshot(
+            service: service,
+            children: rootNodes,
+            projectRootPath: normalizedProjectPath
+        )
+        for (path, children) in rootProjectionChildren {
+            nextState.childrenByDirectoryPath[path] = children
+        }
+        nextState.errorMessage = nil
+
+        let expandedPaths = (existingState?.expandedDirectoryPaths ?? [])
+            .filter { normalizePathForCompare($0) != normalizedProjectPath }
+            .filter { service.directoryExists(at: $0) }
+
+        nextState.expandedDirectoryPaths = Set(expandedPaths)
+        nextState.loadingDirectoryPaths = []
+        for directoryPath in expandedPaths {
+            let result = try loadWorkspaceProjectTreeChildrenSnapshot(
+                service: service,
+                directoryPath: directoryPath,
+                projectRootPath: normalizedProjectPath
+            )
+            for (path, children) in result.childrenByDirectoryPath {
+                nextState.childrenByDirectoryPath[path] = children
+            }
+        }
+
+        if let selectedPath = existingState?.selectedPath,
+           FileManager.default.fileExists(atPath: selectedPath) {
+            nextState.selectedPath = selectedPath
+        } else {
+            nextState.selectedPath = nil
+        }
+
+        return nextState.canonicalizedForDisplay()
+    }
+
+    nonisolated private static func preloadWorkspaceProjectTreeVisibleChainsSnapshot(
+        service: WorkspaceFileSystemService,
+        children: [WorkspaceProjectTreeNode],
+        projectRootPath: String
+    ) throws -> [String: [WorkspaceProjectTreeNode]] {
+        let normalizedProjectRootPath = normalizePathForCompare(projectRootPath)
+        var loadedChildrenByDirectoryPath: [String: [WorkspaceProjectTreeNode]] = [:]
+        for child in children where child.isDirectory {
+            try preloadWorkspaceProjectTreeDisplayChain(
+                service: service,
+                startingAt: child,
+                projectRootPath: normalizedProjectRootPath,
+                into: &loadedChildrenByDirectoryPath
+            )
+        }
+        return loadedChildrenByDirectoryPath
+    }
+
+    nonisolated private static func preloadWorkspaceProjectTreeDisplayChain(
+        service: WorkspaceFileSystemService,
+        startingAt node: WorkspaceProjectTreeNode,
+        projectRootPath: String,
+        into loadedChildrenByDirectoryPath: inout [String: [WorkspaceProjectTreeNode]]
+    ) throws {
+        guard let sourceRootPath = WorkspaceProjectTreeJavaPackageSupport.javaSourceRoot(
+            for: node.path,
+            projectRootPath: projectRootPath
+        ),
+        normalizePathForCompare(node.path) != normalizePathForCompare(sourceRootPath),
+        WorkspaceProjectTreeJavaPackageSupport.isPackageDirectoryPath(node.path, within: sourceRootPath)
+        else {
+            return
+        }
+
+        var currentNode = node
+        while true {
+            let currentPath = normalizePathForCompare(currentNode.path)
+            let children = try service.listDirectory(at: currentPath)
+            loadedChildrenByDirectoryPath[currentPath] = children
             guard let nextNode = WorkspaceProjectTreeJavaPackageSupport.compactedChildDirectory(
                 children: children,
                 sourceRootPath: sourceRootPath
@@ -5676,6 +6171,10 @@ public final class NativeAppViewModel {
         for path in paths {
             workspaceEditorDirectoryWatchersByProjectPath[path]?.values.forEach { $0.stop() }
             workspaceEditorDirectoryWatchersByProjectPath[path] = nil
+            workspaceProjectTreeRefreshTasksByProjectPath[path]?.cancel()
+            workspaceProjectTreeRefreshTasksByProjectPath[path] = nil
+            workspaceProjectTreeRefreshGenerationByProjectPath[path] = nil
+            workspaceProjectTreeRefreshingProjectPaths.remove(path)
             workspaceEditorTabsByProjectPath[path] = nil
             workspaceEditorPresentationByProjectPath[path] = nil
             workspaceEditorRuntimeSessionsByProjectPath[path] = nil
@@ -5683,13 +6182,28 @@ public final class NativeAppViewModel {
                 workspaceDiffTabViewModels[tab.id] = nil
             }
             workspaceProjectTreeStatesByProjectPath[path] = nil
+            workspaceProjectTreeProjectionCacheByProjectPath[path] = nil
             workspaceDiffTabsByProjectPath[path] = nil
             workspaceSelectedPresentedTabByProjectPath[path] = nil
         }
     }
 
+    private var activeWorkspaceSession: OpenWorkspaceSessionState? {
+        workspaceSessionWithoutNormalizing(for: activeWorkspaceProjectPath)
+            ?? workspaceSession(for: activeWorkspaceProjectPath)
+    }
+
     private func workspaceController(for projectPath: String? = nil) -> GhosttyWorkspaceController? {
-        workspaceSession(for: projectPath ?? activeWorkspaceProjectPath)?.controller
+        let resolvedPath = projectPath ?? activeWorkspaceProjectPath
+        return workspaceSessionWithoutNormalizing(for: resolvedPath)?.controller
+            ?? workspaceSession(for: resolvedPath)?.controller
+    }
+
+    private func workspaceSessionWithoutNormalizing(for path: String?) -> OpenWorkspaceSessionState? {
+        guard let path else {
+            return nil
+        }
+        return openWorkspaceSessions.first(where: { $0.projectPath == path })
     }
 
     private func makeProjectRunConfiguration(
@@ -6867,6 +7381,10 @@ private func normalizePathForCompare(_ path: String) -> String {
         normalized.removeLast()
     }
     return normalized
+}
+
+private func elapsedMilliseconds(since startTime: TimeInterval) -> Int {
+    max(0, Int(((ProcessInfo.processInfo.systemUptime - startTime) * 1000).rounded()))
 }
 
 private func normalizePathList(_ paths: [String]) -> [String] {

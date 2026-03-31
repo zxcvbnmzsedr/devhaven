@@ -152,6 +152,169 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
         XCTAssertEqual(canonicalPath(destination), canonicalPath(fixture.repositoryURL.path))
     }
 
+    func testWorkspaceRootSessionCanLoadProjectTree() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let viewModel = fixture.makeViewModel()
+        let group = WorkspaceAlignmentGroupDefinition(
+            name: "支付链路联调",
+            targetBranch: "main",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [group]),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.recheckWorkspaceAlignmentGroup(group.id)
+        try viewModel.enterWorkspaceAlignmentGroup(group.id)
+
+        let activePath = try XCTUnwrap(viewModel.activeWorkspaceProjectPath)
+        let projectTreeProject = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeProject)
+        XCTAssertTrue(projectTreeProject.isWorkspaceRoot)
+        XCTAssertEqual(canonicalPath(projectTreeProject.path), canonicalPath(activePath))
+
+        viewModel.prepareActiveWorkspaceProjectTreeState()
+        let treeLoaded = await waitUntil(timeout: 1) {
+            viewModel.activeWorkspaceProjectTreeState != nil
+        }
+        XCTAssertTrue(treeLoaded)
+
+        let treeState = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeState)
+        XCTAssertEqual(canonicalPath(treeState.rootProjectPath), canonicalPath(activePath))
+        XCTAssertTrue(treeState.displayRootNodes.contains(where: { $0.name == "WORKSPACE.json" }))
+    }
+
+    func testWorkspaceRootSymlinkDirectoryExpandsInlineForLinkedProject() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let viewModel = fixture.makeViewModel()
+        let group = WorkspaceAlignmentGroupDefinition(
+            name: "支付链路联调",
+            targetBranch: "main",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [group]),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.recheckWorkspaceAlignmentGroup(group.id)
+        try viewModel.enterWorkspaceAlignmentGroup(group.id)
+
+        let workspaceRootPath = try XCTUnwrap(viewModel.activeWorkspaceProjectPath)
+        viewModel.prepareActiveWorkspaceProjectTreeState()
+        let treeLoaded = await waitUntil(timeout: 1) {
+            viewModel.activeWorkspaceProjectTreeState != nil
+        }
+        XCTAssertTrue(treeLoaded)
+
+        let manifest = try readWorkspaceManifest(at: workspaceRootPath)
+        let alias = try XCTUnwrap(manifest.members.first?.alias)
+        let linkPath = URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
+            .appendingPathComponent(alias, isDirectory: true)
+            .path
+
+        let initialTreeState = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeState)
+        let linkNode = try XCTUnwrap(initialTreeState.displayNode(for: linkPath))
+        XCTAssertEqual(linkNode.kind, .symlink)
+        XCTAssertEqual(linkNode.resolvedKind, .directory)
+        XCTAssertTrue(linkNode.isDirectory)
+
+        viewModel.toggleWorkspaceProjectTreeDirectory(linkPath, in: workspaceRootPath)
+
+        let linkedProjectExpanded = await waitUntil(timeout: 1) {
+            guard let treeState = viewModel.activeWorkspaceProjectTreeState,
+                  let expandedLinkNode = treeState.displayNode(for: linkPath)
+            else {
+                return false
+            }
+            return expandedLinkNode.children.contains(where: { $0.name == "README.md" })
+        }
+        XCTAssertTrue(linkedProjectExpanded)
+
+        let expandedTreeState = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeState)
+        let expandedLinkNode = try XCTUnwrap(expandedTreeState.displayNode(for: linkPath))
+        XCTAssertTrue(expandedLinkNode.children.contains(where: { $0.name == "README.md" }))
+        XCTAssertEqual(canonicalPath(try XCTUnwrap(viewModel.activeWorkspaceProjectPath)), canonicalPath(workspaceRootPath))
+    }
+
+    func testWorkspaceRootSymlinkDirectoryExpandsInlineForLinkedWorktree() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "develop")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let existingWorktreeURL = fixture.rootURL.appendingPathComponent("existing-feature-worktree", isDirectory: true)
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", existingWorktreeURL.path, "-b", "feature/payment", "develop"]
+        )
+        let expectedWorktreePath = existingWorktreeURL.resolvingSymlinksInPath().path
+
+        let viewModel = fixture.makeViewModel()
+        let group = WorkspaceAlignmentGroupDefinition(
+            name: "支付链路",
+            targetBranch: "feature/payment",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [group]),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.recheckWorkspaceAlignmentGroup(group.id)
+        try viewModel.enterWorkspaceAlignmentGroup(group.id)
+
+        let workspaceRootPath = try XCTUnwrap(viewModel.activeWorkspaceProjectPath)
+        viewModel.prepareActiveWorkspaceProjectTreeState()
+        let treeLoaded = await waitUntil(timeout: 1) {
+            viewModel.activeWorkspaceProjectTreeState != nil
+        }
+        XCTAssertTrue(treeLoaded)
+
+        let manifest = try readWorkspaceManifest(at: workspaceRootPath)
+        let alias = try XCTUnwrap(manifest.members.first?.alias)
+        let linkPath = URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
+            .appendingPathComponent(alias, isDirectory: true)
+            .path
+
+        let initialTreeState = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeState)
+        let linkNode = try XCTUnwrap(initialTreeState.displayNode(for: linkPath))
+        XCTAssertEqual(linkNode.kind, .symlink)
+        XCTAssertEqual(linkNode.resolvedKind, .directory)
+        XCTAssertTrue(linkNode.isDirectory)
+
+        viewModel.toggleWorkspaceProjectTreeDirectory(linkPath, in: workspaceRootPath)
+
+        let linkedWorktreeExpanded = await waitUntil(timeout: 1) {
+            guard let treeState = viewModel.activeWorkspaceProjectTreeState,
+                  let expandedLinkNode = treeState.displayNode(for: linkPath)
+            else {
+                return false
+            }
+            return expandedLinkNode.children.contains(where: { $0.name == "README.md" })
+        }
+        XCTAssertTrue(linkedWorktreeExpanded)
+
+        let expandedTreeState = try XCTUnwrap(viewModel.activeWorkspaceProjectTreeState)
+        let expandedLinkNode = try XCTUnwrap(expandedTreeState.displayNode(for: linkPath))
+        XCTAssertTrue(expandedLinkNode.children.contains(where: { $0.name == "README.md" }))
+        XCTAssertEqual(canonicalPath(try XCTUnwrap(viewModel.activeWorkspaceProjectPath)), canonicalPath(workspaceRootPath))
+        XCTAssertFalse(viewModel.openWorkspaceSessions.contains(where: {
+            canonicalPath($0.projectPath) == canonicalPath(expectedWorktreePath) && $0.workspaceRootContext == nil
+        }))
+    }
+
     func testOpeningAlignmentProjectMemberDoesNotJoinOpenedProjectsUntilExplicitlyPromoted() async throws {
         let fixture = try GitWorkspaceAlignmentFixture.make()
         defer { fixture.cleanup() }
@@ -509,6 +672,30 @@ private struct GitWorkspaceAlignmentFixture {
     }
 }
 
+private func readWorkspaceManifest(at workspaceRootPath: String) throws -> WorkspaceAlignmentRootManifest {
+    let manifestURL = URL(fileURLWithPath: workspaceRootPath, isDirectory: true)
+        .appendingPathComponent("WORKSPACE.json")
+    let manifestData = try Data(contentsOf: manifestURL)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return try decoder.decode(WorkspaceAlignmentRootManifest.self, from: manifestData)
+}
+
 private func canonicalPath(_ path: String) -> String {
     NSString(string: path).resolvingSymlinksInPath
+}
+
+@MainActor
+private func waitUntil(
+    timeout: TimeInterval,
+    condition: @escaping @MainActor () -> Bool
+) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if condition() {
+            return true
+        }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return condition()
 }

@@ -8,6 +8,8 @@ struct WorkspaceProjectTreeView: View {
 
     let project: Project
     let treeState: WorkspaceProjectTreeState
+    let displayProjection: WorkspaceProjectTreeDisplayProjection
+    let isRefreshing: Bool
     let onRefresh: () -> Void
     let onCreateFile: (String?) -> Void
     let onCreateFolder: (String?) -> Void
@@ -21,22 +23,18 @@ struct WorkspaceProjectTreeView: View {
     let onTrashNode: (String) -> Void
     let onRevealInFinder: (String) -> Void
 
-    private var displayRootNodes: [WorkspaceProjectTreeDisplayNode] {
-        treeState.displayRootNodes
-    }
-
     private var isSpeedSearchActive: Bool {
         !speedSearchQuery.isEmpty
     }
 
-    private var filteredDisplayRootNodes: [WorkspaceProjectTreeDisplayNode] {
-        workspaceProjectTreeFilteredNodes(
+    var body: some View {
+        let displayRootNodes = displayProjection.rootNodes
+        let filteredDisplayRootNodes = workspaceProjectTreeFilteredNodes(
             displayRootNodes,
             query: speedSearchQuery
         )
-    }
+        let visibleNodes = flattenVisibleNodes(filteredDisplayRootNodes)
 
-    var body: some View {
         VStack(spacing: 0) {
             header
 
@@ -95,12 +93,14 @@ struct WorkspaceProjectTreeView: View {
         .focused($isTreeFocused)
         .onAppear {
             isTreeFocused = true
-            syncSelectionToVisibleNodes()
+            syncSelectionToVisibleNodes(currentVisibleNodes())
         }
         .onChange(of: speedSearchQuery) { _, _ in
-            syncSelectionToVisibleNodes()
+            syncSelectionToVisibleNodes(currentVisibleNodes())
         }
-        .onMoveCommand(perform: handleMoveCommand)
+        .onMoveCommand { direction in
+            handleMoveCommand(direction, visibleNodes: visibleNodes)
+        }
         .background {
             WorkspaceProjectTreeKeyCaptureView(
                 isEnabled: isKeyboardCaptureEnabled,
@@ -140,14 +140,23 @@ struct WorkspaceProjectTreeView: View {
                     action: { onCreateFolder(treeState.selectedPath) }
                 )
                 Button(action: onRefresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(NativeTheme.textPrimary)
-                        .frame(width: 28, height: 28)
-                        .background(NativeTheme.surface)
-                        .clipShape(.rect(cornerRadius: 8))
+                    Group {
+                        if isRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                                .tint(NativeTheme.textPrimary)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.callout.weight(.semibold))
+                                .foregroundStyle(NativeTheme.textPrimary)
+                        }
+                    }
+                    .frame(width: 28, height: 28)
+                    .background(NativeTheme.surface)
+                    .clipShape(.rect(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
+                .disabled(isRefreshing)
                 .help("刷新目录树")
             }
 
@@ -197,10 +206,6 @@ struct WorkspaceProjectTreeView: View {
         .help(title)
     }
 
-    private var visibleNodes: [WorkspaceProjectTreeDisplayNode] {
-        flattenVisibleNodes(filteredDisplayRootNodes)
-    }
-
     private func flattenVisibleNodes(_ nodes: [WorkspaceProjectTreeDisplayNode]) -> [WorkspaceProjectTreeDisplayNode] {
         var result: [WorkspaceProjectTreeDisplayNode] = []
         for node in nodes {
@@ -213,7 +218,19 @@ struct WorkspaceProjectTreeView: View {
         return result
     }
 
-    private func handleMoveCommand(_ direction: MoveCommandDirection) {
+    private func currentVisibleNodes() -> [WorkspaceProjectTreeDisplayNode] {
+        flattenVisibleNodes(
+            workspaceProjectTreeFilteredNodes(
+                displayProjection.rootNodes,
+                query: speedSearchQuery
+            )
+        )
+    }
+
+    private func handleMoveCommand(
+        _ direction: MoveCommandDirection,
+        visibleNodes: [WorkspaceProjectTreeDisplayNode]
+    ) {
         guard let selectedPath = treeState.selectedPath,
               let currentIndex = visibleNodes.firstIndex(where: { $0.matchesSelection(selectedPath) })
         else {
@@ -280,7 +297,7 @@ struct WorkspaceProjectTreeView: View {
         speedSearchQuery = ""
     }
 
-    private func syncSelectionToVisibleNodes() {
+    private func syncSelectionToVisibleNodes(_ visibleNodes: [WorkspaceProjectTreeDisplayNode]) {
         guard let firstVisibleNode = visibleNodes.first else {
             return
         }
@@ -404,11 +421,14 @@ private struct WorkspaceProjectTreeRowView: View {
     let onRevealInFinder: () -> Void
 
     var body: some View {
+        let canExpand = node.isDirectory
+        let isLinkedDirectory = node.isLinkedDirectory
+
         HStack(spacing: 6) {
             Spacer()
                 .frame(width: CGFloat(level) * 14)
 
-            if node.isDirectory {
+            if canExpand {
                 Button(action: onToggleDirectory) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.caption.weight(.semibold))
@@ -440,20 +460,20 @@ private struct WorkspaceProjectTreeRowView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             onSelect()
-            if !node.isDirectory {
+            if !canExpand && !isLinkedDirectory {
                 onPreviewFile()
             }
         }
         .onTapGesture(count: 2) {
             onSelect()
-            if node.isDirectory {
+            if canExpand {
                 onToggleDirectory()
             } else {
                 onOpenFile()
             }
         }
         .contextMenu {
-            if !node.isDirectory {
+            if !canExpand {
                 Button("在预览标签页打开") {
                     onPreviewFile()
                 }

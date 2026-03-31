@@ -16,6 +16,7 @@ public struct WorkspaceProjectTreeNode: Identifiable, Equatable, Sendable {
     public var parentPath: String?
     public var name: String
     public var kind: WorkspaceProjectTreeNodeKind
+    public var resolvedKind: WorkspaceProjectTreeNodeKind?
     public var isHidden: Bool
 
     public init(
@@ -23,17 +24,27 @@ public struct WorkspaceProjectTreeNode: Identifiable, Equatable, Sendable {
         parentPath: String?,
         name: String,
         kind: WorkspaceProjectTreeNodeKind,
+        resolvedKind: WorkspaceProjectTreeNodeKind? = nil,
         isHidden: Bool
     ) {
         self.path = path
         self.parentPath = parentPath
         self.name = name
         self.kind = kind
+        self.resolvedKind = resolvedKind
         self.isHidden = isHidden
     }
 
     public var isDirectory: Bool {
-        kind.isDirectoryLike
+        kind.isDirectoryLike || resolvedKind == .directory
+    }
+
+    public var isLinkedDirectory: Bool {
+        kind == .symlink && resolvedKind == .directory
+    }
+
+    public var sortsAsDirectory: Bool {
+        isDirectory || isLinkedDirectory
     }
 }
 
@@ -45,6 +56,7 @@ public struct WorkspaceProjectTreeState: Equatable, Sendable {
     public var loadingDirectoryPaths: Set<String>
     public var selectedPath: String?
     public var errorMessage: String?
+    public var revision: Int
 
     public init(
         rootProjectPath: String,
@@ -53,7 +65,8 @@ public struct WorkspaceProjectTreeState: Equatable, Sendable {
         expandedDirectoryPaths: Set<String> = [],
         loadingDirectoryPaths: Set<String> = [],
         selectedPath: String? = nil,
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        revision: Int = 0
     ) {
         self.rootProjectPath = rootProjectPath
         self.rootNodes = rootNodes
@@ -62,6 +75,7 @@ public struct WorkspaceProjectTreeState: Equatable, Sendable {
         self.loadingDirectoryPaths = loadingDirectoryPaths
         self.selectedPath = selectedPath
         self.errorMessage = errorMessage
+        self.revision = revision
     }
 
     public func children(for directoryPath: String?) -> [WorkspaceProjectTreeNode] {
@@ -80,12 +94,26 @@ public struct WorkspaceProjectTreeState: Equatable, Sendable {
     }
 }
 
+public struct WorkspaceProjectTreeDisplayProjection: Equatable, Sendable {
+    public var rootNodes: [WorkspaceProjectTreeDisplayNode]
+    public var aliasMap: [String: String]
+
+    public init(
+        rootNodes: [WorkspaceProjectTreeDisplayNode],
+        aliasMap: [String: String] = [:]
+    ) {
+        self.rootNodes = rootNodes
+        self.aliasMap = aliasMap
+    }
+}
+
 public struct WorkspaceProjectTreeDisplayNode: Identifiable, Equatable, Sendable {
     public var id: String { path }
     public var path: String
     public var parentPath: String?
     public var name: String
     public var kind: WorkspaceProjectTreeNodeKind
+    public var resolvedKind: WorkspaceProjectTreeNodeKind?
     public var compactedDirectoryPaths: [String]
     public var javaSourceRootPath: String?
     public var children: [WorkspaceProjectTreeDisplayNode]
@@ -95,6 +123,7 @@ public struct WorkspaceProjectTreeDisplayNode: Identifiable, Equatable, Sendable
         parentPath: String?,
         name: String,
         kind: WorkspaceProjectTreeNodeKind,
+        resolvedKind: WorkspaceProjectTreeNodeKind? = nil,
         compactedDirectoryPaths: [String] = [],
         javaSourceRootPath: String? = nil,
         children: [WorkspaceProjectTreeDisplayNode] = []
@@ -103,13 +132,18 @@ public struct WorkspaceProjectTreeDisplayNode: Identifiable, Equatable, Sendable
         self.parentPath = parentPath
         self.name = name
         self.kind = kind
+        self.resolvedKind = resolvedKind
         self.compactedDirectoryPaths = compactedDirectoryPaths
         self.javaSourceRootPath = javaSourceRootPath
         self.children = children
     }
 
     public var isDirectory: Bool {
-        kind.isDirectoryLike
+        kind.isDirectoryLike || resolvedKind == .directory
+    }
+
+    public var isLinkedDirectory: Bool {
+        kind == .symlink && resolvedKind == .directory
     }
 
     public var isCompactedDirectory: Bool {
@@ -129,8 +163,12 @@ public struct WorkspaceProjectTreeDisplayNode: Identifiable, Equatable, Sendable
 }
 
 public extension WorkspaceProjectTreeState {
+    var displayProjection: WorkspaceProjectTreeDisplayProjection {
+        WorkspaceProjectTreeDisplayBuilder(state: self).buildProjection()
+    }
+
     var displayRootNodes: [WorkspaceProjectTreeDisplayNode] {
-        WorkspaceProjectTreeDisplayBuilder(state: self).buildRootNodes()
+        displayProjection.rootNodes
     }
 
     func canonicalDisplayPath(for path: String?) -> String? {
@@ -138,12 +176,12 @@ public extension WorkspaceProjectTreeState {
             return nil
         }
         let normalizedPath = normalizeWorkspaceProjectTreePath(path)
-        return displayPathAliasMap()[normalizedPath] ?? normalizedPath
+        return displayProjection.aliasMap[normalizedPath] ?? normalizedPath
     }
 
     func canonicalizedForDisplay() -> WorkspaceProjectTreeState {
         var copy = self
-        let aliasMap = displayPathAliasMap()
+        let aliasMap = displayProjection.aliasMap
         copy.expandedDirectoryPaths = Set(
             expandedDirectoryPaths.map { aliasMap[normalizeWorkspaceProjectTreePath($0)] ?? normalizeWorkspaceProjectTreePath($0) }
         )
@@ -158,9 +196,15 @@ public extension WorkspaceProjectTreeState {
 
     func displayNode(for path: String) -> WorkspaceProjectTreeDisplayNode? {
         let normalizedPath = normalizeWorkspaceProjectTreePath(path)
-        return findDisplayNode(in: displayRootNodes) { node in
+        return findDisplayNode(in: displayProjection.rootNodes) { node in
             normalizeWorkspaceProjectTreePath(node.path) == normalizedPath
         }
+    }
+}
+
+extension WorkspaceProjectTreeState {
+    mutating func advanceStructureRevision() {
+        revision &+= 1
     }
 }
 
@@ -253,20 +297,42 @@ enum WorkspaceProjectTreeJavaPackageSupport {
 private struct WorkspaceProjectTreeDisplayBuilder {
     let state: WorkspaceProjectTreeState
 
-    func buildRootNodes() -> [WorkspaceProjectTreeDisplayNode] {
-        buildDisplayNodes(from: state.rootNodes, parentDisplayPath: nil)
+    func buildProjection() -> WorkspaceProjectTreeDisplayProjection {
+        var aliasMap: [String: String] = [:]
+        let rootNodes = buildDisplayNodes(
+            from: state.rootNodes,
+            parentDisplayPath: nil,
+            aliasMap: &aliasMap
+        )
+        return WorkspaceProjectTreeDisplayProjection(
+            rootNodes: rootNodes,
+            aliasMap: aliasMap
+        )
     }
 
     private func buildDisplayNodes(
         from nodes: [WorkspaceProjectTreeNode],
-        parentDisplayPath: String?
+        parentDisplayPath: String?,
+        aliasMap: inout [String: String]
     ) -> [WorkspaceProjectTreeDisplayNode] {
-        nodes.map { buildDisplayNode(from: $0, parentDisplayPath: parentDisplayPath) }
+        var displayNodes: [WorkspaceProjectTreeDisplayNode] = []
+        displayNodes.reserveCapacity(nodes.count)
+        for node in nodes {
+            displayNodes.append(
+                buildDisplayNode(
+                    from: node,
+                    parentDisplayPath: parentDisplayPath,
+                    aliasMap: &aliasMap
+                )
+            )
+        }
+        return displayNodes
     }
 
     private func buildDisplayNode(
         from node: WorkspaceProjectTreeNode,
-        parentDisplayPath: String?
+        parentDisplayPath: String?,
+        aliasMap: inout [String: String]
     ) -> WorkspaceProjectTreeDisplayNode {
         guard node.isDirectory else {
             return WorkspaceProjectTreeDisplayNode(
@@ -274,6 +340,7 @@ private struct WorkspaceProjectTreeDisplayBuilder {
                 parentPath: parentDisplayPath,
                 name: node.name,
                 kind: node.kind,
+                resolvedKind: node.resolvedKind,
                 children: []
             )
         }
@@ -291,14 +358,20 @@ private struct WorkspaceProjectTreeDisplayBuilder {
         let childNodes = state.children(for: representedPath)
         let displayChildren = buildDisplayNodes(
             from: childNodes,
-            parentDisplayPath: representedPath
+            parentDisplayPath: representedPath,
+            aliasMap: &aliasMap
         )
+        let normalizedRepresentedPath = normalizeWorkspaceProjectTreePath(representedPath)
+        for compactedPath in chain.map(\.path) {
+            aliasMap[normalizeWorkspaceProjectTreePath(compactedPath)] = normalizedRepresentedPath
+        }
 
         return WorkspaceProjectTreeDisplayNode(
             path: representedPath,
             parentPath: parentDisplayPath,
             name: chain.map(\.name).joined(separator: "."),
             kind: representedNode.kind,
+            resolvedKind: representedNode.resolvedKind,
             compactedDirectoryPaths: chain.map(\.path),
             javaSourceRootPath: sourceRootPath,
             children: displayChildren
@@ -333,29 +406,6 @@ private struct WorkspaceProjectTreeDisplayBuilder {
             children: state.children(for: node.path),
             sourceRootPath: sourceRootPath
         )
-    }
-}
-
-private extension WorkspaceProjectTreeState {
-    func displayPathAliasMap() -> [String: String] {
-        var aliasMap: [String: String] = [:]
-        registerDisplayAliases(from: displayRootNodes, into: &aliasMap)
-        return aliasMap
-    }
-
-    func registerDisplayAliases(
-        from nodes: [WorkspaceProjectTreeDisplayNode],
-        into aliasMap: inout [String: String]
-    ) {
-        for node in nodes {
-            let normalizedRepresentedPath = normalizeWorkspaceProjectTreePath(node.path)
-            if node.isDirectory {
-                for compactedPath in node.compactedDirectoryPaths {
-                    aliasMap[normalizeWorkspaceProjectTreePath(compactedPath)] = normalizedRepresentedPath
-                }
-            }
-            registerDisplayAliases(from: node.children, into: &aliasMap)
-        }
     }
 }
 
