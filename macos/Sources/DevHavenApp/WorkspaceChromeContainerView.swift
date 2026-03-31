@@ -34,14 +34,19 @@ struct WorkspaceChromeContainerView<Content: View>: View {
     }
 
     private var workspaceToolWindowStripe: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
+            VStack(spacing: 8) {
+                toolWindowStripeButton(kind: .project)
+                toolWindowStripeButton(kind: .commit)
+            }
+
             Spacer(minLength: 0)
-            toolWindowStripeButton(kind: .project)
-            toolWindowStripeButton(kind: .commit)
+
             toolWindowStripeButton(kind: .git)
         }
+        .padding(.vertical, 8)
         .frame(width: 44)
-        .frame(maxHeight: .infinity)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(NativeTheme.surface.opacity(0.42))
     }
 
