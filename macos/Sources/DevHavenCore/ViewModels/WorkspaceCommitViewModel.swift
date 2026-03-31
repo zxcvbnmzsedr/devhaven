@@ -38,6 +38,10 @@ public final class WorkspaceCommitViewModel {
     @ObservationIgnored private let client: Client
     @ObservationIgnored private var diffPreviewTask: Task<Void, Never>?
     @ObservationIgnored private var diffPreviewRevision = 0
+    @ObservationIgnored private var changesSnapshotRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var changesSnapshotRefreshRevision = 0
+    @ObservationIgnored private var commitExecutionTask: Task<Void, Never>?
+    @ObservationIgnored private var commitExecutionRevision = 0
 
     public var repositoryContext: WorkspaceCommitRepositoryContext
     public var changesSnapshot: WorkspaceCommitChangesSnapshot?
@@ -87,6 +91,8 @@ public final class WorkspaceCommitViewModel {
 
     deinit {
         diffPreviewTask?.cancel()
+        changesSnapshotRefreshTask?.cancel()
+        commitExecutionTask?.cancel()
     }
 
     public func updateRepositoryContext(_ repositoryContext: WorkspaceCommitRepositoryContext) {
@@ -99,43 +105,87 @@ public final class WorkspaceCommitViewModel {
 
         diffPreviewTask?.cancel()
         diffPreviewRevision += 1
+        commitExecutionTask?.cancel()
+        commitExecutionTask = nil
+        commitExecutionRevision += 1
         selectedChangePath = nil
         diffPreview = .idle
         changesSnapshot = nil
         includedPaths = []
+        executionState = .idle
+        errorMessage = nil
         refreshChangesSnapshot(preservingUserState: false)
     }
 
     public func refreshChangesSnapshot(preservingUserState: Bool = true) {
-        do {
-            let snapshot = try client.loadChangesSnapshot(repositoryContext.executionPath)
-            let previousSnapshot = changesSnapshot
-            let previousIncludedPaths = includedPaths
-            let previousSelectedChangePath = preservingUserState ? selectedChangePath : nil
+        changesSnapshotRefreshTask?.cancel()
+        changesSnapshotRefreshRevision += 1
+        let currentRevision = changesSnapshotRefreshRevision
+        let executionPath = repositoryContext.executionPath
 
-            guard snapshot != previousSnapshot else {
-                errorMessage = nil
+        changesSnapshotRefreshTask = Task { [client] in
+            do {
+                let snapshot = try await Task.detached(priority: .userInitiated) {
+                    try client.loadChangesSnapshot(executionPath)
+                }.value
+                guard !Task.isCancelled else {
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.changesSnapshotRefreshRevision == currentRevision,
+                          self.repositoryContext.executionPath == executionPath
+                    else {
+                        return
+                    }
+                    self.changesSnapshotRefreshTask = nil
+                    self.applyChangesSnapshot(snapshot, preservingUserState: preservingUserState)
+                }
+            } catch is CancellationError {
                 return
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.changesSnapshotRefreshRevision == currentRevision,
+                          self.repositoryContext.executionPath == executionPath
+                    else {
+                        return
+                    }
+                    self.changesSnapshotRefreshTask = nil
+                    self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
             }
-
-            changesSnapshot = snapshot
-            includedPaths = mergedIncludedPaths(
-                for: snapshot,
-                previousSnapshot: previousSnapshot,
-                previousIncludedPaths: previousIncludedPaths,
-                preservingUserState: preservingUserState
-            )
-            if let previousSelectedChangePath,
-               !snapshot.changes.contains(where: { $0.path == previousSelectedChangePath }) {
-                self.selectedChangePath = nil
-                diffPreview = .idle
-            } else if let previousSelectedChangePath {
-                selectChange(previousSelectedChangePath)
-            }
-            errorMessage = nil
-        } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    private func applyChangesSnapshot(
+        _ snapshot: WorkspaceCommitChangesSnapshot,
+        preservingUserState: Bool
+    ) {
+        let previousSnapshot = changesSnapshot
+        let previousIncludedPaths = includedPaths
+        let previousSelectedChangePath = preservingUserState ? selectedChangePath : nil
+
+        guard snapshot != previousSnapshot else {
+            errorMessage = nil
+            return
+        }
+
+        changesSnapshot = snapshot
+        includedPaths = mergedIncludedPaths(
+            for: snapshot,
+            previousSnapshot: previousSnapshot,
+            previousIncludedPaths: previousIncludedPaths,
+            preservingUserState: preservingUserState
+        )
+        if let previousSelectedChangePath,
+           !snapshot.changes.contains(where: { $0.path == previousSelectedChangePath }) {
+            selectedChangePath = nil
+            diffPreview = .idle
+        } else if let previousSelectedChangePath {
+            selectChange(previousSelectedChangePath)
+        }
+        errorMessage = nil
     }
 
     public func setInclusion(for path: String, included: Bool) {
@@ -287,15 +337,49 @@ public final class WorkspaceCommitViewModel {
             includedPaths: includedPaths.sorted(),
             options: normalizeOptions(options)
         )
+        commitExecutionTask?.cancel()
+        commitExecutionRevision += 1
+        let currentRevision = commitExecutionRevision
+        let executionPath = repositoryContext.executionPath
         executionState = .running(action)
-        do {
-            try client.executeCommit(repositoryContext.executionPath, request)
-            executionState = .succeeded(action)
-            errorMessage = nil
-        } catch {
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            executionState = .failed(message)
-            errorMessage = message
+        errorMessage = nil
+
+        commitExecutionTask = Task { [client] in
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try client.executeCommit(executionPath, request)
+                }.value
+                guard !Task.isCancelled else {
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.commitExecutionRevision == currentRevision,
+                          self.repositoryContext.executionPath == executionPath
+                    else {
+                        return
+                    }
+                    self.commitExecutionTask = nil
+                    self.executionState = .succeeded(action)
+                    self.errorMessage = nil
+                    self.refreshChangesSnapshot(preservingUserState: false)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.commitExecutionRevision == currentRevision,
+                          self.repositoryContext.executionPath == executionPath
+                    else {
+                        return
+                    }
+                    self.commitExecutionTask = nil
+                    let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    self.executionState = .failed(message)
+                    self.errorMessage = message
+                }
+            }
         }
     }
 

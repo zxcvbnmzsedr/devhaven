@@ -25,6 +25,7 @@ final class WorkspaceRestoreCoordinator {
     private let autosaveDelayNanoseconds: UInt64
     private var pendingAutosaveTask: Task<Void, Never>?
     private var lastSnapshot: WorkspaceRestoreSnapshot?
+    private var autosaveGeneration: UInt64 = 0
 
     init(
         store: WorkspaceRestoreStore = WorkspaceRestoreStore(),
@@ -52,6 +53,8 @@ final class WorkspaceRestoreCoordinator {
         editorRestoreProvider: WorkspaceEditorRestoreProvider?
     ) {
         pendingAutosaveTask?.cancel()
+        autosaveGeneration &+= 1
+        let generation = autosaveGeneration
         pendingAutosaveTask = Task { @MainActor [weak self] in
             guard let self else {
                 return
@@ -62,13 +65,29 @@ final class WorkspaceRestoreCoordinator {
             guard !Task.isCancelled else {
                 return
             }
-            try? self.flushNow(
+            let snapshot = self.captureSnapshot(
                 activeProjectPath: activeProjectPath,
                 selectedProjectPath: selectedProjectPath,
                 sessions: sessions,
                 paneSnapshotProvider: paneSnapshotProvider,
                 editorRestoreProvider: editorRestoreProvider
             )
+            guard self.shouldPersistSnapshot(snapshot) else {
+                return
+            }
+            do {
+                let persistedSnapshot = try await self.persistAutosaveSnapshot(snapshot, generation: generation)
+                guard !Task.isCancelled,
+                      self.autosaveGeneration == generation
+                else {
+                    return
+                }
+                if let persistedSnapshot {
+                    self.lastSnapshot = persistedSnapshot
+                }
+            } catch {
+                return
+            }
         }
     }
 
@@ -91,13 +110,49 @@ final class WorkspaceRestoreCoordinator {
         )
 
         guard !snapshot.isEmpty else {
+            guard lastSnapshot != nil else {
+                return
+            }
             try store.removeSnapshot()
             lastSnapshot = nil
             return
         }
+        guard shouldPersistSnapshot(snapshot) else {
+            return
+        }
 
-        try store.saveSnapshot(snapshot)
-        lastSnapshot = loadSnapshot()
+        let persistedSnapshot = try store.saveSnapshot(snapshot)
+        lastSnapshot = persistedSnapshot
+    }
+
+    private func persistAutosaveSnapshot(
+        _ snapshot: WorkspaceRestoreSnapshot,
+        generation: UInt64
+    ) async throws -> WorkspaceRestoreSnapshot? {
+        let store = self.store
+        return try await Task.detached(priority: .utility) {
+            if snapshot.isEmpty {
+                try store.removeSnapshot()
+                return nil
+            }
+            return try store.saveAutosaveSnapshot(snapshot, generation: generation)
+        }.value
+    }
+
+    private func shouldPersistSnapshot(_ snapshot: WorkspaceRestoreSnapshot) -> Bool {
+        if snapshot.isEmpty {
+            return lastSnapshot != nil
+        }
+        guard let lastSnapshot else {
+            return true
+        }
+        return comparableSnapshot(snapshot) != comparableSnapshot(lastSnapshot)
+    }
+
+    private func comparableSnapshot(_ snapshot: WorkspaceRestoreSnapshot) -> WorkspaceRestoreSnapshot {
+        var snapshot = snapshot
+        snapshot.savedAt = .distantPast
+        return snapshot
     }
 
     private func captureSnapshot(

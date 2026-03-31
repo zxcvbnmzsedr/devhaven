@@ -6,18 +6,18 @@ import Observation
 public final class WorkspaceGitLogViewModel {
     public struct Client: Sendable {
         public var loadLogSnapshot: @Sendable (String, WorkspaceGitLogQuery) throws -> WorkspaceGitLogSnapshot
-        public var loadCommitDetail: @Sendable (String, String) throws -> WorkspaceGitCommitDetail
+        public var loadCommitSummary: @Sendable (String, String) throws -> WorkspaceGitCommitDetail
         public var loadFileDiffForCommit: @Sendable (String, String, String) throws -> String
         public var loadAuthorSuggestions: @Sendable (String, Int) throws -> [String]
 
         public init(
             loadLogSnapshot: @escaping @Sendable (String, WorkspaceGitLogQuery) throws -> WorkspaceGitLogSnapshot,
-            loadCommitDetail: @escaping @Sendable (String, String) throws -> WorkspaceGitCommitDetail,
+            loadCommitSummary: @escaping @Sendable (String, String) throws -> WorkspaceGitCommitDetail,
             loadFileDiffForCommit: @escaping @Sendable (String, String, String) throws -> String,
             loadAuthorSuggestions: @escaping @Sendable (String, Int) throws -> [String]
         ) {
             self.loadLogSnapshot = loadLogSnapshot
-            self.loadCommitDetail = loadCommitDetail
+            self.loadCommitSummary = loadCommitSummary
             self.loadFileDiffForCommit = loadFileDiffForCommit
             self.loadAuthorSuggestions = loadAuthorSuggestions
         }
@@ -25,7 +25,7 @@ public final class WorkspaceGitLogViewModel {
         public static func live(service: NativeGitRepositoryService) -> Client {
             Client(
                 loadLogSnapshot: { try service.loadLogSnapshot(at: $0, query: $1) },
-                loadCommitDetail: { try service.loadCommitDetail(at: $0, commitHash: $1) },
+                loadCommitSummary: { try service.loadCommitSummary(at: $0, commitHash: $1) },
                 loadFileDiffForCommit: { try service.loadDiffForCommitFile(at: $0, commitHash: $1, filePath: $2) },
                 loadAuthorSuggestions: { try service.loadLogAuthors(at: $0, limit: $1) }
             )
@@ -35,6 +35,9 @@ public final class WorkspaceGitLogViewModel {
     private struct ReadResult: Sendable {
         var snapshot: WorkspaceGitLogSnapshot
         var authors: [String]
+        var visibleModel: WorkspaceGitCommitGraphVisibleModel
+        var tableRows: [WorkspaceGitLogTableRow]
+        var preferredGraphWidth: Double
     }
 
     @ObservationIgnored private let client: Client
@@ -42,10 +45,12 @@ public final class WorkspaceGitLogViewModel {
     @ObservationIgnored private var filterDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<Void, Never>?
     @ObservationIgnored private var readRevision = 0
+    @ObservationIgnored private var hasAttemptedInitialRefresh = false
     @ObservationIgnored private var commitDetailTask: Task<Void, Never>?
     @ObservationIgnored private var commitDetailRevision = 0
     @ObservationIgnored private var fileDiffTask: Task<Void, Never>?
     @ObservationIgnored private var fileDiffRevision = 0
+    @ObservationIgnored private var cachedAuthorSuggestionsByRepositoryPath: [String: [String]] = [:]
 
     private nonisolated static let diffPreviewMaxBytes = 256 * 1024
     private nonisolated static let diffPreviewMaxLines = 2_000
@@ -102,7 +107,13 @@ public final class WorkspaceGitLogViewModel {
         let initialGraphVisibleModel = graphVisibleModelBuilder(initialSnapshot.commits)
         self.graphVisibleModel = initialGraphVisibleModel
         self.tableRows = initialGraphVisibleModel.rows.map { row in
-            WorkspaceGitLogTableRow(commit: row.commit, graphRow: row)
+            WorkspaceGitLogTableRow(
+                commit: row.commit,
+                graphRow: row,
+                decorationBadges: Self.decorationBadges(for: row.commit.decorations),
+                formattedDateText: Self.formattedCommitTimestamp(row.commit.authorTimestamp),
+                isHighlightedOnCurrentBranch: false
+            )
         }
         self.preferredGraphWidth = initialGraphVisibleModel.recommendedWidth
         self.selectedCommitHash = nil
@@ -193,7 +204,15 @@ public final class WorkspaceGitLogViewModel {
     }
 
     public func refresh() {
+        hasAttemptedInitialRefresh = true
         beginRead()
+    }
+
+    public func refreshIfNeeded() {
+        guard !hasAttemptedInitialRefresh else {
+            return
+        }
+        refresh()
     }
 
     public func toggleDetails(_ isVisible: Bool) {
@@ -224,13 +243,33 @@ public final class WorkspaceGitLogViewModel {
         loadCommitDetail(for: hash)
     }
 
-    public func selectCommitFile(_ path: String?) {
+    public func selectCommitFile(
+        _ path: String?,
+        loadDiffPreview: Bool = true
+    ) {
         let normalized = Self.normalizedOptional(path)
-        guard selectedFilePath != normalized else {
+        if selectedFilePath == normalized {
+            guard loadDiffPreview,
+                  let normalized,
+                  let selectedCommitHash,
+                  selectedFileDiff.isEmpty,
+                  !isLoadingSelectedFileDiff
+            else {
+                return
+            }
+            loadFileDiff(for: selectedCommitHash, filePath: normalized)
             return
         }
         selectedFilePath = normalized
         guard let normalized, let selectedCommitHash else {
+            selectedFileDiff = ""
+            selectedFileDiffNotice = nil
+            isSelectedFileDiffTruncated = false
+            isLoadingSelectedFileDiff = false
+            fileDiffTask?.cancel()
+            return
+        }
+        guard loadDiffPreview else {
             selectedFileDiff = ""
             selectedFileDiffNotice = nil
             isSelectedFileDiffTruncated = false
@@ -245,11 +284,10 @@ public final class WorkspaceGitLogViewModel {
         guard selectedRevisionFilter == nil else {
             return false
         }
-        guard let currentBranch = logSnapshot.refs.localBranches.first(where: \.isCurrent)?.name else {
-            return false
-        }
-        let decorations = commit.decorations ?? ""
-        return decorations.contains("HEAD -> \(currentBranch)") || decorations == currentBranch || decorations.contains(", \(currentBranch)")
+        return Self.isCommitHighlightedOnCurrentBranch(
+            commit,
+            currentBranchName: logSnapshot.refs.localBranches.first(where: \.isCurrent)?.name
+        )
     }
 
     public func cancelPendingReads(resetSelection: Bool) {
@@ -301,6 +339,8 @@ public final class WorkspaceGitLogViewModel {
             path: Self.normalizedOptional(debouncedPathFilterQuery)
         )
         let authorSuggestionLimit = Self.authorSuggestionLimit
+        let cachedAuthors = cachedAuthorSuggestionsByRepositoryPath[repositoryPath]
+        let graphVisibleModelBuilder = self.graphVisibleModelBuilder
         isLoading = true
         errorMessage = nil
 
@@ -308,8 +348,28 @@ public final class WorkspaceGitLogViewModel {
             do {
                 let result = try await Task.detached(priority: .userInitiated) {
                     let snapshot = try client.loadLogSnapshot(repositoryPath, query)
-                    let authors = try client.loadAuthorSuggestions(repositoryPath, authorSuggestionLimit)
-                    return ReadResult(snapshot: snapshot, authors: authors)
+                    let authors = try cachedAuthors ?? client.loadAuthorSuggestions(repositoryPath, authorSuggestionLimit)
+                    let visibleModel = graphVisibleModelBuilder(snapshot.commits)
+                    let currentBranchName = snapshot.refs.localBranches.first(where: \.isCurrent)?.name
+                    let tableRows = visibleModel.rows.map { row in
+                        WorkspaceGitLogTableRow(
+                            commit: row.commit,
+                            graphRow: row,
+                            decorationBadges: Self.decorationBadges(for: row.commit.decorations),
+                            formattedDateText: Self.formattedCommitTimestamp(row.commit.authorTimestamp),
+                            isHighlightedOnCurrentBranch: Self.isCommitHighlightedOnCurrentBranch(
+                                row.commit,
+                                currentBranchName: currentBranchName
+                            )
+                        )
+                    }
+                    return ReadResult(
+                        snapshot: snapshot,
+                        authors: authors,
+                        visibleModel: visibleModel,
+                        tableRows: tableRows,
+                        preferredGraphWidth: visibleModel.recommendedWidth
+                    )
                 }.value
                 guard !Task.isCancelled else {
                     return
@@ -319,7 +379,13 @@ public final class WorkspaceGitLogViewModel {
                         return
                     }
                     self.availableAuthors = result.authors
-                    self.applyLogSnapshot(result.snapshot)
+                    self.cachedAuthorSuggestionsByRepositoryPath[repositoryPath] = result.authors
+                    self.applyLogSnapshot(
+                        result.snapshot,
+                        visibleModel: result.visibleModel,
+                        tableRows: result.tableRows,
+                        preferredGraphWidth: result.preferredGraphWidth
+                    )
                     self.isLoading = false
                     if !result.snapshot.commits.contains(where: { $0.hash == self.selectedCommitHash }) {
                         self.selectCommit(result.snapshot.commits.first?.hash)
@@ -349,7 +415,7 @@ public final class WorkspaceGitLogViewModel {
         commitDetailTask = Task { [client] in
             do {
                 let detail = try await Task.detached(priority: .userInitiated) {
-                    try client.loadCommitDetail(repositoryPath, hash)
+                    try client.loadCommitSummary(repositoryPath, hash)
                 }.value
                 guard !Task.isCancelled else {
                     return
@@ -366,7 +432,7 @@ public final class WorkspaceGitLogViewModel {
                     let nextFile = self.selectedFilePath.flatMap { path in
                         detail.files.contains(where: { $0.path == path }) ? path : nil
                     } ?? detail.files.first?.path
-                    self.selectCommitFile(nextFile)
+                    self.selectCommitFile(nextFile, loadDiffPreview: false)
                 }
             } catch is CancellationError {
                 return
@@ -472,13 +538,56 @@ public final class WorkspaceGitLogViewModel {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func applyLogSnapshot(_ snapshot: WorkspaceGitLogSnapshot) {
-        let visibleModel = graphVisibleModelBuilder(snapshot.commits)
+    private nonisolated static func formattedCommitTimestamp(_ authorTimestamp: TimeInterval) -> String {
+        let date = Date(timeIntervalSince1970: authorTimestamp)
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) {
+            return "今天"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "昨天"
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "MM/dd"
+        return formatter.string(from: date)
+    }
+
+    private nonisolated static func decorationBadges(for decorations: String?) -> [String] {
+        guard let decorations = decorations?
+            .trimmingCharacters(in: CharacterSet(charactersIn: "() ").union(.whitespacesAndNewlines)),
+              !decorations.isEmpty
+        else {
+            return []
+        }
+        return decorations
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private nonisolated static func isCommitHighlightedOnCurrentBranch(
+        _ commit: WorkspaceGitCommitSummary,
+        currentBranchName: String?
+    ) -> Bool {
+        guard let currentBranchName else {
+            return false
+        }
+        let decorations = commit.decorations ?? ""
+        return decorations.contains("HEAD -> \(currentBranchName)") ||
+            decorations == currentBranchName ||
+            decorations.contains(", \(currentBranchName)")
+    }
+
+    private func applyLogSnapshot(
+        _ snapshot: WorkspaceGitLogSnapshot,
+        visibleModel: WorkspaceGitCommitGraphVisibleModel,
+        tableRows: [WorkspaceGitLogTableRow],
+        preferredGraphWidth: Double
+    ) {
         logSnapshot = snapshot
         graphVisibleModel = visibleModel
-        tableRows = visibleModel.rows.map { row in
-            WorkspaceGitLogTableRow(commit: row.commit, graphRow: row)
-        }
-        preferredGraphWidth = visibleModel.recommendedWidth
+        self.tableRows = tableRows
+        self.preferredGraphWidth = preferredGraphWidth
     }
 }

@@ -4,6 +4,42 @@ import Observation
 @MainActor
 @Observable
 public final class WorkspaceDiffTabViewModel {
+    private enum EditableContentRebuildRequest: Sendable {
+        case compare(
+            mode: WorkspaceDiffCompareMode,
+            leftPane: WorkspaceDiffEditorPane,
+            rightPane: WorkspaceDiffEditorPane
+        )
+        case merge(
+            oursPane: WorkspaceDiffEditorPane,
+            basePane: WorkspaceDiffEditorPane,
+            theirsPane: WorkspaceDiffEditorPane,
+            resultPane: WorkspaceDiffEditorPane
+        )
+
+        func buildDocument() -> WorkspaceDiffLoadedDocument {
+            switch self {
+            case let .compare(mode, leftPane, rightPane):
+                return .compare(
+                    buildCompareDocument(
+                        mode: mode,
+                        leftPane: leftPane,
+                        rightPane: rightPane
+                    )
+                )
+            case let .merge(oursPane, basePane, theirsPane, resultPane):
+                return .merge(
+                    buildMergeDocument(
+                        oursPane: oursPane,
+                        basePane: basePane,
+                        theirsPane: theirsPane,
+                        resultPane: resultPane
+                    )
+                )
+            }
+        }
+    }
+
     private enum DifferenceSelectionPreference {
         case first
         case last
@@ -60,6 +96,9 @@ public final class WorkspaceDiffTabViewModel {
     @ObservationIgnored private let parser: @Sendable (String) -> WorkspaceDiffParsedDocument
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var loadRevision = 0
+    @ObservationIgnored private let editableContentRebuildDelayNanoseconds: UInt64
+    @ObservationIgnored private var editableContentRebuildTask: Task<Void, Never>?
+    @ObservationIgnored private var editableContentRebuildRevision = 0
     @ObservationIgnored private var pendingSelectionPreference: DifferenceSelectionPreference?
 
     public var tab: WorkspaceDiffTabState
@@ -71,11 +110,13 @@ public final class WorkspaceDiffTabViewModel {
     public init(
         tab: WorkspaceDiffTabState,
         client: Client,
-        parser: @escaping @Sendable (String) -> WorkspaceDiffParsedDocument = WorkspaceDiffPatchParser.parse
+        parser: @escaping @Sendable (String) -> WorkspaceDiffParsedDocument = WorkspaceDiffPatchParser.parse,
+        editableContentRebuildDelayNanoseconds: UInt64 = 180_000_000
     ) {
         self.tab = tab
         self.client = client
         self.parser = parser
+        self.editableContentRebuildDelayNanoseconds = editableContentRebuildDelayNanoseconds
         let initialRequestChain = tab.requestChain
             ?? WorkspaceDiffRequestChain(items: [makeRequestItem(from: tab)])
         self.sessionState = WorkspaceDiffSessionState(
@@ -91,6 +132,7 @@ public final class WorkspaceDiffTabViewModel {
 
     deinit {
         loadTask?.cancel()
+        editableContentRebuildTask?.cancel()
     }
 
     public func updateViewerMode(_ mode: WorkspaceDiffViewerMode) {
@@ -132,11 +174,13 @@ public final class WorkspaceDiffTabViewModel {
             return
         }
 
+        cancelEditableContentRebuild()
         documentState.loadState = .idle
         refresh()
     }
 
     public func openSession(_ chain: WorkspaceDiffRequestChain) {
+        cancelEditableContentRebuild()
         sessionState = WorkspaceDiffSessionState(requestChain: chain)
         tab.requestChain = chain
         selectedDifferenceAnchor = nil
@@ -182,34 +226,60 @@ public final class WorkspaceDiffTabViewModel {
     }
 
     public func updateEditableContent(_ text: String) {
+        guard let rebuildRequest = applyEditableContentUpdate(text) else {
+            return
+        }
+        scheduleEditableContentRebuild(for: rebuildRequest)
+    }
+
+    private func applyEditableContentUpdate(_ text: String) -> EditableContentRebuildRequest? {
         switch documentState.loadState {
         case let .loaded(.compare(document)):
-            guard document.rightPane.isEditable else {
-                return
+            guard document.rightPane.isEditable, document.rightPane.text != text else {
+                return nil
             }
             var rightPane = document.rightPane
             rightPane.text = text
-            let updated = buildCompareDocument(
+            documentState.loadState = .loaded(
+                .compare(
+                    WorkspaceDiffCompareDocument(
+                        mode: document.mode,
+                        leftPane: document.leftPane,
+                        rightPane: rightPane,
+                        blocks: document.blocks
+                    )
+                )
+            )
+            return .compare(
                 mode: document.mode,
                 leftPane: document.leftPane,
                 rightPane: rightPane
             )
-            applyLoadedDocument(.compare(updated))
         case let .loaded(.merge(document)):
-            guard document.resultPane.isEditable else {
-                return
+            guard document.resultPane.isEditable, document.resultPane.text != text else {
+                return nil
             }
             var resultPane = document.resultPane
             resultPane.text = text
-            let updated = buildMergeDocument(
+            documentState.loadState = .loaded(
+                .merge(
+                    WorkspaceDiffMergeDocument(
+                        oursPane: document.oursPane,
+                        basePane: document.basePane,
+                        theirsPane: document.theirsPane,
+                        resultPane: resultPane,
+                        conflictBlocks: document.conflictBlocks
+                    )
+                )
+            )
+            return .merge(
                 oursPane: document.oursPane,
                 basePane: document.basePane,
                 theirsPane: document.theirsPane,
                 resultPane: resultPane
             )
-            applyLoadedDocument(.merge(updated))
         default:
-            return
+            return nil
         }
     }
 
@@ -224,6 +294,7 @@ public final class WorkspaceDiffTabViewModel {
     }
 
     public func applyMergeAction(_ action: WorkspaceDiffMergeAction, blockID: String? = nil) {
+        cancelEditableContentRebuild()
         guard case let .loaded(.merge(document)) = documentState.loadState else {
             return
         }
@@ -259,6 +330,7 @@ public final class WorkspaceDiffTabViewModel {
     }
 
     public func applyCompareBlockAction(_ action: WorkspaceDiffCompareBlockAction, blockID: String) throws {
+        cancelEditableContentRebuild()
         guard case let .loaded(.compare(document)) = documentState.loadState,
               let block = document.blocks.first(where: { $0.id == blockID }),
               case let .workingTreeChange(_, executionPath, filePath, _, _, _) = tab.source
@@ -326,6 +398,7 @@ public final class WorkspaceDiffTabViewModel {
     }
 
     public func refresh() {
+        cancelEditableContentRebuild()
         loadTask?.cancel()
         loadRevision += 1
         let currentRevision = loadRevision
@@ -368,6 +441,47 @@ public final class WorkspaceDiffTabViewModel {
                     )
                     self.rebuildNavigatorState()
                 }
+            }
+        }
+    }
+
+    private func cancelEditableContentRebuild() {
+        editableContentRebuildTask?.cancel()
+        editableContentRebuildTask = nil
+        editableContentRebuildRevision += 1
+    }
+
+    private func scheduleEditableContentRebuild(
+        for request: EditableContentRebuildRequest,
+        delayNanoseconds: UInt64? = nil
+    ) {
+        editableContentRebuildTask?.cancel()
+        editableContentRebuildRevision += 1
+        let currentRevision = editableContentRebuildRevision
+        let effectiveDelay = delayNanoseconds ?? editableContentRebuildDelayNanoseconds
+        editableContentRebuildTask = Task { [weak self] in
+            if effectiveDelay > 0 {
+                try? await Task.sleep(nanoseconds: effectiveDelay)
+            } else {
+                await Task.yield()
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            let document = await Task.detached(priority: .userInitiated) {
+                request.buildDocument()
+            }.value
+            guard !Task.isCancelled else {
+                return
+            }
+            await MainActor.run { [weak self] in
+                guard let self,
+                      self.editableContentRebuildRevision == currentRevision
+                else {
+                    return
+                }
+                self.editableContentRebuildTask = nil
+                self.applyLoadedDocument(document)
             }
         }
     }

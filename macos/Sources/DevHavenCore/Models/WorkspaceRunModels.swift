@@ -111,6 +111,10 @@ public enum WorkspaceRunSessionState: Equatable, Sendable {
 }
 
 public struct WorkspaceRunSession: Identifiable, Equatable, Sendable {
+    static let maxDisplayBufferUTF8Bytes = 128 * 1024
+    static let trimmedDisplayBufferUTF8Bytes = 96 * 1024
+    static let displayBufferTruncationNotice = "[DevHaven] 控制台输出过长，已仅保留最近内容。完整日志请点“打开日志”。\n\n"
+
     public var id: String
     public var configurationID: String
     public var configurationName: String
@@ -156,6 +160,59 @@ public struct WorkspaceRunSession: Identifiable, Equatable, Sendable {
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.displayBuffer = displayBuffer
+    }
+
+    mutating func appendDisplayChunk(_ chunk: String) {
+        guard !chunk.isEmpty else {
+            return
+        }
+        displayBuffer = Self.appendingDisplayChunk(chunk, to: displayBuffer)
+    }
+
+    static func appendingDisplayChunk(_ chunk: String, to existing: String) -> String {
+        guard !chunk.isEmpty else {
+            return existing
+        }
+        let combined = existing + chunk
+        guard combined.utf8.count > maxDisplayBufferUTF8Bytes else {
+            return combined
+        }
+
+        let contentWithoutNotice: String
+        if combined.hasPrefix(displayBufferTruncationNotice) {
+            contentWithoutNotice = String(combined.dropFirst(displayBufferTruncationNotice.count))
+        } else {
+            contentWithoutNotice = combined
+        }
+
+        var trimmed = utf8Suffix(
+            of: contentWithoutNotice,
+            byteLimit: trimmedDisplayBufferUTF8Bytes
+        )
+        if let firstNewline = trimmed.firstIndex(of: "\n"),
+           firstNewline < trimmed.index(before: trimmed.endIndex)
+        {
+            trimmed = String(trimmed[trimmed.index(after: firstNewline)...])
+        }
+        return displayBufferTruncationNotice + trimmed
+    }
+
+    private static func utf8Suffix(of text: String, byteLimit: Int) -> String {
+        guard byteLimit > 0, text.utf8.count > byteLimit else {
+            return text
+        }
+        var collectedBytes = 0
+        var startIndex = text.endIndex
+        while startIndex > text.startIndex {
+            let previousIndex = text.index(before: startIndex)
+            let scalarBytes = String(text[previousIndex]).utf8.count
+            if collectedBytes + scalarBytes > byteLimit {
+                break
+            }
+            collectedBytes += scalarBytes
+            startIndex = previousIndex
+        }
+        return String(text[startIndex...])
     }
 }
 

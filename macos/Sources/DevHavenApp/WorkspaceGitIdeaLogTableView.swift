@@ -4,12 +4,6 @@ import DevHavenCore
 struct WorkspaceGitIdeaLogTableView: View {
     @Bindable var viewModel: WorkspaceGitLogViewModel
     private let defaultColumns = WorkspaceGitLogColumn.defaultColumns
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "MM/dd"
-        return formatter
-    }()
 
     private enum TableCellMetrics {
         static let verticalInsetCompensation: CGFloat = 4
@@ -43,7 +37,7 @@ struct WorkspaceGitIdeaLogTableView: View {
                             .foregroundStyle(NativeTheme.textPrimary)
                     }
                     TableColumn(defaultColumns[2].title) { row in
-                        Text(formattedCommitTimestamp(row.commit.authorTimestamp))
+                        Text(row.formattedDateText)
                             .font(.callout.monospacedDigit())
                             .foregroundStyle(NativeTheme.textSecondary)
                     }
@@ -81,7 +75,7 @@ struct WorkspaceGitIdeaLogTableView: View {
                             .font(.callout.weight(.medium))
                             .foregroundStyle(NativeTheme.textPrimary)
                             .lineLimit(1)
-                        ForEach(decorationBadges(for: commit), id: \.self) { badge in
+                        ForEach(row.decorationBadges, id: \.self) { badge in
                             Text(badge)
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(NativeTheme.accent)
@@ -99,43 +93,19 @@ struct WorkspaceGitIdeaLogTableView: View {
                 alignment: .leading
             )
             .frame(height: WorkspaceGitCommitGraphView.rowHeight, alignment: .leading)
-            .background(rowBackground(for: commit))
+            .background(rowBackground(for: row))
             .padding(.vertical, -TableCellMetrics.verticalInsetCompensation)
         }
         .buttonStyle(.plain)
     }
 
-    private func rowBackground(for commit: WorkspaceGitCommitSummary) -> Color {
-        if viewModel.selectedCommitHash == commit.hash {
+    private func rowBackground(for row: WorkspaceGitLogTableRow) -> Color {
+        if viewModel.selectedCommitHash == row.commit.hash {
             return NativeTheme.accent.opacity(0.16)
         }
-        if viewModel.isCommitHighlightedOnCurrentBranch(commit) {
+        if row.isHighlightedOnCurrentBranch {
             return NativeTheme.accent.opacity(0.08)
         }
         return .clear
-    }
-
-    private func decorationBadges(for commit: WorkspaceGitCommitSummary) -> [String] {
-        guard let decorations = commit.decorations?
-            .trimmingCharacters(in: CharacterSet(charactersIn: "() ").union(.whitespacesAndNewlines)),
-              !decorations.isEmpty
-        else {
-            return []
-        }
-        return decorations
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    private func formattedCommitTimestamp(_ authorTimestamp: TimeInterval) -> String {
-        let date = Date(timeIntervalSince1970: authorTimestamp)
-        if Calendar.current.isDateInToday(date) {
-            return "今天"
-        }
-        if Calendar.current.isDateInYesterday(date) {
-            return "昨天"
-        }
-        return Self.dateFormatter.string(from: date)
     }
 }

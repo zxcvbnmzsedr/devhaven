@@ -6,7 +6,6 @@ struct WorkspaceCommitRootView: View {
     let onSyncDiffIfNeeded: (WorkspaceCommitChange) -> Void
     let onOpenDiff: (WorkspaceCommitChange) -> Void
     @State private var topAreaRatio: Double = 0.7
-    @State private var autoRefreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         WorkspaceSplitView(
@@ -25,11 +24,21 @@ struct WorkspaceCommitRootView: View {
         } trailing: {
             WorkspaceCommitPanelView(viewModel: viewModel)
         }
-        .onAppear {
+        .task(id: viewModel.repositoryContext.executionPath) {
             viewModel.refreshChangesSnapshot()
-        }
-        .onReceive(autoRefreshTimer) { _ in
-            viewModel.refreshChangesSnapshot()
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(5))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else {
+                    return
+                }
+                await MainActor.run {
+                    viewModel.refreshChangesSnapshot()
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(NativeTheme.window)

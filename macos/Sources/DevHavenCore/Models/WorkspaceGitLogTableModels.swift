@@ -46,9 +46,21 @@ public struct WorkspaceGitLogTableRow: Equatable, Sendable, Identifiable {
     public var id: String { commit.id }
     public var commit: WorkspaceGitCommitSummary
     public var graphRow: WorkspaceGitCommitGraphVisibleRow
+    public var decorationBadges: [String]
+    public var formattedDateText: String
+    public var isHighlightedOnCurrentBranch: Bool
 
-    public init(commit: WorkspaceGitCommitSummary, graphRow: WorkspaceGitCommitGraphVisibleRow) {
+    public init(
+        commit: WorkspaceGitCommitSummary,
+        graphRow: WorkspaceGitCommitGraphVisibleRow,
+        decorationBadges: [String] = [],
+        formattedDateText: String = "",
+        isHighlightedOnCurrentBranch: Bool = false
+    ) {
         self.commit = commit
         self.graphRow = graphRow
+        self.decorationBadges = decorationBadges
+        self.formattedDateText = formattedDateText
+        self.isHighlightedOnCurrentBranch = isHighlightedOnCurrentBranch
     }
 }

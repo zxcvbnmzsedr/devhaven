@@ -1,6 +1,6 @@
 import Foundation
 
-public final class WorkspaceRestoreStore {
+public final class WorkspaceRestoreStore: @unchecked Sendable {
     public typealias ManifestWriter = (Data, URL) throws -> Void
 
     private let homeDirectoryURL: URL
@@ -8,6 +8,8 @@ public final class WorkspaceRestoreStore {
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let manifestWriter: ManifestWriter
+    private let ioQueue = DispatchQueue(label: "DevHavenCore.WorkspaceRestoreStore")
+    private var latestAutosaveGeneration: UInt64 = 0
 
     public init(
         homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -25,13 +27,69 @@ public final class WorkspaceRestoreStore {
     }
 
     public func loadSnapshot() -> WorkspaceRestoreSnapshot? {
-        if let snapshot = loadSnapshot(from: manifestFileURL) {
-            return snapshot
+        ioQueue.sync {
+            if let snapshot = loadSnapshot(from: manifestFileURL) {
+                return snapshot
+            }
+            return loadSnapshot(from: previousManifestFileURL)
         }
-        return loadSnapshot(from: previousManifestFileURL)
     }
 
-    public func saveSnapshot(_ snapshot: WorkspaceRestoreSnapshot) throws {
+    @discardableResult
+    public func saveSnapshot(_ snapshot: WorkspaceRestoreSnapshot) throws -> WorkspaceRestoreSnapshot {
+        try ioQueue.sync {
+            try saveSnapshotLocked(snapshot)
+        }
+    }
+
+    @discardableResult
+    public func saveAutosaveSnapshot(
+        _ snapshot: WorkspaceRestoreSnapshot,
+        generation: UInt64
+    ) throws -> WorkspaceRestoreSnapshot? {
+        try ioQueue.sync {
+            guard generation >= latestAutosaveGeneration else {
+                return nil
+            }
+            latestAutosaveGeneration = generation
+            return try saveSnapshotLocked(snapshot)
+        }
+    }
+
+    public func removeSnapshot() throws {
+        try ioQueue.sync {
+            guard fileManager.fileExists(atPath: restoreDirectoryURL.path) else {
+                return
+            }
+            try fileManager.removeItem(at: restoreDirectoryURL)
+        }
+    }
+
+    public func loadPaneText(for ref: WorkspacePaneSnapshotTextRef?) -> String? {
+        ioQueue.sync {
+            guard let ref else {
+                return nil
+            }
+            guard let text = try? String(contentsOf: paneTextFileURL(for: ref), encoding: .utf8) else {
+                return nil
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : text
+        }
+    }
+
+    private func loadSnapshot(from fileURL: URL) -> WorkspaceRestoreSnapshot? {
+        guard let data = try? Data(contentsOf: fileURL),
+              let snapshot = try? decoder.decode(WorkspaceRestoreSnapshot.self, from: data),
+              snapshot.version == WorkspaceRestoreSnapshot.currentVersion,
+              !snapshot.sessions.isEmpty
+        else {
+            return nil
+        }
+        return snapshot
+    }
+
+    private func saveSnapshotLocked(_ snapshot: WorkspaceRestoreSnapshot) throws -> WorkspaceRestoreSnapshot {
         try fileManager.createDirectory(at: restoreDirectoryURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: panesDirectoryURL, withIntermediateDirectories: true)
 
@@ -54,35 +112,7 @@ public final class WorkspaceRestoreStore {
         let retainedFileNames = paneTextFileNames(in: persistedSnapshot)
             .union(paneTextFileNames(in: retainedPreviousSnapshot))
         try pruneObsoletePaneTextFiles(keeping: retainedFileNames)
-    }
-
-    public func removeSnapshot() throws {
-        guard fileManager.fileExists(atPath: restoreDirectoryURL.path) else {
-            return
-        }
-        try fileManager.removeItem(at: restoreDirectoryURL)
-    }
-
-    public func loadPaneText(for ref: WorkspacePaneSnapshotTextRef?) -> String? {
-        guard let ref else {
-            return nil
-        }
-        guard let text = try? String(contentsOf: paneTextFileURL(for: ref), encoding: .utf8) else {
-            return nil
-        }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : text
-    }
-
-    private func loadSnapshot(from fileURL: URL) -> WorkspaceRestoreSnapshot? {
-        guard let data = try? Data(contentsOf: fileURL),
-              let snapshot = try? decoder.decode(WorkspaceRestoreSnapshot.self, from: data),
-              snapshot.version == WorkspaceRestoreSnapshot.currentVersion,
-              !snapshot.sessions.isEmpty
-        else {
-            return nil
-        }
-        return snapshot
+        return persistedSnapshot
     }
 
     private func assignFreshTextRefs(in snapshot: WorkspaceRestoreSnapshot, generationID: String) -> WorkspaceRestoreSnapshot {

@@ -20,6 +20,11 @@ final class CodexAgentPresentationCoordinator {
         viewModel: NativeAppViewModel,
         terminalStoreRegistry: WorkspaceTerminalStoreRegistry
     ) {
+        if self.viewModel === viewModel,
+           self.terminalStoreRegistry === terminalStoreRegistry {
+            sync()
+            return
+        }
         self.viewModel = viewModel
         self.terminalStoreRegistry = terminalStoreRegistry
         terminalStoreRegistry.setCodexDisplayModelCreatedObserver { [weak self] projectPath, paneID, model in

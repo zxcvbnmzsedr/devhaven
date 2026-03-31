@@ -37,7 +37,7 @@ struct WorkspaceGitIdeaLogView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(NativeTheme.window)
         .onAppear {
-            viewModel.refresh()
+            viewModel.refreshIfNeeded()
         }
     }
 

@@ -7,6 +7,7 @@ public final class WorkspaceGitViewModel {
     public struct Client: Sendable {
         public var loadRefs: @Sendable (String) throws -> WorkspaceGitRefsSnapshot
         public var loadLogSnapshot: @Sendable (String, WorkspaceGitLogQuery) throws -> WorkspaceGitLogSnapshot
+        public var loadCommitSummary: @Sendable (String, String) throws -> WorkspaceGitCommitDetail
         public var loadCommitDetail: @Sendable (String, String) throws -> WorkspaceGitCommitDetail
         public var loadDiffForCommit: @Sendable (String, String) throws -> String
         public var loadDiffForCommitFile: @Sendable (String, String, String) throws -> String
@@ -33,6 +34,7 @@ public final class WorkspaceGitViewModel {
         public init(
             loadRefs: @escaping @Sendable (String) throws -> WorkspaceGitRefsSnapshot,
             loadLogSnapshot: @escaping @Sendable (String, WorkspaceGitLogQuery) throws -> WorkspaceGitLogSnapshot,
+            loadCommitSummary: @escaping @Sendable (String, String) throws -> WorkspaceGitCommitDetail,
             loadCommitDetail: @escaping @Sendable (String, String) throws -> WorkspaceGitCommitDetail,
             loadDiffForCommit: @escaping @Sendable (String, String) throws -> String,
             loadDiffForCommitFile: @escaping @Sendable (String, String, String) throws -> String = { _, _, _ in "" },
@@ -58,6 +60,7 @@ public final class WorkspaceGitViewModel {
         ) {
             self.loadRefs = loadRefs
             self.loadLogSnapshot = loadLogSnapshot
+            self.loadCommitSummary = loadCommitSummary
             self.loadCommitDetail = loadCommitDetail
             self.loadDiffForCommit = loadDiffForCommit
             self.loadDiffForCommitFile = loadDiffForCommitFile
@@ -86,6 +89,7 @@ public final class WorkspaceGitViewModel {
             Client(
                 loadRefs: { try service.loadRefs(at: $0) },
                 loadLogSnapshot: { try service.loadLogSnapshot(at: $0, query: $1) },
+                loadCommitSummary: { try service.loadCommitSummary(at: $0, commitHash: $1) },
                 loadCommitDetail: { try service.loadCommitDetail(at: $0, commitHash: $1) },
                 loadDiffForCommit: { try service.loadDiffForCommit(at: $0, commitHash: $1) },
                 loadDiffForCommitFile: { try service.loadDiffForCommitFile(at: $0, commitHash: $1, filePath: $2) },
@@ -114,7 +118,7 @@ public final class WorkspaceGitViewModel {
         var logViewModelClient: WorkspaceGitLogViewModel.Client {
             WorkspaceGitLogViewModel.Client(
                 loadLogSnapshot: loadLogSnapshot,
-                loadCommitDetail: loadCommitDetail,
+                loadCommitSummary: loadCommitSummary,
                 loadFileDiffForCommit: loadDiffForCommitFile,
                 loadAuthorSuggestions: loadLogAuthors
             )

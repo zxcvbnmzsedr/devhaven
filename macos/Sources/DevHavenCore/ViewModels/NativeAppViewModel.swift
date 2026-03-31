@@ -133,7 +133,10 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var projectNotesSummaryBackfillTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
     @ObservationIgnored private var isAgentSignalObservationStarted = false
+    @ObservationIgnored private var lastAppliedAgentSignalSnapshotsByTerminalSessionID: [String: WorkspaceAgentSessionSignal] = [:]
+    @ObservationIgnored private var lastAppliedAgentSignalProjectPaths: Set<String> = []
     @ObservationIgnored private var displayProjectCacheByLookupKey: [DisplayProjectLookupKey: Project?] = [:]
+    @ObservationIgnored private var cachedCodexDisplayCandidates: [WorkspaceAgentDisplayCandidate] = []
     @ObservationIgnored private var workspacePendingEditorBatchCloseState: WorkspaceEditorBatchCloseState?
     @ObservationIgnored private var workspaceEditorDirectoryWatchersByProjectPath: [String: [String: WorkspaceDirectoryWatcher]] = [:]
     @ObservationIgnored private var projectsByNormalizedPath: [String: Project] = [:]
@@ -219,6 +222,7 @@ public final class NativeAppViewModel {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: openWorkspaceSessions)
             rebuildWorkspaceSessionIndex()
+            refreshCodexDisplayCandidates()
         }
     }
     public var activeWorkspaceProjectPath: String? {
@@ -239,6 +243,7 @@ public final class NativeAppViewModel {
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState] {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: attentionStateByProjectPath)
+            refreshCodexDisplayCandidates()
         }
     }
     private var agentDisplayOverridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]] {
@@ -266,6 +271,7 @@ public final class NativeAppViewModel {
     private var workspaceGitViewModels: [String: WorkspaceGitViewModel]
     private var workspaceDiffTabViewModels: [String: WorkspaceDiffTabViewModel]
     public private(set) var workspaceSidebarProjectionRevision: Int
+    public private(set) var codexDisplayCandidatesRevision: Int
     public var searchQuery: String
     public var selectedDirectory: DirectoryFilter
     public var selectedTag: String?
@@ -361,6 +367,7 @@ public final class NativeAppViewModel {
         self.workspaceGitViewModels = [:]
         self.workspaceDiffTabViewModels = [:]
         self.workspaceSidebarProjectionRevision = 0
+        self.codexDisplayCandidatesRevision = 0
         self.searchQuery = ""
         self.selectedDirectory = .all
         self.selectedTag = nil
@@ -901,6 +908,7 @@ public final class NativeAppViewModel {
         guard attention != previousAttention else {
             return
         }
+        invalidateAppliedAgentSignalCache()
         attentionStateByProjectPath[signal.projectPath] = attention
     }
 
@@ -913,6 +921,7 @@ public final class NativeAppViewModel {
         guard attention != previousAttention else {
             return
         }
+        invalidateAppliedAgentSignalCache()
         attentionStateByProjectPath[projectPath] = attention
     }
 
@@ -941,6 +950,7 @@ public final class NativeAppViewModel {
         }
         agentSignalStore.stop()
         isAgentSignalObservationStarted = false
+        invalidateAppliedAgentSignalCache()
     }
 
     public func refreshWorkspaceAgentSignals() {
@@ -948,6 +958,11 @@ public final class NativeAppViewModel {
     }
 
     public func codexDisplayCandidates() -> [WorkspaceAgentDisplayCandidate] {
+        refreshCodexDisplayCandidates()
+        return cachedCodexDisplayCandidates
+    }
+
+    private func refreshCodexDisplayCandidates() {
         let openPaths = Set(openWorkspaceProjectPaths)
         let candidates = attentionStateByProjectPath
             .filter { openPaths.contains($0.key) }
@@ -966,7 +981,12 @@ public final class NativeAppViewModel {
                     )
                 }
             }
-        return WorkspaceAgentDisplayCandidate.observationStableSorted(candidates)
+        let sortedCandidates = WorkspaceAgentDisplayCandidate.observationStableSorted(candidates)
+        guard cachedCodexDisplayCandidates != sortedCandidates else {
+            return
+        }
+        cachedCodexDisplayCandidates = sortedCandidates
+        codexDisplayCandidatesRevision &+= 1
     }
 
     public func replaceWorkspaceAgentDisplayOverrides(
@@ -5713,7 +5733,7 @@ public final class NativeAppViewModel {
                 guard let index = state.sessions.firstIndex(where: { $0.id == sessionID }) else {
                     return
                 }
-                state.sessions[index].displayBuffer += chunk
+                state.sessions[index].appendDisplayChunk(chunk)
             }
         case let .stateChanged(projectPath, sessionID, runState):
             updateWorkspaceRunConsoleState(for: projectPath) { state in
@@ -6323,23 +6343,51 @@ public final class NativeAppViewModel {
 
     private func applyAgentSignalSnapshots(_ snapshots: [String: WorkspaceAgentSessionSignal]) {
         let openPaths = Set(openWorkspaceProjectPaths)
+        guard lastAppliedAgentSignalProjectPaths != openPaths ||
+                lastAppliedAgentSignalSnapshotsByTerminalSessionID != snapshots
+        else {
+            return
+        }
+
+        let previousSnapshots = lastAppliedAgentSignalSnapshotsByTerminalSessionID
         var nextAttentionStateByProjectPath = attentionStateByProjectPath.filter { openPaths.contains($0.key) }
-        for path in openPaths {
-            guard var attention = nextAttentionStateByProjectPath[path] else {
+
+        for (terminalSessionID, previousSignal) in previousSnapshots {
+            guard openPaths.contains(previousSignal.projectPath) else {
                 continue
             }
-            attention.clearAgentStates()
-            nextAttentionStateByProjectPath[path] = attention
+            if let currentSignal = snapshots[terminalSessionID],
+               currentSignal.projectPath == previousSignal.projectPath,
+               currentSignal.paneId == previousSignal.paneId {
+                continue
+            }
+            guard var attention = nextAttentionStateByProjectPath[previousSignal.projectPath] else {
+                continue
+            }
+            attention.clearAgentState(for: previousSignal.paneId)
+            nextAttentionStateByProjectPath[previousSignal.projectPath] = attention
         }
-        for signal in snapshots.values where openPaths.contains(signal.projectPath) {
+
+        for (terminalSessionID, signal) in snapshots where openPaths.contains(signal.projectPath) {
+            if previousSnapshots[terminalSessionID] == signal {
+                continue
+            }
             var attention = nextAttentionStateByProjectPath[signal.projectPath] ?? WorkspaceAttentionState()
             applyAgentSignal(signal, to: &attention)
             nextAttentionStateByProjectPath[signal.projectPath] = attention
         }
+
         if attentionStateByProjectPath != nextAttentionStateByProjectPath {
             attentionStateByProjectPath = nextAttentionStateByProjectPath
         }
+        lastAppliedAgentSignalProjectPaths = openPaths
+        lastAppliedAgentSignalSnapshotsByTerminalSessionID = snapshots
         pruneWorkspaceAgentDisplayOverrides()
+    }
+
+    private func invalidateAppliedAgentSignalCache() {
+        lastAppliedAgentSignalProjectPaths = []
+        lastAppliedAgentSignalSnapshotsByTerminalSessionID = [:]
     }
 
     private func pruneWorkspaceAgentDisplayOverrides() {
@@ -6353,6 +6401,10 @@ public final class NativeAppViewModel {
     private func filteredWorkspaceAgentDisplayOverrides(
         _ overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     ) -> [String: [String: WorkspaceAgentPresentationOverride]] {
+        guard !overridesByProjectPath.isEmpty else {
+            return [:]
+        }
+
         let validPaneIDsByProjectPath = Dictionary(
             grouping: codexDisplayCandidates(),
             by: \.projectPath

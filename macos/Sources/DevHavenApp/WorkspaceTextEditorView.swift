@@ -78,11 +78,27 @@ struct WorkspaceTextEditorSearchRequestState: Equatable {
     }
 }
 
+enum WorkspaceTextEditorDecorationRefreshPolicy: Equatable {
+    case immediate
+    case debounced(nanoseconds: UInt64)
+}
+
 struct WorkspaceTextEditorDecorationSignature: Equatable {
     var contentRevision: Int
     var syntaxStyle: WorkspaceEditorSyntaxStyle
     var highlights: [WorkspaceDiffEditorHighlight]
     var inlineHighlights: [WorkspaceDiffEditorInlineHighlight]
+}
+
+struct WorkspaceTextEditorChromeSignature: Equatable {
+    var contentRevision: Int
+    var displayOptions: WorkspaceEditorDisplayOptions
+    var highlights: [WorkspaceDiffEditorHighlight]
+    var explicitMarkupMarkers: [WorkspaceEditorMarkupMarker]
+    var searchQuery: String
+    var isSearchCaseSensitive: Bool
+    var matchesWholeWords: Bool
+    var usesRegularExpression: Bool
 }
 
 struct WorkspaceTextEditorSearchHighlightSignature: Equatable {
@@ -1077,6 +1093,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
     let searchRequestState: Binding<WorkspaceTextEditorSearchRequestState>?
     let searchSessionState: Binding<WorkspaceTextEditorSearchSessionState>?
     let selectionText: Binding<String?>?
+    let decorationRefreshPolicy: WorkspaceTextEditorDecorationRefreshPolicy
 
     init(
         editorID: String,
@@ -1096,7 +1113,8 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         scrollRequestState: Binding<WorkspaceTextEditorScrollRequestState>? = nil,
         searchRequestState: Binding<WorkspaceTextEditorSearchRequestState>? = nil,
         searchSessionState: Binding<WorkspaceTextEditorSearchSessionState>? = nil,
-        selectionText: Binding<String?>? = nil
+        selectionText: Binding<String?>? = nil,
+        decorationRefreshPolicy: WorkspaceTextEditorDecorationRefreshPolicy = .immediate
     ) {
         self.editorID = editorID
         self._text = text
@@ -1116,6 +1134,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         self.searchRequestState = searchRequestState
         self.searchSessionState = searchSessionState
         self.selectionText = selectionText
+        self.decorationRefreshPolicy = decorationRefreshPolicy
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1126,7 +1145,8 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             scrollRequestState: scrollRequestState,
             searchRequestState: searchRequestState,
             searchSessionState: searchSessionState,
-            selectionText: selectionText
+            selectionText: selectionText,
+            decorationRefreshPolicy: decorationRefreshPolicy
         )
     }
 
@@ -1206,7 +1226,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         }
         textView.isEditable = isEditable
         context.coordinator.applyDisplayOptionsIfNeeded(displayOptions, to: scrollView, textView: textView, force: textChanged)
-        context.coordinator.applyDecorationsIfNeeded(
+        let refreshedStaticChrome = context.coordinator.applyDecorationsIfNeeded(
             syntaxStyle: syntaxStyle,
             highlights: highlights,
             inlineHighlights: inlineHighlights,
@@ -1217,8 +1237,10 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             usesRegularExpressionInSearch: usesRegularExpressionInSearch,
             force: textChanged
         )
-        if !textChanged {
-            context.coordinator.refreshEditorChrome()
+        if refreshedStaticChrome {
+            context.coordinator.recordCurrentChromeSignature()
+        } else {
+            context.coordinator.refreshStaticChromeIfNeeded()
         }
         context.coordinator.applyFocusRequestIfNeeded(shouldRequestFocus)
         context.coordinator.applySyncedScrollIfNeeded()
@@ -1238,6 +1260,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         private let searchRequestState: Binding<WorkspaceTextEditorSearchRequestState>?
         private let searchSessionState: Binding<WorkspaceTextEditorSearchSessionState>?
         private let selectionText: Binding<String?>?
+        private let decorationRefreshPolicy: WorkspaceTextEditorDecorationRefreshPolicy
         private weak var scrollView: NSScrollView?
         private weak var textView: NSTextView?
         private weak var overviewBarView: WorkspaceEditorOverviewBarView?
@@ -1266,6 +1289,9 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
         private var latestSearchUsesRegularExpression = false
         private var lastResolvedMarkupSignature: WorkspaceTextEditorMarkupSignature?
         private var cachedMarkupModel = WorkspaceEditorMarkupModel()
+        private var pendingDecorationRefreshTask: Task<Void, Never>?
+        private var shouldPreferCachedMarkupModel = false
+        private var lastAppliedChromeSignature: WorkspaceTextEditorChromeSignature?
 
         init(
             editorID: String,
@@ -1274,7 +1300,8 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             scrollRequestState: Binding<WorkspaceTextEditorScrollRequestState>?,
             searchRequestState: Binding<WorkspaceTextEditorSearchRequestState>?,
             searchSessionState: Binding<WorkspaceTextEditorSearchSessionState>?,
-            selectionText: Binding<String?>?
+            selectionText: Binding<String?>?,
+            decorationRefreshPolicy: WorkspaceTextEditorDecorationRefreshPolicy
         ) {
             self.editorID = editorID
             self.text = text
@@ -1283,9 +1310,11 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             self.searchRequestState = searchRequestState
             self.searchSessionState = searchSessionState
             self.selectionText = selectionText
+            self.decorationRefreshPolicy = decorationRefreshPolicy
         }
 
         deinit {
+            pendingDecorationRefreshTask?.cancel()
             if let observedBoundsClipView {
                 NotificationCenter.default.removeObserver(
                     self,
@@ -1311,7 +1340,6 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             }
             installCurrentLineHighlightViewIfNeeded(in: scrollView, textView: textView)
             guard scrollViewChanged else {
-                refreshEditorChrome()
                 updateSelectionText(in: textView)
                 return
             }
@@ -1407,6 +1435,8 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             guard textView.string != text else {
                 return false
             }
+            cancelPendingDecorationRefresh()
+            shouldPreferCachedMarkupModel = false
             textView.string = text
             lineStartOffsets = WorkspaceTextEditorLineMetrics.lineStartOffsets(in: text as NSString)
             searchContentRevision += 1
@@ -1415,6 +1445,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             return true
         }
 
+        @discardableResult
         func applyDecorationsIfNeeded(
             syntaxStyle: WorkspaceEditorSyntaxStyle,
             highlights: [WorkspaceDiffEditorHighlight],
@@ -1425,9 +1456,9 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             matchesSearchWholeWords: Bool,
             usesRegularExpressionInSearch: Bool,
             force: Bool
-        ) {
+        ) -> Bool {
             guard let textView else {
-                return
+                return false
             }
             latestSyntaxStyle = syntaxStyle
             latestHighlights = highlights
@@ -1443,9 +1474,20 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
                 highlights: highlights,
                 inlineHighlights: inlineHighlights
             )
+            if force {
+                cancelPendingDecorationRefresh()
+                shouldPreferCachedMarkupModel = false
+                lastAppliedChromeSignature = nil
+            }
+            if !force,
+               pendingDecorationRefreshTask != nil,
+               shouldPreferCachedMarkupModel {
+                applySearchHighlightsIfNeeded(force: false)
+                return false
+            }
             guard force || lastAppliedDecorationSignature != signature else {
                 applySearchHighlightsIfNeeded(force: force)
-                return
+                return false
             }
 
             applyTextPresentation(
@@ -1458,6 +1500,7 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             lastAppliedSearchHighlightSignature = nil
             applySearchHighlightsIfNeeded(force: true)
             refreshEditorChrome(redrawTextView: false)
+            return true
         }
 
         func applyDisplayOptionsIfNeeded(
@@ -1474,7 +1517,8 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             lastAppliedDisplayOptions = options
         }
 
-        private func reapplyStoredDecorations(force: Bool) {
+        @discardableResult
+        private func reapplyStoredDecorations(force: Bool) -> Bool {
             applyDecorationsIfNeeded(
                 syntaxStyle: latestSyntaxStyle,
                 highlights: latestHighlights,
@@ -1523,12 +1567,23 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             searchContentRevision += 1
             lastAppliedDecorationSignature = nil
             lastAppliedSearchHighlightSignature = nil
+            lastAppliedChromeSignature = nil
             updateSelectionText(in: textView)
-            reapplyStoredDecorations(force: true)
+            switch decorationRefreshPolicy {
+            case .immediate:
+                shouldPreferCachedMarkupModel = false
+                if reapplyStoredDecorations(force: true) {
+                    recordCurrentChromeSignature()
+                }
+            case let .debounced(nanoseconds):
+                shouldPreferCachedMarkupModel = true
+                refreshEditorChrome(redrawTextView: false, markupRefreshMode: .cached)
+                scheduleDeferredDecorationRefresh(nanoseconds: nanoseconds)
+            }
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            refreshEditorChrome()
+            refreshEditorChrome(markupRefreshMode: .cached)
             if let textView = notification.object as? NSTextView {
                 updateSelectionText(in: textView)
             }
@@ -1773,12 +1828,12 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
                 textView.textContainer?.containerSize.width = max(scrollView.contentSize.width, 0)
             }
             guard let scrollSyncState else {
-                refreshEditorChrome(redrawTextView: false)
+                refreshEditorChrome(redrawTextView: false, markupRefreshMode: .cached)
                 return
             }
             let currentOriginY = scrollView.contentView.bounds.origin.y
             let currentState = scrollSyncState.wrappedValue
-            refreshEditorChrome(redrawTextView: false)
+            refreshEditorChrome(redrawTextView: false, markupRefreshMode: .cached)
 
             if let lastProgrammaticScrollRevision,
                let lastProgrammaticScrollOriginY,
@@ -1834,9 +1889,10 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             return max(0, documentHeight - visibleHeight)
         }
 
-        func refreshEditorChrome(
+        fileprivate func refreshEditorChrome(
             redrawTextView: Bool = true,
-            forceImmediateDisplay: Bool = false
+            forceImmediateDisplay: Bool = false,
+            markupRefreshMode: MarkupRefreshMode? = nil
         ) {
             guard let scrollView,
                   let textView = textView as? WorkspaceEditorTextView
@@ -1857,7 +1913,12 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
                 scrollView: scrollView
             )
 
-            let markupModel = resolvedMarkupModel(in: textView.string as NSString)
+            let resolvedMarkupRefreshMode = markupRefreshMode
+                ?? (shouldPreferCachedMarkupModel ? .cached : .resolved)
+            let markupModel = resolvedMarkupModel(
+                in: textView.string as NSString,
+                refreshMode: resolvedMarkupRefreshMode
+            )
             (scrollView.verticalRulerView as? WorkspaceLineNumberRulerView)?
                 .update(
                     lineStartOffsets: lineStartOffsets,
@@ -1959,7 +2020,18 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             updateSearchSessionState(in: textView, searchResult: searchResult)
         }
 
-        private func resolvedMarkupModel(in content: NSString) -> WorkspaceEditorMarkupModel {
+        fileprivate enum MarkupRefreshMode {
+            case resolved
+            case cached
+        }
+
+        private func resolvedMarkupModel(
+            in content: NSString,
+            refreshMode: MarkupRefreshMode
+        ) -> WorkspaceEditorMarkupModel {
+            if refreshMode == .cached {
+                return cachedMarkupModel
+            }
             let signature = WorkspaceTextEditorMarkupSignature(
                 contentRevision: searchContentRevision,
                 query: latestSearchQuery,
@@ -2012,7 +2084,60 @@ struct WorkspaceTextEditorView: NSViewRepresentable {
             isApplyingRemoteScroll = true
             scrollView.contentView.scroll(to: origin)
             scrollView.reflectScrolledClipView(scrollView.contentView)
+            refreshEditorChrome(redrawTextView: false, markupRefreshMode: .cached)
+        }
+
+        private func cancelPendingDecorationRefresh() {
+            pendingDecorationRefreshTask?.cancel()
+            pendingDecorationRefreshTask = nil
+        }
+
+        fileprivate func recordCurrentChromeSignature() {
+            lastAppliedChromeSignature = currentChromeSignature()
+        }
+
+        fileprivate func refreshStaticChromeIfNeeded() {
+            let signature = currentChromeSignature()
+            guard lastAppliedChromeSignature != signature else {
+                return
+            }
             refreshEditorChrome(redrawTextView: false)
+            lastAppliedChromeSignature = signature
+        }
+
+        private func currentChromeSignature() -> WorkspaceTextEditorChromeSignature {
+            WorkspaceTextEditorChromeSignature(
+                contentRevision: searchContentRevision,
+                displayOptions: latestDisplayOptions,
+                highlights: latestHighlights,
+                explicitMarkupMarkers: latestMarkupMarkers,
+                searchQuery: latestSearchQuery,
+                isSearchCaseSensitive: latestSearchCaseSensitive,
+                matchesWholeWords: latestSearchWholeWords,
+                usesRegularExpression: latestSearchUsesRegularExpression
+            )
+        }
+
+        private func scheduleDeferredDecorationRefresh(nanoseconds: UInt64) {
+            cancelPendingDecorationRefresh()
+            pendingDecorationRefreshTask = Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                if nanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: nanoseconds)
+                } else {
+                    await Task.yield()
+                }
+                guard !Task.isCancelled else {
+                    return
+                }
+                self.pendingDecorationRefreshTask = nil
+                self.shouldPreferCachedMarkupModel = false
+                if self.reapplyStoredDecorations(force: true) {
+                    self.recordCurrentChromeSignature()
+                }
+            }
         }
 
         private func updateSearchSessionState(

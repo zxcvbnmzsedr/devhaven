@@ -99,7 +99,10 @@ struct WorkspaceDiffTwoSideViewerView: View {
                 highlights: pane.highlights,
                 inlineHighlights: pane.inlineHighlights,
                 scrollSyncState: $scrollSyncState,
-                scrollRequestState: $scrollRequestState
+                scrollRequestState: $scrollRequestState,
+                decorationRefreshPolicy: pane.isEditable
+                    ? .debounced(nanoseconds: 180_000_000)
+                    : .immediate
             )
         }
         .overlay {

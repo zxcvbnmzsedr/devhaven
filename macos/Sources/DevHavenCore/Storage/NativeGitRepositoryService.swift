@@ -108,7 +108,7 @@ public struct NativeGitRepositoryService: Sendable {
         throw WorkspaceGitCommandError.commandFailed(command: result.command.joined(separator: " "), message: result.errorMessage)
     }
 
-    public func loadCommitDetail(at repositoryPath: String, commitHash: String) throws -> WorkspaceGitCommitDetail {
+    public func loadCommitSummary(at repositoryPath: String, commitHash: String) throws -> WorkspaceGitCommitDetail {
         let detailResult = try runner.runAllowingFailure(
             arguments: [
                 "show",
@@ -132,7 +132,11 @@ public struct NativeGitRepositoryService: Sendable {
         }
 
         let changes = NativeGitParsers.parseNameStatus(filesResult.stdout)
-        var detail = try NativeGitParsers.parseCommitDetail(detailResult.stdout, changedFiles: changes)
+        return try NativeGitParsers.parseCommitDetail(detailResult.stdout, changedFiles: changes)
+    }
+
+    public func loadCommitDetail(at repositoryPath: String, commitHash: String) throws -> WorkspaceGitCommitDetail {
+        var detail = try loadCommitSummary(at: repositoryPath, commitHash: commitHash)
         detail.diff = try loadDiffForCommit(at: repositoryPath, commitHash: commitHash)
         return detail
     }

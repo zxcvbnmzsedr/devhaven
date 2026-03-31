@@ -5,6 +5,15 @@ public enum WorkspaceGitCommitGraphBuilder {
     public static let horizontalPadding: Double = 4
 
     public static func buildVisibleModel(commits: [WorkspaceGitCommitSummary]) -> WorkspaceGitCommitGraphVisibleModel {
+        buildVisibleModel(commits: commits, includeDebugLaneCommitHashes: false)
+    }
+}
+
+private extension WorkspaceGitCommitGraphBuilder {
+    static func buildVisibleModel(
+        commits: [WorkspaceGitCommitSummary],
+        includeDebugLaneCommitHashes: Bool
+    ) -> WorkspaceGitCommitGraphVisibleModel {
         let permanentModel = buildPermanentModel(commits: commits)
         guard !commits.isEmpty else {
             return WorkspaceGitCommitGraphVisibleModel(
@@ -16,10 +25,15 @@ public enum WorkspaceGitCommitGraphBuilder {
         }
 
         let edgeSpans = buildEdgeSpans(permanentModel: permanentModel)
+        let edgeByID = Dictionary(uniqueKeysWithValues: edgeSpans.map { ($0.id, $0) })
+        let adjacentNodeEdgeIDsByRow = buildAdjacentNodeEdgeIDsByRow(
+            rowCount: commits.count,
+            edgeSpans: edgeSpans
+        )
         let rowElements = buildRowElements(rowCount: commits.count, edgeSpans: edgeSpans)
         let positionsByRow = buildPositionsByRow(
             rowElements: rowElements,
-            edgeSpans: edgeSpans,
+            edgeByID: edgeByID,
             permanentModel: permanentModel
         )
 
@@ -34,24 +48,32 @@ public enum WorkspaceGitCommitGraphBuilder {
             let edgeElements = visibleEdgeElements(
                 for: rowIndex,
                 rowElements: rowElements,
-                edgeSpans: edgeSpans,
+                edgeByID: edgeByID,
+                adjacentNodeEdgeIDsByRow: adjacentNodeEdgeIDsByRow,
                 positionsByRow: positionsByRow
             )
 
-            let currentLaneCommitHashes = debugVisibleElementKeys(
-                edgeSpans: edgeSpans,
-                rowIndex: rowIndex,
-                positionsByRow: positionsByRow,
-                commits: commits
-            )
-            let nextLaneCommitHashes = rowIndex + 1 < rowElements.count
-                ? debugVisibleElementKeys(
-                    edgeSpans: edgeSpans,
-                    rowIndex: rowIndex + 1,
+            let currentLaneCommitHashes: [String]
+            let nextLaneCommitHashes: [String]
+            if includeDebugLaneCommitHashes {
+                currentLaneCommitHashes = debugVisibleElementKeys(
+                    edgeByID: edgeByID,
+                    rowIndex: rowIndex,
                     positionsByRow: positionsByRow,
                     commits: commits
                 )
-                : []
+                nextLaneCommitHashes = rowIndex + 1 < rowElements.count
+                    ? debugVisibleElementKeys(
+                        edgeByID: edgeByID,
+                        rowIndex: rowIndex + 1,
+                        positionsByRow: positionsByRow,
+                        commits: commits
+                    )
+                    : []
+            } else {
+                currentLaneCommitHashes = []
+                nextLaneCommitHashes = []
+            }
 
             return WorkspaceGitCommitGraphVisibleRow(
                 rowIndex: rowIndex,
@@ -75,9 +97,7 @@ public enum WorkspaceGitCommitGraphBuilder {
             recommendedWidth: recommendedWidth
         )
     }
-}
 
-private extension WorkspaceGitCommitGraphBuilder {
     struct WorkspaceGitCommitGraphEdgeSpan: Equatable {
         let id: Int
         let childRow: Int
@@ -90,6 +110,22 @@ private extension WorkspaceGitCommitGraphBuilder {
     enum RowElement: Hashable {
         case node(Int)
         case edge(Int)
+    }
+
+    struct EdgeDedupKey: Hashable {
+        let rowIndex: Int
+        let positionInCurrentRow: Int
+        let positionInOtherRow: Int
+        let direction: WorkspaceGitCommitGraphEdgeDirection
+        let colorIndex: Int
+
+        init(_ edge: WorkspaceGitCommitGraphEdgePrintElement) {
+            self.rowIndex = edge.rowIndex
+            self.positionInCurrentRow = edge.positionInCurrentRow
+            self.positionInOtherRow = edge.positionInOtherRow
+            self.direction = edge.direction
+            self.colorIndex = edge.colorIndex
+        }
     }
 
     static func buildPermanentModel(commits: [WorkspaceGitCommitSummary]) -> WorkspaceGitCommitGraphPermanentModel {
@@ -204,10 +240,9 @@ private extension WorkspaceGitCommitGraphBuilder {
 
     static func buildPositionsByRow(
         rowElements: [[RowElement]],
-        edgeSpans: [WorkspaceGitCommitGraphEdgeSpan],
+        edgeByID: [Int: WorkspaceGitCommitGraphEdgeSpan],
         permanentModel: WorkspaceGitCommitGraphPermanentModel
     ) -> [[RowElement: Int]] {
-        let edgeByID = Dictionary(uniqueKeysWithValues: edgeSpans.map { ($0.id, $0) })
         return rowElements.enumerated().map { _, elements in
             let stableElements = elements.enumerated().sorted { lhs, rhs in
                 let result = compare(
@@ -244,25 +279,37 @@ private extension WorkspaceGitCommitGraphBuilder {
         return positionsByRow[rowIndex][.edge(edge.id)] ?? 0
     }
 
+    static func buildAdjacentNodeEdgeIDsByRow(
+        rowCount: Int,
+        edgeSpans: [WorkspaceGitCommitGraphEdgeSpan]
+    ) -> [[Int]] {
+        var edgeIDsByRow = Array(repeating: [Int](), count: rowCount)
+        for edge in edgeSpans {
+            edgeIDsByRow[edge.childRow].append(edge.id)
+            edgeIDsByRow[edge.parentRow].append(edge.id)
+        }
+        return edgeIDsByRow
+    }
+
     static func visibleEdgeElements(
         for rowIndex: Int,
         rowElements: [[RowElement]],
-        edgeSpans: [WorkspaceGitCommitGraphEdgeSpan],
+        edgeByID: [Int: WorkspaceGitCommitGraphEdgeSpan],
+        adjacentNodeEdgeIDsByRow: [[Int]],
         positionsByRow: [[RowElement: Int]]
     ) -> [WorkspaceGitCommitGraphEdgePrintElement] {
         guard rowIndex >= 0, rowIndex < positionsByRow.count else {
             return []
         }
 
-        let edgeByID = Dictionary(uniqueKeysWithValues: edgeSpans.map { ($0.id, $0) })
         let nodeElement = RowElement.node(rowIndex)
         let nodeColumn = positionsByRow[rowIndex][nodeElement] ?? 0
         var printElements: [WorkspaceGitCommitGraphEdgePrintElement] = []
 
-        let adjacentNodeEdges = edgeSpans.filter { edge in
-            edge.childRow == rowIndex || edge.parentRow == rowIndex
-        }
-        for edge in adjacentNodeEdges {
+        for edgeID in adjacentNodeEdgeIDsByRow[rowIndex] {
+            guard let edge = edgeByID[edgeID] else {
+                continue
+            }
             if rowIndex > edge.childRow {
                 printElements.append(
                     WorkspaceGitCommitGraphEdgePrintElement(
@@ -415,19 +462,19 @@ private extension WorkspaceGitCommitGraphBuilder {
         _ edgeElements: [WorkspaceGitCommitGraphEdgePrintElement]
     ) -> [WorkspaceGitCommitGraphEdgePrintElement] {
         var deduplicated: [WorkspaceGitCommitGraphEdgePrintElement] = []
-        for edge in edgeElements where !deduplicated.contains(edge) {
+        var seenKeys = Set<EdgeDedupKey>()
+        for edge in edgeElements where seenKeys.insert(EdgeDedupKey(edge)).inserted {
             deduplicated.append(edge)
         }
         return deduplicated
     }
 
     static func debugVisibleElementKeys(
-        edgeSpans: [WorkspaceGitCommitGraphEdgeSpan],
+        edgeByID: [Int: WorkspaceGitCommitGraphEdgeSpan],
         rowIndex: Int,
         positionsByRow: [[RowElement: Int]],
         commits: [WorkspaceGitCommitSummary]
     ) -> [String] {
-        let edgeByID = Dictionary(uniqueKeysWithValues: edgeSpans.map { ($0.id, $0) })
         return positionsByRow[rowIndex]
             .sorted { lhs, rhs in lhs.value < rhs.value }
             .map(\.key)

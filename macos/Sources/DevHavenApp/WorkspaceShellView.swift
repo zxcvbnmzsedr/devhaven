@@ -377,7 +377,7 @@ private struct WorkspaceCodexPresentationCoordinatorBridge: View {
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
             .onAppear {
-                syncCoordinator()
+                connectCoordinator()
             }
             .onDisappear {
                 codexPresentationCoordinator.disconnect()
@@ -388,7 +388,7 @@ private struct WorkspaceCodexPresentationCoordinatorBridge: View {
             .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
                 syncCoordinator()
             }
-            .onChange(of: viewModel.codexDisplayCandidates()) { _, _ in
+            .onChange(of: viewModel.codexDisplayCandidatesRevision) { _, _ in
                 syncCoordinator()
             }
             .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
@@ -396,11 +396,15 @@ private struct WorkspaceCodexPresentationCoordinatorBridge: View {
             }
     }
 
-    private func syncCoordinator() {
+    private func connectCoordinator() {
         codexPresentationCoordinator.connect(
             viewModel: viewModel,
             terminalStoreRegistry: terminalStoreRegistry
         )
+    }
+
+    private func syncCoordinator() {
+        codexPresentationCoordinator.sync()
     }
 }
 

@@ -4,10 +4,17 @@ public final class WorkspaceRunLogStore: @unchecked Sendable {
     private let fileManager: FileManager
     private let baseDirectoryURL: URL
     private let writeQueue = DispatchQueue(label: "DevHavenCore.WorkspaceRunLogStore")
+    private var openFileHandlesByPath = [String: FileHandle]()
 
     public init(baseDirectoryURL: URL, fileManager: FileManager = .default) {
         self.baseDirectoryURL = baseDirectoryURL
         self.fileManager = fileManager
+    }
+
+    deinit {
+        writeQueue.sync {
+            closeAllHandlesLocked()
+        }
     }
 
     public func createLogFile(scriptName: String, sessionID: String, date: Date = Date()) throws -> URL {
@@ -29,15 +36,14 @@ public final class WorkspaceRunLogStore: @unchecked Sendable {
     public func append(_ chunk: String, to fileURL: URL) throws {
         try writeQueue.sync {
             let data = Data(chunk.utf8)
-            if let handle = try? FileHandle(forWritingTo: fileURL) {
-                try handle.seekToEnd()
-                try handle.write(contentsOf: data)
-                try handle.close()
-                return
-            }
+            let handle = try fileHandle(for: fileURL)
+            try handle.write(contentsOf: data)
+        }
+    }
 
-            try fileManager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: fileURL)
+    public func closeLogFile(at fileURL: URL) {
+        writeQueue.sync {
+            closeHandleLocked(forPath: fileURL.path)
         }
     }
 
@@ -52,5 +58,39 @@ public final class WorkspaceRunLogStore: @unchecked Sendable {
         let scalars = raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
         let value = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
         return value.isEmpty ? "run" : value
+    }
+
+    private func fileHandle(for fileURL: URL) throws -> FileHandle {
+        let path = fileURL.path
+        if let handle = openFileHandlesByPath[path] {
+            return handle
+        }
+
+        if !fileManager.fileExists(atPath: path) {
+            try fileManager.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            fileManager.createFile(atPath: path, contents: Data())
+        }
+
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        openFileHandlesByPath[path] = handle
+        return handle
+    }
+
+    private func closeHandleLocked(forPath path: String) {
+        guard let handle = openFileHandlesByPath.removeValue(forKey: path) else {
+            return
+        }
+        try? handle.synchronize()
+        try? handle.close()
+    }
+
+    private func closeAllHandlesLocked() {
+        for path in openFileHandlesByPath.keys {
+            closeHandleLocked(forPath: path)
+        }
     }
 }

@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import DevHavenCore
 
@@ -5,24 +6,27 @@ struct WorkspaceGitIdeaLogChangesView: View {
     @Bindable var viewModel: WorkspaceGitLogViewModel
     let onOpenDiff: (WorkspaceGitCommitFileChange) -> Void
     @State private var expandedDirectoryIDs = Set<String>()
-    @State private var lastExpandedTreeSignature = ""
+    @State private var lastExpandedTreeSignature: Int?
 
     var body: some View {
+        let detail = viewModel.selectedCommitDetail
+        let projection = detail.map { changeTreeProjection(for: $0.files) }
+
         VStack(alignment: .leading, spacing: 0) {
             paneHeader(title: "变更", subtitle: changeCountLabel)
             Divider()
                 .overlay(NativeTheme.border)
 
-            changesBrowserToolbar
+            changesBrowserToolbar(projection)
             Divider()
                 .overlay(NativeTheme.border)
 
-            if viewModel.isLoadingSelectedCommitDetail && viewModel.selectedCommitDetail == nil {
+            if viewModel.isLoadingSelectedCommitDetail && detail == nil {
                 ProgressView("正在加载变更…")
                     .tint(NativeTheme.accent)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let detail = viewModel.selectedCommitDetail {
-                changesBrowserContent(detail)
+            } else if let projection {
+                changesBrowserContent(projection)
             } else {
                 ContentUnavailableView(
                     "选择一个提交",
@@ -42,14 +46,7 @@ struct WorkspaceGitIdeaLogChangesView: View {
         return "未选择"
     }
 
-    private var currentChangeTreeRoots: [ChangeTreeNode] {
-        guard let detail = viewModel.selectedCommitDetail else {
-            return []
-        }
-        return changeTreeRoots(for: detail.files)
-    }
-
-    private var changesBrowserToolbar: some View {
+    private func changesBrowserToolbar(_ projection: ChangeTreeProjection?) -> some View {
         HStack(spacing: 6) {
             toolbarButton(systemImage: "arrow.left", title: "后退") {
                 // 结构优先：本轮先对齐 toolbar 布局，交互后续再补齐。
@@ -58,7 +55,7 @@ struct WorkspaceGitIdeaLogChangesView: View {
                 // 结构优先：本轮先对齐 toolbar 布局，交互后续再补齐。
             }
             toolbarButton(systemImage: "arrow.up.left.and.arrow.down.right", title: "展开全部") {
-                expandAllDirectories(in: currentChangeTreeRoots)
+                expandAllDirectories(in: projection)
             }
             toolbarButton(systemImage: "arrow.down.forward.and.arrow.up.backward", title: "折叠全部") {
                 collapseAllDirectories()
@@ -104,12 +101,9 @@ struct WorkspaceGitIdeaLogChangesView: View {
     }
 
     @ViewBuilder
-    private func changesBrowserContent(_ detail: WorkspaceGitCommitDetail) -> some View {
-        let roots = changeTreeRoots(for: detail.files)
-        let treeSignature = changeTreeSignature(for: detail.files)
-
+    private func changesBrowserContent(_ projection: ChangeTreeProjection) -> some View {
         List {
-            ForEach(roots) { node in
+            ForEach(projection.roots) { node in
                 changeTreeNodeView(node)
             }
         }
@@ -117,10 +111,10 @@ struct WorkspaceGitIdeaLogChangesView: View {
         .scrollContentBackground(.hidden)
         .background(NativeTheme.window)
         .onAppear {
-            syncExpandedDirectoriesIfNeeded(signature: treeSignature, roots: roots)
+            syncExpandedDirectoriesIfNeeded(projection)
         }
-        .onChange(of: treeSignature) { _, newSignature in
-            syncExpandedDirectoriesIfNeeded(signature: newSignature, roots: roots)
+        .onChange(of: projection.signature) { _, _ in
+            syncExpandedDirectoriesIfNeeded(projection)
         }
     }
 
@@ -254,19 +248,24 @@ struct WorkspaceGitIdeaLogChangesView: View {
         }
     }
 
-    private func changeTreeRoots(for files: [WorkspaceGitCommitFileChange]) -> [ChangeTreeNode] {
-        ChangeTreeBuilder(files: files, fileNameProvider: primaryFileName(for:)).build()
+    private func changeTreeProjection(for files: [WorkspaceGitCommitFileChange]) -> ChangeTreeProjection {
+        let signature = changeTreeProjectionSignature(for: files)
+        if let cached = ChangeTreeProjectionCache.shared.projection(for: signature) {
+            return cached
+        }
+
+        let roots = ChangeTreeBuilder(files: files, fileNameProvider: primaryFileName(for:)).build()
+        let projection = ChangeTreeProjection(
+            roots: roots,
+            signature: signature,
+            allDirectoryIDs: allDirectoryIDs(in: roots)
+        )
+        ChangeTreeProjectionCache.shared.store(projection, for: signature)
+        return projection
     }
 
-    private func changeTreeSignature(for files: [WorkspaceGitCommitFileChange]) -> String {
-        files
-            .map(\.path)
-            .sorted()
-            .joined(separator: "|")
-    }
-
-    private func expandAllDirectories(in roots: [ChangeTreeNode]) {
-        expandedDirectoryIDs = allDirectoryIDs(in: roots)
+    private func expandAllDirectories(in projection: ChangeTreeProjection?) {
+        expandedDirectoryIDs = projection?.allDirectoryIDs ?? []
     }
 
     private func collapseAllDirectories() {
@@ -285,12 +284,12 @@ struct WorkspaceGitIdeaLogChangesView: View {
         return ids
     }
 
-    private func syncExpandedDirectoriesIfNeeded(signature: String, roots: [ChangeTreeNode]) {
-        guard lastExpandedTreeSignature != signature else {
+    private func syncExpandedDirectoriesIfNeeded(_ projection: ChangeTreeProjection) {
+        guard lastExpandedTreeSignature != projection.signature else {
             return
         }
-        lastExpandedTreeSignature = signature
-        expandedDirectoryIDs = allDirectoryIDs(in: roots)
+        lastExpandedTreeSignature = projection.signature
+        expandedDirectoryIDs = projection.allDirectoryIDs
     }
 
     private func color(for status: WorkspaceGitCommitFileStatus) -> Color {
@@ -327,6 +326,35 @@ struct WorkspaceGitIdeaLogChangesView: View {
         case .unknown:
             return "questionmark.square"
         }
+    }
+}
+
+private struct ChangeTreeProjection {
+    let roots: [ChangeTreeNode]
+    let signature: Int
+    let allDirectoryIDs: Set<String>
+}
+
+private final class ChangeTreeProjectionCache: @unchecked Sendable {
+    static let shared = ChangeTreeProjectionCache()
+    private static let maxEntryCount = 64
+
+    private let lock = NSLock()
+    private var cachedProjections: [Int: ChangeTreeProjection] = [:]
+
+    func projection(for signature: Int) -> ChangeTreeProjection? {
+        lock.lock()
+        defer { lock.unlock() }
+        return cachedProjections[signature]
+    }
+
+    func store(_ projection: ChangeTreeProjection, for signature: Int) {
+        lock.lock()
+        cachedProjections[signature] = projection
+        if cachedProjections.count > Self.maxEntryCount {
+            cachedProjections.removeAll(keepingCapacity: true)
+        }
+        lock.unlock()
     }
 }
 
@@ -409,4 +437,15 @@ private struct ChangeTreeBuilder {
             return directoryNodes + fileNodes
         }
     }
+}
+
+private func changeTreeProjectionSignature(for files: [WorkspaceGitCommitFileChange]) -> Int {
+    var hasher = Hasher()
+    hasher.combine(files.count)
+    for file in files {
+        hasher.combine(file.path)
+        hasher.combine(file.oldPath)
+        hasher.combine(file.status.rawValue)
+    }
+    return hasher.finalize()
 }
