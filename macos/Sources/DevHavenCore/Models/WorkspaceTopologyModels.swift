@@ -965,11 +965,23 @@ public struct WorkspaceSessionState: Equatable, Sendable {
     }
 
     public mutating func closeTab(_ id: String) {
+        closeTab(id, allowsEmptyTabs: false)
+    }
+
+    public mutating func closeTabAllowingEmpty(_ id: String) {
+        closeTab(id, allowsEmptyTabs: true)
+    }
+
+    private mutating func closeTab(_ id: String, allowsEmptyTabs: Bool) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs.remove(at: index)
 
         if tabs.isEmpty {
-            _ = createTab()
+            if allowsEmptyTabs {
+                selectedTabId = nil
+            } else {
+                _ = createTab()
+            }
             return
         }
 

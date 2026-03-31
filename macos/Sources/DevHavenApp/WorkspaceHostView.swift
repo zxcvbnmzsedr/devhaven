@@ -543,7 +543,7 @@ struct WorkspaceHostView: View {
     private func handleCloseTab(_ mode: ghostty_action_close_tab_mode_e, tabID: String) -> Bool {
         switch mode {
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_THIS:
-            workspace.closeTab(tabID)
+            closeTerminalTab(tabID)
             return true
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_OTHER:
             workspace.closeOtherTabs(keeping: tabID)
@@ -559,12 +559,76 @@ struct WorkspaceHostView: View {
     private func closePresentedTab(_ selection: WorkspacePresentedTabSelection) {
         switch selection {
         case let .terminal(tabID):
-            workspace.closeTab(tabID)
+            closeTerminalTab(tabID)
         case let .editor(editorTabID):
             viewModel.closeWorkspaceEditorTab(editorTabID, in: project.path)
         case let .diff(diffTabID):
             viewModel.closeWorkspaceDiffTab(diffTabID, in: project.path)
         }
+    }
+
+    private func closeTerminalTab(_ tabID: String) {
+        if shouldCloseTransientWorkspace(for: .tab) {
+            viewModel.closeWorkspaceProjectWithFeedback(project.path)
+            return
+        }
+        if workspace.tabs.count == 1,
+           let fallbackSelection = fallbackPresentedSelectionAfterClosingLastTerminalTab() {
+            viewModel.selectWorkspacePresentedTab(fallbackSelection, in: project.path)
+            workspace.closeTabAllowingEmpty(tabID)
+            return
+        }
+        if workspace.tabs.count == 1 {
+            viewModel.closeWorkspaceSessionWithFeedback(project.path)
+            return
+        }
+        workspace.closeTab(tabID)
+    }
+
+    private func shouldCloseTransientWorkspace(
+        for action: WorkspaceTransientTerminalCloseAction
+    ) -> Bool {
+        let snapshot = viewModel.workspacePresentedTabSnapshot(for: project.path)
+        let hasEditorTabs = snapshot.items.contains { item in
+            if case .editor = item.selection {
+                return true
+            }
+            return false
+        }
+        let hasDiffTabs = snapshot.items.contains { item in
+            if case .diff = item.selection {
+                return true
+            }
+            return false
+        }
+        return WorkspaceTransientClosePolicy.shouldCloseWorkspace(
+            for: action,
+            project: project,
+            terminalTabCount: workspace.tabs.count,
+            hasEditorTabs: hasEditorTabs,
+            hasDiffTabs: hasDiffTabs
+        )
+    }
+
+    private func fallbackPresentedSelectionAfterClosingLastTerminalTab() -> WorkspacePresentedTabSelection? {
+        let snapshot = viewModel.workspacePresentedTabSnapshot(for: project.path)
+        if let editor = snapshot.items.last(where: { item in
+            if case .editor = item.selection {
+                return true
+            }
+            return false
+        }) {
+            return editor.selection
+        }
+        if let diff = snapshot.items.last(where: { item in
+            if case .diff = item.selection {
+                return true
+            }
+            return false
+        }) {
+            return diff.selection
+        }
+        return nil
     }
 
     private func handleGotoTab(_ target: ghostty_action_goto_tab_e) -> Bool {

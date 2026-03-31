@@ -97,6 +97,11 @@ public final class GhosttyWorkspaceController {
         onChange?()
     }
 
+    public func closeTabAllowingEmpty(_ id: String) {
+        projection.closeTabAllowingEmpty(id)
+        onChange?()
+    }
+
     public func closeOtherTabs(keeping id: String) {
         projection.closeOtherTabs(keeping: id)
         onChange?()

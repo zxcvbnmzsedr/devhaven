@@ -59,10 +59,18 @@ struct AppRootView: View {
             }
         }
         .overlay(alignment: .top) {
-            if let toastMessage = quitGuard.toastMessage {
-                AppQuitToastView(message: toastMessage)
-                    .padding(.top, 18)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+            if quitGuard.toastMessage != nil || viewModel.workspaceToastMessage != nil {
+                VStack(spacing: 8) {
+                    if let toastMessage = quitGuard.toastMessage {
+                        AppQuitToastView(message: toastMessage)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    if let workspaceToastMessage = viewModel.workspaceToastMessage {
+                        AppQuitToastView(message: workspaceToastMessage)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .padding(.top, 18)
             }
         }
         .background(NativeTheme.window.ignoresSafeArea())
@@ -81,6 +89,7 @@ struct AppRootView: View {
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.18), value: viewModel.isDetailPanelPresented)
         .animation(.easeInOut(duration: 0.16), value: quitGuard.toastMessage != nil)
+        .animation(.easeInOut(duration: 0.16), value: viewModel.workspaceToastMessage != nil)
         .sheet(isPresented: $viewModel.isDashboardPresented) {
             GitDashboardView(viewModel: viewModel)
                 .preferredColorScheme(.dark)

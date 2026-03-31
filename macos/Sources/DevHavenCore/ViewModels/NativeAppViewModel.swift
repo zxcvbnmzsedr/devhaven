@@ -143,6 +143,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var workspaceSessionIndexByNormalizedPath: [String: Int] = [:]
     @ObservationIgnored private var workspaceSidebarProjectionCache: WorkspaceSidebarProjectionCacheEntry?
     @ObservationIgnored private var workspaceAlignmentGroupsCache: WorkspaceAlignmentGroupsCacheEntry?
+    @ObservationIgnored private var workspaceToastDismissTask: Task<Void, Never>?
 
     public enum DirectoryFilter: Equatable, Sendable {
         case all
@@ -284,6 +285,7 @@ public final class NativeAppViewModel {
     public var gitStatisticsProgressText: String?
     public var isProjectDocumentLoading: Bool
     public var errorMessage: String?
+    public private(set) var workspaceToastMessage: String?
     public var isDashboardPresented: Bool
     public var isSettingsPresented: Bool
     public var requestedSettingsSection: SettingsNavigationSection?
@@ -380,6 +382,7 @@ public final class NativeAppViewModel {
         self.gitStatisticsProgressText = nil
         self.isProjectDocumentLoading = false
         self.errorMessage = nil
+        self.workspaceToastMessage = nil
         self.isDashboardPresented = false
         self.isSettingsPresented = false
         self.requestedSettingsSection = nil
@@ -1579,7 +1582,7 @@ public final class NativeAppViewModel {
                         if let workspaceAlignmentGroupID {
                             return sessionPathMatches || $0.workspaceAlignmentGroupID == workspaceAlignmentGroupID
                         }
-                        return isWorkspaceSessionOwnedByProjectPool($0, rootProjectPath: path)
+                        return sessionPathMatches || isWorkspaceSessionOwnedByProjectPool($0, rootProjectPath: path)
                     }
                     .map(\.projectPath)
             )
@@ -1610,6 +1613,92 @@ public final class NativeAppViewModel {
             scheduleSelectedProjectDocumentRefresh()
         }
         scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func closeWorkspaceSession(_ path: String) {
+        guard let index = workspaceSessionIndex(for: path) else {
+            return
+        }
+
+        let removedPaths = Set([path])
+        openWorkspaceSessions.remove(at: index)
+        removedPaths.forEach { runManager.stopAll(projectPath: $0) }
+        clearWorkspaceRuntimePresentationState(for: removedPaths)
+        attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
+        workspaceRunConsoleStateByProjectPath = workspaceRunConsoleStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
+        pruneWorkspaceAgentDisplayOverrides()
+
+        if openWorkspaceSessions.isEmpty {
+            activeWorkspaceProjectPath = nil
+            isDetailPanelPresented = false
+            scheduleWorkspaceRestoreAutosave()
+            return
+        }
+
+        if let currentActiveWorkspaceProjectPath = activeWorkspaceProjectPath,
+           removedPaths.contains(currentActiveWorkspaceProjectPath) {
+            let fallbackIndex = min(index, openWorkspaceSessions.count - 1)
+            let fallbackPath = openWorkspaceSessions[fallbackIndex].projectPath
+            activeWorkspaceProjectPath = fallbackPath
+            selectedProjectPath = fallbackPath
+            isDetailPanelPresented = false
+            scheduleSelectedProjectDocumentRefresh()
+        }
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func closeWorkspaceProjectWithFeedback(_ path: String) {
+        guard workspaceSessionIndex(for: path) != nil else {
+            return
+        }
+        let feedbackMessage = workspaceCloseFeedbackMessage(for: path)
+        closeWorkspaceProject(path)
+        if let feedbackMessage {
+            presentWorkspaceToast(feedbackMessage)
+        }
+    }
+
+    public func closeWorkspaceSessionWithFeedback(_ path: String) {
+        guard workspaceSessionIndex(for: path) != nil else {
+            return
+        }
+        let feedbackMessage = workspaceCloseFeedbackMessage(for: path, includeRegularProject: true)
+        closeWorkspaceSession(path)
+        if let feedbackMessage {
+            presentWorkspaceToast(feedbackMessage)
+        }
+    }
+
+    public func presentWorkspaceToast(
+        _ message: String,
+        duration: TimeInterval = 1.5
+    ) {
+        workspaceToastDismissTask?.cancel()
+        workspaceToastMessage = message
+        guard duration > 0 else {
+            workspaceToastDismissTask = nil
+            return
+        }
+        let delayNanoseconds = UInt64(duration * 1_000_000_000)
+        workspaceToastDismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled else {
+                return
+            }
+            await MainActor.run {
+                guard let self else {
+                    return
+                }
+                self.workspaceToastDismissTask = nil
+                self.workspaceToastMessage = nil
+            }
+        }
+    }
+
+    public func dismissWorkspaceToast() {
+        workspaceToastDismissTask?.cancel()
+        workspaceToastDismissTask = nil
+        workspaceToastMessage = nil
     }
 
     public func exitWorkspace() {
@@ -4401,6 +4490,26 @@ public final class NativeAppViewModel {
 
     private func isQuickTerminalSessionPath(_ path: String) -> Bool {
         workspaceSession(for: path)?.isQuickTerminal ?? false
+    }
+
+    private func workspaceCloseFeedbackMessage(
+        for path: String,
+        includeRegularProject: Bool = false
+    ) -> String? {
+        guard let session = workspaceSession(for: path) else {
+            return nil
+        }
+        if let workspaceRootContext = session.workspaceRootContext {
+            return "已关闭工作区「\(workspaceRootContext.workspaceName)」"
+        }
+        if session.isQuickTerminal {
+            return "已结束快速终端"
+        }
+        if includeRegularProject,
+           let project = resolveDisplayProject(for: path, rootProjectPath: session.rootProjectPath) {
+            return "已关闭项目「\(project.name)」"
+        }
+        return nil
     }
 
     private func buildWorkspaceProjectTreeState(
