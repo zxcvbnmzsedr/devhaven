@@ -2005,56 +2005,79 @@ public final class NativeAppViewModel {
                     directoryPath: normalizedDirectoryPath,
                     projectRootPath: projectRootPath
                 )
-                await MainActor.run {
-                    guard let self,
-                          var latestState = self.workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
-                    else {
-                        return
-                    }
-                    latestState.loadingDirectoryPaths.remove(normalizedDirectoryPath)
-                    for (path, children) in result.childrenByDirectoryPath {
-                        latestState.childrenByDirectoryPath[path] = children
-                    }
-                    latestState.errorMessage = nil
-                    latestState.advanceStructureRevision()
-                    let finalizedState = latestState.canonicalizedForDisplay()
-                    self.workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = finalizedState
-                    self.errorMessage = nil
-                    self.workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
-                        projectPath: resolvedProjectPath,
-                        directoryPath: normalizedDirectoryPath,
-                        revision: finalizedState.revision,
-                        durationMs: elapsedMilliseconds(since: startTime),
-                        loadedDirectoryCount: result.loadedDirectoryCount,
-                        directChildCount: result.directChildCount,
-                        status: "success",
-                        errorDescription: nil
-                    )
-                }
+                await self?.finishWorkspaceProjectTreeDirectoryLoadSuccess(
+                    for: resolvedProjectPath,
+                    directoryPath: normalizedDirectoryPath,
+                    result: result,
+                    startTime: startTime
+                )
             } catch {
-                await MainActor.run {
-                    guard let self,
-                          var latestState = self.workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
-                    else {
-                        return
-                    }
-                    latestState.loadingDirectoryPaths.remove(normalizedDirectoryPath)
-                    latestState.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    self.workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = latestState
-                    self.errorMessage = latestState.errorMessage
-                    self.workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
-                        projectPath: resolvedProjectPath,
-                        directoryPath: normalizedDirectoryPath,
-                        revision: latestState.revision,
-                        durationMs: elapsedMilliseconds(since: startTime),
-                        loadedDirectoryCount: 0,
-                        directChildCount: 0,
-                        status: "failed",
-                        errorDescription: latestState.errorMessage
-                    )
-                }
+                let errorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                await self?.finishWorkspaceProjectTreeDirectoryLoadFailure(
+                    for: resolvedProjectPath,
+                    directoryPath: normalizedDirectoryPath,
+                    errorDescription: errorDescription,
+                    startTime: startTime
+                )
             }
         }
+    }
+
+    private func finishWorkspaceProjectTreeDirectoryLoadSuccess(
+        for projectPath: String,
+        directoryPath: String,
+        result: WorkspaceProjectTreeDirectoryLoadResult,
+        startTime: TimeInterval
+    ) {
+        guard var latestState = workspaceProjectTreeStatesByProjectPath[projectPath] else {
+            return
+        }
+
+        latestState.loadingDirectoryPaths.remove(directoryPath)
+        for (path, children) in result.childrenByDirectoryPath {
+            latestState.childrenByDirectoryPath[path] = children
+        }
+        latestState.errorMessage = nil
+        latestState.advanceStructureRevision()
+        let finalizedState = latestState.canonicalizedForDisplay()
+        workspaceProjectTreeStatesByProjectPath[projectPath] = finalizedState
+        errorMessage = nil
+        workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
+            projectPath: projectPath,
+            directoryPath: directoryPath,
+            revision: finalizedState.revision,
+            durationMs: elapsedMilliseconds(since: startTime),
+            loadedDirectoryCount: result.loadedDirectoryCount,
+            directChildCount: result.directChildCount,
+            status: "success",
+            errorDescription: nil
+        )
+    }
+
+    private func finishWorkspaceProjectTreeDirectoryLoadFailure(
+        for projectPath: String,
+        directoryPath: String,
+        errorDescription: String,
+        startTime: TimeInterval
+    ) {
+        guard var latestState = workspaceProjectTreeStatesByProjectPath[projectPath] else {
+            return
+        }
+
+        latestState.loadingDirectoryPaths.remove(directoryPath)
+        latestState.errorMessage = errorDescription
+        workspaceProjectTreeStatesByProjectPath[projectPath] = latestState
+        errorMessage = latestState.errorMessage
+        workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
+            projectPath: projectPath,
+            directoryPath: directoryPath,
+            revision: latestState.revision,
+            durationMs: elapsedMilliseconds(since: startTime),
+            loadedDirectoryCount: 0,
+            directChildCount: 0,
+            status: "failed",
+            errorDescription: latestState.errorMessage
+        )
     }
 
     private func preloadWorkspaceProjectTreeVisibleChainsIfNeeded(
@@ -2126,40 +2149,26 @@ public final class NativeAppViewModel {
                     projectPath: normalizedProjectPath,
                     preserving: state
                 )
-                await MainActor.run {
-                    guard let self else {
-                        return
-                    }
-                    self.finishWorkspaceProjectTreeRefresh(
-                        for: normalizedProjectPath,
-                        generation: nextGeneration,
-                        rebuiltState: rebuiltState,
-                        preferredSelectionPath: preferredSelectionPath,
-                        startTime: startTime
-                    )
-                }
+                await self?.finishWorkspaceProjectTreeRefresh(
+                    for: normalizedProjectPath,
+                    generation: nextGeneration,
+                    rebuiltState: rebuiltState,
+                    preferredSelectionPath: preferredSelectionPath,
+                    startTime: startTime
+                )
             } catch is CancellationError {
-                await MainActor.run {
-                    guard let self else {
-                        return
-                    }
-                    self.finishWorkspaceProjectTreeRefreshCancellation(
-                        for: normalizedProjectPath,
-                        generation: nextGeneration
-                    )
-                }
+                await self?.finishWorkspaceProjectTreeRefreshCancellation(
+                    for: normalizedProjectPath,
+                    generation: nextGeneration
+                )
             } catch {
-                await MainActor.run {
-                    guard let self else {
-                        return
-                    }
-                    self.finishWorkspaceProjectTreeRefreshFailure(
-                        for: normalizedProjectPath,
-                        generation: nextGeneration,
-                        preserving: state,
-                        error: error
-                    )
-                }
+                let errorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                await self?.finishWorkspaceProjectTreeRefreshFailure(
+                    for: normalizedProjectPath,
+                    generation: nextGeneration,
+                    preserving: state,
+                    errorDescription: errorDescription
+                )
             }
         }
     }
@@ -2219,7 +2228,7 @@ public final class NativeAppViewModel {
         for projectPath: String,
         generation: Int,
         preserving state: WorkspaceProjectTreeState?,
-        error: Error
+        errorDescription: String
     ) {
         guard workspaceProjectTreeRefreshGenerationByProjectPath[projectPath] == generation else {
             return
@@ -2228,7 +2237,7 @@ public final class NativeAppViewModel {
         var fallbackState = workspaceProjectTreeStatesByProjectPath[projectPath]
             ?? state
             ?? WorkspaceProjectTreeState(rootProjectPath: projectPath)
-        fallbackState.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        fallbackState.errorMessage = errorDescription
         workspaceProjectTreeStatesByProjectPath[projectPath] = fallbackState
         workspaceProjectTreeRefreshingProjectPaths.remove(projectPath)
         workspaceProjectTreeRefreshTasksByProjectPath[projectPath] = nil
