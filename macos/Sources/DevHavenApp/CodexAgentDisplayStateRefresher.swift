@@ -24,6 +24,7 @@ enum CodexAgentDisplayStateRefresher {
     }
 
     static let recentActivityWindow: TimeInterval = 2
+    static let minimumSignalPriorityWindow: TimeInterval = 1
 
     static func refresh(
         viewModel: NativeAppViewModel,
@@ -63,6 +64,14 @@ enum CodexAgentDisplayStateRefresher {
                   let recentTextWindow = normalizedVisibleText(snapshot.recentTextWindow)
             else {
                 continue
+            }
+
+            if let signalUpdatedAt = candidate.signalUpdatedAt {
+                let signalPriorityDeadline = signalUpdatedAt.addingTimeInterval(minimumSignalPriorityWindow)
+                if now < signalPriorityDeadline {
+                    nextRefreshDeadline = earliestDeadline(nextRefreshDeadline, signalPriorityDeadline)
+                    continue
+                }
             }
 
             let paneKey = PaneKey(projectPath: candidate.projectPath, paneID: candidate.paneID)

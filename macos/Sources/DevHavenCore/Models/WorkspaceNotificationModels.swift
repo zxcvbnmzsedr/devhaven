@@ -60,11 +60,18 @@ public struct WorkspaceAgentDisplayCandidate: Equatable, Sendable {
     public var projectPath: String
     public var paneID: String
     public var signalState: WorkspaceAgentState
+    public var signalUpdatedAt: Date?
 
-    public init(projectPath: String, paneID: String, signalState: WorkspaceAgentState) {
+    public init(
+        projectPath: String,
+        paneID: String,
+        signalState: WorkspaceAgentState,
+        signalUpdatedAt: Date? = nil
+    ) {
         self.projectPath = projectPath
         self.paneID = paneID
         self.signalState = signalState
+        self.signalUpdatedAt = signalUpdatedAt
     }
 
     public static func observationStableSorted(

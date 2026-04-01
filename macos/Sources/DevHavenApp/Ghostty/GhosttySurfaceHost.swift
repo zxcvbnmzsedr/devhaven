@@ -358,6 +358,8 @@ struct GhosttySurfaceHost: View {
 @Observable
 final class GhosttySurfaceHostModel {
     static let codexDisplaySnapshotWindowLimit = CodexAgentDisplaySnapshot.windowLimit
+    static let codexDisplaySnapshotRefreshDelay: TimeInterval = 0.6
+    static let codexDisplayVisibleTextCacheInterval: TimeInterval = 1
 
     struct SnapshotContext: Equatable, Sendable {
         var workingDirectory: String?
@@ -419,6 +421,12 @@ final class GhosttySurfaceHostModel {
     private var cachedCodexDisplaySnapshot: CodexAgentDisplaySnapshot?
     @ObservationIgnored
     private var onCodexDisplaySnapshotChange: ((CodexAgentDisplaySnapshot?) -> Void)?
+    @ObservationIgnored
+    private var codexDisplaySamplingSuspended = false
+    @ObservationIgnored
+    private var cachedCodexVisibleTextSample: String?
+    @ObservationIgnored
+    private var cachedCodexVisibleTextSampleAt: Date?
 
     var currentSurfaceView: GhosttyTerminalSurfaceView? {
         ownedSurfaceView
@@ -496,16 +504,31 @@ final class GhosttySurfaceHostModel {
 
     func setCodexDisplayTrackingEnabled(_ enabled: Bool) {
         guard codexDisplayTrackingEnabled != enabled else {
-            if enabled, cachedCodexDisplaySnapshot == nil {
+            syncCodexDisplayInvalidationObservation()
+            if enabled, cachedCodexDisplaySnapshot == nil, !codexDisplaySamplingSuspended {
                 scheduleCodexDisplaySnapshotRefresh(immediate: true)
             }
             return
         }
         codexDisplayTrackingEnabled = enabled
+        syncCodexDisplayInvalidationObservation()
         if enabled {
             scheduleCodexDisplaySnapshotRefresh(immediate: true)
         } else {
             clearCodexDisplaySnapshot()
+            clearCodexVisibleTextSampleCache()
+        }
+    }
+
+    func setCodexDisplaySamplingSuspended(_ suspended: Bool) {
+        guard codexDisplaySamplingSuspended != suspended else {
+            return
+        }
+        codexDisplaySamplingSuspended = suspended
+        if suspended {
+            cancelPendingCodexDisplaySnapshotRefresh()
+        } else if codexDisplayTrackingEnabled {
+            scheduleCodexDisplaySnapshotRefresh()
         }
     }
 
@@ -607,9 +630,7 @@ final class GhosttySurfaceHostModel {
             self.bellCount += 1
             self.onBell?()
         }
-        bridge.onContentInvalidated = { [weak self] in
-            self?.scheduleCodexDisplaySnapshotRefresh()
-        }
+        updateCodexDisplayInvalidationObservation(for: bridge)
         bridge.onCloseRequest = { [weak self] processAlive in
             self?.handleProcessExit(processAlive: processAlive)
         }
@@ -785,11 +806,30 @@ final class GhosttySurfaceHostModel {
         pendingWindowResponderRestoreTask = nil
     }
 
-    private func scheduleCodexDisplaySnapshotRefresh(immediate: Bool = false) {
-        guard codexDisplayTrackingEnabled else {
+    private func syncCodexDisplayInvalidationObservation() {
+        guard let bridge = ownedSurfaceView?.bridge else {
             return
         }
-        let delay: TimeInterval = immediate ? 0 : 0.25
+        updateCodexDisplayInvalidationObservation(for: bridge)
+    }
+
+    private func updateCodexDisplayInvalidationObservation(
+        for bridge: GhosttySurfaceBridge
+    ) {
+        guard codexDisplayTrackingEnabled else {
+            bridge.onContentInvalidated = nil
+            return
+        }
+        bridge.onContentInvalidated = { [weak self] in
+            self?.scheduleCodexDisplaySnapshotRefresh()
+        }
+    }
+
+    private func scheduleCodexDisplaySnapshotRefresh(immediate: Bool = false) {
+        guard codexDisplayTrackingEnabled, !codexDisplaySamplingSuspended else {
+            return
+        }
+        let delay: TimeInterval = immediate ? 0 : Self.codexDisplaySnapshotRefreshDelay
         pendingCodexDisplaySnapshotRefreshTask?.cancel()
         pendingCodexDisplaySnapshotRefreshTask = Task { @MainActor [weak self] in
             guard let self else {
@@ -804,9 +844,10 @@ final class GhosttySurfaceHostModel {
                 return
             }
             self.pendingCodexDisplaySnapshotRefreshTask = nil
+            let now = Date()
             self.updateCodexDisplaySnapshot(
-                withVisibleText: self.ownedSurfaceView?.debugVisibleText(),
-                now: Date()
+                withVisibleText: self.sampleCodexVisibleText(now: now),
+                now: now
             )
         }
     }
@@ -823,6 +864,24 @@ final class GhosttySurfaceHostModel {
         }
         cachedCodexDisplaySnapshot = nil
         onCodexDisplaySnapshotChange?(nil)
+    }
+
+    private func sampleCodexVisibleText(now: Date) -> String? {
+        if let cachedCodexVisibleTextSampleAt,
+           now.timeIntervalSince(cachedCodexVisibleTextSampleAt) < Self.codexDisplayVisibleTextCacheInterval {
+            return cachedCodexVisibleTextSample
+        }
+        let sampledText = ownedSurfaceView?.debugVisibleText()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .nilIfEmpty
+        cachedCodexVisibleTextSample = sampledText
+        cachedCodexVisibleTextSampleAt = now
+        return sampledText
+    }
+
+    private func clearCodexVisibleTextSampleCache() {
+        cachedCodexVisibleTextSample = nil
+        cachedCodexVisibleTextSampleAt = nil
     }
 
     private func shouldScheduleWindowResponderRestore(preferredFocus: Bool) -> Bool {

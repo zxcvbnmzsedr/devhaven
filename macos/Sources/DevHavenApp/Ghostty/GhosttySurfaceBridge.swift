@@ -38,12 +38,15 @@ final class GhosttySurfaceBridge {
     private var lastContentInvalidationTime: CFAbsoluteTime = 0
 
     func invalidateRenderedContent() {
+        guard let onContentInvalidated else {
+            return
+        }
         let now = CFAbsoluteTimeGetCurrent()
         guard now - lastContentInvalidationTime >= Self.contentInvalidationThrottleInterval else {
             return
         }
         lastContentInvalidationTime = now
-        onContentInvalidated?()
+        onContentInvalidated()
     }
 
     @MainActor

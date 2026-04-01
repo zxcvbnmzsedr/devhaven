@@ -388,6 +388,9 @@ private struct WorkspaceCodexPresentationCoordinatorBridge: View {
             .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
                 syncCoordinator()
             }
+            .onChange(of: viewModel.activeWorkspaceSelectedPresentedTab) { _, _ in
+                syncCoordinator()
+            }
             .onChange(of: viewModel.codexDisplayCandidatesRevision) { _, _ in
                 syncCoordinator()
             }

@@ -251,6 +251,7 @@ public final class NativeAppViewModel {
     public var activeWorkspaceProjectPath: String? {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: activeWorkspaceProjectPath)
+            refreshCodexDisplayCandidates()
         }
     }
     public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
@@ -262,7 +263,11 @@ public final class NativeAppViewModel {
     private var workspaceEditorPresentationByProjectPath: [String: WorkspaceEditorPresentationState]
     private var workspaceEditorRuntimeSessionsByProjectPath: [String: [String: WorkspaceEditorRuntimeSessionState]]
     private var workspaceDiffTabsByProjectPath: [String: [WorkspaceDiffTabState]]
-    private var workspaceSelectedPresentedTabByProjectPath: [String: WorkspacePresentedTabSelection]
+    private var workspaceSelectedPresentedTabByProjectPath: [String: WorkspacePresentedTabSelection] {
+        didSet {
+            refreshCodexDisplayCandidates()
+        }
+    }
     private var attentionStateByProjectPath: [String: WorkspaceAttentionState] {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: attentionStateByProjectPath)
@@ -1004,24 +1009,35 @@ public final class NativeAppViewModel {
     }
 
     private func refreshCodexDisplayCandidates() {
-        let openPaths = Set(openWorkspaceProjectPaths)
-        let candidates = attentionStateByProjectPath
-            .filter { openPaths.contains($0.key) }
-            .flatMap { projectPath, attention in
-                attention.agentStateByPaneID.compactMap { entry -> WorkspaceAgentDisplayCandidate? in
-                    let (paneID, state) = entry
-                    guard (state == .running || state == .waiting),
-                          attention.agentKindByPaneID[paneID] == .codex
-                    else {
-                        return nil
-                    }
-                    return WorkspaceAgentDisplayCandidate(
-                        projectPath: projectPath,
-                        paneID: paneID,
-                        signalState: state
-                    )
+        let candidates: [WorkspaceAgentDisplayCandidate]
+        if let activeWorkspaceProjectPath,
+           openWorkspaceProjectPaths.contains(activeWorkspaceProjectPath),
+           let controller = workspaceController(for: activeWorkspaceProjectPath),
+           case let .terminal(selectedTerminalTabID)? = resolvedWorkspacePresentedTabSelection(
+               for: activeWorkspaceProjectPath,
+               controller: controller
+           ),
+           let selectedTab = controller.tabs.first(where: { $0.id == selectedTerminalTabID }),
+           let attention = attentionStateByProjectPath[activeWorkspaceProjectPath] {
+            let visiblePaneIDs = Set(selectedTab.leaves.map(\.id))
+            candidates = attention.agentStateByPaneID.compactMap { entry -> WorkspaceAgentDisplayCandidate? in
+                let (paneID, state) = entry
+                guard visiblePaneIDs.contains(paneID),
+                      (state == .running || state == .waiting),
+                      attention.agentKindByPaneID[paneID] == .codex
+                else {
+                    return nil
                 }
+                return WorkspaceAgentDisplayCandidate(
+                    projectPath: activeWorkspaceProjectPath,
+                    paneID: paneID,
+                    signalState: state,
+                    signalUpdatedAt: attention.agentUpdatedAtByPaneID[paneID]
+                )
             }
+        } else {
+            candidates = []
+        }
         let sortedCandidates = WorkspaceAgentDisplayCandidate.observationStableSorted(candidates)
         guard cachedCodexDisplayCandidates != sortedCandidates else {
             return

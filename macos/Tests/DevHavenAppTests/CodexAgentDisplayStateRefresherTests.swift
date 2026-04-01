@@ -91,4 +91,35 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
         XCTAssertNil(afterDeadline.overridesByProjectPath[projectPath]?[paneID])
         XCTAssertNil(afterDeadline.nextRefreshDeadline)
     }
+
+    func testRecentSignalWinsBeforeFallbackWindowOpens() {
+        let projectPath = "/tmp/project"
+        let paneID = "pane-1"
+        let signalUpdatedAt = Date(timeIntervalSinceReferenceDate: 100)
+        let evaluationTime = signalUpdatedAt.addingTimeInterval(0.2)
+
+        let evaluation = CodexAgentDisplayStateRefresher.evaluate(
+            for: [
+                WorkspaceAgentDisplayCandidate(
+                    projectPath: projectPath,
+                    paneID: paneID,
+                    signalState: .waiting,
+                    signalUpdatedAt: signalUpdatedAt
+                )
+            ],
+            runtimeState: .init(),
+            now: evaluationTime
+        ) { _, _ in
+            CodexAgentDisplaySnapshot(
+                recentTextWindow: "transient output",
+                lastActivityAt: signalUpdatedAt
+            )
+        }
+
+        XCTAssertNil(evaluation.overridesByProjectPath[projectPath]?[paneID])
+        XCTAssertEqual(
+            evaluation.nextRefreshDeadline,
+            signalUpdatedAt.addingTimeInterval(CodexAgentDisplayStateRefresher.minimumSignalPriorityWindow)
+        )
+    }
 }

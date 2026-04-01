@@ -1,4 +1,5 @@
 import AppKit
+import Dispatch
 
 @MainActor
 final class GhosttySurfaceScrollView: NSView {
@@ -16,11 +17,19 @@ final class GhosttySurfaceScrollView: NSView {
     private var lastSentRow: Int?
     private var scrollbar: ScrollbarState?
     private var onSurfaceAttached: (() -> Void)?
+    private var onLiveScrollChange: ((Bool) -> Void)?
     private var needsSurfaceAttachmentCallback = true
+    private var pendingLiveScrollRow: Int?
+    private var isLiveScrollFlushScheduled = false
 
-    init(surfaceView: NSView, onSurfaceAttached: (() -> Void)? = nil) {
+    init(
+        surfaceView: NSView,
+        onSurfaceAttached: (() -> Void)? = nil,
+        onLiveScrollChange: ((Bool) -> Void)? = nil
+    ) {
         self.surfaceView = surfaceView
         self.onSurfaceAttached = onSurfaceAttached
+        self.onLiveScrollChange = onLiveScrollChange
         scrollView = NSScrollView()
         scrollView.hasHorizontalScroller = false
         scrollView.hasVerticalScroller = false
@@ -48,7 +57,7 @@ final class GhosttySurfaceScrollView: NSView {
                 object: scrollView.contentView,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                MainActor.assumeIsolated {
                     self?.handleScrollChange()
                 }
             }
@@ -59,8 +68,8 @@ final class GhosttySurfaceScrollView: NSView {
                 object: scrollView,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.isLiveScrolling = true
+                MainActor.assumeIsolated {
+                    self?.setLiveScrolling(true)
                 }
             }
         )
@@ -70,8 +79,9 @@ final class GhosttySurfaceScrollView: NSView {
                 object: scrollView,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.isLiveScrolling = false
+                MainActor.assumeIsolated {
+                    self?.flushPendingLiveScrollRow()
+                    self?.setLiveScrolling(false)
                 }
             }
         )
@@ -81,7 +91,7 @@ final class GhosttySurfaceScrollView: NSView {
                 object: scrollView,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                MainActor.assumeIsolated {
                     self?.handleLiveScroll()
                 }
             }
@@ -130,6 +140,11 @@ final class GhosttySurfaceScrollView: NSView {
         onSurfaceAttached = handler
     }
 
+    func setLiveScrollChangeHandler(_ handler: ((Bool) -> Void)?) {
+        onLiveScrollChange = handler
+        handler?(isLiveScrolling)
+    }
+
     func updateSurfaceSize() {
         (surfaceView as? GhosttyTerminalSurfaceView)?.updateSurfaceSize()
         needsLayout = true
@@ -161,21 +176,38 @@ final class GhosttySurfaceScrollView: NSView {
 
     private func synchronizeSurfaceView() {
         let visibleRect = scrollView.contentView.documentVisibleRect
+        guard surfaceView.frame.origin != visibleRect.origin else {
+            return
+        }
         surfaceView.frame.origin = visibleRect.origin
     }
 
-    private func synchronizeScrollView() {
-        documentView.frame.size.height = documentHeight()
+    private func synchronizeScrollView(forceReflect: Bool = false) {
+        let nextDocumentHeight = documentHeight()
+        let documentHeightChanged = abs(documentView.frame.height - nextDocumentHeight) > .ulpOfOne
+        if documentHeightChanged {
+            documentView.frame.size.height = nextDocumentHeight
+        }
+
+        var didScrollProgrammatically = false
         if !isLiveScrolling,
            let surfaceView = surfaceView as? GhosttyTerminalSurfaceView {
             let cellHeight = surfaceView.currentCellSize().height
             if cellHeight > 0, let scrollbar {
                 let offsetY = CGFloat(scrollbar.total - scrollbar.offset - scrollbar.length) * cellHeight
-                scrollView.contentView.scroll(to: CGPoint(x: 0, y: offsetY))
+                let currentOrigin = scrollView.contentView.bounds.origin
+                if abs(currentOrigin.y - offsetY) > .ulpOfOne {
+                    scrollView.contentView.scroll(to: CGPoint(x: currentOrigin.x, y: offsetY))
+                    didScrollProgrammatically = true
+                }
                 lastSentRow = Int(scrollbar.offset)
+                pendingLiveScrollRow = nil
             }
         }
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+
+        if forceReflect || documentHeightChanged || didScrollProgrammatically {
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
     }
 
     private func handleLiveScroll() {
@@ -187,8 +219,8 @@ final class GhosttySurfaceScrollView: NSView {
         let scrollOffset = documentHeight - visibleRect.origin.y - visibleRect.height
         let row = Int(scrollOffset / cellHeight)
         guard row != lastSentRow else { return }
-        lastSentRow = row
-        surfaceView.performBindingAction("scroll_to_row:\(row)")
+        pendingLiveScrollRow = row
+        scheduleLiveScrollRowFlush()
     }
 
     private func documentHeight() -> CGFloat {
@@ -203,5 +235,40 @@ final class GhosttySurfaceScrollView: NSView {
             return documentGridHeight + padding
         }
         return contentHeight
+    }
+
+    private func setLiveScrolling(_ isLiveScrolling: Bool) {
+        guard self.isLiveScrolling != isLiveScrolling else {
+            return
+        }
+        self.isLiveScrolling = isLiveScrolling
+        onLiveScrollChange?(isLiveScrolling)
+    }
+
+    private func scheduleLiveScrollRowFlush() {
+        guard !isLiveScrollFlushScheduled else {
+            return
+        }
+        isLiveScrollFlushScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                self?.flushPendingLiveScrollRow()
+            }
+        }
+    }
+
+    private func flushPendingLiveScrollRow() {
+        isLiveScrollFlushScheduled = false
+        guard let row = pendingLiveScrollRow,
+              let surfaceView = surfaceView as? GhosttyTerminalSurfaceView
+        else {
+            return
+        }
+        pendingLiveScrollRow = nil
+        guard row != lastSentRow else {
+            return
+        }
+        lastSentRow = row
+        surfaceView.performBindingAction("scroll_to_row:\(row)")
     }
 }
