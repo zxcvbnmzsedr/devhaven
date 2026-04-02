@@ -1084,10 +1084,14 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         guard let index = tabs.firstIndex(where: { $0.id == tabID }) else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        tabs[index].title = WorkspaceTabTitlePolicy.resolveRuntimeTitle(
+        let resolvedTitle = WorkspaceTabTitlePolicy.resolveRuntimeTitle(
             currentTitle: tabs[index].title,
             runtimeTitle: trimmed
         )
+        guard tabs[index].title != resolvedTitle else {
+            return
+        }
+        tabs[index].title = resolvedTitle
     }
 
     private var selectedTabIndex: Int? {
