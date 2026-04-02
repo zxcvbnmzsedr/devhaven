@@ -46,10 +46,18 @@ struct WorkspaceSplitView<Leading: View, Trailing: View>: View {
 
             ZStack(alignment: .topLeading) {
                 leading
-                    .frame(width: leadingRect.size.width, height: leadingRect.size.height)
+                    .frame(
+                        width: leadingRect.size.width,
+                        height: leadingRect.size.height,
+                        alignment: .topLeading
+                    )
                     .offset(x: leadingRect.origin.x, y: leadingRect.origin.y)
                 trailing
-                    .frame(width: trailingRect.size.width, height: trailingRect.size.height)
+                    .frame(
+                        width: trailingRect.size.width,
+                        height: trailingRect.size.height,
+                        alignment: .topLeading
+                    )
                     .offset(x: trailingRect.origin.x, y: trailingRect.origin.y)
                 SplitDivider(
                     direction: direction,
