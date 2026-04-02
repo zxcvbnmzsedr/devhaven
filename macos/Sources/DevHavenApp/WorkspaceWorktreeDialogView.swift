@@ -18,6 +18,7 @@ private enum WorkspaceWorktreeBranchMode: String, CaseIterable, Identifiable {
 struct WorkspaceWorktreeDialogView: View {
     let sourceProject: Project
     let loadBranches: (String) async throws -> [NativeGitBranch]
+    let loadBaseBranchReferences: (String) async throws -> [NativeGitBaseBranchReference]
     let loadWorktrees: (String) async throws -> [NativeGitWorktree]
     let managedPathPreview: (String, String) throws -> String
     let onCreateWorktree: (_ branch: String, _ createBranch: Bool, _ baseBranch: String?, _ autoOpen: Bool) async throws -> Void
@@ -27,6 +28,7 @@ struct WorkspaceWorktreeDialogView: View {
     @State private var mode: WorkspaceWorktreeDialogMode = .create
     @State private var branchMode: WorkspaceWorktreeBranchMode = .new
     @State private var branches = [NativeGitBranch]()
+    @State private var baseBranchReferences = [NativeGitBaseBranchReference]()
     @State private var existingWorktrees = [NativeGitWorktree]()
     @State private var existingBranch = ""
     @State private var newBranch = ""
@@ -34,9 +36,18 @@ struct WorkspaceWorktreeDialogView: View {
     @State private var selectedExistingWorktreePath = ""
     @State private var autoOpen = true
     @State private var isLoadingBranches = false
+    @State private var isLoadingBaseBranches = false
     @State private var isLoadingWorktrees = false
     @State private var isSubmitting = false
     @State private var localError: String?
+
+    private var localBaseBranchReferences: [NativeGitBaseBranchReference] {
+        baseBranchReferences.filter { $0.kind == .local }
+    }
+
+    private var remoteBaseBranchReferences: [NativeGitBaseBranchReference] {
+        baseBranchReferences.filter { $0.kind == .remote }
+    }
 
     private var activeBranch: String {
         branchMode == .existing ? existingBranch.trimmingCharacters(in: .whitespacesAndNewlines) : newBranch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -159,13 +170,28 @@ struct WorkspaceWorktreeDialogView: View {
                 }
 
                 fieldCard(title: "基线分支") {
-                    if isLoadingBranches {
+                    if isLoadingBaseBranches {
                         ProgressView()
                             .controlSize(.small)
                     } else {
                         Picker("基线分支", selection: $baseBranch) {
-                            ForEach(branches) { branch in
-                                Text(branch.isMain ? "\(branch.name)（主分支）" : branch.name).tag(branch.name)
+                            if !localBaseBranchReferences.isEmpty {
+                                Section {
+                                    ForEach(localBaseBranchReferences) { branchReference in
+                                        Text(worktreeBaseBranchLabel(branchReference)).tag(branchReference.name)
+                                    }
+                                } header: {
+                                    Text("本地")
+                                }
+                            }
+                            if !remoteBaseBranchReferences.isEmpty {
+                                Section {
+                                    ForEach(remoteBaseBranchReferences) { branchReference in
+                                        Text(worktreeBaseBranchLabel(branchReference)).tag(branchReference.name)
+                                    }
+                                } header: {
+                                    Text("远端")
+                                }
                             }
                         }
                         .pickerStyle(.menu)
@@ -273,6 +299,9 @@ struct WorkspaceWorktreeDialogView: View {
                 await loadBranchList()
             }
             group.addTask {
+                await loadBaseBranchList()
+            }
+            group.addTask {
                 await loadExistingWorktrees()
             }
         }
@@ -326,7 +355,24 @@ struct WorkspaceWorktreeDialogView: View {
             let items = try await loadBranches(sourceProject.path)
             branches = items
             existingBranch = items.first(where: \.isMain)?.name ?? items.first?.name ?? ""
-            baseBranch = items.first(where: { $0.name == "develop" })?.name ?? existingBranch
+        } catch {
+            localError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func loadBaseBranchList() async {
+        isLoadingBaseBranches = true
+        defer { isLoadingBaseBranches = false }
+        do {
+            let items = try await loadBaseBranchReferences(sourceProject.path)
+            baseBranchReferences = items
+            let trimmedSelection = baseBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+            if items.contains(where: { $0.name == trimmedSelection }) {
+                baseBranch = trimmedSelection
+            } else {
+                baseBranch = preferredWorktreeBaseBranch(from: items) ?? ""
+            }
         } catch {
             localError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
@@ -344,4 +390,20 @@ struct WorkspaceWorktreeDialogView: View {
             localError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
+}
+
+private func preferredWorktreeBaseBranch(
+    from branches: [NativeGitBaseBranchReference]
+) -> String? {
+    branches.first(where: { $0.kind == .local && $0.isMain })?.name
+        ?? branches.first(where: { $0.kind == .local })?.name
+        ?? branches.first(where: { $0.kind == .remote && $0.isMain })?.name
+        ?? branches.first?.name
+}
+
+private func worktreeBaseBranchLabel(_ branchReference: NativeGitBaseBranchReference) -> String {
+    if branchReference.isMain {
+        return "\(branchReference.name)（主分支）"
+    }
+    return branchReference.name
 }

@@ -14,7 +14,7 @@ public struct WorkspaceAlignmentMemberDefinition: Codable, Equatable, Sendable, 
     public init(
         projectPath: String,
         targetBranch: String,
-        baseBranchMode: WorkspaceAlignmentBaseBranchMode = .autoDetect,
+        baseBranchMode: WorkspaceAlignmentBaseBranchMode = .specified,
         specifiedBaseBranch: String? = nil
     ) {
         self.projectPath = projectPath
@@ -52,7 +52,7 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         id: String = UUID().uuidString,
         name: String,
         targetBranch: String,
-        baseBranchMode: WorkspaceAlignmentBaseBranchMode = .autoDetect,
+        baseBranchMode: WorkspaceAlignmentBaseBranchMode = .specified,
         specifiedBaseBranch: String? = nil,
         projectPaths: [String] = [],
         members: [WorkspaceAlignmentMemberDefinition] = [],
@@ -93,7 +93,7 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         self.id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
         self.name = try container.decode(String.self, forKey: .name)
         self.targetBranch = try container.decode(String.self, forKey: .targetBranch)
-        self.baseBranchMode = try container.decodeIfPresent(WorkspaceAlignmentBaseBranchMode.self, forKey: .baseBranchMode) ?? .autoDetect
+        self.baseBranchMode = try container.decodeIfPresent(WorkspaceAlignmentBaseBranchMode.self, forKey: .baseBranchMode) ?? .specified
         self.specifiedBaseBranch = try container.decodeIfPresent(String.self, forKey: .specifiedBaseBranch)
         self.projectPaths = try container.decodeIfPresent([String].self, forKey: .projectPaths) ?? []
         self.members = try container.decodeIfPresent([WorkspaceAlignmentMemberDefinition].self, forKey: .members) ?? []

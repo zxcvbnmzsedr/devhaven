@@ -104,6 +104,90 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: managedPath))
     }
 
+    func testApplyWorkspaceAlignmentGroupCreatesMissingBranchFromSelectedBaseBranch() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let viewModel = fixture.makeViewModel()
+        let member = WorkspaceAlignmentMemberDefinition(
+            projectPath: fixture.repositoryURL.path,
+            targetBranch: "feature/payment",
+            baseBranchMode: .specified,
+            specifiedBaseBranch: "main"
+        )
+        let group = WorkspaceAlignmentGroupDefinition(
+            name: "支付链路",
+            targetBranch: "feature/payment",
+            projectPaths: [fixture.repositoryURL.path],
+            members: [member]
+        )
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [group]),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.recheckWorkspaceAlignmentGroup(group.id)
+        let memberAfterRecheck = try XCTUnwrap(viewModel.workspaceAlignmentGroups.first?.members.first)
+        XCTAssertEqual(memberAfterRecheck.status, .branchMissing)
+
+        try await viewModel.applyWorkspaceAlignmentGroup(group.id)
+
+        let managedPath = try viewModel.managedWorktreePathPreview(
+            for: fixture.repositoryURL.path,
+            branch: "feature/payment"
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: managedPath))
+        XCTAssertEqual(
+            try fixture.git(in: URL(fileURLWithPath: managedPath, isDirectory: true), ["branch", "--show-current"])
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            "feature/payment"
+        )
+
+        let memberAfterApply = try XCTUnwrap(viewModel.workspaceAlignmentGroups.first?.members.first)
+        XCTAssertEqual(memberAfterApply.status, .aligned)
+        assertWorktreeOpenTarget(
+            memberAfterApply.openTarget,
+            rootProjectPath: fixture.repositoryURL.path,
+            worktreePath: managedPath
+        )
+    }
+
+    func testApplyWorkspaceAlignmentGroupRejectsLegacyAutoDetectBaseBranch() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let viewModel = fixture.makeViewModel()
+        let member = WorkspaceAlignmentMemberDefinition(
+            projectPath: fixture.repositoryURL.path,
+            targetBranch: "feature/payment",
+            baseBranchMode: .autoDetect
+        )
+        let group = WorkspaceAlignmentGroupDefinition(
+            name: "支付链路",
+            targetBranch: "feature/payment",
+            projectPaths: [fixture.repositoryURL.path],
+            members: [member]
+        )
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [group]),
+            projects: [fixture.makeProject()]
+        )
+
+        do {
+            try await viewModel.applyWorkspaceAlignmentGroup(group.id)
+            XCTFail("预期旧的自动探测配置会被拒绝，但实际成功")
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            XCTAssertTrue(message.contains("自动探测"), "错误文案应提示旧配置需重新选择基线分支，实际：\(message)")
+        }
+    }
+
     func testEnterWorkspaceAlignmentGroupCreatesWorkspaceRootSessionAndManifest() async throws {
         let fixture = try GitWorkspaceAlignmentFixture.make()
         defer { fixture.cleanup() }

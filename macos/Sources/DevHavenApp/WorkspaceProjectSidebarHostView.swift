@@ -34,6 +34,7 @@ private struct WorkspaceAlignmentAddProjectsContext: Identifiable {
     let workspaceID: String
     let workspaceName: String
     let excludedProjectPaths: Set<String>
+    let initialSelectedProjectPaths: Set<String>
 }
 
 private struct WorkspaceAlignmentDeleteRequest: Identifiable {
@@ -71,6 +72,10 @@ struct WorkspaceProjectSidebarHostView: View {
     }
 
     var body: some View {
+        withDeleteWorkspaceAlert(on: withDeleteWorktreeConfirmation(on: contentWithSheets))
+    }
+
+    private var contentWithSheets: some View {
         WorkspaceProjectListView(
             groups: sidebarProjectionStore.projection.groups,
             canOpenMoreProjects: !sidebarProjectionStore.projection.availableProjects.isEmpty,
@@ -125,7 +130,9 @@ struct WorkspaceProjectSidebarHostView: View {
                 }
             },
             onRequestEditWorkspaceAlignment: presentEditWorkspaceAlignmentSheet,
-            onRequestAddProjectsToWorkspaceAlignment: presentAddProjectsSheet,
+            onRequestAddProjectsToWorkspaceAlignment: { workspaceID in
+                presentAddProjectsSheet(workspaceID)
+            },
             onRequestRecheckWorkspaceAlignment: { workspaceID in
                 Task {
                     do {
@@ -166,26 +173,7 @@ struct WorkspaceProjectSidebarHostView: View {
                 }
             },
             onAddProjectToWorkspaceAlignment: { projectPath, workspaceID in
-                Task {
-                    do {
-                        let template = workspaceAlignmentInitialAddTemplate(for: workspaceID)
-                        let entry = WorkspaceAlignmentMemberFormEntry(
-                            projectPath: projectPath,
-                            alias: workspaceAlignmentDefaultAlias(for: projectPath),
-                            targetBranch: template?.targetBranch ?? "",
-                            baseBranchMode: template?.baseBranchMode ?? .autoDetect,
-                            specifiedBaseBranch: template?.specifiedBaseBranch ?? ""
-                        )
-                        try await viewModel.addWorkspaceAlignmentMembers(
-                            [workspaceAlignmentMemberDefinition(from: entry)],
-                            memberAliases: workspaceAlignmentMemberAliases(from: [entry]),
-                            toWorkspaceAlignmentGroup: workspaceID,
-                            applyRules: true
-                        )
-                    } catch {
-                        viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                    }
-                }
+                presentAddProjectsSheet(workspaceID, preselectedProjectPaths: [projectPath])
             },
             onExit: viewModel.exitWorkspace
         )
@@ -221,6 +209,7 @@ struct WorkspaceProjectSidebarHostView: View {
             WorkspaceWorktreeDialogView(
                 sourceProject: dialogProject.project,
                 loadBranches: { try await viewModel.listWorkspaceBranches(for: $0) },
+                loadBaseBranchReferences: { try await viewModel.listWorkspaceBaseBranchReferences(for: $0) },
                 loadWorktrees: { try await viewModel.listProjectWorktrees(for: $0) },
                 managedPathPreview: { try viewModel.managedWorktreePathPreview(for: $0, branch: $1) },
                 onCreateWorktree: { branch, createBranch, baseBranch, autoOpen in
@@ -275,6 +264,7 @@ struct WorkspaceProjectSidebarHostView: View {
                 title: context.title,
                 mode: context.mode,
                 availableProjects: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions,
+                loadBaseBranchReferences: { try await viewModel.listWorkspaceBaseBranchReferences(for: $0) },
                 initialData: context.initialData,
                 errorMessage: alignmentEditorErrorMessage,
                 isSubmitting: alignmentEditorIsSubmitting,
@@ -291,7 +281,9 @@ struct WorkspaceProjectSidebarHostView: View {
                 availableProjects: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions.filter {
                     !context.excludedProjectPaths.contains($0.path)
                 },
+                loadBaseBranchReferences: { try await viewModel.listWorkspaceBaseBranchReferences(for: $0) },
                 initialMemberTemplate: workspaceAlignmentInitialAddTemplate(for: context.workspaceID),
+                initialSelectedProjectPaths: context.initialSelectedProjectPaths,
                 errorMessage: alignmentAddProjectsErrorMessage,
                 isSubmitting: alignmentAddProjectsIsSubmitting,
                 onSubmit: { members, applyRules in
@@ -301,7 +293,10 @@ struct WorkspaceProjectSidebarHostView: View {
             )
             .preferredColorScheme(.dark)
         }
-        .confirmationDialog(
+    }
+
+    private func withDeleteWorktreeConfirmation<Content: View>(on content: Content) -> some View {
+        content.confirmationDialog(
             pendingDeleteRequest?.presentation.title ?? "删除 worktree",
             isPresented: Binding(
                 get: { pendingDeleteRequest != nil },
@@ -329,11 +324,12 @@ struct WorkspaceProjectSidebarHostView: View {
                 pendingDeleteRequest = nil
             }
         } message: {
-            if let pendingDeleteRequest {
-                Text(pendingDeleteRequest.presentation.message)
-            }
+            Text(pendingDeleteWorktreeMessage)
         }
-        .alert(
+    }
+
+    private func withDeleteWorkspaceAlert<Content: View>(on content: Content) -> some View {
+        content.alert(
             "删除工作区",
             isPresented: Binding(
                 get: { pendingDeleteWorkspaceAlignment != nil },
@@ -366,6 +362,10 @@ struct WorkspaceProjectSidebarHostView: View {
         }
     }
 
+    private var pendingDeleteWorktreeMessage: String {
+        pendingDeleteRequest?.presentation.message ?? ""
+    }
+
     private func syncSidebarProjection() {
         sidebarProjectionStore.sync(from: viewModel)
     }
@@ -389,7 +389,7 @@ struct WorkspaceProjectSidebarHostView: View {
                             projectPath: projectPath,
                             alias: workspaceAlignmentDefaultAlias(for: projectPath),
                             targetBranch: "",
-                            baseBranchMode: .autoDetect,
+                            baseBranchMode: .specified,
                             specifiedBaseBranch: ""
                         )
                     },
@@ -415,7 +415,7 @@ struct WorkspaceProjectSidebarHostView: View {
                         projectPath: member.projectPath,
                         alias: group.definition.memberAliases[member.projectPath] ?? workspaceAlignmentDefaultAlias(for: member.projectPath),
                         targetBranch: member.targetBranch,
-                        baseBranchMode: member.baseBranchMode,
+                        baseBranchMode: .specified,
                         specifiedBaseBranch: member.specifiedBaseBranch ?? ""
                     )
                 },
@@ -424,7 +424,10 @@ struct WorkspaceProjectSidebarHostView: View {
         )
     }
 
-    private func presentAddProjectsSheet(_ workspaceID: String) {
+    private func presentAddProjectsSheet(
+        _ workspaceID: String,
+        preselectedProjectPaths: Set<String> = []
+    ) {
         guard let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }) else {
             return
         }
@@ -434,7 +437,8 @@ struct WorkspaceProjectSidebarHostView: View {
             id: group.id,
             workspaceID: group.id,
             workspaceName: group.definition.name,
-            excludedProjectPaths: Set(group.definition.projectPaths)
+            excludedProjectPaths: Set(group.definition.projectPaths),
+            initialSelectedProjectPaths: preselectedProjectPaths
         )
     }
 
@@ -539,7 +543,7 @@ struct WorkspaceProjectSidebarHostView: View {
         WorkspaceAlignmentMemberDefinition(
             projectPath: entry.projectPath,
             targetBranch: entry.targetBranch,
-            baseBranchMode: entry.baseBranchMode,
+            baseBranchMode: .specified,
             specifiedBaseBranch: entry.specifiedBaseBranch
         )
     }
@@ -559,7 +563,7 @@ struct WorkspaceProjectSidebarHostView: View {
             projectPath: "",
             alias: "",
             targetBranch: firstMember.targetBranch,
-            baseBranchMode: firstMember.baseBranchMode,
+            baseBranchMode: .specified,
             specifiedBaseBranch: firstMember.specifiedBaseBranch ?? ""
         )
     }

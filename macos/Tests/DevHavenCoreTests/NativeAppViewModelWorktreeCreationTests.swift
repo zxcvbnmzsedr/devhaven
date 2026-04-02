@@ -104,6 +104,77 @@ final class NativeAppViewModelWorktreeCreationTests: XCTestCase {
         XCTAssertNil(worktree.initError)
     }
 
+    func testListBaseBranchReferencesIncludesLocalAndRemoteEntries() throws {
+        let fixture = try GitWorktreeCreationFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let remoteURL = fixture.rootURL.appendingPathComponent("origin.git", isDirectory: true)
+        try fixture.git(in: fixture.rootURL, ["init", "--bare", remoteURL.path])
+        try fixture.git(in: fixture.repositoryURL, ["remote", "add", "origin", remoteURL.path])
+        try fixture.git(in: fixture.repositoryURL, ["push", "-u", "origin", "main"])
+
+        let service = NativeGitWorktreeService(homeDirectoryURL: fixture.homeURL)
+        let references = try service.listBaseBranchReferences(at: fixture.repositoryURL.path)
+
+        XCTAssertTrue(references.contains(where: { $0.name == "main" && $0.kind == .local }))
+        XCTAssertTrue(references.contains(where: { $0.name == "origin/main" && $0.kind == .remote }))
+        XCTAssertFalse(references.contains(where: { $0.name == "origin" && $0.kind == .remote }))
+    }
+
+    func testCreateWorkspaceWorktreeSupportsExplicitRemoteBaseBranch() async throws {
+        let fixture = try GitWorktreeCreationFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let remoteURL = fixture.rootURL.appendingPathComponent("origin.git", isDirectory: true)
+        try fixture.git(in: fixture.rootURL, ["init", "--bare", remoteURL.path])
+        try fixture.git(in: fixture.repositoryURL, ["remote", "add", "origin", remoteURL.path])
+        try fixture.git(in: fixture.repositoryURL, ["push", "-u", "origin", "main"])
+        try fixture.git(in: fixture.repositoryURL, ["push", "origin", "main:refs/heads/release/8.2"])
+
+        let releaseCommit = try fixture.git(in: fixture.repositoryURL, ["rev-parse", "HEAD"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try fixture.commit(fileName: "README.md", content: "hello v2")
+        try fixture.git(in: fixture.repositoryURL, ["push", "origin", "main"])
+        try fixture.git(in: fixture.repositoryURL, ["fetch", "origin", "main", "release/8.2"])
+
+        let originMainCommit = try fixture.git(in: fixture.repositoryURL, ["rev-parse", "origin/main"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let originReleaseCommit = try fixture.git(in: fixture.repositoryURL, ["rev-parse", "origin/release/8.2"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(originReleaseCommit, releaseCommit)
+        XCTAssertNotEqual(originMainCommit, originReleaseCommit)
+
+        let viewModel = fixture.makeViewModel()
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.createWorkspaceWorktree(
+            from: fixture.repositoryURL.path,
+            branch: "feature/from-remote-base",
+            createBranch: true,
+            baseBranch: "origin/release/8.2",
+            autoOpen: false
+        )
+
+        let worktree = try XCTUnwrap(viewModel.snapshot.projects.first?.worktrees.first)
+        XCTAssertEqual(worktree.baseBranch, "origin/release/8.2")
+        let worktreeHead = try fixture.git(
+            in: URL(fileURLWithPath: worktree.path, isDirectory: true),
+            ["rev-parse", "HEAD"]
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertEqual(worktreeHead, originReleaseCommit)
+    }
+
     func testDeleteWorkspaceWorktreeRemovesCreatedLocalBranch() async throws {
         let fixture = try GitWorktreeCreationFixture.make()
         defer { fixture.cleanup() }

@@ -26,6 +26,7 @@ struct WorkspaceAlignmentEditorSheet: View {
     let title: String
     let mode: WorkspaceAlignmentEditorSheetMode
     let availableProjects: [Project]
+    let loadBaseBranchReferences: (String) async throws -> [NativeGitBaseBranchReference]
     let initialData: WorkspaceAlignmentEditorFormData
     let errorMessage: String?
     let isSubmitting: Bool
@@ -42,6 +43,7 @@ struct WorkspaceAlignmentEditorSheet: View {
         title: String,
         mode: WorkspaceAlignmentEditorSheetMode,
         availableProjects: [Project],
+        loadBaseBranchReferences: @escaping (String) async throws -> [NativeGitBaseBranchReference],
         initialData: WorkspaceAlignmentEditorFormData,
         errorMessage: String? = nil,
         isSubmitting: Bool = false,
@@ -51,6 +53,7 @@ struct WorkspaceAlignmentEditorSheet: View {
         self.title = title
         self.mode = mode
         self.availableProjects = availableProjects
+        self.loadBaseBranchReferences = loadBaseBranchReferences
         self.initialData = initialData
         self.errorMessage = errorMessage
         self.isSubmitting = isSubmitting
@@ -81,8 +84,7 @@ struct WorkspaceAlignmentEditorSheet: View {
             if member.targetBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return false
             }
-            if member.baseBranchMode == .specified,
-               member.specifiedBaseBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if member.specifiedBaseBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return false
             }
         }
@@ -157,7 +159,9 @@ struct WorkspaceAlignmentEditorSheet: View {
                                 WorkspaceAlignmentMemberEditorCard(
                                     title: projectName(for: member.projectPath),
                                     subtitle: member.projectPath,
+                                    projectPath: member.projectPath,
                                     entry: binding(for: member.projectPath),
+                                    loadBaseBranchReferences: loadBaseBranchReferences,
                                     isSubmitting: isSubmitting
                                 )
                             }
@@ -271,7 +275,7 @@ struct WorkspaceAlignmentEditorSheet: View {
             projectPath: projectPath,
             alias: sanitizeWorkspaceAlias(projectName(for: projectPath)),
             targetBranch: "",
-            baseBranchMode: .autoDetect,
+            baseBranchMode: .specified,
             specifiedBaseBranch: ""
         )
     }
@@ -315,7 +319,9 @@ struct WorkspaceAlignmentEditorSheet: View {
 struct WorkspaceAlignmentAddProjectsSheet: View {
     let workspaceName: String
     let availableProjects: [Project]
+    let loadBaseBranchReferences: (String) async throws -> [NativeGitBaseBranchReference]
     let initialMemberTemplate: WorkspaceAlignmentMemberFormEntry?
+    let initialSelectedProjectPaths: Set<String>
     let errorMessage: String?
     let isSubmitting: Bool
     let onSubmit: (_ members: [WorkspaceAlignmentMemberFormEntry], _ applyRules: Bool) -> Void
@@ -329,7 +335,9 @@ struct WorkspaceAlignmentAddProjectsSheet: View {
     init(
         workspaceName: String,
         availableProjects: [Project],
+        loadBaseBranchReferences: @escaping (String) async throws -> [NativeGitBaseBranchReference],
         initialMemberTemplate: WorkspaceAlignmentMemberFormEntry? = nil,
+        initialSelectedProjectPaths: Set<String> = [],
         errorMessage: String? = nil,
         isSubmitting: Bool = false,
         onSubmit: @escaping (_ members: [WorkspaceAlignmentMemberFormEntry], _ applyRules: Bool) -> Void,
@@ -337,12 +345,31 @@ struct WorkspaceAlignmentAddProjectsSheet: View {
     ) {
         self.workspaceName = workspaceName
         self.availableProjects = availableProjects
+        self.loadBaseBranchReferences = loadBaseBranchReferences
         self.initialMemberTemplate = initialMemberTemplate
+        self.initialSelectedProjectPaths = initialSelectedProjectPaths
         self.errorMessage = errorMessage
         self.isSubmitting = isSubmitting
         self.onSubmit = onSubmit
         self.onClose = onClose
-        _memberEntriesByPath = State(initialValue: [:])
+        let initialEntries = Dictionary(uniqueKeysWithValues: initialSelectedProjectPaths.map { path in
+            let projectName = availableProjects.first(where: { $0.path == path })?.name ?? {
+                let name = (path as NSString).lastPathComponent
+                return name.isEmpty ? path : name
+            }()
+            return (
+                path,
+                WorkspaceAlignmentMemberFormEntry(
+                    projectPath: path,
+                    alias: sanitizeWorkspaceAlias(projectName),
+                    targetBranch: initialMemberTemplate?.targetBranch ?? "",
+                    baseBranchMode: .specified,
+                    specifiedBaseBranch: initialMemberTemplate?.specifiedBaseBranch ?? ""
+                )
+            )
+        })
+        _selectedPaths = State(initialValue: initialSelectedProjectPaths)
+        _memberEntriesByPath = State(initialValue: initialEntries)
     }
 
     private var sortedProjects: [Project] {
@@ -409,7 +436,9 @@ struct WorkspaceAlignmentAddProjectsSheet: View {
                                 WorkspaceAlignmentMemberEditorCard(
                                     title: projectName(for: member.projectPath),
                                     subtitle: member.projectPath,
+                                    projectPath: member.projectPath,
                                     entry: memberBinding(for: member.projectPath),
+                                    loadBaseBranchReferences: loadBaseBranchReferences,
                                     isSubmitting: isSubmitting
                                 )
                             }
@@ -441,7 +470,7 @@ struct WorkspaceAlignmentAddProjectsSheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(selectedMembers.isEmpty || selectedMembers.contains(where: { member in
                     member.targetBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-                    (member.baseBranchMode == .specified && member.specifiedBaseBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    member.specifiedBaseBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 }) || isSubmitting)
             }
         }
@@ -504,7 +533,7 @@ struct WorkspaceAlignmentAddProjectsSheet: View {
             projectPath: projectPath,
             alias: sanitizeWorkspaceAlias(projectName(for: projectPath)),
             targetBranch: initialMemberTemplate?.targetBranch ?? "",
-            baseBranchMode: initialMemberTemplate?.baseBranchMode ?? .autoDetect,
+            baseBranchMode: .specified,
             specifiedBaseBranch: initialMemberTemplate?.specifiedBaseBranch ?? ""
         )
     }
@@ -541,8 +570,22 @@ struct WorkspaceAlignmentAddProjectsSheet: View {
 private struct WorkspaceAlignmentMemberEditorCard: View {
     let title: String
     let subtitle: String
+    let projectPath: String
     @Binding var entry: WorkspaceAlignmentMemberFormEntry
+    let loadBaseBranchReferences: (String) async throws -> [NativeGitBaseBranchReference]
     let isSubmitting: Bool
+
+    @State private var availableBaseBranchReferences = [NativeGitBaseBranchReference]()
+    @State private var isLoadingBaseBranches = false
+    @State private var baseBranchLoadErrorMessage: String?
+
+    private var localBaseBranchReferences: [NativeGitBaseBranchReference] {
+        availableBaseBranchReferences.filter { $0.kind == .local }
+    }
+
+    private var remoteBaseBranchReferences: [NativeGitBaseBranchReference] {
+        availableBaseBranchReferences.filter { $0.kind == .remote }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -582,17 +625,43 @@ private struct WorkspaceAlignmentMemberEditorCard: View {
                 Text("基线分支")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(NativeTheme.textSecondary)
-                Picker("基线分支", selection: $entry.baseBranchMode) {
-                    Text("自动探测").tag(WorkspaceAlignmentBaseBranchMode.autoDetect)
-                    Text("指定").tag(WorkspaceAlignmentBaseBranchMode.specified)
-                }
-                .pickerStyle(.segmented)
-                .disabled(isSubmitting)
-
-                if entry.baseBranchMode == .specified {
-                    TextField("例如：main / develop", text: $entry.specifiedBaseBranch)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(isSubmitting)
+                if isLoadingBaseBranches {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if let baseBranchLoadErrorMessage, !baseBranchLoadErrorMessage.isEmpty {
+                    Text(baseBranchLoadErrorMessage)
+                        .font(.caption2)
+                        .foregroundStyle(NativeTheme.danger)
+                } else if availableBaseBranchReferences.isEmpty {
+                    Text("当前仓库没有可选基线分支")
+                        .font(.caption2)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                } else {
+                    Picker("基线分支", selection: $entry.specifiedBaseBranch) {
+                        if !localBaseBranchReferences.isEmpty {
+                            Section {
+                                ForEach(localBaseBranchReferences) { branchReference in
+                                    Text(workspaceAlignmentBaseBranchLabel(branchReference))
+                                        .tag(branchReference.name)
+                                }
+                            } header: {
+                                Text("本地")
+                            }
+                        }
+                        if !remoteBaseBranchReferences.isEmpty {
+                            Section {
+                                ForEach(remoteBaseBranchReferences) { branchReference in
+                                    Text(workspaceAlignmentBaseBranchLabel(branchReference))
+                                        .tag(branchReference.name)
+                                }
+                            } header: {
+                                Text("远端")
+                            }
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .disabled(isSubmitting)
                 }
             }
         }
@@ -600,11 +669,68 @@ private struct WorkspaceAlignmentMemberEditorCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(NativeTheme.elevated)
         .clipShape(.rect(cornerRadius: 10))
+        .task(id: projectPath) {
+            await loadAvailableBaseBranches()
+        }
+    }
+
+    @MainActor
+    private func loadAvailableBaseBranches() async {
+        guard !projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            availableBaseBranchReferences = []
+            baseBranchLoadErrorMessage = nil
+            entry.baseBranchMode = .specified
+            entry.specifiedBaseBranch = ""
+            return
+        }
+        guard !isLoadingBaseBranches else {
+            return
+        }
+        isLoadingBaseBranches = true
+        baseBranchLoadErrorMessage = nil
+        defer { isLoadingBaseBranches = false }
+
+        do {
+            let branchReferences = try await loadBaseBranchReferences(projectPath)
+            availableBaseBranchReferences = branchReferences
+            synchronizeBaseBranchSelection(with: branchReferences)
+        } catch {
+            availableBaseBranchReferences = []
+            baseBranchLoadErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            entry.baseBranchMode = .specified
+        }
+    }
+
+    @MainActor
+    private func synchronizeBaseBranchSelection(with branchReferences: [NativeGitBaseBranchReference]) {
+        entry.baseBranchMode = .specified
+        let trimmedSelection = entry.specifiedBaseBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+        if branchReferences.contains(where: { $0.name == trimmedSelection }) {
+            if entry.specifiedBaseBranch != trimmedSelection {
+                entry.specifiedBaseBranch = trimmedSelection
+            }
+            return
+        }
+        entry.specifiedBaseBranch = preferredWorkspaceAlignmentBaseBranch(from: branchReferences) ?? ""
     }
 }
 
 private func initialValueOrEmpty(_ value: String) -> String {
     value
+}
+
+private func preferredWorkspaceAlignmentBaseBranch(from branches: [NativeGitBaseBranchReference]) -> String? {
+    branches.first(where: { $0.kind == .local && $0.isMain })?.name
+        ?? branches.first(where: { $0.kind == .local })?.name
+        ?? branches.first(where: { $0.kind == .remote && $0.isMain })?.name
+        ?? branches.first?.name
+}
+
+private func workspaceAlignmentBaseBranchLabel(_ branchReference: NativeGitBaseBranchReference) -> String {
+    if branchReference.isMain {
+        return "\(branchReference.name)（主分支）"
+    }
+    return branchReference.name
 }
 
 func sanitizeWorkspaceAlias(_ rawValue: String) -> String {

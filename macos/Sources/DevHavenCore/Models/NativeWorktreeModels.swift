@@ -12,6 +12,29 @@ public struct NativeGitBranch: Equatable, Sendable, Identifiable {
     public var id: String { name }
 }
 
+public enum NativeGitBaseBranchReferenceKind: String, Codable, Equatable, Sendable {
+    case local
+    case remote
+}
+
+public struct NativeGitBaseBranchReference: Equatable, Sendable, Identifiable {
+    public var name: String
+    public var kind: NativeGitBaseBranchReferenceKind
+    public var isMain: Bool
+
+    public init(
+        name: String,
+        kind: NativeGitBaseBranchReferenceKind,
+        isMain: Bool
+    ) {
+        self.name = name
+        self.kind = kind
+        self.isMain = isMain
+    }
+
+    public var id: String { "\(kind.rawValue):\(name)" }
+}
+
 public struct NativeGitWorktree: Equatable, Sendable, Identifiable {
     public var path: String
     public var branch: String
@@ -426,6 +449,7 @@ public protocol NativeWorktreeServicing: Sendable {
     func preflightCreateWorktree(_ request: NativeWorktreeCreateRequest) throws -> String
     func currentBranch(at projectPath: String) throws -> String
     func listBranches(at projectPath: String) throws -> [NativeGitBranch]
+    func listBaseBranchReferences(at projectPath: String) throws -> [NativeGitBaseBranchReference]
     func listWorktrees(at projectPath: String) throws -> [NativeGitWorktree]
     func createWorktree(
         _ request: NativeWorktreeCreateRequest,
@@ -433,6 +457,18 @@ public protocol NativeWorktreeServicing: Sendable {
     ) throws -> NativeWorktreeCreateResult
     func removeWorktree(_ request: NativeWorktreeRemoveRequest) throws -> NativeWorktreeRemoveResult
     func cleanupFailedWorktreeCreate(_ request: NativeWorktreeCleanupRequest) throws -> NativeWorktreeCleanupResult
+}
+
+public extension NativeWorktreeServicing {
+    func listBaseBranchReferences(at projectPath: String) throws -> [NativeGitBaseBranchReference] {
+        try listBranches(at: projectPath).map { branch in
+            NativeGitBaseBranchReference(
+                name: branch.name,
+                kind: .local,
+                isMain: branch.isMain
+            )
+        }
+    }
 }
 
 public protocol NativeWorktreeEnvironmentServicing: Sendable {

@@ -3368,6 +3368,15 @@ public final class NativeAppViewModel {
         }.value
     }
 
+    public func listWorkspaceBaseBranchReferences(
+        for rootProjectPath: String
+    ) async throws -> [NativeGitBaseBranchReference] {
+        let worktreeService = self.worktreeService
+        return try await Task.detached(priority: .userInitiated) {
+            try worktreeService.listBaseBranchReferences(at: rootProjectPath)
+        }.value
+    }
+
     public func listProjectWorktrees(for rootProjectPath: String) async throws -> [NativeGitWorktree] {
         let worktreeService = self.worktreeService
         return try await Task.detached(priority: .userInitiated) {
@@ -3410,7 +3419,7 @@ public final class NativeAppViewModel {
             id: groupID,
             name: name,
             targetBranch: firstMember?.targetBranch ?? "",
-            baseBranchMode: firstMember?.baseBranchMode ?? .autoDetect,
+            baseBranchMode: firstMember?.baseBranchMode ?? .specified,
             specifiedBaseBranch: firstMember?.specifiedBaseBranch,
             projectPaths: sanitizedMembers.map(\.projectPath),
             members: sanitizedMembers,
@@ -3455,7 +3464,7 @@ public final class NativeAppViewModel {
         let firstMember = sanitizedMembers.first
         next.name = name
         next.targetBranch = firstMember?.targetBranch ?? ""
-        next.baseBranchMode = firstMember?.baseBranchMode ?? .autoDetect
+        next.baseBranchMode = firstMember?.baseBranchMode ?? .specified
         next.specifiedBaseBranch = firstMember?.specifiedBaseBranch
         next.projectPaths = sanitizedMembers.map(\.projectPath)
         next.members = sanitizedMembers
@@ -6517,12 +6526,11 @@ public final class NativeAppViewModel {
                 })?.name ?? pathLastComponent(member.projectPath)
                 throw NativeWorktreeError.invalidBranch("请为 \(projectName) 填写目标 branch")
             }
-            if member.baseBranchMode == .specified,
-               (member.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+            if member.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
                 let projectName = snapshot.projects.first(where: {
                     normalizePathForCompare($0.path) == normalizePathForCompare(member.projectPath)
                 })?.name ?? pathLastComponent(member.projectPath)
-                throw NativeWorktreeError.invalidBaseBranch("请为 \(projectName) 填写基线分支")
+                throw NativeWorktreeError.invalidBaseBranch("请为 \(projectName) 选择基线分支")
             }
         }
     }
@@ -6695,26 +6703,14 @@ public final class NativeAppViewModel {
     private func resolveWorkspaceAlignmentBaseBranch(
         for member: WorkspaceAlignmentMemberDefinition
     ) async throws -> String {
-        switch member.baseBranchMode {
-        case .specified:
-            let branch = member.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !branch.isEmpty else {
-                throw NativeWorktreeError.invalidBaseBranch("请填写基线分支")
+        let branch = member.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !branch.isEmpty else {
+            if member.baseBranchMode == .autoDetect {
+                throw NativeWorktreeError.invalidBaseBranch("旧工作区配置仍在使用自动探测，请重新选择基线分支")
             }
-            return branch
-        case .autoDetect:
-            let branches = try await listWorkspaceBranches(for: member.projectPath)
-            if branches.contains(where: { $0.name == "develop" }) {
-                return "develop"
-            }
-            if let main = branches.first(where: \.isMain)?.name {
-                return main
-            }
-            guard let fallback = branches.first?.name else {
-                throw NativeWorktreeError.invalidBaseBranch("无法自动探测基线分支")
-            }
-            return fallback
+            throw NativeWorktreeError.invalidBaseBranch("请选择基线分支")
         }
+        return branch
     }
 
     private func refreshWorkspaceAlignmentProjectStatus(

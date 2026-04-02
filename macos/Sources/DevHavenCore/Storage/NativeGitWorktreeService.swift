@@ -55,6 +55,56 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         return branches.map { NativeGitBranch(name: $0, isMain: $0 == defaultBranch) }
     }
 
+    public func listBaseBranchReferences(at projectPath: String) throws -> [NativeGitBaseBranchReference] {
+        try ensureGitRepository(at: projectPath)
+        let localBranches = try listBranches(at: projectPath)
+        let mainBranchName = localBranches.first(where: \.isMain)?.name
+
+        let localReferences = localBranches.map { branch in
+            NativeGitBaseBranchReference(
+                name: branch.name,
+                kind: .local,
+                isMain: branch.isMain
+            )
+        }
+
+        let remoteOutput = (try? runGit(
+            ["for-each-ref", "--format=%(refname:short)|%(refname)", "refs/remotes"],
+            at: projectPath
+        ).stdout) ?? ""
+        let remoteReferences = remoteOutput
+            .split(whereSeparator: \.isNewline)
+            .compactMap { rawLine -> (shortName: String, fullRef: String)? in
+                let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !line.isEmpty else {
+                    return nil
+                }
+                let parts = line.split(separator: "|", maxSplits: 1).map(String.init)
+                guard parts.count == 2 else {
+                    return nil
+                }
+                let shortName = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                let fullRef = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !shortName.isEmpty, !fullRef.isEmpty else {
+                    return nil
+                }
+                return (shortName, fullRef)
+            }
+            .filter { !$0.fullRef.hasSuffix("/HEAD") }
+            .map { reference in
+                NativeGitBaseBranchReference(
+                    name: reference.shortName,
+                    kind: .remote,
+                    isMain: remoteBranchShortName(reference.shortName) == mainBranchName
+                )
+            }
+            .sorted { lhs, rhs in
+                lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+
+        return localReferences + remoteReferences
+    }
+
     public func listWorktrees(at projectPath: String) throws -> [NativeGitWorktree] {
         try ensureGitRepository(at: projectPath)
         let output = try runGit(["worktree", "list", "--porcelain"], at: projectPath).stdout
@@ -324,42 +374,8 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
             throw NativeWorktreeError.invalidBaseBranch("基线分支不能为空")
         }
 
-        if hasOriginRemote(projectPath) {
-            switch branchExistsOnRemote(projectPath: projectPath, branch: baseBranch) {
-            case .exists:
-                let remoteRef = "origin/\(baseBranch)"
-                let fetchErrorMessage: String?
-                do {
-                    try fetchOriginBranch(projectPath: projectPath, branch: baseBranch)
-                    fetchErrorMessage = nil
-                } catch {
-                    fetchErrorMessage = error.localizedDescription
-                }
-                if refExistsLocally(projectPath: projectPath, reference: remoteRef) {
-                    return remoteRef
-                }
-                if refExistsLocally(projectPath: projectPath, reference: baseBranch) {
-                    return baseBranch
-                }
-                if let fetchErrorMessage {
-                    throw NativeWorktreeError.invalidBaseBranch(
-                        "基线分支不可用：远端分支 \(remoteRef) 刷新失败，且本地不存在同名分支（\(fetchErrorMessage)）"
-                    )
-                }
-                throw NativeWorktreeError.invalidBaseBranch("基线分支不可用：远端分支 \(remoteRef) 无法在本地解析")
-            case .notFound:
-                if refExistsLocally(projectPath: projectPath, reference: baseBranch) {
-                    return baseBranch
-                }
-                throw NativeWorktreeError.invalidBaseBranch("基线分支不可用：远端与本地均不存在分支 \(baseBranch)")
-            case let .error(message):
-                if refExistsLocally(projectPath: projectPath, reference: baseBranch) {
-                    return baseBranch
-                }
-                throw NativeWorktreeError.invalidBaseBranch(
-                    "基线分支不可用：无法校验远端分支 \(baseBranch)，且本地不存在同名分支（\(message)）"
-                )
-            }
+        if let remoteReference = resolveExplicitRemoteReference(projectPath: projectPath, baseBranch: baseBranch) {
+            return try resolveExplicitRemoteStartPoint(projectPath: projectPath, remoteReference: remoteReference)
         }
 
         if refExistsLocally(projectPath: projectPath, reference: baseBranch) {
@@ -416,6 +432,45 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         }
         let result = String(sanitized).trimmingCharacters(in: CharacterSet(charactersIn: "-._"))
         return result.isEmpty ? fallback : result
+    }
+
+    private func resolveExplicitRemoteStartPoint(
+        projectPath: String,
+        remoteReference: ExplicitRemoteReference
+    ) throws -> String {
+        switch branchExistsOnRemote(
+            projectPath: projectPath,
+            remoteName: remoteReference.remoteName,
+            branch: remoteReference.branchName
+        ) {
+        case .exists:
+            let fetchErrorMessage: String?
+            do {
+                try fetchRemoteBranch(
+                    projectPath: projectPath,
+                    remoteName: remoteReference.remoteName,
+                    branch: remoteReference.branchName
+                )
+                fetchErrorMessage = nil
+            } catch {
+                fetchErrorMessage = error.localizedDescription
+            }
+            if refExistsLocally(projectPath: projectPath, reference: remoteReference.reference) {
+                return remoteReference.reference
+            }
+            if let fetchErrorMessage {
+                throw NativeWorktreeError.invalidBaseBranch(
+                    "基线分支不可用：远端分支 \(remoteReference.reference) 刷新失败，且本地无法解析（\(fetchErrorMessage)）"
+                )
+            }
+            throw NativeWorktreeError.invalidBaseBranch("基线分支不可用：远端分支 \(remoteReference.reference) 无法在本地解析")
+        case .notFound:
+            throw NativeWorktreeError.invalidBaseBranch("基线分支不可用：远端不存在分支 \(remoteReference.reference)")
+        case let .error(message):
+            throw NativeWorktreeError.invalidBaseBranch(
+                "基线分支不可用：无法校验远端分支 \(remoteReference.reference)（\(message)）"
+            )
+        }
     }
 
     private func normalizeBranchName(_ branch: String) throws -> String {
@@ -542,6 +597,20 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         _ = try runGit(["fetch", "origin", branch], at: projectPath)
     }
 
+    private func remoteNames(projectPath: String) -> Set<String> {
+        let output = (try? runGit(["remote"], at: projectPath).stdout) ?? ""
+        return Set(
+            output
+                .split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private func fetchRemoteBranch(projectPath: String, remoteName: String, branch: String) throws {
+        _ = try runGit(["fetch", remoteName, branch], at: projectPath)
+    }
+
     private func refExistsLocally(projectPath: String, reference: String) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -556,10 +625,10 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
         return process.terminationStatus == 0
     }
 
-    private func branchExistsOnRemote(projectPath: String, branch: String) -> RemoteBranchCheck {
+    private func branchExistsOnRemote(projectPath: String, remoteName: String, branch: String) -> RemoteBranchCheck {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["git", "ls-remote", "--exit-code", "--heads", "origin", branch]
+        process.arguments = ["git", "ls-remote", "--exit-code", "--heads", remoteName, branch]
         process.currentDirectoryURL = URL(fileURLWithPath: projectPath, isDirectory: true)
         let stdout = Pipe()
         let stderr = Pipe()
@@ -587,6 +656,37 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
         return .error(message.isEmpty ? "未知错误" : message)
+    }
+
+    private func resolveExplicitRemoteReference(
+        projectPath: String,
+        baseBranch: String
+    ) -> ExplicitRemoteReference? {
+        let components = baseBranch.split(separator: "/", maxSplits: 1).map(String.init)
+        guard components.count == 2 else {
+            return nil
+        }
+        let remoteName = components[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        let branchName = components[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remoteName.isEmpty,
+              !branchName.isEmpty,
+              remoteNames(projectPath: projectPath).contains(remoteName)
+        else {
+            return nil
+        }
+        return ExplicitRemoteReference(
+            remoteName: remoteName,
+            branchName: branchName,
+            reference: "\(remoteName)/\(branchName)"
+        )
+    }
+
+    private func remoteBranchShortName(_ reference: String) -> String {
+        let components = reference.split(separator: "/", maxSplits: 1).map(String.init)
+        guard components.count == 2 else {
+            return reference
+        }
+        return components[1]
     }
 
     private func parseWorktreeListOutput(basePath: String, output: String) -> [NativeGitWorktree] {
@@ -714,6 +814,12 @@ public struct NativeGitWorktreeService: NativeWorktreeServicing {
 private struct ProcessOutput {
     let stdout: String
     let stderr: String
+}
+
+private struct ExplicitRemoteReference {
+    let remoteName: String
+    let branchName: String
+    let reference: String
 }
 
 private enum RemoteBranchCheck {
