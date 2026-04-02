@@ -157,7 +157,20 @@ public final class GhosttyWorkspaceController {
     }
 
     public func updateTitle(for tabID: String, title: String) {
-        let previousTitle = projection.tabs.first(where: { $0.id == tabID })?.title
+        guard let previousTitle = projection.tabs.first(where: { $0.id == tabID })?.title else {
+            return
+        }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        let resolvedTitle = WorkspaceTabTitlePolicy.resolveRuntimeTitle(
+            currentTitle: previousTitle,
+            runtimeTitle: trimmed
+        )
+        guard previousTitle != resolvedTitle else {
+            return
+        }
         projection.updateTitle(for: tabID, title: title)
         let nextTitle = projection.tabs.first(where: { $0.id == tabID })?.title
         guard previousTitle != nextTitle else {
