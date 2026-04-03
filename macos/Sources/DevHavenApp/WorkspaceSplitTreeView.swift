@@ -147,14 +147,18 @@ struct WorkspaceSplitTreeView: View {
         .coordinateSpace(name: Self.canvasCoordinateSpaceName)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onPreferenceChange(WorkspacePaneItemFramePreferenceKey.self) { preferences in
-            itemFramesByItemID = Dictionary(
-                uniqueKeysWithValues: preferences.map { ($0.itemID, $0.frame) }
-            )
+            let nextFrames = WorkspaceSplitTreePreferenceProjection.itemFrames(from: preferences)
+            guard nextFrames != itemFramesByItemID else {
+                return
+            }
+            itemFramesByItemID = nextFrames
         }
         .onPreferenceChange(WorkspacePaneTabStripFramePreferenceKey.self) { preferences in
-            tabStripFramesByPaneID = Dictionary(
-                uniqueKeysWithValues: preferences.map { ($0.paneID, $0.frame) }
-            )
+            let nextFrames = WorkspaceSplitTreePreferenceProjection.tabStripFrames(from: preferences)
+            guard nextFrames != tabStripFramesByPaneID else {
+                return
+            }
+            tabStripFramesByPaneID = nextFrames
         }
     }
 
@@ -459,6 +463,33 @@ struct WorkspaceSplitTreeView: View {
             candidates.append((.down, frame.maxY - location.y))
         }
         return candidates.min(by: { $0.1 < $1.1 })?.0
+    }
+}
+
+enum WorkspaceSplitTreePreferenceProjection {
+    static func itemFrames(
+        from preferences: [WorkspacePaneItemFramePreference]
+    ) -> [String: CGRect] {
+        Dictionary(
+            uniqueKeysWithValues: preferences.map { ($0.itemID, normalize($0.frame)) }
+        )
+    }
+
+    static func tabStripFrames(
+        from preferences: [WorkspacePaneTabStripFramePreference]
+    ) -> [String: CGRect] {
+        Dictionary(
+            uniqueKeysWithValues: preferences.map { ($0.paneID, normalize($0.frame)) }
+        )
+    }
+
+    static func normalize(_ rect: CGRect) -> CGRect {
+        CGRect(
+            x: rect.origin.x.rounded(),
+            y: rect.origin.y.rounded(),
+            width: rect.size.width.rounded(),
+            height: rect.size.height.rounded()
+        )
     }
 }
 
