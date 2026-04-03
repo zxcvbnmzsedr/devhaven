@@ -128,7 +128,12 @@ struct WorkspaceTerminalPaneView: View {
         .clipShape(.rect(cornerRadius: 6))
         .overlay {
             RoundedRectangle(cornerRadius: 6)
-                .stroke(NativeTheme.border.opacity(0.95), lineWidth: 1)
+                .stroke(
+                    showsItemMergeTarget
+                    ? NativeTheme.accent.opacity(0.55)
+                    : NativeTheme.border.opacity(0.95),
+                    lineWidth: showsItemMergeTarget ? 1.5 : 1
+                )
         }
         .overlay(alignment: .top) {
             Rectangle()
@@ -136,14 +141,23 @@ struct WorkspaceTerminalPaneView: View {
                 .frame(height: 1)
                 .padding(.horizontal, 1)
         }
+        .shadow(
+            color: showsItemMergeTarget ? NativeTheme.accent.opacity(0.12) : Color.clear,
+            radius: 8,
+            x: 0,
+            y: 0
+        )
         .overlay {
             GeometryReader { proxy in
-                if let dropDirection {
-                    paneDropOverlay(in: proxy.size, direction: dropDirection)
+                if shouldShowDockingPreview {
+                    paneDockingOverlay(in: proxy.size)
                 }
             }
         }
         .opacity(isDraggingPane ? 0.74 : 1)
+        .animation(.easeOut(duration: 0.12), value: showsItemMergeTarget)
+        .animation(.easeOut(duration: 0.12), value: itemDropTarget?.itemID)
+        .animation(.easeOut(duration: 0.12), value: dropDirection)
         .onAppear {
             syncSurfaceActivity()
         }
@@ -178,8 +192,8 @@ struct WorkspaceTerminalPaneView: View {
                         )
                     }
                 }
-                .padding(.horizontal, 1)
             }
+            .padding(.horizontal, 1)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(tabStripFrameReporter)
             .overlay {
@@ -213,6 +227,10 @@ struct WorkspaceTerminalPaneView: View {
                 onClosePane(pane.id)
             }
         }
+    }
+
+    private var shouldShowDockingPreview: Bool {
+        itemDropTarget != nil || showsItemMergeTarget || dropDirection != nil
     }
 
     @ViewBuilder
@@ -331,7 +349,7 @@ struct WorkspaceTerminalPaneView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "arrow.down.left.and.arrow.up.right")
                         .font(.system(size: 10, weight: .semibold))
-                    Text("移入当前窗格")
+                    Text("移入当前组")
                         .font(.system(size: 11, weight: .semibold))
                 }
                 .foregroundStyle(NativeTheme.accent)
@@ -341,6 +359,7 @@ struct WorkspaceTerminalPaneView: View {
                     Capsule()
                         .fill(NativeTheme.window.opacity(0.92))
                 )
+                .shadow(color: NativeTheme.accent.opacity(0.12), radius: 4, x: 0, y: 1)
             }
             .allowsHitTesting(false)
     }
@@ -387,42 +406,132 @@ struct WorkspaceTerminalPaneView: View {
     }
 
     @ViewBuilder
-    private func paneDropOverlay(
-        in size: CGSize,
-        direction: WorkspacePaneSplitDirection
-    ) -> some View {
-        let horizontalThickness = max(44, min(size.width * 0.24, 84))
-        let verticalThickness = max(36, min(size.height * 0.24, 72))
+    private func paneDockingOverlay(in size: CGSize) -> some View {
+        let showsEdgeTargets = dropDirection != nil || showsItemMergeTarget
 
-        ZStack(alignment: paneDropAlignment(for: direction)) {
-            Rectangle()
-                .fill(NativeTheme.accent.opacity(0.16))
-                .frame(
-                    width: paneDropWidth(for: direction, size: size, horizontalThickness: horizontalThickness),
-                    height: paneDropHeight(for: direction, size: size, verticalThickness: verticalThickness)
-                )
+        ZStack {
+            if showsEdgeTargets {
+                paneDockZone(in: size, direction: .left, isActive: dropDirection == .left)
+                paneDockZone(in: size, direction: .right, isActive: dropDirection == .right)
+                paneDockZone(in: size, direction: .top, isActive: dropDirection == .top)
+                paneDockZone(in: size, direction: .down, isActive: dropDirection == .down)
+            }
+
+            if draggedItemID != nil, showsEdgeTargets || showsItemMergeTarget {
+                paneMergeZone(in: size, isActive: showsItemMergeTarget)
+            }
         }
-        .padding(2)
-        .clipShape(.rect(cornerRadius: 6))
-        .overlay {
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(NativeTheme.accent.opacity(0.5), lineWidth: 1)
-                .padding(1)
+        .overlay(alignment: .top) {
+            if itemDropTarget != nil {
+                dockStatusPill(title: "插入标签栏")
+                    .padding(.top, 52)
+            }
+        }
+        .overlay(alignment: paneDropAlignment(for: dropDirection ?? .right)) {
+            if let dropDirection {
+                dockStatusPill(title: splitDropLabel(for: dropDirection))
+                    .padding(12)
+            }
         }
         .overlay {
-            if draggedItemID != nil {
-                Text(splitDropLabel(for: direction))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(NativeTheme.accent)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        Capsule()
-                            .fill(NativeTheme.window.opacity(0.92))
-                    )
+            if showsItemMergeTarget {
+                dockStatusPill(title: "并入当前组")
             }
         }
         .allowsHitTesting(false)
+    }
+
+    private func paneDockZone(
+        in size: CGSize,
+        direction: WorkspacePaneSplitDirection,
+        isActive: Bool
+    ) -> some View {
+        let frame = paneDockZoneFrame(in: size, direction: direction)
+
+        return RoundedRectangle(cornerRadius: 8)
+            .fill(NativeTheme.accent.opacity(isActive ? 0.18 : 0.06))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(NativeTheme.accent.opacity(isActive ? 0.65 : 0.2), lineWidth: isActive ? 1.2 : 1)
+            }
+            .frame(width: frame.width, height: frame.height)
+            .offset(
+                x: frame.midX - size.width / 2,
+                y: frame.midY - size.height / 2
+            )
+    }
+
+    private func paneMergeZone(
+        in size: CGSize,
+        isActive: Bool
+    ) -> some View {
+        let width = max(120, min(size.width * 0.36, 220))
+        let height = max(72, min(size.height * 0.22, 120))
+
+        return RoundedRectangle(cornerRadius: 10)
+            .fill(NativeTheme.accent.opacity(isActive ? 0.16 : 0.05))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(NativeTheme.accent.opacity(isActive ? 0.65 : 0.22), style: StrokeStyle(lineWidth: isActive ? 1.25 : 1, dash: isActive ? [] : [5, 4]))
+            }
+            .frame(width: width, height: height)
+    }
+
+    private func paneDockZoneFrame(
+        in size: CGSize,
+        direction: WorkspacePaneSplitDirection
+    ) -> CGRect {
+        let inset: CGFloat = 10
+        let horizontalThickness = max(48, min(size.width * 0.2, 92))
+        let verticalThickness = max(40, min(size.height * 0.2, 84))
+
+        switch direction {
+        case .left:
+            return CGRect(
+                x: inset,
+                y: inset,
+                width: max(0, horizontalThickness),
+                height: max(0, size.height - inset * 2)
+            )
+        case .right:
+            return CGRect(
+                x: max(inset, size.width - horizontalThickness - inset),
+                y: inset,
+                width: max(0, horizontalThickness),
+                height: max(0, size.height - inset * 2)
+            )
+        case .top:
+            return CGRect(
+                x: inset,
+                y: inset,
+                width: max(0, size.width - inset * 2),
+                height: max(0, verticalThickness)
+            )
+        case .down:
+            return CGRect(
+                x: inset,
+                y: max(inset, size.height - verticalThickness - inset),
+                width: max(0, size.width - inset * 2),
+                height: max(0, verticalThickness)
+            )
+        }
+    }
+
+    private func dockStatusPill(title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(NativeTheme.accent)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule()
+                    .fill(NativeTheme.window.opacity(0.94))
+            )
+            .overlay {
+                Capsule()
+                    .stroke(NativeTheme.accent.opacity(0.18), lineWidth: 1)
+            }
+            .shadow(color: NativeTheme.accent.opacity(0.12), radius: 4, x: 0, y: 1)
     }
 
     private func paneDropAlignment(for direction: WorkspacePaneSplitDirection) -> Alignment {
@@ -438,32 +547,6 @@ struct WorkspaceTerminalPaneView: View {
         }
     }
 
-    private func paneDropWidth(
-        for direction: WorkspacePaneSplitDirection,
-        size: CGSize,
-        horizontalThickness: CGFloat
-    ) -> CGFloat {
-        switch direction {
-        case .left, .right:
-            return horizontalThickness
-        case .top, .down:
-            return max(0, size.width - 4)
-        }
-    }
-
-    private func paneDropHeight(
-        for direction: WorkspacePaneSplitDirection,
-        size: CGSize,
-        verticalThickness: CGFloat
-    ) -> CGFloat {
-        switch direction {
-        case .left, .right:
-            return max(0, size.height - 4)
-        case .top, .down:
-            return verticalThickness
-        }
-    }
-
     private func splitDropLabel(for direction: WorkspacePaneSplitDirection) -> String {
         switch direction {
         case .left:
@@ -474,6 +557,19 @@ struct WorkspaceTerminalPaneView: View {
             return "拆分到上方"
         case .down:
             return "拆分到下方"
+        }
+    }
+
+    private func splitDropReleaseText(for direction: WorkspacePaneSplitDirection) -> String {
+        switch direction {
+        case .left:
+            return "释放后停靠到左侧并形成新组"
+        case .right:
+            return "释放后停靠到右侧并形成新组"
+        case .top:
+            return "释放后停靠到上方并形成新组"
+        case .down:
+            return "释放后停靠到下方并形成新组"
         }
     }
 
