@@ -300,8 +300,7 @@ public struct WorkspacePaneSnapshotTextRef: Codable, Equatable, Sendable {
     }
 }
 
-public struct WorkspacePaneRestoreSnapshot: Equatable, Sendable {
-    public var paneId: String
+public struct WorkspacePaneItemRestoreSnapshot: Equatable, Sendable {
     public var surfaceId: String
     public var terminalSessionId: String
     public var restoredWorkingDirectory: String?
@@ -311,7 +310,6 @@ public struct WorkspacePaneRestoreSnapshot: Equatable, Sendable {
     public var snapshotText: String?
 
     public init(
-        paneId: String,
         surfaceId: String,
         terminalSessionId: String,
         restoredWorkingDirectory: String?,
@@ -320,7 +318,6 @@ public struct WorkspacePaneRestoreSnapshot: Equatable, Sendable {
         snapshotTextRef: WorkspacePaneSnapshotTextRef?,
         snapshotText: String?
     ) {
-        self.paneId = paneId
         self.surfaceId = surfaceId
         self.terminalSessionId = terminalSessionId
         self.restoredWorkingDirectory = restoredWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
@@ -331,9 +328,65 @@ public struct WorkspacePaneRestoreSnapshot: Equatable, Sendable {
     }
 }
 
-extension WorkspacePaneRestoreSnapshot: Codable {
+public struct WorkspacePaneRestoreSnapshot: Equatable, Sendable {
+    public var paneId: String
+    public var selectedItemId: String?
+    public var items: [WorkspacePaneItemRestoreSnapshot]
+
+    public var selectedItem: WorkspacePaneItemRestoreSnapshot? {
+        if let selectedItemId,
+           let selected = items.first(where: { $0.surfaceId == selectedItemId }) {
+            return selected
+        }
+        return items.last ?? items.first
+    }
+
+    public var surfaceId: String {
+        selectedItem?.surfaceId ?? ""
+    }
+
+    public var terminalSessionId: String {
+        selectedItem?.terminalSessionId ?? ""
+    }
+
+    public var restoredWorkingDirectory: String? {
+        selectedItem?.restoredWorkingDirectory
+    }
+
+    public var restoredTitle: String? {
+        selectedItem?.restoredTitle
+    }
+
+    public var agentSummary: String? {
+        selectedItem?.agentSummary
+    }
+
+    public var snapshotTextRef: WorkspacePaneSnapshotTextRef? {
+        selectedItem?.snapshotTextRef
+    }
+
+    public var snapshotText: String? {
+        selectedItem?.snapshotText
+    }
+
+    public init(
+        paneId: String,
+        selectedItemId: String?,
+        items: [WorkspacePaneItemRestoreSnapshot]
+    ) {
+        self.paneId = paneId
+        self.selectedItemId = selectedItemId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.items = items
+    }
+
+    public func item(for surfaceId: String?) -> WorkspacePaneItemRestoreSnapshot? {
+        guard let surfaceId else { return nil }
+        return items.first(where: { $0.surfaceId == surfaceId })
+    }
+}
+
+extension WorkspacePaneItemRestoreSnapshot: Codable {
     enum CodingKeys: String, CodingKey {
-        case paneId
         case surfaceId
         case terminalSessionId
         case restoredWorkingDirectory
@@ -345,7 +398,6 @@ extension WorkspacePaneRestoreSnapshot: Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.init(
-            paneId: try container.decode(String.self, forKey: .paneId),
             surfaceId: try container.decode(String.self, forKey: .surfaceId),
             terminalSessionId: try container.decode(String.self, forKey: .terminalSessionId),
             restoredWorkingDirectory: try container.decodeIfPresent(String.self, forKey: .restoredWorkingDirectory),
@@ -358,7 +410,62 @@ extension WorkspacePaneRestoreSnapshot: Codable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(surfaceId, forKey: .surfaceId)
+        try container.encode(terminalSessionId, forKey: .terminalSessionId)
+        try container.encodeIfPresent(restoredWorkingDirectory, forKey: .restoredWorkingDirectory)
+        try container.encodeIfPresent(restoredTitle, forKey: .restoredTitle)
+        try container.encodeIfPresent(agentSummary, forKey: .agentSummary)
+        try container.encodeIfPresent(snapshotTextRef, forKey: .snapshotTextRef)
+    }
+}
+
+extension WorkspacePaneRestoreSnapshot: Codable {
+    enum CodingKeys: String, CodingKey {
+        case paneId
+        case selectedItemId
+        case items
+        case surfaceId
+        case terminalSessionId
+        case restoredWorkingDirectory
+        case restoredTitle
+        case agentSummary
+        case snapshotTextRef
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let paneId = try container.decode(String.self, forKey: .paneId)
+        if let items = try container.decodeIfPresent([WorkspacePaneItemRestoreSnapshot].self, forKey: .items),
+           !items.isEmpty {
+            self.init(
+                paneId: paneId,
+                selectedItemId: try container.decodeIfPresent(String.self, forKey: .selectedItemId),
+                items: items
+            )
+            return
+        }
+
+        let legacyItem = WorkspacePaneItemRestoreSnapshot(
+            surfaceId: try container.decode(String.self, forKey: .surfaceId),
+            terminalSessionId: try container.decode(String.self, forKey: .terminalSessionId),
+            restoredWorkingDirectory: try container.decodeIfPresent(String.self, forKey: .restoredWorkingDirectory),
+            restoredTitle: try container.decodeIfPresent(String.self, forKey: .restoredTitle),
+            agentSummary: try container.decodeIfPresent(String.self, forKey: .agentSummary),
+            snapshotTextRef: try container.decodeIfPresent(WorkspacePaneSnapshotTextRef.self, forKey: .snapshotTextRef),
+            snapshotText: nil
+        )
+        self.init(
+            paneId: paneId,
+            selectedItemId: legacyItem.surfaceId,
+            items: [legacyItem]
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(paneId, forKey: .paneId)
+        try container.encodeIfPresent(selectedItemId, forKey: .selectedItemId)
+        try container.encode(items, forKey: .items)
         try container.encode(surfaceId, forKey: .surfaceId)
         try container.encode(terminalSessionId, forKey: .terminalSessionId)
         try container.encodeIfPresent(restoredWorkingDirectory, forKey: .restoredWorkingDirectory)

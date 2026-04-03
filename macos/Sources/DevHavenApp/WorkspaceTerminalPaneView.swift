@@ -4,11 +4,21 @@ import DevHavenCore
 
 struct WorkspaceTerminalPaneView: View {
     let pane: WorkspacePaneState
+    let selectedItem: WorkspacePaneItemState
     let model: GhosttySurfaceHostModel
     let surfaceActivity: WorkspaceSurfaceActivity
     let isFocused: Bool
     let isZoomed: Bool
+    let isDraggingPane: Bool
+    let dropDirection: WorkspacePaneSplitDirection?
+    let draggedItemID: String?
+    let itemDropTarget: WorkspacePaneItemChipDropTarget?
+    let showsItemMergeTarget: Bool
+    let dragCoordinateSpaceName: String
     let onFocusPane: (String) -> Void
+    let onSelectItem: (String, String) -> Void
+    let onCreateItem: (String) -> Void
+    let onCloseItem: (String, String) -> Void
     let onClosePane: (String) -> Void
     let onSplitPane: (String, WorkspacePaneSplitDirection) -> Void
     let onFocusDirection: (String, WorkspacePaneFocusDirection) -> Void
@@ -21,32 +31,119 @@ struct WorkspaceTerminalPaneView: View {
     let onCloseTabAction: (ghostty_action_close_tab_mode_e) -> Bool
     let onGotoTabAction: (ghostty_action_goto_tab_e) -> Bool
     let onMoveTabAction: (ghostty_action_move_tab_s) -> Bool
+    let onPaneDragChanged: (CGPoint) -> Void
+    let onPaneDragEnded: (CGPoint) -> Void
+    let onPaneItemDragChanged: (String, CGPoint) -> Void
+    let onPaneItemDragEnded: (String, CGPoint) -> Void
+
+    init(
+        pane: WorkspacePaneState,
+        selectedItem: WorkspacePaneItemState? = nil,
+        model: GhosttySurfaceHostModel,
+        surfaceActivity: WorkspaceSurfaceActivity,
+        isFocused: Bool,
+        isZoomed: Bool,
+        isDraggingPane: Bool = false,
+        dropDirection: WorkspacePaneSplitDirection? = nil,
+        draggedItemID: String? = nil,
+        itemDropTarget: WorkspacePaneItemChipDropTarget? = nil,
+        showsItemMergeTarget: Bool = false,
+        dragCoordinateSpaceName: String = "workspace-split-tree-canvas",
+        onFocusPane: @escaping (String) -> Void,
+        onSelectItem: @escaping (String, String) -> Void = { _, _ in },
+        onCreateItem: @escaping (String) -> Void = { _ in },
+        onCloseItem: @escaping (String, String) -> Void = { _, _ in },
+        onClosePane: @escaping (String) -> Void,
+        onSplitPane: @escaping (String, WorkspacePaneSplitDirection) -> Void,
+        onFocusDirection: @escaping (String, WorkspacePaneFocusDirection) -> Void,
+        onResizePane: @escaping (String, WorkspacePaneSplitDirection, UInt16) -> Void,
+        onEqualize: @escaping (String) -> Void,
+        onToggleZoom: @escaping (String) -> Void,
+        onSurfaceExit: @escaping (String) -> Void,
+        onUpdateTabTitle: @escaping (String) -> Void,
+        onNewTab: @escaping () -> Bool,
+        onCloseTabAction: @escaping (ghostty_action_close_tab_mode_e) -> Bool,
+        onGotoTabAction: @escaping (ghostty_action_goto_tab_e) -> Bool,
+        onMoveTabAction: @escaping (ghostty_action_move_tab_s) -> Bool,
+        onPaneDragChanged: @escaping (CGPoint) -> Void = { _ in },
+        onPaneDragEnded: @escaping (CGPoint) -> Void = { _ in },
+        onPaneItemDragChanged: @escaping (String, CGPoint) -> Void = { _, _ in },
+        onPaneItemDragEnded: @escaping (String, CGPoint) -> Void = { _, _ in }
+    ) {
+        self.pane = pane
+        self.selectedItem = selectedItem ?? pane.selectedItem ?? pane.items.last ?? WorkspacePaneItemState(
+            request: pane.request,
+            title: pane.selectedTitle
+        )
+        self.model = model
+        self.surfaceActivity = surfaceActivity
+        self.isFocused = isFocused
+        self.isZoomed = isZoomed
+        self.isDraggingPane = isDraggingPane
+        self.dropDirection = dropDirection
+        self.draggedItemID = draggedItemID
+        self.itemDropTarget = itemDropTarget
+        self.showsItemMergeTarget = showsItemMergeTarget
+        self.dragCoordinateSpaceName = dragCoordinateSpaceName
+        self.onFocusPane = onFocusPane
+        self.onSelectItem = onSelectItem
+        self.onCreateItem = onCreateItem
+        self.onCloseItem = onCloseItem
+        self.onClosePane = onClosePane
+        self.onSplitPane = onSplitPane
+        self.onFocusDirection = onFocusDirection
+        self.onResizePane = onResizePane
+        self.onEqualize = onEqualize
+        self.onToggleZoom = onToggleZoom
+        self.onSurfaceExit = onSurfaceExit
+        self.onUpdateTabTitle = onUpdateTabTitle
+        self.onNewTab = onNewTab
+        self.onCloseTabAction = onCloseTabAction
+        self.onGotoTabAction = onGotoTabAction
+        self.onMoveTabAction = onMoveTabAction
+        self.onPaneDragChanged = onPaneDragChanged
+        self.onPaneDragEnded = onPaneDragEnded
+        self.onPaneItemDragChanged = onPaneItemDragChanged
+        self.onPaneItemDragEnded = onPaneItemDragEnded
+    }
 
     var body: some View {
-        let chromePolicy = WorkspaceChromePolicy.workspaceMinimal
-
-        Group {
-            if chromePolicy.showsPaneHeader {
-                VStack(spacing: 10) {
-                    header
-                    surfaceHost
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(NativeTheme.window)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(isFocused ? NativeTheme.accent.opacity(0.28) : NativeTheme.border.opacity(0.9))
+                        .frame(height: 1)
                 }
-                .padding(10)
-                .background(NativeTheme.surface)
-                .clipShape(.rect(cornerRadius: 14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(isFocused ? NativeTheme.accent.opacity(0.8) : NativeTheme.border, lineWidth: isFocused ? 2 : 1)
-                )
-            } else {
-                surfaceHost
-                    .overlay(
-                        Rectangle()
-                            .inset(by: 0)
-                            .stroke(isFocused ? NativeTheme.accent.opacity(0.8) : Color.clear, lineWidth: 2)
-                    )
+
+            surfaceHost
+                .padding(.horizontal, 3)
+                .padding(.top, 3)
+                .padding(.bottom, 3)
+        }
+        .background(NativeTheme.surface)
+        .clipShape(.rect(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(NativeTheme.border.opacity(0.95), lineWidth: 1)
+        }
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(isFocused ? NativeTheme.accent.opacity(0.65) : Color.clear)
+                .frame(height: 1)
+                .padding(.horizontal, 1)
+        }
+        .overlay {
+            GeometryReader { proxy in
+                if let dropDirection {
+                    paneDropOverlay(in: proxy.size, direction: dropDirection)
+                }
             }
         }
+        .opacity(isDraggingPane ? 0.74 : 1)
         .onAppear {
             syncSurfaceActivity()
         }
@@ -68,11 +165,34 @@ struct WorkspaceTerminalPaneView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Label(isZoomed ? "已放大窗格" : (isFocused ? "当前窗格" : "窗格"), systemImage: isFocused ? "command" : "rectangle.split.1x2")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(isFocused ? NativeTheme.textPrimary : NativeTheme.textSecondary)
-            Spacer(minLength: 0)
+        HStack(spacing: 6) {
+            paneDragGrip
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(pane.items) { item in
+                        paneItemChip(
+                            item,
+                            isDragged: draggedItemID == item.id,
+                            dropEdge: itemDropTarget?.itemID == item.id ? itemDropTarget?.edge : nil
+                        )
+                    }
+                }
+                .padding(.horizontal, 1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(tabStripFrameReporter)
+            .overlay {
+                if showsItemMergeTarget {
+                    mergeTargetOverlay
+                }
+            }
+
+            paneButton(title: "当前窗格新建终端标签", systemImage: "plus") {
+                onFocusPane(pane.id)
+                onCreateItem(pane.id)
+            }
+
             paneButton(title: "左右分屏", systemImage: "square.split.2x1") {
                 onFocusPane(pane.id)
                 onSplitPane(pane.id, .right)
@@ -95,17 +215,266 @@ struct WorkspaceTerminalPaneView: View {
         }
     }
 
+    @ViewBuilder
+    private var paneDragGrip: some View {
+        let grip = Color.clear
+            .frame(width: 10, height: 18)
+            .contentShape(.rect)
+            .help("拖动重排窗格")
+
+        if isZoomed {
+            grip
+        } else {
+            grip
+                .gesture(
+                    DragGesture(minimumDistance: 4, coordinateSpace: .named(dragCoordinateSpaceName))
+                        .onChanged { gesture in
+                            onFocusPane(pane.id)
+                            onPaneDragChanged(gesture.location)
+                        }
+                        .onEnded { gesture in
+                            onPaneDragEnded(gesture.location)
+                        }
+                )
+        }
+    }
+
+    private func paneItemChip(
+        _ item: WorkspacePaneItemState,
+        isDragged: Bool,
+        dropEdge: WorkspacePaneItemDropEdge?
+    ) -> some View {
+        let isSelected = item.id == selectedItem.id
+
+        return HStack(spacing: 4) {
+            HStack(spacing: 4) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 10, weight: .medium))
+                Text(item.title)
+                    .lineLimit(1)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(isSelected ? NativeTheme.textPrimary : NativeTheme.textSecondary)
+            .contentShape(.rect)
+            .onTapGesture {
+                onFocusPane(pane.id)
+                onSelectItem(pane.id, item.id)
+            }
+            .gesture(
+                DragGesture(minimumDistance: 4, coordinateSpace: .named(dragCoordinateSpaceName))
+                    .onChanged { gesture in
+                        onFocusPane(pane.id)
+                        onSelectItem(pane.id, item.id)
+                        onPaneItemDragChanged(item.id, gesture.location)
+                    }
+                    .onEnded { gesture in
+                        onPaneItemDragEnded(item.id, gesture.location)
+                    }
+            )
+
+            Button {
+                onFocusPane(pane.id)
+                onCloseItem(pane.id, item.id)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(isSelected ? NativeTheme.textPrimary : NativeTheme.textSecondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .background(isSelected ? NativeTheme.elevated.opacity(0.92) : NativeTheme.window.opacity(0.4))
+        .overlay {
+            if draggedItemID != nil,
+               itemDropTarget?.itemID == item.id {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(NativeTheme.accent.opacity(0.08))
+                    .padding(1)
+            }
+        }
+        .clipShape(.rect(cornerRadius: 5))
+        .overlay {
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(
+                    isSelected ? NativeTheme.accent.opacity(0.3) : NativeTheme.border.opacity(0.6),
+                    lineWidth: 1
+                )
+        }
+        .overlay(alignment: dropEdge == .trailing ? .trailing : .leading) {
+            if let dropEdge,
+               draggedItemID != item.id || dropEdge == .leading {
+                Rectangle()
+                    .fill(NativeTheme.accent.opacity(0.95))
+                    .frame(width: 2)
+                    .padding(.vertical, 2)
+                    .shadow(color: NativeTheme.accent.opacity(0.35), radius: 2, x: 0, y: 0)
+            }
+        }
+        .opacity(isDragged ? 0.48 : 1)
+        .scaleEffect(isDragged ? 0.985 : 1)
+        .background(itemFrameReporter(for: item))
+        .contentShape(.rect)
+    }
+
+    private var mergeTargetOverlay: some View {
+        RoundedRectangle(cornerRadius: 5)
+            .fill(NativeTheme.accent.opacity(0.12))
+            .padding(.vertical, 2)
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(NativeTheme.accent.opacity(0.65), lineWidth: 1)
+                    .padding(.vertical, 2)
+            }
+            .overlay {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.left.and.arrow.up.right")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text("移入当前窗格")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .foregroundStyle(NativeTheme.accent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule()
+                        .fill(NativeTheme.window.opacity(0.92))
+                )
+            }
+            .allowsHitTesting(false)
+    }
+
+    private var tabStripFrameReporter: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: WorkspacePaneTabStripFramePreferenceKey.self,
+                value: [
+                    WorkspacePaneTabStripFramePreference(
+                        paneID: pane.id,
+                        frame: proxy.frame(in: .named(dragCoordinateSpaceName))
+                    )
+                ]
+            )
+        }
+    }
+
+    private func itemFrameReporter(for item: WorkspacePaneItemState) -> some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: WorkspacePaneItemFramePreferenceKey.self,
+                value: [
+                    WorkspacePaneItemFramePreference(
+                        paneID: pane.id,
+                        itemID: item.id,
+                        frame: proxy.frame(in: .named(dragCoordinateSpaceName))
+                    )
+                ]
+            )
+        }
+    }
+
     private func paneButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(NativeTheme.textSecondary)
-                .frame(width: 26, height: 26)
-                .background(NativeTheme.window)
-                .clipShape(.rect(cornerRadius: 7))
+                .frame(width: 20, height: 20)
+                .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .help(title)
+    }
+
+    @ViewBuilder
+    private func paneDropOverlay(
+        in size: CGSize,
+        direction: WorkspacePaneSplitDirection
+    ) -> some View {
+        let horizontalThickness = max(44, min(size.width * 0.24, 84))
+        let verticalThickness = max(36, min(size.height * 0.24, 72))
+
+        ZStack(alignment: paneDropAlignment(for: direction)) {
+            Rectangle()
+                .fill(NativeTheme.accent.opacity(0.16))
+                .frame(
+                    width: paneDropWidth(for: direction, size: size, horizontalThickness: horizontalThickness),
+                    height: paneDropHeight(for: direction, size: size, verticalThickness: verticalThickness)
+                )
+        }
+        .padding(2)
+        .clipShape(.rect(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(NativeTheme.accent.opacity(0.5), lineWidth: 1)
+                .padding(1)
+        }
+        .overlay {
+            if draggedItemID != nil {
+                Text(splitDropLabel(for: direction))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(NativeTheme.accent)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(NativeTheme.window.opacity(0.92))
+                    )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func paneDropAlignment(for direction: WorkspacePaneSplitDirection) -> Alignment {
+        switch direction {
+        case .left:
+            return .leading
+        case .right:
+            return .trailing
+        case .top:
+            return .top
+        case .down:
+            return .bottom
+        }
+    }
+
+    private func paneDropWidth(
+        for direction: WorkspacePaneSplitDirection,
+        size: CGSize,
+        horizontalThickness: CGFloat
+    ) -> CGFloat {
+        switch direction {
+        case .left, .right:
+            return horizontalThickness
+        case .top, .down:
+            return max(0, size.width - 4)
+        }
+    }
+
+    private func paneDropHeight(
+        for direction: WorkspacePaneSplitDirection,
+        size: CGSize,
+        verticalThickness: CGFloat
+    ) -> CGFloat {
+        switch direction {
+        case .left, .right:
+            return max(0, size.height - 4)
+        case .top, .down:
+            return verticalThickness
+        }
+    }
+
+    private func splitDropLabel(for direction: WorkspacePaneSplitDirection) -> String {
+        switch direction {
+        case .left:
+            return "拆分到左侧"
+        case .right:
+            return "拆分到右侧"
+        case .top:
+            return "拆分到上方"
+        case .down:
+            return "拆分到下方"
+        }
     }
 
     private func syncSurfaceActivity() {
@@ -137,5 +506,42 @@ struct WorkspaceTerminalPaneView: View {
             onToggleZoom(pane.id)
             return true
         }
+    }
+}
+
+enum WorkspacePaneItemDropEdge {
+    case leading
+    case trailing
+}
+
+struct WorkspacePaneItemChipDropTarget: Equatable {
+    let itemID: String
+    let edge: WorkspacePaneItemDropEdge
+}
+
+struct WorkspacePaneItemFramePreference: Equatable {
+    let paneID: String
+    let itemID: String
+    let frame: CGRect
+}
+
+struct WorkspacePaneTabStripFramePreference: Equatable {
+    let paneID: String
+    let frame: CGRect
+}
+
+struct WorkspacePaneItemFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [WorkspacePaneItemFramePreference] = []
+
+    static func reduce(value: inout [WorkspacePaneItemFramePreference], nextValue: () -> [WorkspacePaneItemFramePreference]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+struct WorkspacePaneTabStripFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [WorkspacePaneTabStripFramePreference] = []
+
+    static func reduce(value: inout [WorkspacePaneTabStripFramePreference], nextValue: () -> [WorkspacePaneTabStripFramePreference]) {
+        value.append(contentsOf: nextValue())
     }
 }

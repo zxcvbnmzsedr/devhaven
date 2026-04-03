@@ -31,12 +31,175 @@ public enum WorkspaceSplitAxis: String, Codable, Equatable, Sendable {
     case vertical
 }
 
-public struct WorkspacePaneState: Identifiable, Equatable, Sendable {
-    public var id: String { request.paneId }
+public struct WorkspacePaneItemState: Identifiable, Equatable, Sendable {
     public var request: WorkspaceTerminalLaunchRequest
+    public var title: String
 
-    public init(request: WorkspaceTerminalLaunchRequest) {
+    public var id: String { request.surfaceId }
+
+    public init(
+        request: WorkspaceTerminalLaunchRequest,
+        title: String
+    ) {
         self.request = request
+        self.title = title
+    }
+
+    public func rebinding(
+        tabId: String? = nil,
+        paneId: String
+    ) -> WorkspacePaneItemState {
+        WorkspacePaneItemState(
+            request: request.rebinding(tabId: tabId, paneId: paneId),
+            title: title
+        )
+    }
+}
+
+public struct WorkspacePaneState: Identifiable, Equatable, Sendable {
+    public var paneId: String
+    public var items: [WorkspacePaneItemState]
+    public var selectedItemId: String
+
+    public var id: String { paneId }
+
+    public init(
+        paneId: String,
+        items: [WorkspacePaneItemState],
+        selectedItemId: String
+    ) {
+        self.paneId = paneId
+        self.items = items
+        self.selectedItemId = selectedItemId
+        normalizeSelectedItem()
+    }
+
+    public init(
+        request: WorkspaceTerminalLaunchRequest,
+        title: String = "终端"
+    ) {
+        let item = WorkspacePaneItemState(request: request, title: title)
+        self.init(
+            paneId: request.paneId,
+            items: [item],
+            selectedItemId: item.id
+        )
+    }
+
+    public var selectedItem: WorkspacePaneItemState? {
+        items.first(where: { $0.id == selectedItemId }) ?? items.last
+    }
+
+    public var request: WorkspaceTerminalLaunchRequest {
+        guard let selectedItem else {
+            preconditionFailure("Workspace pane 缺少 terminal item，无法解析当前 request")
+        }
+        return selectedItem.request
+    }
+
+    public var selectedTitle: String {
+        selectedItem?.title ?? "终端"
+    }
+
+    public var selectedIndex: Int? {
+        items.firstIndex(where: { $0.id == selectedItemId })
+    }
+
+    public var hasMultipleItems: Bool {
+        items.count > 1
+    }
+
+    public mutating func appendItem(_ item: WorkspacePaneItemState, select: Bool = true) {
+        items.append(item)
+        if select {
+            selectedItemId = item.id
+        }
+        normalizeSelectedItem()
+    }
+
+    public mutating func insertItem(
+        _ item: WorkspacePaneItemState,
+        at index: Int? = nil,
+        select: Bool = true
+    ) {
+        let resolvedIndex = min(max(index ?? items.count, 0), items.count)
+        items.insert(item, at: resolvedIndex)
+        if select {
+            selectedItemId = item.id
+        }
+        normalizeSelectedItem()
+    }
+
+    @discardableResult
+    public mutating func removeItem(id itemID: String) -> WorkspacePaneItemState? {
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+            return nil
+        }
+        let removed = items.remove(at: index)
+        if selectedItemId == itemID {
+            let fallbackIndex = min(index, max(items.count - 1, 0))
+            selectedItemId = items.indices.contains(fallbackIndex)
+                ? items[fallbackIndex].id
+                : ""
+        }
+        normalizeSelectedItem()
+        return removed
+    }
+
+    public mutating func selectItem(_ itemID: String) {
+        guard items.contains(where: { $0.id == itemID }) else {
+            return
+        }
+        selectedItemId = itemID
+    }
+
+    public mutating func moveItem(id itemID: String, by amount: Int) {
+        guard let currentIndex = items.firstIndex(where: { $0.id == itemID }) else {
+            return
+        }
+        let targetIndex = min(max(currentIndex + amount, 0), items.count - 1)
+        guard targetIndex != currentIndex else {
+            return
+        }
+        let item = items.remove(at: currentIndex)
+        items.insert(item, at: targetIndex)
+        selectedItemId = itemID
+        normalizeSelectedItem()
+    }
+
+    public mutating func closeOtherItems(keeping itemID: String) {
+        guard items.contains(where: { $0.id == itemID }) else {
+            return
+        }
+        items = items.filter { $0.id == itemID }
+        selectedItemId = itemID
+    }
+
+    public mutating func closeItemsToRight(of itemID: String) {
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+            return
+        }
+        items = Array(items.prefix(index + 1))
+        normalizeSelectedItem()
+    }
+
+    public mutating func updateItemTitle(id itemID: String, title: String) {
+        guard let index = items.firstIndex(where: { $0.id == itemID }) else {
+            return
+        }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        items[index].title = trimmed
+    }
+
+    private mutating func normalizeSelectedItem() {
+        if items.isEmpty {
+            selectedItemId = ""
+        } else if !items.contains(where: { $0.id == selectedItemId }) {
+            selectedItemId = items.last?.id ?? ""
+        }
     }
 }
 
@@ -188,6 +351,11 @@ public struct WorkspacePaneTree: Equatable, Sendable {
         return root.path(to: paneID)
     }
 
+    public func node(at path: Path) -> Node? {
+        guard let root else { return nil }
+        return root.node(at: path)
+    }
+
     @discardableResult
     public mutating func insertPane(
         _ pane: WorkspacePaneState,
@@ -234,6 +402,14 @@ public struct WorkspacePaneTree: Equatable, Sendable {
     public mutating func setSplitRatio(at path: Path, ratio: Double) {
         guard let root else { return }
         self.root = root.settingSplitRatio(at: path, ratio: min(max(ratio, 0.1), 0.9))
+    }
+
+    public func replacingPane(at path: Path, with pane: WorkspacePaneState) -> WorkspacePaneTree {
+        guard let root else { return self }
+        return WorkspacePaneTree(
+            root: root.replacingLeaf(at: path, with: pane),
+            zoomedPaneId: zoomedPaneId
+        )
     }
 
     public mutating func resizePane(
@@ -684,6 +860,50 @@ extension WorkspacePaneTree.Node {
         }
     }
 
+    var leafValue: WorkspacePaneState? {
+        guard case let .leaf(pane) = self else {
+            return nil
+        }
+        return pane
+    }
+
+    func replacingLeaf(
+        at path: WorkspacePaneTree.Path,
+        with pane: WorkspacePaneState
+    ) -> WorkspacePaneTree.Node {
+        guard !path.isEmpty else {
+            return .leaf(pane)
+        }
+        switch self {
+        case .leaf:
+            return self
+        case let .split(split):
+            var remaining = path.components
+            let first = remaining.removeFirst()
+            let remainingPath = WorkspacePaneTree.Path(components: remaining)
+            switch first {
+            case .left:
+                return .split(
+                    WorkspaceSplitState(
+                        direction: split.direction,
+                        ratio: split.ratio,
+                        left: split.left.replacingLeaf(at: remainingPath, with: pane),
+                        right: split.right
+                    )
+                )
+            case .right:
+                return .split(
+                    WorkspaceSplitState(
+                        direction: split.direction,
+                        ratio: split.ratio,
+                        left: split.left,
+                        right: split.right.replacingLeaf(at: remainingPath, with: pane)
+                    )
+                )
+            }
+        }
+    }
+
     public func leafFrames(in frame: CGRect) -> [WorkspacePaneTree.LeafFrame] {
         switch self {
         case let .leaf(pane):
@@ -893,6 +1113,10 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         return selectedTab.tree.find(paneID: selectedTab.focusedPaneId) ?? selectedTab.leaves.first
     }
 
+    public var selectedPaneItem: WorkspacePaneItemState? {
+        selectedPane?.selectedItem
+    }
+
     @discardableResult
     public mutating func createTab() -> WorkspaceTabState {
         let tabNumber = nextTabNumber
@@ -1020,6 +1244,340 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         return newPane
     }
 
+    @discardableResult
+    public mutating func createTerminalItem(inPane paneID: String?) -> WorkspacePaneItemState? {
+        guard let paneID else { return nil }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return nil
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue else {
+            return nil
+        }
+        let item = makePaneItem(for: tabs[tabIndex].id, inPane: paneID)
+        pane.appendItem(item)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+        return item
+    }
+
+    public mutating func selectPaneItem(paneID: String?, itemID: String?) {
+        guard let paneID, let itemID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue else {
+            return
+        }
+        guard pane.items.contains(where: { $0.id == itemID }) else {
+            return
+        }
+        pane.selectItem(itemID)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    public mutating func gotoPreviousPaneItem(inPane paneID: String?) {
+        guard let paneID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue,
+              !pane.items.isEmpty
+        else {
+            return
+        }
+        let currentIndex = pane.selectedIndex ?? 0
+        let previousIndex = (currentIndex - 1 + pane.items.count) % pane.items.count
+        pane.selectItem(pane.items[previousIndex].id)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    public mutating func gotoNextPaneItem(inPane paneID: String?) {
+        guard let paneID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue,
+              !pane.items.isEmpty
+        else {
+            return
+        }
+        let currentIndex = pane.selectedIndex ?? 0
+        let nextIndex = (currentIndex + 1) % pane.items.count
+        pane.selectItem(pane.items[nextIndex].id)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    public mutating func gotoLastPaneItem(inPane paneID: String?) {
+        guard let paneID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue,
+              let last = pane.items.last
+        else {
+            return
+        }
+        pane.selectItem(last.id)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    public mutating func gotoPaneItem(at index: Int, inPane paneID: String?) {
+        guard let paneID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue,
+              !pane.items.isEmpty
+        else {
+            return
+        }
+        let clampedIndex = min(max(index - 1, 0), pane.items.count - 1)
+        pane.selectItem(pane.items[clampedIndex].id)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    public mutating func movePaneItem(
+        inPane paneID: String?,
+        itemID: String?,
+        by amount: Int
+    ) {
+        guard let paneID, let itemID, amount != 0 else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue else {
+            return
+        }
+        pane.moveItem(id: itemID, by: amount)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    @discardableResult
+    public mutating func movePaneItem(
+        _ itemID: String?,
+        from sourcePaneID: String?,
+        to targetPaneID: String?,
+        at targetIndex: Int? = nil
+    ) -> WorkspacePaneItemState? {
+        guard let itemID, let sourcePaneID, let targetPaneID else {
+            return nil
+        }
+        guard let tabIndex = tabs.firstIndex(where: {
+            $0.tree.find(paneID: sourcePaneID) != nil && $0.tree.find(paneID: targetPaneID) != nil
+        }) else {
+            return nil
+        }
+
+        if sourcePaneID == targetPaneID {
+            guard let panePath = tabs[tabIndex].tree.path(to: sourcePaneID),
+                  var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue,
+                  let movingItem = pane.removeItem(id: itemID)
+            else {
+                return nil
+            }
+            pane.insertItem(movingItem, at: targetIndex)
+            tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+            tabs[tabIndex].focusedPaneId = sourcePaneID
+            selectedTabId = tabs[tabIndex].id
+            return movingItem
+        }
+
+        var tree = tabs[tabIndex].tree
+        guard let sourcePanePath = tree.path(to: sourcePaneID),
+              var sourcePane = tree.node(at: sourcePanePath)?.leafValue,
+              let movingItem = sourcePane.removeItem(id: itemID)
+        else {
+            return nil
+        }
+
+        if sourcePane.items.isEmpty {
+            guard tree.removePane(sourcePaneID) else {
+                return nil
+            }
+        } else {
+            tree = tree.replacingPane(at: sourcePanePath, with: sourcePane)
+        }
+
+        guard let targetPanePath = tree.path(to: targetPaneID),
+              var targetPane = tree.node(at: targetPanePath)?.leafValue
+        else {
+            return nil
+        }
+
+        let reboundItem = movingItem.rebinding(tabId: tabs[tabIndex].id, paneId: targetPaneID)
+        targetPane.insertItem(reboundItem, at: targetIndex)
+        tree = tree.replacingPane(at: targetPanePath, with: targetPane)
+
+        tabs[tabIndex].tree = tree
+        tabs[tabIndex].focusedPaneId = targetPaneID
+        selectedTabId = tabs[tabIndex].id
+        return reboundItem
+    }
+
+    @discardableResult
+    public mutating func splitPaneItem(
+        _ itemID: String?,
+        from sourcePaneID: String?,
+        beside anchorPaneID: String?,
+        direction: WorkspacePaneSplitDirection
+    ) -> WorkspacePaneState? {
+        guard let itemID, let sourcePaneID, let anchorPaneID else {
+            return nil
+        }
+        guard let tabIndex = tabs.firstIndex(where: {
+            $0.tree.find(paneID: sourcePaneID) != nil && $0.tree.find(paneID: anchorPaneID) != nil
+        }) else {
+            return nil
+        }
+
+        let tabID = tabs[tabIndex].id
+        let nextPaneSequence = nextPaneNumber
+        let newPaneID = "\(workspaceId)/pane:\(nextPaneSequence)"
+
+        var tree = tabs[tabIndex].tree
+        guard let sourcePanePath = tree.path(to: sourcePaneID),
+              var sourcePane = tree.node(at: sourcePanePath)?.leafValue,
+              let movingItem = sourcePane.removeItem(id: itemID)
+        else {
+            return nil
+        }
+
+        if sourcePane.items.isEmpty {
+            guard sourcePaneID != anchorPaneID else {
+                return nil
+            }
+            guard tree.removePane(sourcePaneID) else {
+                return nil
+            }
+        } else {
+            tree = tree.replacingPane(at: sourcePanePath, with: sourcePane)
+        }
+
+        let reboundItem = movingItem.rebinding(tabId: tabID, paneId: newPaneID)
+        let newPane = WorkspacePaneState(
+            paneId: newPaneID,
+            items: [reboundItem],
+            selectedItemId: reboundItem.id
+        )
+        guard tree.insertPane(newPane, at: anchorPaneID, direction: direction) else {
+            return nil
+        }
+
+        nextPaneNumber += 1
+        tabs[tabIndex].tree = tree
+        tabs[tabIndex].focusedPaneId = newPaneID
+        selectedTabId = tabID
+        return newPane
+    }
+
+    public mutating func movePane(
+        _ paneID: String?,
+        beside targetPaneID: String?,
+        direction: WorkspacePaneSplitDirection
+    ) {
+        guard let paneID, let targetPaneID, paneID != targetPaneID else {
+            return
+        }
+        guard let tabIndex = tabs.firstIndex(where: {
+            $0.tree.find(paneID: paneID) != nil && $0.tree.find(paneID: targetPaneID) != nil
+        }) else {
+            return
+        }
+        guard let movingPane = tabs[tabIndex].tree.find(paneID: paneID) else {
+            return
+        }
+
+        var tree = tabs[tabIndex].tree
+        guard tree.removePane(paneID) else {
+            return
+        }
+        guard tree.insertPane(movingPane, at: targetPaneID, direction: direction) else {
+            return
+        }
+
+        tabs[tabIndex].tree = tree
+        tabs[tabIndex].focusedPaneId = movingPane.id
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    public mutating func closeOtherPaneItems(
+        inPane paneID: String?,
+        keeping itemID: String?
+    ) {
+        guard let paneID, let itemID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue else {
+            return
+        }
+        pane.closeOtherItems(keeping: itemID)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    public mutating func closePaneItemsToRight(
+        inPane paneID: String?,
+        of itemID: String?
+    ) {
+        guard let paneID, let itemID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue else {
+            return
+        }
+        pane.closeItemsToRight(of: itemID)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
+    public mutating func closePaneItem(paneID: String?, itemID: String?) {
+        guard let paneID, let itemID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue else {
+            return
+        }
+        guard pane.items.contains(where: { $0.id == itemID }) else {
+            return
+        }
+        if pane.items.count <= 1 {
+            closePane(paneID)
+            return
+        }
+        _ = pane.removeItem(id: itemID)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+    }
+
     public mutating func focusPane(_ paneID: String?) {
         guard let paneID else { return }
         guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
@@ -1094,6 +1652,23 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         tabs[index].title = resolvedTitle
     }
 
+    public mutating func updatePaneItemTitle(
+        inPane paneID: String?,
+        itemID: String?,
+        title: String
+    ) {
+        guard let paneID, let itemID else { return }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue else {
+            return
+        }
+        pane.updateItemTitle(id: itemID, title: title)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+    }
+
     private var selectedTabIndex: Int? {
         guard let selectedTabId else {
             return tabs.isEmpty ? nil : 0
@@ -1104,15 +1679,38 @@ public struct WorkspaceSessionState: Equatable, Sendable {
     private mutating func makePane(for tabID: String) -> WorkspacePaneState {
         let paneNumber = nextPaneNumber
         nextPaneNumber += 1
+        let paneID = "\(workspaceId)/pane:\(paneNumber)"
+        let item = makePaneItem(for: tabID, inPane: paneID, sequenceNumber: paneNumber)
         return WorkspacePaneState(
-            request: WorkspaceTerminalLaunchRequest(
-                projectPath: projectPath,
-                workspaceId: workspaceId,
-                tabId: tabID,
-                paneId: "\(workspaceId)/pane:\(paneNumber)",
-                surfaceId: "\(workspaceId)/surface:\(paneNumber)",
-                terminalSessionId: "\(workspaceId)/session:\(paneNumber)"
-            )
+            paneId: paneID,
+            items: [item],
+            selectedItemId: item.id
+        )
+    }
+
+    private mutating func makePaneItem(
+        for tabID: String,
+        inPane paneID: String,
+        sequenceNumber: Int? = nil
+    ) -> WorkspacePaneItemState {
+        let itemNumber: Int
+        if let sequenceNumber {
+            itemNumber = sequenceNumber
+        } else {
+            itemNumber = nextPaneNumber
+            nextPaneNumber += 1
+        }
+        let request = WorkspaceTerminalLaunchRequest(
+            projectPath: projectPath,
+            workspaceId: workspaceId,
+            tabId: tabID,
+            paneId: paneID,
+            surfaceId: "\(workspaceId)/surface:\(itemNumber)",
+            terminalSessionId: "\(workspaceId)/session:\(itemNumber)"
+        )
+        return WorkspacePaneItemState(
+            request: request,
+            title: WorkspaceTabTitlePolicy.defaultTitle(for: itemNumber)
         )
     }
 
@@ -1204,24 +1802,31 @@ private extension WorkspacePaneTree {
     ) -> WorkspacePaneTree.Node {
         switch snapshot {
         case let .leaf(pane):
-            let restoreContext = WorkspaceTerminalRestoreContext(
-                workingDirectory: pane.restoredWorkingDirectory,
-                title: pane.restoredTitle,
-                snapshotText: pane.snapshotText,
-                agentSummary: pane.agentSummary
-            )
             return .leaf(
                 WorkspacePaneState(
-                    request: WorkspaceTerminalLaunchRequest(
-                        projectPath: projectPath,
-                        workspaceId: workspaceId,
-                        tabId: tabID,
-                        paneId: pane.paneId,
-                        surfaceId: pane.surfaceId,
-                        terminalSessionId: pane.terminalSessionId,
-                        workingDirectoryOverride: pane.restoredWorkingDirectory,
-                        restoreContext: restoreContext.isEmpty ? nil : restoreContext
-                    )
+                    paneId: pane.paneId,
+                    items: pane.items.map { item in
+                        let restoreContext = WorkspaceTerminalRestoreContext(
+                            workingDirectory: item.restoredWorkingDirectory,
+                            title: item.restoredTitle,
+                            snapshotText: item.snapshotText,
+                            agentSummary: item.agentSummary
+                        )
+                        return WorkspacePaneItemState(
+                            request: WorkspaceTerminalLaunchRequest(
+                                projectPath: projectPath,
+                                workspaceId: workspaceId,
+                                tabId: tabID,
+                                paneId: pane.paneId,
+                                surfaceId: item.surfaceId,
+                                terminalSessionId: item.terminalSessionId,
+                                workingDirectoryOverride: item.restoredWorkingDirectory,
+                                restoreContext: restoreContext.isEmpty ? nil : restoreContext
+                            ),
+                            title: item.restoredTitle ?? WorkspaceTabTitlePolicy.defaultTitle(for: 1)
+                        )
+                    },
+                    selectedItemId: pane.selectedItemId ?? pane.items.last?.surfaceId ?? pane.items.first?.surfaceId ?? ""
                 )
             )
         case let .split(split):
@@ -1254,13 +1859,18 @@ private extension WorkspacePaneTree.Node {
             return .leaf(
                 WorkspacePaneRestoreSnapshot(
                     paneId: pane.id,
-                    surfaceId: pane.request.surfaceId,
-                    terminalSessionId: pane.request.terminalSessionId,
-                    restoredWorkingDirectory: pane.request.restoreContext?.workingDirectory,
-                    restoredTitle: pane.request.restoreContext?.title,
-                    agentSummary: pane.request.restoreContext?.agentSummary,
-                    snapshotTextRef: nil,
-                    snapshotText: pane.request.restoreContext?.snapshotText
+                    selectedItemId: pane.selectedItemId,
+                    items: pane.items.map { item in
+                        WorkspacePaneItemRestoreSnapshot(
+                            surfaceId: item.request.surfaceId,
+                            terminalSessionId: item.request.terminalSessionId,
+                            restoredWorkingDirectory: item.request.restoreContext?.workingDirectory,
+                            restoredTitle: item.title,
+                            agentSummary: item.request.restoreContext?.agentSummary,
+                            snapshotTextRef: nil,
+                            snapshotText: item.request.restoreContext?.snapshotText
+                        )
+                    }
                 )
             )
         case let .split(split):

@@ -139,10 +139,14 @@ public final class WorkspaceRestoreStore: @unchecked Sendable {
         switch node {
         case let .leaf(pane):
             var pane = pane
-            if pane.snapshotText != nil {
-                pane.snapshotTextRef = .forPaneSnapshot(pane.paneId, generationID: generationID)
-            } else {
-                pane.snapshotTextRef = nil
+            pane.items = pane.items.enumerated().map { index, item in
+                var item = item
+                if item.snapshotText != nil {
+                    item.snapshotTextRef = .forPaneSnapshot("\(pane.paneId)|item:\(index)", generationID: generationID)
+                } else {
+                    item.snapshotTextRef = nil
+                }
+                return item
             }
             return .leaf(pane)
         case let .split(split):

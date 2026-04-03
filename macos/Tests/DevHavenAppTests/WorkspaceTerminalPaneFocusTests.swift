@@ -65,13 +65,18 @@ final class WorkspaceTerminalPaneFocusTests: XCTestCase {
         model: GhosttySurfaceHostModel,
         isFocused: Bool
     ) -> some View {
-        WorkspaceTerminalPaneView(
-            pane: WorkspacePaneState(request: makeRequest(paneID: paneID)),
+        let pane = makePaneState(paneID: paneID)
+        return WorkspaceTerminalPaneView(
+            pane: pane,
+            selectedItem: pane.selectedItem ?? pane.items[0],
             model: model,
             surfaceActivity: WorkspaceSurfaceActivity(isVisible: true, isFocused: isFocused),
             isFocused: isFocused,
             isZoomed: false,
             onFocusPane: { _ in },
+            onSelectItem: { _, _ in },
+            onCreateItem: { _ in },
+            onCloseItem: { _, _ in },
             onClosePane: { _ in },
             onSplitPane: { _, _ in },
             onFocusDirection: { _, _ in },
@@ -84,6 +89,18 @@ final class WorkspaceTerminalPaneFocusTests: XCTestCase {
             onCloseTabAction: { _ in false },
             onGotoTabAction: { _ in false },
             onMoveTabAction: { _ in false }
+        )
+    }
+
+    private func makePaneState(paneID: String) -> WorkspacePaneState {
+        let item = WorkspacePaneItemState(
+            request: makeRequest(paneID: paneID),
+            title: "终端"
+        )
+        return WorkspacePaneState(
+            paneId: paneID,
+            items: [item],
+            selectedItemId: item.id
         )
     }
 

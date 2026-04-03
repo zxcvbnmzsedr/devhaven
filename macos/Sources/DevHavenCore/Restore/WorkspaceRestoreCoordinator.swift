@@ -218,7 +218,11 @@ final class WorkspaceRestoreCoordinator {
         switch node {
         case let .leaf(pane):
             var pane = pane
-            pane.snapshotText = store.loadPaneText(for: pane.snapshotTextRef)
+            pane.items = pane.items.map { item in
+                var item = item
+                item.snapshotText = store.loadPaneText(for: item.snapshotTextRef)
+                return item
+            }
             return .leaf(pane)
         case let .split(split):
             return .split(
@@ -242,16 +246,35 @@ final class WorkspaceRestoreCoordinator {
         case let .leaf(pane):
             let currentContext = paneSnapshotProvider?(projectPath, pane.paneId)
             let previousPane = previousPaneMap[paneKey(projectPath: projectPath, paneID: pane.paneId)]
+            var items = pane.items
+            let selectedItemID = pane.selectedItemId ?? pane.selectedItem?.surfaceId
+            if let selectedItemID,
+               let selectedIndex = items.firstIndex(where: { $0.surfaceId == selectedItemID }) {
+                let previousSelectedItem = previousPane?.item(for: selectedItemID) ?? previousPane?.selectedItem
+                let currentItem = items[selectedIndex]
+                items[selectedIndex] = WorkspacePaneItemRestoreSnapshot(
+                    surfaceId: currentItem.surfaceId,
+                    terminalSessionId: currentItem.terminalSessionId,
+                    restoredWorkingDirectory: currentContext?.workingDirectory
+                        ?? currentItem.restoredWorkingDirectory
+                        ?? previousSelectedItem?.restoredWorkingDirectory,
+                    restoredTitle: currentContext?.title
+                        ?? currentItem.restoredTitle
+                        ?? previousSelectedItem?.restoredTitle,
+                    agentSummary: currentContext?.agentSummary
+                        ?? currentItem.agentSummary
+                        ?? previousSelectedItem?.agentSummary,
+                    snapshotTextRef: previousSelectedItem?.snapshotTextRef ?? currentItem.snapshotTextRef,
+                    snapshotText: currentContext?.snapshotText
+                        ?? currentItem.snapshotText
+                        ?? previousSelectedItem?.snapshotText
+                )
+            }
             return .leaf(
                 WorkspacePaneRestoreSnapshot(
                     paneId: pane.paneId,
-                    surfaceId: pane.surfaceId,
-                    terminalSessionId: pane.terminalSessionId,
-                    restoredWorkingDirectory: currentContext?.workingDirectory ?? previousPane?.restoredWorkingDirectory,
-                    restoredTitle: currentContext?.title ?? previousPane?.restoredTitle,
-                    agentSummary: currentContext?.agentSummary ?? previousPane?.agentSummary,
-                    snapshotTextRef: previousPane?.snapshotTextRef,
-                    snapshotText: currentContext?.snapshotText ?? previousPane?.snapshotText
+                    selectedItemId: selectedItemID,
+                    items: items
                 )
             )
         case let .split(split):

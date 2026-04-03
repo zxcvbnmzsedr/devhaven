@@ -4,13 +4,15 @@ import DevHavenCore
 
 @MainActor
 final class WorkspaceTerminalSessionStore: ObservableObject {
-    private var modelsByPaneID: [String: GhosttySurfaceHostModel] = [:]
+    private var modelsByItemID: [String: GhosttySurfaceHostModel] = [:]
+    private var paneIDByItemID: [String: String] = [:]
+    private var selectedItemIDByPaneID: [String: String] = [:]
     private var trackedCodexPaneIDs: Set<String> = []
 
     var onModelCreated: ((String, GhosttySurfaceHostModel) -> Void)?
 
     var modelCount: Int {
-        modelsByPaneID.count
+        modelsByItemID.count
     }
 
     func model(
@@ -26,12 +28,13 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
         onMoveTab: ((ghostty_action_move_tab_s) -> Bool)? = nil,
         onSplitAction: ((GhosttySplitAction) -> Bool)? = nil
     ) -> GhosttySurfaceHostModel {
-        if let existing = modelsByPaneID[pane.id] {
-            return existing
-        }
-
-        let model = GhosttySurfaceHostModel(
+        let item = pane.selectedItem ?? pane.items.last ?? WorkspacePaneItemState(
             request: pane.request,
+            title: pane.selectedTitle
+        )
+        return model(
+            for: item,
+            in: pane,
             onFocusChange: onFocusChange,
             onSurfaceExit: onSurfaceExit,
             onTabTitleChange: onTabTitleChange,
@@ -43,44 +46,108 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
             onMoveTab: onMoveTab,
             onSplitAction: onSplitAction
         )
-        model.setCodexDisplayTrackingEnabled(trackedCodexPaneIDs.contains(pane.id))
-        modelsByPaneID[pane.id] = model
+    }
+
+    func model(
+        for item: WorkspacePaneItemState,
+        in pane: WorkspacePaneState,
+        onFocusChange: ((Bool) -> Void)? = nil,
+        onSurfaceExit: (() -> Void)? = nil,
+        onTabTitleChange: ((String) -> Void)? = nil,
+        onNotificationEvent: ((String, String) -> Void)? = nil,
+        onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)? = nil,
+        onNewTab: (() -> Bool)? = nil,
+        onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)? = nil,
+        onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
+        onMoveTab: ((ghostty_action_move_tab_s) -> Bool)? = nil,
+        onSplitAction: ((GhosttySplitAction) -> Bool)? = nil
+    ) -> GhosttySurfaceHostModel {
+        paneIDByItemID[item.id] = pane.id
+        selectedItemIDByPaneID[pane.id] = pane.selectedItem?.id
+
+        if let existing = modelsByItemID[item.id] {
+            syncCodexTrackingForLoadedModels()
+            return existing
+        }
+
+        let model = GhosttySurfaceHostModel(
+            request: item.request,
+            onFocusChange: onFocusChange,
+            onSurfaceExit: onSurfaceExit,
+            onTabTitleChange: onTabTitleChange,
+            onNotificationEvent: onNotificationEvent,
+            onTaskStatusChange: onTaskStatusChange,
+            onNewTab: onNewTab,
+            onCloseTab: onCloseTab,
+            onGotoTab: onGotoTab,
+            onMoveTab: onMoveTab,
+            onSplitAction: onSplitAction
+        )
+        modelsByItemID[item.id] = model
+        model.setCodexDisplayTrackingEnabled(
+            trackedCodexPaneIDs.contains(pane.id) && pane.selectedItem?.id == item.id
+        )
         onModelCreated?(pane.id, model)
         return model
     }
 
     @discardableResult
     func warmSelectedPane(in controller: GhosttyWorkspaceController) -> GhosttySurfaceHostModel? {
-        guard let selectedPane = controller.selectedPane else {
+        guard let selectedPane = controller.selectedPane,
+              let selectedItem = selectedPane.selectedItem
+        else {
             return nil
         }
-        return model(for: selectedPane)
+        return model(for: selectedItem, in: selectedPane)
     }
 
     func modelIfLoaded(for paneID: String) -> GhosttySurfaceHostModel? {
-        modelsByPaneID[paneID]
+        guard let selectedItemID = selectedItemIDByPaneID[paneID] else {
+            return nil
+        }
+        return modelsByItemID[selectedItemID]
+    }
+
+    func syncSelectedItemIDs(_ selectedItemIDsByPaneID: [String: String]) {
+        self.selectedItemIDByPaneID = selectedItemIDsByPaneID
+        syncCodexTrackingForLoadedModels()
     }
 
     func syncCodexDisplayTracking(_ trackedPaneIDs: Set<String>) {
         trackedCodexPaneIDs = trackedPaneIDs
-        for (paneID, model) in modelsByPaneID {
-            model.setCodexDisplayTrackingEnabled(trackedPaneIDs.contains(paneID))
-        }
+        syncCodexTrackingForLoadedModels()
     }
 
-    func syncRetainedPaneIDs(_ paneIDs: Set<String>) {
-        let removedIDs = Set(modelsByPaneID.keys).subtracting(paneIDs)
-        for paneID in removedIDs {
-            modelsByPaneID[paneID]?.releaseSurface()
-            modelsByPaneID.removeValue(forKey: paneID)
+    func syncRetainedItemIDs(_ itemIDs: Set<String>) {
+        let removedIDs = Set(modelsByItemID.keys).subtracting(itemIDs)
+        for itemID in removedIDs {
+            modelsByItemID[itemID]?.releaseSurface()
+            modelsByItemID.removeValue(forKey: itemID)
+            paneIDByItemID.removeValue(forKey: itemID)
         }
+        let retainedPaneIDs = Set(paneIDByItemID.values)
+        selectedItemIDByPaneID = selectedItemIDByPaneID.filter { retainedPaneIDs.contains($0.key) }
     }
 
     func releaseAll() {
-        for model in modelsByPaneID.values {
+        for model in modelsByItemID.values {
             model.releaseSurface()
         }
-        modelsByPaneID.removeAll()
+        modelsByItemID.removeAll()
+        paneIDByItemID.removeAll()
+        selectedItemIDByPaneID.removeAll()
+    }
+
+    private func syncCodexTrackingForLoadedModels() {
+        for (itemID, model) in modelsByItemID {
+            guard let paneID = paneIDByItemID[itemID] else {
+                model.setCodexDisplayTrackingEnabled(false)
+                continue
+            }
+            model.setCodexDisplayTrackingEnabled(
+                trackedCodexPaneIDs.contains(paneID) && selectedItemIDByPaneID[paneID] == itemID
+            )
+        }
     }
 }
 
@@ -126,6 +193,14 @@ final class WorkspaceTerminalStoreRegistry: ObservableObject {
 
     func modelIfLoaded(for projectPath: String, paneID: String) -> GhosttySurfaceHostModel? {
         storesByProjectPath[projectPath]?.modelIfLoaded(for: paneID)
+    }
+
+    func syncSelectedItemIDs(
+        _ selectedItemIDsByPaneIDByProjectPath: [String: [String: String]]
+    ) {
+        for (projectPath, store) in storesByProjectPath {
+            store.syncSelectedItemIDs(selectedItemIDsByPaneIDByProjectPath[projectPath] ?? [:])
+        }
     }
 
     func syncCodexDisplayTracking(

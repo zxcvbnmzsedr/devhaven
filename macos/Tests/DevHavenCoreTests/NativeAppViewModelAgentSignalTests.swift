@@ -156,4 +156,57 @@ final class NativeAppViewModelAgentSignalTests: XCTestCase {
             ]
         )
     }
+
+    func testRecordAgentSignalRemapsMovedSurfaceToCurrentPane() throws {
+        let projectPath = "/tmp/project"
+        let controller = GhosttyWorkspaceController(projectPath: projectPath)
+        let sourcePaneID = try XCTUnwrap(controller.selectedPane?.id)
+        let movedItem = try XCTUnwrap(controller.createTerminalItem(inPane: sourcePaneID))
+        let targetPane = try XCTUnwrap(controller.splitFocusedPane(direction: .right))
+        _ = try XCTUnwrap(
+            controller.movePaneItem(
+                movedItem.id,
+                from: sourcePaneID,
+                to: targetPane.id,
+                at: 1
+            )
+        )
+
+        let viewModel = NativeAppViewModel()
+        viewModel.openWorkspaceSessions = [
+            OpenWorkspaceSessionState(
+                projectPath: projectPath,
+                controller: controller
+            )
+        ]
+        viewModel.activeWorkspaceProjectPath = projectPath
+
+        viewModel.recordAgentSignal(
+            WorkspaceAgentSessionSignal(
+                projectPath: projectPath,
+                workspaceId: controller.workspaceId,
+                tabId: try XCTUnwrap(controller.selectedTabId),
+                paneId: sourcePaneID,
+                surfaceId: movedItem.id,
+                terminalSessionId: movedItem.request.terminalSessionId,
+                agentKind: .codex,
+                sessionId: "session-1",
+                state: .running,
+                summary: "running",
+                updatedAt: Date(timeIntervalSinceReferenceDate: 42)
+            )
+        )
+
+        XCTAssertEqual(
+            viewModel.codexDisplayCandidates(),
+            [
+                WorkspaceAgentDisplayCandidate(
+                    projectPath: projectPath,
+                    paneID: targetPane.id,
+                    signalState: .running,
+                    signalUpdatedAt: Date(timeIntervalSinceReferenceDate: 42)
+                )
+            ]
+        )
+    }
 }

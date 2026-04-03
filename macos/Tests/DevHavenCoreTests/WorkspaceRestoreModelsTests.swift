@@ -33,13 +33,18 @@ final class WorkspaceRestoreModelsTests: XCTestCase {
                                 root: .leaf(
                                     WorkspacePaneRestoreSnapshot(
                                         paneId: "pane-1",
-                                        surfaceId: "surface-1",
-                                        terminalSessionId: "session-1",
-                                        restoredWorkingDirectory: "/tmp/project",
-                                        restoredTitle: "Shell",
-                                        agentSummary: nil,
-                                        snapshotTextRef: nil,
-                                        snapshotText: "echo hello"
+                                        selectedItemId: "surface-1",
+                                        items: [
+                                            WorkspacePaneItemRestoreSnapshot(
+                                                surfaceId: "surface-1",
+                                                terminalSessionId: "session-1",
+                                                restoredWorkingDirectory: "/tmp/project",
+                                                restoredTitle: "Shell",
+                                                agentSummary: nil,
+                                                snapshotTextRef: nil,
+                                                snapshotText: "echo hello"
+                                            )
+                                        ]
                                     )
                                 ),
                                 zoomedPaneId: nil

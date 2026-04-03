@@ -36,7 +36,7 @@ struct WorkspaceTabBarView: View {
 
             HStack(spacing: 8) {
                 toolbarButton(
-                    title: "新建标签页",
+                    title: "新建工作区标签",
                     systemImage: "plus",
                     action: onCreateTab
                 )

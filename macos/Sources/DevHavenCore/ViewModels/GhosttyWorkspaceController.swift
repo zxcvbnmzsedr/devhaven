@@ -40,6 +40,10 @@ public final class GhosttyWorkspaceController {
         projection.selectedPane
     }
 
+    public var selectedPaneItem: WorkspacePaneItemState? {
+        projection.selectedPaneItem
+    }
+
     public var tabCount: Int {
         projection.tabs.count
     }
@@ -121,6 +125,97 @@ public final class GhosttyWorkspaceController {
         return pane
     }
 
+    @discardableResult
+    public func createTerminalItem(inPane paneID: String?) -> WorkspacePaneItemState? {
+        let item = projection.createTerminalItem(inPane: paneID)
+        if item != nil {
+            onChange?()
+        }
+        return item
+    }
+
+    public func selectPaneItem(inPane paneID: String?, itemID: String?) {
+        projection.selectPaneItem(paneID: paneID, itemID: itemID)
+        onChange?()
+    }
+
+    public func gotoPreviousPaneItem(inPane paneID: String?) {
+        projection.gotoPreviousPaneItem(inPane: paneID)
+        onChange?()
+    }
+
+    public func gotoNextPaneItem(inPane paneID: String?) {
+        projection.gotoNextPaneItem(inPane: paneID)
+        onChange?()
+    }
+
+    public func gotoLastPaneItem(inPane paneID: String?) {
+        projection.gotoLastPaneItem(inPane: paneID)
+        onChange?()
+    }
+
+    public func gotoPaneItem(at index: Int, inPane paneID: String?) {
+        projection.gotoPaneItem(at: index, inPane: paneID)
+        onChange?()
+    }
+
+    public func movePaneItem(inPane paneID: String?, itemID: String?, by amount: Int) {
+        projection.movePaneItem(inPane: paneID, itemID: itemID, by: amount)
+        onChange?()
+    }
+
+    @discardableResult
+    public func movePaneItem(
+        _ itemID: String?,
+        from sourcePaneID: String?,
+        to targetPaneID: String?,
+        at targetIndex: Int? = nil
+    ) -> WorkspacePaneItemState? {
+        let item = projection.movePaneItem(itemID, from: sourcePaneID, to: targetPaneID, at: targetIndex)
+        if item != nil {
+            onChange?()
+        }
+        return item
+    }
+
+    @discardableResult
+    public func splitPaneItem(
+        _ itemID: String?,
+        from sourcePaneID: String?,
+        beside anchorPaneID: String?,
+        direction: WorkspacePaneSplitDirection
+    ) -> WorkspacePaneState? {
+        let pane = projection.splitPaneItem(itemID, from: sourcePaneID, beside: anchorPaneID, direction: direction)
+        if pane != nil {
+            onChange?()
+        }
+        return pane
+    }
+
+    public func movePane(
+        _ paneID: String?,
+        beside targetPaneID: String?,
+        direction: WorkspacePaneSplitDirection
+    ) {
+        projection.movePane(paneID, beside: targetPaneID, direction: direction)
+        onChange?()
+    }
+
+    public func closeOtherPaneItems(inPane paneID: String?, keeping itemID: String?) {
+        projection.closeOtherPaneItems(inPane: paneID, keeping: itemID)
+        onChange?()
+    }
+
+    public func closePaneItemsToRight(inPane paneID: String?, of itemID: String?) {
+        projection.closePaneItemsToRight(inPane: paneID, of: itemID)
+        onChange?()
+    }
+
+    public func closePaneItem(inPane paneID: String?, itemID: String?) {
+        projection.closePaneItem(paneID: paneID, itemID: itemID)
+        onChange?()
+    }
+
     public func focusPane(_ paneID: String?) {
         projection.focusPane(paneID)
         onChange?()
@@ -176,6 +271,11 @@ public final class GhosttyWorkspaceController {
         guard previousTitle != nextTitle else {
             return
         }
+        onChange?()
+    }
+
+    public func updatePaneItemTitle(inPane paneID: String?, itemID: String?, title: String) {
+        projection.updatePaneItemTitle(inPane: paneID, itemID: itemID, title: title)
         onChange?()
     }
 

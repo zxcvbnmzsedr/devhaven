@@ -59,7 +59,7 @@ struct WorkspaceShellView: View {
             .onChange(of: toolWindowSyncToken) { _, _ in
                 viewModel.syncActiveWorkspaceToolWindowContext()
             }
-            .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
+            .onChange(of: viewModel.activeWorkspaceLaunchRequest?.surfaceId) { _, _ in
                 syncTerminalCommandRouter()
                 warmActiveWorkspace()
             }
@@ -349,11 +349,15 @@ struct WorkspaceShellView: View {
             guard viewModel.workspaceFocusedArea == .terminal,
                   let activeProjectPath = viewModel.activeWorkspaceProjectPath,
                   let controller = viewModel.activeWorkspaceController,
-                  let selectedPane = controller.selectedPane
+                  let selectedPane = controller.selectedPane,
+                  let selectedItem = selectedPane.selectedItem
             else {
                 return nil
             }
-            return terminalStoreRegistry.store(for: activeProjectPath).model(for: selectedPane)
+            return terminalStoreRegistry.store(for: activeProjectPath).model(
+                for: selectedItem,
+                in: selectedPane
+            )
         }
     }
 
@@ -394,7 +398,7 @@ private struct WorkspaceCodexPresentationCoordinatorBridge: View {
             .onChange(of: viewModel.codexDisplayCandidatesRevision) { _, _ in
                 syncCoordinator()
             }
-            .onChange(of: viewModel.activeWorkspaceLaunchRequest?.paneId) { _, _ in
+            .onChange(of: viewModel.activeWorkspaceLaunchRequest?.surfaceId) { _, _ in
                 syncCoordinator()
             }
     }

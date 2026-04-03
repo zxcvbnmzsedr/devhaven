@@ -116,13 +116,18 @@ final class WorkspaceRestoreCoordinatorTests: XCTestCase {
                                 root: .leaf(
                                     WorkspacePaneRestoreSnapshot(
                                         paneId: "pane-1",
-                                        surfaceId: "surface-1",
-                                        terminalSessionId: "terminal-1",
-                                        restoredWorkingDirectory: projectPath,
-                                        restoredTitle: "Shell",
-                                        agentSummary: nil,
-                                        snapshotTextRef: nil,
-                                        snapshotText: snapshotText
+                                        selectedItemId: "surface-1",
+                                        items: [
+                                            WorkspacePaneItemRestoreSnapshot(
+                                                surfaceId: "surface-1",
+                                                terminalSessionId: "terminal-1",
+                                                restoredWorkingDirectory: projectPath,
+                                                restoredTitle: "Shell",
+                                                agentSummary: nil,
+                                                snapshotTextRef: nil,
+                                                snapshotText: snapshotText
+                                            )
+                                        ]
                                     )
                                 ),
                                 zoomedPaneId: nil

@@ -73,6 +73,23 @@ public struct WorkspaceTerminalLaunchRequest: Equatable, Sendable {
             "DEVHAVEN_TERMINAL_RUNTIME": terminalRuntime,
         ]
     }
+
+    public func rebinding(
+        tabId: String? = nil,
+        paneId: String
+    ) -> WorkspaceTerminalLaunchRequest {
+        WorkspaceTerminalLaunchRequest(
+            projectPath: projectPath,
+            workspaceId: workspaceId,
+            tabId: tabId ?? self.tabId,
+            paneId: paneId,
+            surfaceId: surfaceId,
+            terminalSessionId: terminalSessionId,
+            terminalRuntime: terminalRuntime,
+            workingDirectoryOverride: workingDirectoryOverride,
+            restoreContext: restoreContext
+        )
+    }
 }
 
 private extension String {

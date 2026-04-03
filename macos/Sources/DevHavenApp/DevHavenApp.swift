@@ -49,6 +49,11 @@ struct DevHavenApp: App {
         .defaultSize(width: 1480, height: 920)
         .commands {
             CommandGroup(replacing: .newItem) {
+                Button("新建工作区标签") {
+                    _ = viewModel.createWorkspaceTerminalTab()
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(viewModel.activeWorkspaceController == nil)
             }
 
             CommandGroup(replacing: .appTermination) {

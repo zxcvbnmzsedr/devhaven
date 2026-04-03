@@ -948,14 +948,15 @@ public final class NativeAppViewModel {
         guard openWorkspaceProjectPaths.contains(signal.projectPath) else {
             return
         }
+        let normalizedSignal = normalizedAgentSignal(signal)
         var attention = attentionStateByProjectPath[signal.projectPath] ?? WorkspaceAttentionState()
         let previousAttention = attention
-        applyAgentSignal(signal, to: &attention)
+        applyAgentSignal(normalizedSignal, to: &attention)
         guard attention != previousAttention else {
             return
         }
         invalidateAppliedAgentSignalCache()
-        attentionStateByProjectPath[signal.projectPath] = attention
+        attentionStateByProjectPath[normalizedSignal.projectPath] = attention
     }
 
     public func clearAgentSignal(projectPath: String, paneID: String) {
@@ -1092,6 +1093,18 @@ public final class NativeAppViewModel {
 
     public var activeWorkspaceHasSelectedPane: Bool {
         activeWorkspaceSession?.controller.selectedPane != nil
+    }
+
+    @discardableResult
+    public func createWorkspaceTerminalTab(in projectPath: String? = nil) -> WorkspaceTabState? {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let controller = workspaceController(for: resolvedProjectPath)
+        else {
+            return nil
+        }
+        let tab = controller.createTab()
+        selectWorkspacePresentedTab(.terminal(tab.id), in: resolvedProjectPath)
+        return tab
     }
 
     public var activeWorkspaceRootProject: Project? {
@@ -6986,9 +6999,10 @@ public final class NativeAppViewModel {
     }
 
     private func applyAgentSignalSnapshots(_ snapshots: [String: WorkspaceAgentSessionSignal]) {
+        let normalizedSnapshots = normalizedAgentSignalSnapshots(snapshots)
         let openPaths = Set(openWorkspaceProjectPaths)
         guard lastAppliedAgentSignalProjectPaths != openPaths ||
-                lastAppliedAgentSignalSnapshotsByTerminalSessionID != snapshots
+                lastAppliedAgentSignalSnapshotsByTerminalSessionID != normalizedSnapshots
         else {
             return
         }
@@ -7012,7 +7026,7 @@ public final class NativeAppViewModel {
             nextAttentionStateByProjectPath[previousSignal.projectPath] = attention
         }
 
-        for (terminalSessionID, signal) in snapshots where openPaths.contains(signal.projectPath) {
+        for (terminalSessionID, signal) in normalizedSnapshots where openPaths.contains(signal.projectPath) {
             if previousSnapshots[terminalSessionID] == signal {
                 continue
             }
@@ -7025,7 +7039,7 @@ public final class NativeAppViewModel {
             attentionStateByProjectPath = nextAttentionStateByProjectPath
         }
         lastAppliedAgentSignalProjectPaths = openPaths
-        lastAppliedAgentSignalSnapshotsByTerminalSessionID = snapshots
+        lastAppliedAgentSignalSnapshotsByTerminalSessionID = normalizedSnapshots
         pruneWorkspaceAgentDisplayOverrides()
     }
 
@@ -7107,6 +7121,45 @@ public final class NativeAppViewModel {
             updatedAt: signal.updatedAt,
             for: signal.paneId
         )
+    }
+
+    private func normalizedAgentSignalSnapshots(
+        _ snapshots: [String: WorkspaceAgentSessionSignal]
+    ) -> [String: WorkspaceAgentSessionSignal] {
+        snapshots.reduce(into: [:]) { partialResult, entry in
+            partialResult[entry.key] = normalizedAgentSignal(entry.value)
+        }
+    }
+
+    private func normalizedAgentSignal(
+        _ signal: WorkspaceAgentSessionSignal
+    ) -> WorkspaceAgentSessionSignal {
+        guard let resolvedPaneID = currentPaneID(for: signal),
+              resolvedPaneID != signal.paneId
+        else {
+            return signal
+        }
+        var normalized = signal
+        normalized.paneId = resolvedPaneID
+        return normalized
+    }
+
+    private func currentPaneID(
+        for signal: WorkspaceAgentSessionSignal
+    ) -> String? {
+        guard let controller = workspaceController(for: signal.projectPath) else {
+            return nil
+        }
+        for tab in controller.tabs {
+            for pane in tab.leaves {
+                if pane.items.contains(where: {
+                    $0.id == signal.surfaceId || $0.request.terminalSessionId == signal.terminalSessionId
+                }) {
+                    return pane.id
+                }
+            }
+        }
+        return nil
     }
 
     private func resolvedWorkspaceRunConfigurations(for projectPath: String) -> [WorkspaceRunConfiguration] {

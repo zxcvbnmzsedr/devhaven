@@ -46,8 +46,7 @@ struct WorkspaceHostView: View {
                         viewModel.closeWorkspaceEditorTabsToRight(of: tabID, in: project.path)
                     },
                     onCreateTab: {
-                        let tab = workspace.createTab()
-                        viewModel.selectWorkspacePresentedTab(.terminal(tab.id), in: project.path)
+                        _ = viewModel.createWorkspaceTerminalTab(in: project.path)
                     },
                     onSplitHorizontally: {
                         if case .editor = selectedPresentedTab {
@@ -123,14 +122,18 @@ struct WorkspaceHostView: View {
             .frame(width: 0, height: 0)
         }
         .onAppear {
-            terminalSessionStore.syncRetainedPaneIDs(retainedPaneIDs)
+            terminalSessionStore.syncSelectedItemIDs(selectedItemIDsByPane)
+            terminalSessionStore.syncRetainedItemIDs(retainedItemIDs)
             WorkspaceLaunchDiagnostics.shared.recordHostMounted(
                 workspace: workspace.sessionState,
                 isActive: project.path == viewModel.activeWorkspaceProjectPath
             )
         }
-        .onChange(of: retainedPaneIDs) { _, paneIDs in
-            terminalSessionStore.syncRetainedPaneIDs(paneIDs)
+        .onChange(of: selectedItemIDsByPane) { _, selectedItemIDs in
+            terminalSessionStore.syncSelectedItemIDs(selectedItemIDs)
+        }
+        .onChange(of: retainedItemIDs) { _, itemIDs in
+            terminalSessionStore.syncRetainedItemIDs(itemIDs)
         }
     }
 
@@ -273,8 +276,23 @@ struct WorkspaceHostView: View {
         .clipShape(.rect(cornerRadius: 10))
     }
 
-    private var retainedPaneIDs: Set<String> {
-        Set(workspace.tabs.flatMap(\.leaves).map(\.id))
+    private var retainedItemIDs: Set<String> {
+        Set(
+            workspace.tabs
+                .flatMap(\.leaves)
+                .flatMap(\.items)
+                .map(\.id)
+        )
+    }
+
+    private var selectedItemIDsByPane: [String: String] {
+        Dictionary(
+            uniqueKeysWithValues: workspace.tabs
+                .flatMap(\.leaves)
+                .compactMap { pane in
+                    pane.selectedItem.map { (pane.id, $0.id) }
+                }
+        )
     }
 
     private var pendingEditorCloseRequestBinding: Binding<WorkspaceEditorCloseRequest?> {
@@ -370,9 +388,25 @@ struct WorkspaceHostView: View {
             WorkspaceSplitTreeView(
                 tab: selectedTab,
                 isTabSelected: isSelectedTab,
-                surfaceModelForPane: surfaceModel,
-                surfaceActivityForPane: surfaceActivity,
+                surfaceModelForPaneItem: { pane, item in
+                    surfaceModel(for: pane, item: item)
+                },
+                surfaceActivityForPaneItem: { pane, item in
+                    surfaceActivity(for: pane, item: item)
+                },
                 onFocusPane: { workspace.focusPane($0) },
+                onSelectPaneItem: { paneID, itemID in
+                    workspace.focusPane(paneID)
+                    workspace.selectPaneItem(inPane: paneID, itemID: itemID)
+                },
+                onCreatePaneItem: { paneID in
+                    workspace.focusPane(paneID)
+                    _ = workspace.createTerminalItem(inPane: paneID)
+                },
+                onClosePaneItem: { paneID, itemID in
+                    workspace.focusPane(paneID)
+                    workspace.closePaneItem(inPane: paneID, itemID: itemID)
+                },
                 onClosePane: { workspace.closePane($0) },
                 onSplitPane: { paneID, direction in
                     workspace.focusPane(paneID)
@@ -410,8 +444,29 @@ struct WorkspaceHostView: View {
                 onMoveTabAction: { move in
                     handleMoveTab(move, tabID: selectedTab.id)
                 },
+                onMovePaneItem: { sourcePaneID, itemID, targetPaneID, targetIndex in
+                    workspace.focusPane(sourcePaneID)
+                    _ = workspace.movePaneItem(
+                        itemID,
+                        from: sourcePaneID,
+                        to: targetPaneID,
+                        at: targetIndex
+                    )
+                },
+                onSplitPaneItem: { sourcePaneID, itemID, targetPaneID, direction in
+                    workspace.focusPane(sourcePaneID)
+                    _ = workspace.splitPaneItem(
+                        itemID,
+                        from: sourcePaneID,
+                        beside: targetPaneID,
+                        direction: direction
+                    )
+                },
                 onSetSplitRatio: { path, ratio in
                     workspace.setSelectedTabSplitRatio(at: path, ratio: ratio)
+                },
+                onMovePane: { sourcePaneID, targetPaneID, direction in
+                    workspace.movePane(sourcePaneID, beside: targetPaneID, direction: direction)
                 }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -440,25 +495,46 @@ struct WorkspaceHostView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func surfaceModel(for pane: WorkspacePaneState) -> GhosttySurfaceHostModel {
-        terminalSessionStore.model(
-            for: pane,
+    private func surfaceModel(
+        for pane: WorkspacePaneState,
+        item: WorkspacePaneItemState
+    ) -> GhosttySurfaceHostModel {
+        let itemID = item.id
+        return terminalSessionStore.model(
+            for: item,
+            in: pane,
             onFocusChange: { focused in
                 guard focused else { return }
-                workspace.focusPane(pane.id)
-                viewModel.markWorkspaceNotificationsRead(projectPath: pane.request.projectPath, paneID: pane.id)
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return
+                }
+                workspace.focusPane(context.pane.id)
+                workspace.selectPaneItem(inPane: context.pane.id, itemID: context.item.id)
+                viewModel.markWorkspaceNotificationsRead(
+                    projectPath: context.item.request.projectPath,
+                    paneID: context.pane.id
+                )
             },
             onSurfaceExit: {
-                workspace.closePane(pane.id)
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return
+                }
+                workspace.closePaneItem(inPane: context.pane.id, itemID: context.item.id)
             },
             onTabTitleChange: { title in
-                workspace.updateTitle(for: pane.request.tabId, title: title)
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return
+                }
+                workspace.updatePaneItemTitle(inPane: context.pane.id, itemID: context.item.id, title: title)
             },
             onNotificationEvent: { title, body in
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return
+                }
                 viewModel.recordWorkspaceNotification(
-                    projectPath: pane.request.projectPath,
-                    tabID: pane.request.tabId,
-                    paneID: pane.id,
+                    projectPath: context.item.request.projectPath,
+                    tabID: context.item.request.tabId,
+                    paneID: context.pane.id,
                     title: title,
                     body: body
                 )
@@ -469,41 +545,79 @@ struct WorkspaceHostView: View {
                 )
             },
             onTaskStatusChange: { status in
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return
+                }
                 viewModel.updateWorkspaceTaskStatus(
-                    projectPath: pane.request.projectPath,
-                    paneID: pane.id,
+                    projectPath: context.item.request.projectPath,
+                    paneID: context.pane.id,
                     status: status
                 )
             },
             onNewTab: {
-                _ = workspace.createTab()
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return false
+                }
+                workspace.focusPane(context.pane.id)
+                if let newItem = workspace.createTerminalItem(inPane: context.pane.id),
+                   let updatedPane = workspace.sessionState.selectedPane {
+                    _ = self.surfaceModel(for: updatedPane, item: newItem)
+                }
                 return true
             },
             onCloseTab: { mode in
-                self.handleCloseTab(mode, tabID: pane.request.tabId)
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return false
+                }
+                return self.handlePaneItemCloseTab(mode, paneID: context.pane.id, itemID: context.item.id)
             },
             onGotoTab: { target in
-                self.handleGotoTab(target)
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return false
+                }
+                return self.handlePaneItemGotoTab(target, paneID: context.pane.id)
             },
             onMoveTab: { move in
-                self.handleMoveTab(move, tabID: pane.request.tabId)
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return false
+                }
+                return self.handlePaneItemMoveTab(move, paneID: context.pane.id, itemID: context.item.id)
             },
             onSplitAction: { action in
-                workspace.focusPane(pane.id)
-                return self.handleSplitAction(action, paneID: pane.id)
+                guard let context = self.currentPaneItemContext(for: itemID) else {
+                    return false
+                }
+                workspace.focusPane(context.pane.id)
+                return self.handleSplitAction(action, paneID: context.pane.id)
             }
         )
     }
 
-    private func surfaceActivity(for pane: WorkspacePaneState) -> WorkspaceSurfaceActivity {
+    private func surfaceActivity(
+        for pane: WorkspacePaneState,
+        item: WorkspacePaneItemState
+    ) -> WorkspaceSurfaceActivity {
         WorkspaceSurfaceActivityPolicy.activity(
             isWorkspaceVisible: isWorkspaceVisible,
-            isSelectedTab: pane.request.tabId == workspace.selectedTabId,
+            isSelectedTab: item.request.tabId == workspace.selectedTabId,
             windowIsVisible: windowActivity.isVisible,
             windowIsKey: windowActivity.isKeyWindow,
-            focusedPaneID: workspace.tabs.first(where: { $0.id == pane.request.tabId })?.focusedPaneId,
+            focusedPaneID: workspace.tabs.first(where: { $0.id == item.request.tabId })?.focusedPaneId,
             paneID: pane.id
         )
+    }
+
+    private func currentPaneItemContext(
+        for itemID: String
+    ) -> (pane: WorkspacePaneState, item: WorkspacePaneItemState)? {
+        for tab in workspace.tabs {
+            for pane in tab.leaves {
+                if let item = pane.items.first(where: { $0.id == itemID }) {
+                    return (pane, item)
+                }
+            }
+        }
+        return nil
     }
 
     private var isWorkspaceVisible: Bool {
@@ -654,6 +768,64 @@ struct WorkspaceHostView: View {
             return false
         }
         workspace.moveTab(id: tabID, by: amount)
+        return true
+    }
+
+    private func handlePaneItemCloseTab(
+        _ mode: ghostty_action_close_tab_mode_e,
+        paneID: String,
+        itemID: String
+    ) -> Bool {
+        switch mode {
+        case GHOSTTY_ACTION_CLOSE_TAB_MODE_THIS:
+            workspace.closePaneItem(inPane: paneID, itemID: itemID)
+            return true
+        case GHOSTTY_ACTION_CLOSE_TAB_MODE_OTHER:
+            workspace.closeOtherPaneItems(inPane: paneID, keeping: itemID)
+            return true
+        case GHOSTTY_ACTION_CLOSE_TAB_MODE_RIGHT:
+            workspace.closePaneItemsToRight(inPane: paneID, of: itemID)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func handlePaneItemGotoTab(
+        _ target: ghostty_action_goto_tab_e,
+        paneID: String
+    ) -> Bool {
+        let raw = Int(target.rawValue)
+        if raw > 0 {
+            workspace.gotoPaneItem(at: raw, inPane: paneID)
+            return true
+        }
+
+        switch raw {
+        case Int(GHOSTTY_GOTO_TAB_PREVIOUS.rawValue):
+            workspace.gotoPreviousPaneItem(inPane: paneID)
+            return true
+        case Int(GHOSTTY_GOTO_TAB_NEXT.rawValue):
+            workspace.gotoNextPaneItem(inPane: paneID)
+            return true
+        case Int(GHOSTTY_GOTO_TAB_LAST.rawValue):
+            workspace.gotoLastPaneItem(inPane: paneID)
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func handlePaneItemMoveTab(
+        _ move: ghostty_action_move_tab_s,
+        paneID: String,
+        itemID: String
+    ) -> Bool {
+        let amount = Int(move.amount)
+        guard amount != 0 else {
+            return false
+        }
+        workspace.movePaneItem(inPane: paneID, itemID: itemID, by: amount)
         return true
     }
 }

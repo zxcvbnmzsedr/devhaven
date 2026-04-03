@@ -8,7 +8,8 @@ final class WorkspaceTerminalSessionStoreTests: XCTestCase {
         let store = WorkspaceTerminalSessionStore()
         store.syncCodexDisplayTracking(["pane-1"])
 
-        let model = store.model(for: makePaneState(projectPath: "/tmp/project", paneID: "pane-1"))
+        let pane = makePaneState(projectPath: "/tmp/project", paneID: "pane-1")
+        let model = store.model(for: pane.selectedItem ?? pane.items[0], in: pane)
         model.updateCodexDisplaySnapshot(withVisibleText: "Codex output", now: Date(timeIntervalSinceReferenceDate: 100))
 
         XCTAssertEqual(model.codexDisplaySnapshot()?.recentTextWindow, "Codex output")
@@ -27,14 +28,15 @@ final class WorkspaceTerminalSessionStoreTests: XCTestCase {
         let projectPath = "/tmp/project"
         let paneID = "pane-1"
         let store = registry.store(for: projectPath)
-        _ = store.model(for: makePaneState(projectPath: projectPath, paneID: paneID))
+        let pane = makePaneState(projectPath: projectPath, paneID: paneID)
+        _ = store.model(for: pane.selectedItem ?? pane.items[0], in: pane)
 
         XCTAssertEqual(observedProjectPath, projectPath)
         XCTAssertEqual(observedPaneID, paneID)
     }
 
     private func makePaneState(projectPath: String, paneID: String) -> WorkspacePaneState {
-        WorkspacePaneState(
+        let item = WorkspacePaneItemState(
             request: WorkspaceTerminalLaunchRequest(
                 projectPath: projectPath,
                 workspaceId: "workspace",
@@ -42,7 +44,13 @@ final class WorkspaceTerminalSessionStoreTests: XCTestCase {
                 paneId: paneID,
                 surfaceId: "surface-\(paneID)",
                 terminalSessionId: "session-\(paneID)"
-            )
+            ),
+            title: "终端"
+        )
+        return WorkspacePaneState(
+            paneId: paneID,
+            items: [item],
+            selectedItemId: item.id
         )
     }
 }
