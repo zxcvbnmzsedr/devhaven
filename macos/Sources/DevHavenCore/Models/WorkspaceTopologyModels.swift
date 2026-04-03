@@ -31,18 +31,29 @@ public enum WorkspaceSplitAxis: String, Codable, Equatable, Sendable {
     case vertical
 }
 
+public enum WorkspacePaneItemKind: String, Codable, Equatable, Sendable {
+    case terminal
+    case browser
+}
+
 public struct WorkspacePaneItemState: Identifiable, Equatable, Sendable {
     public var request: WorkspaceTerminalLaunchRequest
     public var title: String
+    public var kind: WorkspacePaneItemKind
+    public var browserState: WorkspaceBrowserState?
 
     public var id: String { request.surfaceId }
 
     public init(
         request: WorkspaceTerminalLaunchRequest,
-        title: String
+        title: String,
+        kind: WorkspacePaneItemKind = .terminal,
+        browserState: WorkspaceBrowserState? = nil
     ) {
         self.request = request
         self.title = title
+        self.kind = kind
+        self.browserState = browserState
     }
 
     public func rebinding(
@@ -51,8 +62,18 @@ public struct WorkspacePaneItemState: Identifiable, Equatable, Sendable {
     ) -> WorkspacePaneItemState {
         WorkspacePaneItemState(
             request: request.rebinding(tabId: tabId, paneId: paneId),
-            title: title
+            title: title,
+            kind: kind,
+            browserState: browserState?.rebinding(tabId: tabId, paneId: paneId)
         )
+    }
+
+    public var isTerminal: Bool {
+        kind == .terminal
+    }
+
+    public var isBrowser: Bool {
+        kind == .browser
     }
 }
 
@@ -95,6 +116,14 @@ public struct WorkspacePaneState: Identifiable, Equatable, Sendable {
             preconditionFailure("Workspace pane 缺少 terminal item，无法解析当前 request")
         }
         return selectedItem.request
+    }
+
+    public var selectedTerminalRequest: WorkspaceTerminalLaunchRequest? {
+        selectedItem?.isTerminal == true ? selectedItem?.request : nil
+    }
+
+    public var selectedBrowserState: WorkspaceBrowserState? {
+        selectedItem?.isBrowser == true ? selectedItem?.browserState : nil
     }
 
     public var selectedTitle: String {
@@ -192,6 +221,42 @@ public struct WorkspacePaneState: Identifiable, Equatable, Sendable {
             return
         }
         items[index].title = trimmed
+        if items[index].isBrowser {
+            items[index].browserState = items[index].browserState?.updating(title: trimmed)
+        }
+    }
+
+    @discardableResult
+    public mutating func updateBrowserItemState(
+        id itemID: String,
+        title: String? = nil,
+        urlString: String? = nil,
+        isLoading: Bool? = nil
+    ) -> WorkspaceBrowserState? {
+        guard let index = items.firstIndex(where: { $0.id == itemID }),
+              items[index].isBrowser
+        else {
+            return nil
+        }
+        let currentState = items[index].browserState
+            ?? WorkspaceBrowserState(
+                surfaceId: items[index].id,
+                projectPath: items[index].request.projectPath,
+                tabId: items[index].request.tabId,
+                paneId: items[index].request.paneId,
+                title: items[index].title
+            )
+        let nextState = currentState.updating(
+            title: title,
+            urlString: urlString,
+            isLoading: isLoading
+        )
+        items[index].browserState = nextState
+        let trimmedTitle = nextState.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty {
+            items[index].title = trimmedTitle
+        }
+        return nextState
     }
 
     private mutating func normalizeSelectedItem() {
@@ -1262,6 +1327,31 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         return item
     }
 
+    @discardableResult
+    public mutating func createBrowserItem(
+        inPane paneID: String?,
+        urlString: String? = nil
+    ) -> WorkspacePaneItemState? {
+        guard let paneID else { return nil }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return nil
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue else {
+            return nil
+        }
+        let item = makeBrowserItem(
+            for: tabs[tabIndex].id,
+            inPane: paneID,
+            urlString: urlString
+        )
+        pane.appendItem(item)
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        tabs[tabIndex].focusedPaneId = paneID
+        selectedTabId = tabs[tabIndex].id
+        return item
+    }
+
     public mutating func selectPaneItem(paneID: String?, itemID: String?) {
         guard let paneID, let itemID else { return }
         guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
@@ -1669,6 +1759,39 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
     }
 
+    @discardableResult
+    public mutating func updateBrowserState(
+        inPane paneID: String?,
+        itemID: String?,
+        title: String? = nil,
+        urlString: String? = nil,
+        isLoading: Bool? = nil
+    ) -> WorkspaceBrowserState? {
+        guard let paneID, let itemID else {
+            return nil
+        }
+        guard let tabIndex = tabs.firstIndex(where: { $0.tree.find(paneID: paneID) != nil }) else {
+            return nil
+        }
+        guard let panePath = tabs[tabIndex].tree.path(to: paneID),
+              var pane = tabs[tabIndex].tree.node(at: panePath)?.leafValue
+        else {
+            return nil
+        }
+        let previousState = pane.items.first(where: { $0.id == itemID })?.browserState
+        let nextState = pane.updateBrowserItemState(
+            id: itemID,
+            title: title,
+            urlString: urlString,
+            isLoading: isLoading
+        )
+        guard nextState != previousState else {
+            return nextState
+        }
+        tabs[tabIndex].tree = tabs[tabIndex].tree.replacingPane(at: panePath, with: pane)
+        return nextState
+    }
+
     private var selectedTabIndex: Int? {
         guard let selectedTabId else {
             return tabs.isEmpty ? nil : 0
@@ -1711,6 +1834,39 @@ public struct WorkspaceSessionState: Equatable, Sendable {
         return WorkspacePaneItemState(
             request: request,
             title: WorkspaceTabTitlePolicy.defaultTitle(for: itemNumber)
+        )
+    }
+
+    private mutating func makeBrowserItem(
+        for tabID: String,
+        inPane paneID: String,
+        urlString: String? = nil
+    ) -> WorkspacePaneItemState {
+        let itemNumber = nextPaneNumber
+        nextPaneNumber += 1
+        let request = WorkspaceTerminalLaunchRequest(
+            projectPath: projectPath,
+            workspaceId: workspaceId,
+            tabId: tabID,
+            paneId: paneID,
+            surfaceId: "\(workspaceId)/surface:\(itemNumber)",
+            terminalSessionId: "\(workspaceId)/browser-session:\(itemNumber)",
+            terminalRuntime: "browser"
+        )
+        let browserState = WorkspaceBrowserState(
+            surfaceId: request.surfaceId,
+            projectPath: projectPath,
+            tabId: tabID,
+            paneId: paneID,
+            title: "浏览器",
+            urlString: urlString ?? "",
+            isLoading: false
+        )
+        return WorkspacePaneItemState(
+            request: request,
+            title: browserState.title,
+            kind: .browser,
+            browserState: browserState
         )
     }
 
@@ -1806,6 +1962,32 @@ private extension WorkspacePaneTree {
                 WorkspacePaneState(
                     paneId: pane.paneId,
                     items: pane.items.map { item in
+                        if item.kind == .browser {
+                            let browserState = WorkspaceBrowserState(
+                                surfaceId: item.surfaceId,
+                                projectPath: projectPath,
+                                tabId: tabID,
+                                paneId: pane.paneId,
+                                title: item.browserTitle ?? item.restoredTitle ?? "浏览器",
+                                urlString: item.browserURLString ?? "",
+                                isLoading: item.browserIsLoading ?? false
+                            )
+                            return WorkspacePaneItemState(
+                                request: WorkspaceTerminalLaunchRequest(
+                                    projectPath: projectPath,
+                                    workspaceId: workspaceId,
+                                    tabId: tabID,
+                                    paneId: pane.paneId,
+                                    surfaceId: item.surfaceId,
+                                    terminalSessionId: item.terminalSessionId,
+                                    terminalRuntime: "browser"
+                                ),
+                                title: browserState.title,
+                                kind: .browser,
+                                browserState: browserState
+                            )
+                        }
+
                         let restoreContext = WorkspaceTerminalRestoreContext(
                             workingDirectory: item.restoredWorkingDirectory,
                             title: item.restoredTitle,
@@ -1864,11 +2046,15 @@ private extension WorkspacePaneTree.Node {
                         WorkspacePaneItemRestoreSnapshot(
                             surfaceId: item.request.surfaceId,
                             terminalSessionId: item.request.terminalSessionId,
+                            kind: item.kind,
                             restoredWorkingDirectory: item.request.restoreContext?.workingDirectory,
                             restoredTitle: item.title,
                             agentSummary: item.request.restoreContext?.agentSummary,
                             snapshotTextRef: nil,
-                            snapshotText: item.request.restoreContext?.snapshotText
+                            snapshotText: item.request.restoreContext?.snapshotText,
+                            browserTitle: item.browserState?.title,
+                            browserURLString: item.browserState?.urlString,
+                            browserIsLoading: item.browserState?.isLoading
                         )
                     }
                 )

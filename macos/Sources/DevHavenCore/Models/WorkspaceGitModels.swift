@@ -50,6 +50,7 @@ public enum WorkspaceToolWindowPlacement: String, Identifiable, Sendable {
 
 public enum WorkspaceFocusedArea: Equatable, Sendable {
     case terminal
+    case browserPaneItem(String)
     case sideToolWindow(WorkspaceToolWindowKind)
     case bottomToolWindow(WorkspaceToolWindowKind)
     case editorTab(String)

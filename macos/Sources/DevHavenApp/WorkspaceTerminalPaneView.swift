@@ -5,7 +5,8 @@ import DevHavenCore
 struct WorkspaceTerminalPaneView: View {
     let pane: WorkspacePaneState
     let selectedItem: WorkspacePaneItemState
-    let model: GhosttySurfaceHostModel
+    let terminalModel: GhosttySurfaceHostModel?
+    let browserModel: WorkspaceBrowserHostModel?
     let surfaceActivity: WorkspaceSurfaceActivity
     let isFocused: Bool
     let isZoomed: Bool
@@ -18,6 +19,7 @@ struct WorkspaceTerminalPaneView: View {
     let onFocusPane: (String) -> Void
     let onSelectItem: (String, String) -> Void
     let onCreateItem: (String) -> Void
+    let onCreateBrowserItem: (String) -> Void
     let onCloseItem: (String, String) -> Void
     let onClosePane: (String) -> Void
     let onSplitPane: (String, WorkspacePaneSplitDirection) -> Void
@@ -39,7 +41,8 @@ struct WorkspaceTerminalPaneView: View {
     init(
         pane: WorkspacePaneState,
         selectedItem: WorkspacePaneItemState? = nil,
-        model: GhosttySurfaceHostModel,
+        terminalModel: GhosttySurfaceHostModel? = nil,
+        browserModel: WorkspaceBrowserHostModel? = nil,
         surfaceActivity: WorkspaceSurfaceActivity,
         isFocused: Bool,
         isZoomed: Bool,
@@ -52,6 +55,7 @@ struct WorkspaceTerminalPaneView: View {
         onFocusPane: @escaping (String) -> Void,
         onSelectItem: @escaping (String, String) -> Void = { _, _ in },
         onCreateItem: @escaping (String) -> Void = { _ in },
+        onCreateBrowserItem: @escaping (String) -> Void = { _ in },
         onCloseItem: @escaping (String, String) -> Void = { _, _ in },
         onClosePane: @escaping (String) -> Void,
         onSplitPane: @escaping (String, WorkspacePaneSplitDirection) -> Void,
@@ -75,7 +79,8 @@ struct WorkspaceTerminalPaneView: View {
             request: pane.request,
             title: pane.selectedTitle
         )
-        self.model = model
+        self.terminalModel = terminalModel
+        self.browserModel = browserModel
         self.surfaceActivity = surfaceActivity
         self.isFocused = isFocused
         self.isZoomed = isZoomed
@@ -88,6 +93,7 @@ struct WorkspaceTerminalPaneView: View {
         self.onFocusPane = onFocusPane
         self.onSelectItem = onSelectItem
         self.onCreateItem = onCreateItem
+        self.onCreateBrowserItem = onCreateBrowserItem
         self.onCloseItem = onCloseItem
         self.onClosePane = onClosePane
         self.onSplitPane = onSplitPane
@@ -165,16 +171,40 @@ struct WorkspaceTerminalPaneView: View {
             syncSurfaceActivity()
         }
         .onDisappear {
-            model.syncSurfaceActivity(isVisible: false, isFocused: false)
+            terminalModel?.syncSurfaceActivity(isVisible: false, isFocused: false)
         }
     }
 
     private var surfaceHost: some View {
-        GhosttySurfaceHost(
-            model: model,
-            isFocused: isFocused,
-            chromePolicy: .workspaceMinimal
-        )
+        Group {
+            if selectedItem.isBrowser,
+               let browserState = selectedItem.browserState,
+               let browserModel {
+                WorkspaceBrowserPaneItemView(
+                    itemID: selectedItem.id,
+                    state: browserState,
+                    model: browserModel,
+                    isFocused: isFocused,
+                    onFocusBrowserItem: {
+                        onFocusPane(pane.id)
+                        onSelectItem(pane.id, selectedItem.id)
+                    }
+                )
+            } else if let terminalModel {
+                GhosttySurfaceHost(
+                    model: terminalModel,
+                    isFocused: isFocused,
+                    chromePolicy: .workspaceMinimal
+                )
+            } else {
+                ContentUnavailableView(
+                    "浏览器标签不可用",
+                    systemImage: "globe",
+                    description: Text("当前浏览器标签状态已失效，请重新打开。")
+                )
+                .foregroundStyle(NativeTheme.textSecondary)
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -205,6 +235,10 @@ struct WorkspaceTerminalPaneView: View {
             paneButton(title: "当前窗格新建终端标签", systemImage: "plus") {
                 onFocusPane(pane.id)
                 onCreateItem(pane.id)
+            }
+            paneButton(title: "当前窗格新建浏览器标签", systemImage: "globe") {
+                onFocusPane(pane.id)
+                onCreateBrowserItem(pane.id)
             }
 
             paneButton(title: "左右分屏", systemImage: "square.split.2x1") {
@@ -266,7 +300,7 @@ struct WorkspaceTerminalPaneView: View {
 
         return HStack(spacing: 4) {
             HStack(spacing: 4) {
-                Image(systemName: "terminal")
+                Image(systemName: item.isBrowser ? "globe" : "terminal")
                     .font(.system(size: 10, weight: .medium))
                 Text(item.title)
                     .lineLimit(1)
@@ -574,12 +608,15 @@ struct WorkspaceTerminalPaneView: View {
     }
 
     private func syncSurfaceActivity() {
-        model.syncSurfaceActivity(
+        guard let terminalModel else {
+            return
+        }
+        terminalModel.syncSurfaceActivity(
             isVisible: surfaceActivity.isVisible,
             isFocused: surfaceActivity.isFocused
         )
         if surfaceActivity.isFocused {
-            model.restoreWindowResponderIfNeeded()
+            terminalModel.restoreWindowResponderIfNeeded()
         }
     }
 

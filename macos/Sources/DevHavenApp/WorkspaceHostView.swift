@@ -7,6 +7,7 @@ struct WorkspaceHostView: View {
     let project: Project
     let workspace: GhosttyWorkspaceController
     let terminalSessionStore: WorkspaceTerminalSessionStore
+    @StateObject private var browserSessionStore = WorkspaceBrowserSessionStore()
     @State private var windowActivity: WindowActivityState = .inactive
     @State private var isRunConfigurationSheetPresented = false
     @State private var runConsoleResizeStartHeight: CGFloat?
@@ -124,6 +125,7 @@ struct WorkspaceHostView: View {
         .onAppear {
             terminalSessionStore.syncSelectedItemIDs(selectedItemIDsByPane)
             terminalSessionStore.syncRetainedItemIDs(retainedItemIDs)
+            browserSessionStore.syncRetainedItemIDs(retainedItemIDs)
             WorkspaceLaunchDiagnostics.shared.recordHostMounted(
                 workspace: workspace.sessionState,
                 isActive: project.path == viewModel.activeWorkspaceProjectPath
@@ -134,6 +136,7 @@ struct WorkspaceHostView: View {
         }
         .onChange(of: retainedItemIDs) { _, itemIDs in
             terminalSessionStore.syncRetainedItemIDs(itemIDs)
+            browserSessionStore.syncRetainedItemIDs(itemIDs)
         }
     }
 
@@ -391,6 +394,9 @@ struct WorkspaceHostView: View {
                 surfaceModelForPaneItem: { pane, item in
                     surfaceModel(for: pane, item: item)
                 },
+                browserModelForPaneItem: { pane, item in
+                    browserModel(for: pane, item: item)
+                },
                 surfaceActivityForPaneItem: { pane, item in
                     surfaceActivity(for: pane, item: item)
                 },
@@ -398,14 +404,31 @@ struct WorkspaceHostView: View {
                 onSelectPaneItem: { paneID, itemID in
                     workspace.focusPane(paneID)
                     workspace.selectPaneItem(inPane: paneID, itemID: itemID)
+                    if let item = workspace.sessionState.selectedPane?.selectedItem, item.isBrowser {
+                        viewModel.setWorkspaceFocusedArea(.browserPaneItem(item.id))
+                    } else {
+                        viewModel.setWorkspaceFocusedArea(.terminal)
+                    }
                 },
                 onCreatePaneItem: { paneID in
                     workspace.focusPane(paneID)
                     _ = workspace.createTerminalItem(inPane: paneID)
+                    viewModel.setWorkspaceFocusedArea(.terminal)
+                },
+                onCreateBrowserItem: { paneID in
+                    workspace.focusPane(paneID)
+                    if let item = workspace.createBrowserItem(inPane: paneID) {
+                        viewModel.setWorkspaceFocusedArea(.browserPaneItem(item.id))
+                    }
                 },
                 onClosePaneItem: { paneID, itemID in
                     workspace.focusPane(paneID)
                     workspace.closePaneItem(inPane: paneID, itemID: itemID)
+                    if let selectedBrowser = workspace.selectedPane?.selectedBrowserState {
+                        viewModel.setWorkspaceFocusedArea(.browserPaneItem(selectedBrowser.id))
+                    } else {
+                        viewModel.setWorkspaceFocusedArea(.terminal)
+                    }
                 },
                 onClosePane: { workspace.closePane($0) },
                 onSplitPane: { paneID, direction in
@@ -589,6 +612,47 @@ struct WorkspaceHostView: View {
                 }
                 workspace.focusPane(context.pane.id)
                 return self.handleSplitAction(action, paneID: context.pane.id)
+            }
+        )
+    }
+
+    private func browserModel(
+        for pane: WorkspacePaneState,
+        item: WorkspacePaneItemState
+    ) -> WorkspaceBrowserHostModel? {
+        guard item.isBrowser,
+              let state = item.browserState
+        else {
+            return nil
+        }
+
+        let itemID = item.id
+        return browserSessionStore.model(
+            for: state,
+            onStateChange: { snapshot in
+                guard let context = self.currentPaneItemContext(for: itemID),
+                      context.item.isBrowser
+                else {
+                    return
+                }
+                let projectionUpdate = WorkspaceBrowserProjectionPolicy.resolve(
+                    existing: context.item.browserState,
+                    runtime: snapshot
+                )
+                WorkspaceBrowserDiagnostics.recordProjectionUpdate(
+                    surfaceId: context.item.id,
+                    tabId: context.item.request.tabId,
+                    paneId: context.pane.id,
+                    runtime: snapshot,
+                    projected: projectionUpdate
+                )
+                _ = workspace.updateBrowserState(
+                    inPane: context.pane.id,
+                    itemID: context.item.id,
+                    title: projectionUpdate.title,
+                    urlString: projectionUpdate.urlString,
+                    isLoading: projectionUpdate.isLoading
+                )
             }
         )
     }

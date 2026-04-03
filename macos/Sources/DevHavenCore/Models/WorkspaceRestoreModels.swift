@@ -303,28 +303,40 @@ public struct WorkspacePaneSnapshotTextRef: Codable, Equatable, Sendable {
 public struct WorkspacePaneItemRestoreSnapshot: Equatable, Sendable {
     public var surfaceId: String
     public var terminalSessionId: String
+    public var kind: WorkspacePaneItemKind
     public var restoredWorkingDirectory: String?
     public var restoredTitle: String?
     public var agentSummary: String?
     public var snapshotTextRef: WorkspacePaneSnapshotTextRef?
     public var snapshotText: String?
+    public var browserTitle: String?
+    public var browserURLString: String?
+    public var browserIsLoading: Bool?
 
     public init(
         surfaceId: String,
         terminalSessionId: String,
+        kind: WorkspacePaneItemKind = .terminal,
         restoredWorkingDirectory: String?,
         restoredTitle: String?,
         agentSummary: String?,
         snapshotTextRef: WorkspacePaneSnapshotTextRef?,
-        snapshotText: String?
+        snapshotText: String?,
+        browserTitle: String? = nil,
+        browserURLString: String? = nil,
+        browserIsLoading: Bool? = nil
     ) {
         self.surfaceId = surfaceId
         self.terminalSessionId = terminalSessionId
+        self.kind = kind
         self.restoredWorkingDirectory = restoredWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.restoredTitle = restoredTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.agentSummary = agentSummary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.snapshotTextRef = snapshotTextRef
         self.snapshotText = snapshotText?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.browserTitle = browserTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.browserURLString = browserURLString?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.browserIsLoading = browserIsLoading
     }
 }
 
@@ -389,10 +401,14 @@ extension WorkspacePaneItemRestoreSnapshot: Codable {
     enum CodingKeys: String, CodingKey {
         case surfaceId
         case terminalSessionId
+        case kind
         case restoredWorkingDirectory
         case restoredTitle
         case agentSummary
         case snapshotTextRef
+        case browserTitle
+        case browserURLString
+        case browserIsLoading
     }
 
     public init(from decoder: Decoder) throws {
@@ -400,11 +416,15 @@ extension WorkspacePaneItemRestoreSnapshot: Codable {
         self.init(
             surfaceId: try container.decode(String.self, forKey: .surfaceId),
             terminalSessionId: try container.decode(String.self, forKey: .terminalSessionId),
+            kind: try container.decodeIfPresent(WorkspacePaneItemKind.self, forKey: .kind) ?? .terminal,
             restoredWorkingDirectory: try container.decodeIfPresent(String.self, forKey: .restoredWorkingDirectory),
             restoredTitle: try container.decodeIfPresent(String.self, forKey: .restoredTitle),
             agentSummary: try container.decodeIfPresent(String.self, forKey: .agentSummary),
             snapshotTextRef: try container.decodeIfPresent(WorkspacePaneSnapshotTextRef.self, forKey: .snapshotTextRef),
-            snapshotText: nil
+            snapshotText: nil,
+            browserTitle: try container.decodeIfPresent(String.self, forKey: .browserTitle),
+            browserURLString: try container.decodeIfPresent(String.self, forKey: .browserURLString),
+            browserIsLoading: try container.decodeIfPresent(Bool.self, forKey: .browserIsLoading)
         )
     }
 
@@ -412,10 +432,14 @@ extension WorkspacePaneItemRestoreSnapshot: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(surfaceId, forKey: .surfaceId)
         try container.encode(terminalSessionId, forKey: .terminalSessionId)
+        try container.encode(kind, forKey: .kind)
         try container.encodeIfPresent(restoredWorkingDirectory, forKey: .restoredWorkingDirectory)
         try container.encodeIfPresent(restoredTitle, forKey: .restoredTitle)
         try container.encodeIfPresent(agentSummary, forKey: .agentSummary)
         try container.encodeIfPresent(snapshotTextRef, forKey: .snapshotTextRef)
+        try container.encodeIfPresent(browserTitle, forKey: .browserTitle)
+        try container.encodeIfPresent(browserURLString, forKey: .browserURLString)
+        try container.encodeIfPresent(browserIsLoading, forKey: .browserIsLoading)
     }
 }
 

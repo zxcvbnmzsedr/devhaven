@@ -1107,6 +1107,84 @@ public final class NativeAppViewModel {
         return tab
     }
 
+    @discardableResult
+    public func openWorkspaceBrowserTab(
+        urlString: String? = nil,
+        in projectPath: String? = nil
+    ) -> WorkspacePaneItemState? {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let controller = workspaceController(for: resolvedProjectPath),
+              let paneID = controller.selectedPane?.id
+        else {
+            return nil
+        }
+        let item = controller.createBrowserItem(inPane: paneID, urlString: urlString)
+        if let item {
+            workspaceFocusedArea = .browserPaneItem(item.id)
+            workspaceSelectedPresentedTabByProjectPath[resolvedProjectPath] = .terminal(controller.selectedTabId ?? "")
+            scheduleWorkspaceRestoreAutosave()
+        }
+        return item
+    }
+
+    public func closeWorkspaceBrowserTab(
+        _ itemID: String,
+        in projectPath: String? = nil
+    ) {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let controller = workspaceController(for: resolvedProjectPath),
+              let context = workspacePaneItemContext(for: itemID, in: controller)
+        else {
+            return
+        }
+        controller.closePaneItem(inPane: context.pane.id, itemID: itemID)
+        if let selectedBrowser = controller.selectedPane?.selectedBrowserState {
+            workspaceFocusedArea = .browserPaneItem(selectedBrowser.id)
+        } else {
+            workspaceFocusedArea = .terminal
+        }
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    @discardableResult
+    public func updateWorkspaceBrowserTabState(
+        _ itemID: String,
+        in projectPath: String? = nil,
+        title: String? = nil,
+        urlString: String? = nil,
+        isLoading: Bool? = nil
+    ) -> WorkspaceBrowserState? {
+        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+              let controller = workspaceController(for: resolvedProjectPath),
+              let context = workspacePaneItemContext(for: itemID, in: controller)
+        else {
+            return nil
+        }
+        let state = controller.updateBrowserState(
+            inPane: context.pane.id,
+            itemID: itemID,
+            title: title,
+            urlString: urlString,
+            isLoading: isLoading
+        )
+        if state != nil {
+            scheduleWorkspaceRestoreAutosave()
+        }
+        return state
+    }
+
+    public func workspaceBrowserItemState(
+        for projectPath: String? = nil,
+        itemID: String
+    ) -> WorkspaceBrowserState? {
+        guard let controller = workspaceController(for: projectPath ?? activeWorkspaceProjectPath),
+              let context = workspacePaneItemContext(for: itemID, in: controller)
+        else {
+            return nil
+        }
+        return context.item.browserState
+    }
+
     public var activeWorkspaceRootProject: Project? {
         guard let normalizedRootProjectPath = normalizedOptionalPathForCompare(activeWorkspaceRootProjectPath) else {
             return nil
@@ -6180,6 +6258,16 @@ public final class NativeAppViewModel {
         case .terminal:
             workspaceFocusedArea = .terminal
             return true
+        case let .browserPaneItem(itemID):
+            guard case .terminal = selection,
+                  let controller = workspaceController(for: projectPath),
+                  workspacePaneItemContext(for: itemID, in: controller)?.item.isBrowser == true
+            else {
+                workspaceFocusedArea = defaultFocusedArea(for: selection)
+                return false
+            }
+            workspaceFocusedArea = .browserPaneItem(itemID)
+            return true
         case let .sideToolWindow(kind):
             showWorkspaceSideToolWindow(kind)
             return true
@@ -6244,6 +6332,20 @@ public final class NativeAppViewModel {
         let resolvedPath = projectPath ?? activeWorkspaceProjectPath
         return workspaceSessionWithoutNormalizing(for: resolvedPath)?.controller
             ?? workspaceSession(for: resolvedPath)?.controller
+    }
+
+    private func workspacePaneItemContext(
+        for itemID: String,
+        in controller: GhosttyWorkspaceController
+    ) -> (pane: WorkspacePaneState, item: WorkspacePaneItemState)? {
+        for tab in controller.tabs {
+            for pane in tab.leaves {
+                if let item = pane.items.first(where: { $0.id == itemID }) {
+                    return (pane, item)
+                }
+            }
+        }
+        return nil
     }
 
     private func workspaceSessionWithoutNormalizing(for path: String?) -> OpenWorkspaceSessionState? {

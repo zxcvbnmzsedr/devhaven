@@ -1,5 +1,11 @@
 import Foundation
 import Observation
+import OSLog
+
+private let workspaceBrowserStateSyncLogger = Logger(
+    subsystem: "DevHavenNative",
+    category: "WorkspaceBrowserStateSync"
+)
 
 @MainActor
 @Observable
@@ -128,6 +134,18 @@ public final class GhosttyWorkspaceController {
     @discardableResult
     public func createTerminalItem(inPane paneID: String?) -> WorkspacePaneItemState? {
         let item = projection.createTerminalItem(inPane: paneID)
+        if item != nil {
+            onChange?()
+        }
+        return item
+    }
+
+    @discardableResult
+    public func createBrowserItem(
+        inPane paneID: String?,
+        urlString: String? = nil
+    ) -> WorkspacePaneItemState? {
+        let item = projection.createBrowserItem(inPane: paneID, urlString: urlString)
         if item != nil {
             onChange?()
         }
@@ -279,6 +297,50 @@ public final class GhosttyWorkspaceController {
         onChange?()
     }
 
+    @discardableResult
+    public func updateBrowserState(
+        inPane paneID: String?,
+        itemID: String?,
+        title: String? = nil,
+        urlString: String? = nil,
+        isLoading: Bool? = nil
+    ) -> WorkspaceBrowserState? {
+        let previousState = browserState(inPane: paneID, itemID: itemID)
+        let state = projection.updateBrowserState(
+            inPane: paneID,
+            itemID: itemID,
+            title: title,
+            urlString: urlString,
+            isLoading: isLoading
+        )
+        guard let state else {
+            workspaceBrowserStateSyncLogger.notice(
+                """
+                [workspace-browser-state] apply pane=\((paneID ?? "nil"), privacy: .public) \
+                item=\((itemID ?? "nil"), privacy: .public) \
+                applied=false \
+                reason=missing
+                """
+            )
+            return nil
+        }
+        let applied = state != previousState
+        workspaceBrowserStateSyncLogger.notice(
+            """
+            [workspace-browser-state] apply pane=\((paneID ?? "nil"), privacy: .public) \
+            item=\((itemID ?? "nil"), privacy: .public) \
+            applied=\(applied) \
+            title=\(state.title, privacy: .public) \
+            url=\(state.urlString, privacy: .public) \
+            loading=\(state.isLoading)
+            """
+        )
+        if applied {
+            onChange?()
+        }
+        return state
+    }
+
     public func makeRestoreSnapshot(
         rootProjectPath: String,
         isQuickTerminal: Bool,
@@ -296,5 +358,15 @@ public final class GhosttyWorkspaceController {
     public func restore(from snapshot: ProjectWorkspaceRestoreSnapshot) {
         projection = WorkspaceSessionState(restoring: snapshot)
         onChange?()
+    }
+
+    private func browserState(inPane paneID: String?, itemID: String?) -> WorkspaceBrowserState? {
+        guard let paneID, let itemID,
+              let pane = projection.tabs.lazy.compactMap({ $0.tree.find(paneID: paneID) }).first,
+              let item = pane.items.first(where: { $0.id == itemID })
+        else {
+            return nil
+        }
+        return item.browserState
     }
 }

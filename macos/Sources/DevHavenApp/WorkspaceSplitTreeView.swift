@@ -8,10 +8,12 @@ struct WorkspaceSplitTreeView: View {
     let tab: WorkspaceTabState
     let isTabSelected: Bool
     let surfaceModelForPaneItem: (WorkspacePaneState, WorkspacePaneItemState) -> GhosttySurfaceHostModel
+    let browserModelForPaneItem: (WorkspacePaneState, WorkspacePaneItemState) -> WorkspaceBrowserHostModel?
     let surfaceActivityForPaneItem: (WorkspacePaneState, WorkspacePaneItemState) -> WorkspaceSurfaceActivity
     let onFocusPane: (String) -> Void
     let onSelectPaneItem: (String, String) -> Void
     let onCreatePaneItem: (String) -> Void
+    let onCreateBrowserItem: (String) -> Void
     let onClosePaneItem: (String, String) -> Void
     let onClosePane: (String) -> Void
     let onSplitPane: (String, WorkspacePaneSplitDirection) -> Void
@@ -179,7 +181,8 @@ struct WorkspaceSplitTreeView: View {
         return WorkspaceTerminalPaneView(
             pane: pane,
             selectedItem: activeItem,
-            model: surfaceModelForPaneItem(pane, activeItem),
+            terminalModel: activeItem.isTerminal ? surfaceModelForPaneItem(pane, activeItem) : nil,
+            browserModel: activeItem.isBrowser ? browserModelForPaneItem(pane, activeItem) : nil,
             surfaceActivity: surfaceActivityForPaneItem(pane, activeItem),
             isFocused: isTabSelected && tab.focusedPaneId == pane.id,
             isZoomed: isZoomed,
@@ -192,6 +195,7 @@ struct WorkspaceSplitTreeView: View {
             onFocusPane: onFocusPane,
             onSelectItem: onSelectPaneItem,
             onCreateItem: onCreatePaneItem,
+            onCreateBrowserItem: onCreateBrowserItem,
             onCloseItem: onClosePaneItem,
             onClosePane: onClosePane,
             onSplitPane: onSplitPane,
