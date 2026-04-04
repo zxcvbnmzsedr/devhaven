@@ -29,7 +29,7 @@ final class DevHavenAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct DevHavenApp: App {
     @NSApplicationDelegateAdaptor(DevHavenAppDelegate.self) private var appDelegate
-    @State private var viewModel = NativeAppViewModel()
+    @State private var viewModel = Self.makeViewModel()
     @StateObject private var updateController = DevHavenUpdateController()
     @StateObject private var quitGuard = AppQuitGuard()
 
@@ -105,6 +105,27 @@ struct DevHavenApp: App {
                 shortcut: viewModel.snapshot.appState.settings.workspaceOpenProjectShortcut
             )
         }
+    }
+
+    private static func makeViewModel() -> NativeAppViewModel {
+        let store = LegacyCompatStore()
+        let runManager = WorkspaceRunManager(
+            logStore: WorkspaceRunLogStore(baseDirectoryURL: FileManager.default.homeDirectoryForCurrentUser),
+            environmentResolver: { request, processEnvironment in
+                let baseEnvironment = WorkspaceRunManager.defaultEnvironment(
+                    for: request,
+                    processEnvironment: processEnvironment
+                )
+                return GhosttyRuntimeEnvironmentBuilder.build(
+                    baseEnvironment: baseEnvironment,
+                    processEnvironment: processEnvironment
+                )
+            }
+        )
+        return NativeAppViewModel(
+            store: store,
+            runManager: runManager
+        )
     }
 }
 

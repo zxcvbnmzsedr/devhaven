@@ -296,6 +296,16 @@ public struct WorkspaceRunStartRequest: Equatable, Sendable {
         displayCommand
     }
 
+    public var environment: [String: String] {
+        [
+            "DEVHAVEN_PROJECT_PATH": projectPath,
+            "DEVHAVEN_ROOT_PROJECT_PATH": rootProjectPath,
+            "DEVHAVEN_RUN_CONFIGURATION_ID": configurationID,
+            "DEVHAVEN_RUN_CONFIGURATION_NAME": configurationName,
+            "DEVHAVEN_RUN_SESSION_ID": sessionID,
+        ]
+    }
+
     public init(
         sessionID: String,
         configurationID: String,
