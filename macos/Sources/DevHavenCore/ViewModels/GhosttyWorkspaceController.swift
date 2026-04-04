@@ -293,7 +293,40 @@ public final class GhosttyWorkspaceController {
     }
 
     public func updatePaneItemTitle(inPane paneID: String?, itemID: String?, title: String) {
-        projection.updatePaneItemTitle(inPane: paneID, itemID: itemID, title: title)
+        guard let paneID, let itemID else {
+            return
+        }
+        guard let previousTitle = projection.tabs
+            .first(where: { $0.tree.find(paneID: paneID) != nil })?
+            .tree
+            .find(paneID: paneID)?
+            .items
+            .first(where: { $0.id == itemID })?
+            .title else {
+            return
+        }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        let resolvedTitle = WorkspaceTerminalPaneTitlePolicy.resolveRuntimeTitle(
+            currentTitle: previousTitle,
+            runtimeTitle: trimmed
+        )
+        guard previousTitle != resolvedTitle else {
+            return
+        }
+        projection.updatePaneItemTitle(inPane: paneID, itemID: itemID, title: resolvedTitle)
+        let nextTitle = projection.tabs
+            .first(where: { $0.tree.find(paneID: paneID) != nil })?
+            .tree
+            .find(paneID: paneID)?
+            .items
+            .first(where: { $0.id == itemID })?
+            .title
+        guard previousTitle != nextTitle else {
+            return
+        }
         onChange?()
     }
 

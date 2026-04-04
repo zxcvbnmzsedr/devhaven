@@ -389,6 +389,8 @@ final class GhosttySurfaceHostModel {
     private let onSurfaceExit: (() -> Void)?
     @ObservationIgnored
     private let onTabTitleChange: ((String) -> Void)?
+    @ObservationIgnored
+    private let onWorkingDirectoryChange: ((String) -> Void)?
     var onNotificationEvent: ((String, String) -> Void)?
     var onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)?
     var onBell: (() -> Void)?
@@ -469,6 +471,7 @@ final class GhosttySurfaceHostModel {
         onFocusChange: ((Bool) -> Void)? = nil,
         onSurfaceExit: (() -> Void)? = nil,
         onTabTitleChange: ((String) -> Void)? = nil,
+        onWorkingDirectoryChange: ((String) -> Void)? = nil,
         onNotificationEvent: ((String, String) -> Void)? = nil,
         onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)? = nil,
         onBell: (() -> Void)? = nil,
@@ -485,6 +488,7 @@ final class GhosttySurfaceHostModel {
         self.onFocusChange = onFocusChange
         self.onSurfaceExit = onSurfaceExit
         self.onTabTitleChange = onTabTitleChange
+        self.onWorkingDirectoryChange = onWorkingDirectoryChange
         self.onNotificationEvent = onNotificationEvent
         self.onTaskStatusChange = onTaskStatusChange
         self.onBell = onBell
@@ -552,6 +556,32 @@ final class GhosttySurfaceHostModel {
         onCodexDisplaySnapshotChange?(nextSnapshot)
     }
 
+    @discardableResult
+    func applyRuntimeTitle(_ title: String) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        if WorkspaceTerminalPaneTitlePolicy.matchesWorkingDirectoryDisplay(
+            title: trimmed,
+            workingDirectory: surfaceWorkingDirectory
+        ) {
+            guard let workingDirectoryDisplay = WorkspaceTerminalPaneTitlePolicy.displayPath(for: surfaceWorkingDirectory),
+                  surfaceTitle != workingDirectoryDisplay else {
+                return nil
+            }
+            surfaceTitle = workingDirectoryDisplay
+            onTabTitleChange?(workingDirectoryDisplay)
+            return workingDirectoryDisplay
+        }
+        guard surfaceTitle != trimmed else {
+            return nil
+        }
+        surfaceTitle = trimmed
+        onTabTitleChange?(trimmed)
+        return trimmed
+    }
+
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
         _ = preferredFocus
         if let ownedSurfaceView {
@@ -576,11 +606,7 @@ final class GhosttySurfaceHostModel {
             guard let self else {
                 return
             }
-            guard self.surfaceTitle != title else {
-                return
-            }
-            self.surfaceTitle = title
-            self.onTabTitleChange?(title)
+            _ = self.applyRuntimeTitle(title)
         }
         bridge.onWorkingDirectoryChange = { [weak self] path in
             guard let self else {
@@ -590,6 +616,7 @@ final class GhosttySurfaceHostModel {
                 return
             }
             self.surfaceWorkingDirectory = path
+            self.onWorkingDirectoryChange?(path)
         }
         bridge.onRendererHealthChange = { [weak self] healthy in
             guard let self else {

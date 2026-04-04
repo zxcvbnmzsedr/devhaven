@@ -220,6 +220,9 @@ public struct WorkspacePaneState: Identifiable, Equatable, Sendable {
         guard !trimmed.isEmpty else {
             return
         }
+        guard items[index].title != trimmed else {
+            return
+        }
         items[index].title = trimmed
         if items[index].isBrowser {
             items[index].browserState = items[index].browserState?.updating(title: trimmed)
@@ -1831,9 +1834,13 @@ public struct WorkspaceSessionState: Equatable, Sendable {
             surfaceId: "\(workspaceId)/surface:\(itemNumber)",
             terminalSessionId: "\(workspaceId)/session:\(itemNumber)"
         )
+        let fallbackTitle = WorkspaceTabTitlePolicy.defaultTitle(for: itemNumber)
         return WorkspacePaneItemState(
             request: request,
-            title: WorkspaceTabTitlePolicy.defaultTitle(for: itemNumber)
+            title: WorkspaceTerminalPaneTitlePolicy.defaultTitle(
+                for: request.workingDirectory,
+                fallback: fallbackTitle
+            )
         )
     }
 
@@ -2005,7 +2012,10 @@ private extension WorkspacePaneTree {
                                 workingDirectoryOverride: item.restoredWorkingDirectory,
                                 restoreContext: restoreContext.isEmpty ? nil : restoreContext
                             ),
-                            title: item.restoredTitle ?? WorkspaceTabTitlePolicy.defaultTitle(for: 1)
+                            title: WorkspaceTerminalPaneTitlePolicy.defaultTitle(
+                                for: item.restoredWorkingDirectory,
+                                fallback: item.restoredTitle ?? WorkspaceTabTitlePolicy.defaultTitle(for: 1)
+                            )
                         )
                     },
                     selectedItemId: pane.selectedItemId ?? pane.items.last?.surfaceId ?? pane.items.first?.surfaceId ?? ""
