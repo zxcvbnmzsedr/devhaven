@@ -13,6 +13,8 @@ final class GhosttyTerminalSurfaceView: NSView {
         let length: UInt64
     }
 
+    private static let readableDraggedTypes = NSPasteboard.ghosttyOpinionatedReadableTypes
+
     let runtime: GhosttyRuntime
     let request: WorkspaceTerminalLaunchRequest
     let bridge: GhosttySurfaceBridge
@@ -80,6 +82,7 @@ final class GhosttyTerminalSurfaceView: NSView {
             initializationError = error
         }
         wantsLayer = true
+        registerForDraggedTypes(Self.readableDraggedTypes)
     }
 
     @available(*, unavailable)
@@ -357,6 +360,27 @@ final class GhosttyTerminalSurfaceView: NSView {
             momentumPhase: event.momentumPhase
         )
         ghostty_surface_mouse_scroll(surface, input.deltaX, input.deltaY, input.mods)
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        resolvedDragOperation(from: sender.draggingPasteboard)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        resolvedDragOperation(from: sender.draggingPasteboard)
+    }
+
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        droppedText(from: sender.draggingPasteboard) != nil
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        guard let text = droppedText(from: sender.draggingPasteboard) else {
+            return false
+        }
+        window?.makeFirstResponder(self)
+        debugSendText(text)
+        return true
     }
 
     override func keyDown(with event: NSEvent) {
@@ -757,6 +781,20 @@ final class GhosttyTerminalSurfaceView: NSView {
         }
 
         return ghostty_surface_key(surface, keyEvent)
+    }
+
+    private func resolvedDragOperation(from pasteboard: NSPasteboard) -> NSDragOperation {
+        droppedText(from: pasteboard) == nil ? [] : .copy
+    }
+
+    private func droppedText(from pasteboard: NSPasteboard) -> String? {
+        guard pasteboard.hasOpinionatedStringContents(),
+              let text = pasteboard.getOpinionatedStringContents(),
+              !text.isEmpty
+        else {
+            return nil
+        }
+        return text
     }
 
     private func translatedEvent(for event: NSEvent) -> NSEvent? {

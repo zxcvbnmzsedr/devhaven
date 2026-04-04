@@ -8,6 +8,15 @@ extension NSPasteboard {
 
     private static let ghosttySelectionName = NSPasteboard.Name("com.devhaven.ghostty.selection")
 
+    static var ghosttyOpinionatedReadableTypes: [NSPasteboard.PasteboardType] {
+        [
+            .fileURL,
+            .URL,
+            .string,
+            ghosttyUTF8PlainTextType,
+        ]
+    }
+
     static func ghosttyEscape(_ string: String) -> String {
         var result = string
         for character in ghosttyEscapeCharacters {
@@ -28,6 +37,14 @@ extension NSPasteboard {
         }
 
         return string(forType: Self.ghosttyUTF8PlainTextType)
+    }
+
+    func hasOpinionatedStringContents() -> Bool {
+        if canReadObject(forClasses: [NSURL.self], options: nil) {
+            return true
+        }
+
+        return availableType(from: Self.ghosttyOpinionatedReadableTypes) != nil
     }
 
     static func ghostty(_ clipboard: ghostty_clipboard_e) -> NSPasteboard? {
