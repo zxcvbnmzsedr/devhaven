@@ -31,7 +31,7 @@ struct WorkspaceProjectListView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(spacing: 8) {
                     ForEach(groups) { group in
                         ProjectGroupView(
