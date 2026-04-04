@@ -134,7 +134,14 @@ private struct WorkspaceAlignmentGroupCard: View {
     let onRequestApplyProject: (String) -> Void
     let onRequestRemoveProject: (String) -> Void
 
+    private var cardBackground: Color {
+        group.isActive ? NativeTheme.accent.opacity(0.18) : NativeTheme.elevated
+    }
+
     private var outlineColor: Color {
+        if group.isActive {
+            return NativeTheme.accent.opacity(0.55)
+        }
         let metrics = group.summaryMetrics
         if metrics.failed > 0 {
             return NativeTheme.danger.opacity(0.55)
@@ -160,10 +167,10 @@ private struct WorkspaceAlignmentGroupCard: View {
                 memberList
             }
         }
-        .background(NativeTheme.elevated)
+        .background(cardBackground)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(outlineColor, lineWidth: 1)
+                .stroke(outlineColor, lineWidth: group.isActive ? 1.2 : 1)
         )
         .clipShape(.rect(cornerRadius: 12))
         .contentShape(.rect(cornerRadius: 12))
@@ -186,26 +193,28 @@ private struct WorkspaceAlignmentGroupCard: View {
             Button(action: onToggleExpanded) {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(NativeTheme.textSecondary)
+                    .foregroundStyle(group.isActive ? NativeTheme.accent : NativeTheme.textSecondary)
                     .frame(width: 28, height: 28)
-                    .background(NativeTheme.surface)
+                    .background(group.isActive ? NativeTheme.accent.opacity(0.14) : NativeTheme.surface)
                     .clipShape(.rect(cornerRadius: 8))
             }
             .buttonStyle(.plain)
 
             Button(action: onOpenWorkspace) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(group.definition.name)
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(NativeTheme.textPrimary)
-                        .lineLimit(1)
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(group.definition.name)
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(NativeTheme.textPrimary)
+                            .lineLimit(1)
 
-                    WorkspaceAlignmentBadge(
-                        title: group.definition.targetBranch,
-                        systemImage: "arrow.triangle.branch",
-                        tone: .neutral,
-                        monospaced: true
-                    )
+                        WorkspaceAlignmentBadge(
+                            title: group.definition.targetBranch,
+                            systemImage: "arrow.triangle.branch",
+                            tone: group.isActive ? .accent : .neutral,
+                            monospaced: true
+                        )
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect(cornerRadius: 10))
@@ -256,6 +265,13 @@ private struct WorkspaceAlignmentMemberRow: View {
     let onRequestRemove: () -> Void
 
     @State private var isHovering = false
+
+    private var rowBackground: Color {
+        if member.isActive {
+            return NativeTheme.accent.opacity(0.16)
+        }
+        return isHovering ? NativeTheme.surface.opacity(0.92) : Color.clear
+    }
 
     private var statusTone: WorkspaceAlignmentBadgeTone {
         switch member.status {
@@ -310,7 +326,7 @@ private struct WorkspaceAlignmentMemberRow: View {
 
                     Text(subtitleText)
                         .font(.caption2)
-                        .foregroundStyle(NativeTheme.textSecondary.opacity(0.88))
+                        .foregroundStyle(member.isActive ? NativeTheme.textPrimary.opacity(0.78) : NativeTheme.textSecondary.opacity(0.88))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                 }
@@ -320,7 +336,7 @@ private struct WorkspaceAlignmentMemberRow: View {
                 VStack(alignment: .trailing, spacing: 6) {
                     WorkspaceAlignmentBadge(
                         title: member.status.displayText,
-                        tone: statusTone
+                        tone: member.isActive ? .accent : statusTone
                     )
 
                     if !member.branchLabel.isEmpty {
@@ -336,7 +352,7 @@ private struct WorkspaceAlignmentMemberRow: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isHovering ? NativeTheme.surface.opacity(0.92) : Color.clear)
+            .background(rowBackground)
             .clipShape(.rect(cornerRadius: 8))
             .contentShape(.rect(cornerRadius: 8))
         }
@@ -345,6 +361,11 @@ private struct WorkspaceAlignmentMemberRow: View {
             isHovering = hovering
         }
         .padding(.horizontal, 6)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(member.isActive ? NativeTheme.accent.opacity(0.4) : Color.clear, lineWidth: 1)
+                .padding(.horizontal, 6)
+        )
         .help(member.status.detailText(targetBranch: member.targetBranch) ?? member.openTarget.path)
         .contextMenu {
             Button("打开项目", action: onOpenProject)
@@ -363,11 +384,14 @@ private struct WorkspaceAlignmentMemberRow: View {
     }
 
     private var iconColor: Color {
+        if member.isActive {
+            return NativeTheme.accent
+        }
         switch member.openTarget {
         case .project:
-            NativeTheme.textSecondary.opacity(0.9)
+            return NativeTheme.textSecondary.opacity(0.9)
         case .worktree:
-            NativeTheme.accent.opacity(0.95)
+            return NativeTheme.accent.opacity(0.95)
         }
     }
 }

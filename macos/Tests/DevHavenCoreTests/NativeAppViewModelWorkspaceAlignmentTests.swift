@@ -399,7 +399,7 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
         }))
     }
 
-    func testOpeningAlignmentProjectMemberDoesNotJoinOpenedProjectsUntilExplicitlyPromoted() async throws {
+    func testOpeningAlignmentProjectMemberAppearsInOpenedProjectsWhileKeepingAlignmentOwnershipUntilPromoted() async throws {
         let fixture = try GitWorkspaceAlignmentFixture.make()
         defer { fixture.cleanup() }
 
@@ -424,8 +424,11 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
 
         XCTAssertEqual(viewModel.activeWorkspaceProjectPath, fixture.repositoryURL.path)
         XCTAssertEqual(viewModel.openWorkspaceSessions.count, 2)
-        XCTAssertFalse(viewModel.openWorkspaceRootProjectPaths.contains(fixture.repositoryURL.path))
-        XCTAssertTrue(viewModel.availableWorkspaceProjects.contains(where: { $0.path == fixture.repositoryURL.path }))
+        XCTAssertTrue(viewModel.openWorkspaceRootProjectPaths.contains(fixture.repositoryURL.path))
+        XCTAssertFalse(viewModel.availableWorkspaceProjects.contains(where: { $0.path == fixture.repositoryURL.path }))
+        XCTAssertTrue(viewModel.workspaceSidebarGroups.contains(where: { $0.rootProject.path == fixture.repositoryURL.path }))
+        XCTAssertTrue(viewModel.workspaceAlignmentGroups.first?.isActive == true)
+        XCTAssertTrue(viewModel.workspaceAlignmentGroups.first?.members.first?.isActive == true)
 
         let memberSession = try XCTUnwrap(viewModel.openWorkspaceSessions.first(where: { $0.projectPath == fixture.repositoryURL.path }))
         XCTAssertEqual(memberSession.workspaceAlignmentGroupID, group.id)
@@ -479,7 +482,7 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
         XCTAssertEqual(canonicalPath(try XCTUnwrap(viewModel.activeWorkspaceProjectPath)), canonicalPath(workspaceRootPath))
     }
 
-    func testOpeningAlignmentWorktreeMemberDoesNotOpenProjectPoolAndClosingWorkspaceRootCascades() async throws {
+    func testOpeningAlignmentWorktreeMemberAppearsInOpenedProjectsWithoutOpeningRootSession() async throws {
         let fixture = try GitWorkspaceAlignmentFixture.make()
         defer { fixture.cleanup() }
 
@@ -522,7 +525,21 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
         XCTAssertFalse(viewModel.openWorkspaceSessions.contains(where: {
             $0.projectPath == fixture.repositoryURL.path && $0.workspaceRootContext == nil
         }))
-        XCTAssertFalse(viewModel.openWorkspaceRootProjectPaths.contains(fixture.repositoryURL.path))
+        XCTAssertTrue(viewModel.openWorkspaceRootProjectPaths.contains(fixture.repositoryURL.path))
+        XCTAssertFalse(viewModel.availableWorkspaceProjects.contains(where: { $0.path == fixture.repositoryURL.path }))
+
+        let rootGroup = try XCTUnwrap(viewModel.workspaceSidebarGroups.first(where: {
+            canonicalPath($0.rootProject.path) == canonicalPath(fixture.repositoryURL.path)
+        }))
+        XCTAssertTrue(rootGroup.isActive)
+        let sidebarWorktree = try XCTUnwrap(rootGroup.worktrees.first(where: {
+            canonicalPath($0.path) == canonicalPath(expectedWorktreePath)
+        }))
+        XCTAssertTrue(sidebarWorktree.isOpen)
+        XCTAssertTrue(sidebarWorktree.isActive)
+        let activeAlignmentGroup = try XCTUnwrap(viewModel.workspaceAlignmentGroups.first)
+        XCTAssertTrue(activeAlignmentGroup.isActive)
+        XCTAssertTrue(activeAlignmentGroup.members.first?.isActive == true)
 
         let worktreeSession = try XCTUnwrap(viewModel.openWorkspaceSessions.first(where: {
             canonicalPath($0.projectPath) == canonicalPath(expectedWorktreePath)
@@ -530,14 +547,95 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
         XCTAssertEqual(worktreeSession.rootProjectPath, fixture.repositoryURL.path)
         XCTAssertEqual(worktreeSession.workspaceAlignmentGroupID, group.id)
         XCTAssertEqual(canonicalPath(worktreeSession.projectPath), canonicalPath(expectedWorktreePath))
+    }
+
+    func testRegularOpenedWorktreeStillHighlightsMatchingWorkspaceMember() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "develop")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let existingWorktreeURL = fixture.rootURL.appendingPathComponent("existing-feature-worktree", isDirectory: true)
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", existingWorktreeURL.path, "-b", "feature/payment", "develop"]
+        )
+        let expectedWorktreePath = existingWorktreeURL.resolvingSymlinksInPath().path
+
+        let viewModel = fixture.makeViewModel()
+        let group = WorkspaceAlignmentGroupDefinition(
+            name: "支付链路",
+            targetBranch: "feature/payment",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [group]),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.recheckWorkspaceAlignmentGroup(group.id)
+        viewModel.openWorkspaceWorktree(expectedWorktreePath, from: fixture.repositoryURL.path)
+
+        let activeAlignmentGroup = try XCTUnwrap(viewModel.workspaceAlignmentGroups.first)
+        XCTAssertTrue(activeAlignmentGroup.isActive)
+        XCTAssertTrue(activeAlignmentGroup.members.first?.isActive == true)
+
+        let activeSession = try XCTUnwrap(viewModel.openWorkspaceSessions.first(where: {
+            canonicalPath($0.projectPath) == canonicalPath(expectedWorktreePath)
+        }))
+        XCTAssertNil(activeSession.workspaceAlignmentGroupID)
+    }
+
+    func testClosingSyntheticOpenedProjectGroupClosesAlignmentWorktreeButKeepsWorkspaceRoot() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "develop")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let existingWorktreeURL = fixture.rootURL.appendingPathComponent("existing-feature-worktree", isDirectory: true)
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", existingWorktreeURL.path, "-b", "feature/payment", "develop"]
+        )
+        let expectedWorktreePath = existingWorktreeURL.resolvingSymlinksInPath().path
+
+        let viewModel = fixture.makeViewModel()
+        let group = WorkspaceAlignmentGroupDefinition(
+            name: "支付链路",
+            targetBranch: "feature/payment",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [group]),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.recheckWorkspaceAlignmentGroup(group.id)
+        let member = try XCTUnwrap(viewModel.workspaceAlignmentGroups.first?.members.first)
+        viewModel.openWorkspaceAlignmentMember(member)
 
         let workspaceRootPath = try XCTUnwrap(viewModel.openWorkspaceSessions.first(where: {
             $0.isQuickTerminal && $0.workspaceRootContext?.workspaceID == group.id
         })?.projectPath)
-        viewModel.closeWorkspaceProject(workspaceRootPath)
 
-        XCTAssertTrue(viewModel.openWorkspaceSessions.isEmpty)
-        XCTAssertNil(viewModel.activeWorkspaceProjectPath)
+        viewModel.activateWorkspaceProject(fixture.repositoryURL.path)
+        XCTAssertEqual(
+            canonicalPath(try XCTUnwrap(viewModel.activeWorkspaceProjectPath)),
+            canonicalPath(expectedWorktreePath)
+        )
+
+        viewModel.closeWorkspaceProject(fixture.repositoryURL.path)
+
+        XCTAssertFalse(viewModel.openWorkspaceSessions.contains(where: {
+            canonicalPath($0.projectPath) == canonicalPath(expectedWorktreePath)
+        }))
+        XCTAssertTrue(viewModel.openWorkspaceSessions.contains(where: {
+            canonicalPath($0.projectPath) == canonicalPath(workspaceRootPath) &&
+                $0.workspaceRootContext?.workspaceID == group.id
+        }))
+        XCTAssertEqual(canonicalPath(try XCTUnwrap(viewModel.activeWorkspaceProjectPath)), canonicalPath(workspaceRootPath))
     }
 
     func testOpeningRootProjectAfterAlignmentWorktreeDoesNotReownOrCloseAlignmentSession() async throws {
@@ -590,7 +688,7 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
         let sidebarWorktree = try XCTUnwrap(rootGroup.worktrees.first(where: {
             canonicalPath($0.path) == canonicalPath(expectedWorktreePath)
         }))
-        XCTAssertFalse(sidebarWorktree.isOpen)
+        XCTAssertTrue(sidebarWorktree.isOpen)
         XCTAssertFalse(sidebarWorktree.isActive)
 
         viewModel.closeWorkspaceProject(fixture.repositoryURL.path)

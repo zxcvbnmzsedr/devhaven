@@ -233,6 +233,7 @@ public struct WorkspaceAlignmentMemberProjection: Equatable, Sendable, Identifia
     public var branchLabel: String
     public var status: WorkspaceAlignmentMemberStatus
     public var openTarget: WorkspaceAlignmentOpenTarget
+    public var isActive: Bool
 
     public init(
         groupID: String,
@@ -242,7 +243,8 @@ public struct WorkspaceAlignmentMemberProjection: Equatable, Sendable, Identifia
         targetBranch: String? = nil,
         branchLabel: String? = nil,
         status: WorkspaceAlignmentMemberStatus,
-        openTarget: WorkspaceAlignmentOpenTarget? = nil
+        openTarget: WorkspaceAlignmentOpenTarget? = nil,
+        isActive: Bool = false
     ) {
         self.groupID = groupID
         self.projectPath = projectPath
@@ -252,6 +254,7 @@ public struct WorkspaceAlignmentMemberProjection: Equatable, Sendable, Identifia
         self.branchLabel = branchLabel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.status = status
         self.openTarget = openTarget ?? .project(projectPath: projectPath)
+        self.isActive = isActive
     }
 
     public var id: String { "\(groupID)|\(projectPath)" }
@@ -260,13 +263,16 @@ public struct WorkspaceAlignmentMemberProjection: Equatable, Sendable, Identifia
 public struct WorkspaceAlignmentGroupProjection: Equatable, Sendable, Identifiable {
     public var definition: WorkspaceAlignmentGroupDefinition
     public var members: [WorkspaceAlignmentMemberProjection]
+    public var isActive: Bool
 
     public init(
         definition: WorkspaceAlignmentGroupDefinition,
-        members: [WorkspaceAlignmentMemberProjection]
+        members: [WorkspaceAlignmentMemberProjection],
+        isActive: Bool = false
     ) {
         self.definition = definition
         self.members = members
+        self.isActive = isActive
     }
 
     public var id: String { definition.id }

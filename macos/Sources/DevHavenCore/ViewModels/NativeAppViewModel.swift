@@ -481,9 +481,7 @@ public final class NativeAppViewModel {
     }
 
     public var openWorkspaceRootProjectPaths: [String] {
-        openWorkspaceSessions
-            .filter { isWorkspaceSessionOwnedByProjectPool($0, rootProjectPath: $0.projectPath) }
-            .map(\.projectPath)
+        orderedOpenWorkspaceRootProjectPaths()
     }
 
     public var openWorkspaceProjects: [Project] {
@@ -530,10 +528,11 @@ public final class NativeAppViewModel {
                         count += item.unreadNotificationCount
                     }
                 : 0
+            let isGroupActive = activeWorkspaceProjectPath == rootPath || worktrees.contains(where: \.isActive)
             return WorkspaceSidebarProjectGroup(
                 rootProject: rootProject,
                 worktrees: worktrees,
-                isActive: activeWorkspaceProjectPath == rootPath,
+                isActive: isGroupActive,
                 currentBranch: currentBranchByProjectPath[rootPath],
                 notifications: notifications,
                 unreadNotificationCount: unreadNotificationCount,
@@ -585,6 +584,9 @@ public final class NativeAppViewModel {
         }
 
         let projectsByNormalizedPath = self.projectsByNormalizedPath
+        let activeAlignmentGroupID = activeWorkspaceSession?.workspaceRootContext?.workspaceID
+        let normalizedActiveWorkspaceProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath)
+        let normalizedActiveWorkspaceRootProjectPath = normalizedOptionalPathForCompare(activeWorkspaceRootProjectPath)
         let groups = snapshot.appState.workspaceAlignmentGroups.map { definition in
             let aliasByProjectPath = resolvedWorkspaceAlignmentAliases(
                 for: definition,
@@ -604,6 +606,10 @@ public final class NativeAppViewModel {
                     targetBranch: memberDefinition.targetBranch,
                     status: status
                 )
+                let normalizedOpenTargetPath = normalizePathForCompare(openTarget.path)
+                let isActive = normalizedActiveWorkspaceRootProjectPath == normalizedProjectPath ||
+                    normalizedActiveWorkspaceProjectPath == normalizedProjectPath ||
+                    normalizedActiveWorkspaceProjectPath == normalizedOpenTargetPath
                 return WorkspaceAlignmentMemberProjection(
                     groupID: definition.id,
                     projectPath: normalizedProjectPath,
@@ -617,10 +623,16 @@ public final class NativeAppViewModel {
                         openTarget: openTarget
                     ),
                     status: status,
-                    openTarget: openTarget
+                    openTarget: openTarget,
+                    isActive: isActive
                 )
             }
-            return WorkspaceAlignmentGroupProjection(definition: definition, members: members)
+            let isActive = activeAlignmentGroupID == definition.id || members.contains(where: \.isActive)
+            return WorkspaceAlignmentGroupProjection(
+                definition: definition,
+                members: members,
+                isActive: isActive
+            )
         }
         workspaceAlignmentGroupsCache = WorkspaceAlignmentGroupsCacheEntry(
             revision: workspaceSidebarProjectionRevision,
@@ -1731,11 +1743,52 @@ public final class NativeAppViewModel {
     }
 
     public func closeWorkspaceProject(_ path: String) {
+        let normalizedPath = normalizePathForCompare(path)
+
         guard let index = workspaceSessionIndex(for: path) else {
+            let groupedSessionIndices = openWorkspaceSessions.enumerated().compactMap { element -> Int? in
+                let session = element.element
+                guard !session.isQuickTerminal,
+                      normalizePathForCompare(session.rootProjectPath) == normalizedPath
+                else {
+                    return nil
+                }
+                return element.offset
+            }
+            guard !groupedSessionIndices.isEmpty else {
+                return
+            }
+
+            let removedPaths = Set(groupedSessionIndices.map { openWorkspaceSessions[$0].projectPath })
+            let fallbackAnchorIndex = groupedSessionIndices.min() ?? 0
+
+            openWorkspaceSessions.removeAll { removedPaths.contains($0.projectPath) }
+            removedPaths.forEach { runManager.stopAll(projectPath: $0) }
+            clearWorkspaceRuntimePresentationState(for: removedPaths)
+            attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
+            workspaceRunConsoleStateByProjectPath = workspaceRunConsoleStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
+            pruneWorkspaceAgentDisplayOverrides()
+
+            if openWorkspaceSessions.isEmpty {
+                activeWorkspaceProjectPath = nil
+                isDetailPanelPresented = false
+                scheduleWorkspaceRestoreAutosave()
+                return
+            }
+
+            if let currentActiveWorkspaceProjectPath = activeWorkspaceProjectPath,
+               removedPaths.contains(currentActiveWorkspaceProjectPath) {
+                let fallbackIndex = min(fallbackAnchorIndex, openWorkspaceSessions.count - 1)
+                let fallbackPath = openWorkspaceSessions[fallbackIndex].projectPath
+                activeWorkspaceProjectPath = fallbackPath
+                selectedProjectPath = fallbackPath
+                isDetailPanelPresented = false
+                scheduleSelectedProjectDocumentRefresh()
+            }
+            scheduleWorkspaceRestoreAutosave()
             return
         }
 
-        let normalizedPath = normalizePathForCompare(path)
         let session = openWorkspaceSessions[index]
         let rootProjectPath = session.rootProjectPath
         let workspaceAlignmentGroupID = session.workspaceRootContext?.workspaceID
@@ -4924,13 +4977,17 @@ public final class NativeAppViewModel {
     }
 
     private func workspaceSession(for path: String?) -> OpenWorkspaceSessionState? {
-        guard let normalizedPath = normalizedOptionalPathForCompare(path),
-              let index = workspaceSessionIndexByNormalizedPath[normalizedPath],
-              openWorkspaceSessions.indices.contains(index)
-        else {
+        guard let normalizedPath = normalizedOptionalPathForCompare(path) else {
             return nil
         }
-        return openWorkspaceSessions[index]
+        if let index = workspaceSessionIndexByNormalizedPath[normalizedPath],
+           openWorkspaceSessions.indices.contains(index) {
+            return openWorkspaceSessions[index]
+        }
+        return openWorkspaceSessions.last(where: {
+            !$0.isQuickTerminal &&
+                normalizePathForCompare($0.rootProjectPath) == normalizedPath
+        })
     }
 
     private func canonicalWorkspaceSessionPath(
@@ -4942,13 +4999,34 @@ public final class NativeAppViewModel {
         }
         if let sessions {
             return sessions.first(where: { $0.projectPath == normalizedPath })?.projectPath
+                ?? sessions.last(where: {
+                    !$0.isQuickTerminal &&
+                        normalizePathForCompare($0.rootProjectPath) == normalizedPath
+                })?.projectPath
         }
         guard let index = workspaceSessionIndexByNormalizedPath[normalizedPath],
               openWorkspaceSessions.indices.contains(index)
         else {
-            return nil
+            return openWorkspaceSessions.last(where: {
+                !$0.isQuickTerminal &&
+                    normalizePathForCompare($0.rootProjectPath) == normalizedPath
+            })?.projectPath
         }
         return openWorkspaceSessions[index].projectPath
+    }
+
+    private func orderedOpenWorkspaceRootProjectPaths() -> [String] {
+        var paths: [String] = []
+        var seen = Set<String>()
+
+        for session in openWorkspaceSessions where !session.isQuickTerminal {
+            let normalizedRootProjectPath = normalizePathForCompare(session.rootProjectPath)
+            if seen.insert(normalizedRootProjectPath).inserted {
+                paths.append(normalizedRootProjectPath)
+            }
+        }
+
+        return paths
     }
 
     private func promoteWorkspaceSessionIfNeeded(for path: String, rootProjectPath: String) {
@@ -6938,16 +7016,17 @@ public final class NativeAppViewModel {
     ) -> [WorkspaceSidebarWorktreeItem] {
         let persistedPaths = Set(rootProject.worktrees.map { normalizePathForCompare($0.path) })
         let persistedItems = rootProject.worktrees.map { worktree -> WorkspaceSidebarWorktreeItem in
-            let owningProjectPoolSession = openWorkspaceSessions.first(where: {
+            let visibleSidebarSession = openWorkspaceSessions.first(where: {
                 normalizePathForCompare($0.projectPath) == normalizePathForCompare(worktree.path) &&
-                    isWorkspaceSessionOwnedByProjectPool($0, rootProjectPath: rootProjectPath)
+                    !$0.isQuickTerminal &&
+                    normalizePathForCompare($0.rootProjectPath) == normalizePathForCompare(rootProjectPath)
             })
-            let attention = owningProjectPoolSession.flatMap { attentionStateByProjectPath[$0.projectPath] }
+            let attention = visibleSidebarSession.flatMap { attentionStateByProjectPath[$0.projectPath] }
             return WorkspaceSidebarWorktreeItem(
                 rootProjectPath: rootProjectPath,
                 worktree: worktree,
-                isOpen: owningProjectPoolSession != nil,
-                isActive: owningProjectPoolSession != nil && activeWorkspaceProjectPath == worktree.path,
+                isOpen: visibleSidebarSession != nil,
+                isActive: visibleSidebarSession != nil && activeWorkspaceProjectPath == worktree.path,
                 notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
                 unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
                 taskStatus: attention.map(\.taskStatus),
