@@ -294,6 +294,75 @@ final class WorkspaceGitLogViewModelTests: XCTestCase {
         XCTAssertEqual(threadRecorder.values, [false], "graph projection 应在后台线程构建，避免卡住主线程刷新")
     }
 
+    func testResolveFileChangeForOpeningDiffLoadsCommitDetailAndSelectsFirstFile() async throws {
+        let counter = CallCounter()
+        let repositoryPath = "/tmp/repo"
+        let commit = Self.makeCommitSummary(hash: "open-1")
+        let firstFile = WorkspaceGitCommitFileChange(path: "Sources/First.swift", status: .modified)
+        let secondFile = WorkspaceGitCommitFileChange(path: "Sources/Second.swift", status: .added)
+        let detail = Self.makeCommitDetail(hash: commit.hash, files: [firstFile, secondFile])
+        let viewModel = makeViewModel(
+            repositoryPath: repositoryPath,
+            client: .init(
+                loadLogSnapshot: { path, _ in
+                    XCTAssertEqual(path, repositoryPath)
+                    return Self.makeSnapshot(commits: [commit])
+                },
+                loadCommitSummary: { path, hash in
+                    counter.increment("summary")
+                    XCTAssertEqual(path, repositoryPath)
+                    XCTAssertEqual(hash, commit.hash)
+                    return detail
+                },
+                loadFileDiffForCommit: { _, _, _ in
+                    counter.increment("fileDiff")
+                    return ""
+                },
+                loadAuthorSuggestions: { _, _ in [] }
+            )
+        )
+
+        let fileToOpen = await viewModel.resolveFileChangeForOpeningDiff(commitHash: commit.hash)
+
+        XCTAssertEqual(fileToOpen, firstFile)
+        XCTAssertEqual(counter.value(for: "summary"), 1)
+        XCTAssertEqual(counter.value(for: "fileDiff"), 0)
+        XCTAssertEqual(viewModel.selectedCommitHash, commit.hash)
+        XCTAssertEqual(viewModel.selectedCommitDetail?.hash, commit.hash)
+        XCTAssertEqual(viewModel.selectedFilePath, firstFile.path)
+    }
+
+    func testResolveFileChangeForOpeningDiffPrefersAlreadySelectedFile() async throws {
+        let repositoryPath = "/tmp/repo"
+        let commit = Self.makeCommitSummary(hash: "open-2")
+        let firstFile = WorkspaceGitCommitFileChange(path: "Sources/First.swift", status: .modified)
+        let secondFile = WorkspaceGitCommitFileChange(path: "Sources/Second.swift", status: .renamed)
+        let detail = Self.makeCommitDetail(hash: commit.hash, files: [firstFile, secondFile])
+        let viewModel = makeViewModel(
+            repositoryPath: repositoryPath,
+            client: .init(
+                loadLogSnapshot: { _, _ in Self.makeSnapshot(commits: [commit]) },
+                loadCommitSummary: { _, _ in detail },
+                loadFileDiffForCommit: { _, _, _ in "" },
+                loadAuthorSuggestions: { _, _ in [] }
+            )
+        )
+
+        viewModel.selectCommit(commit.hash)
+        let detailLoaded = await waitUntil(timeout: 1) {
+            !viewModel.isLoadingSelectedCommitDetail &&
+            viewModel.selectedCommitDetail?.hash == commit.hash
+        }
+        XCTAssertTrue(detailLoaded)
+
+        viewModel.selectCommitFile(secondFile.path, loadDiffPreview: false)
+
+        let fileToOpen = await viewModel.resolveFileChangeForOpeningDiff(commitHash: commit.hash)
+
+        XCTAssertEqual(fileToOpen, secondFile)
+        XCTAssertEqual(viewModel.selectedFilePath, secondFile.path)
+    }
+
     private func makeViewModel(
         repositoryPath: String,
         client: WorkspaceGitLogViewModel.Client,

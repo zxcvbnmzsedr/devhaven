@@ -280,6 +280,31 @@ public final class WorkspaceGitLogViewModel {
         loadFileDiff(for: selectedCommitHash, filePath: normalized)
     }
 
+    public func resolveFileChangeForOpeningDiff(
+        commitHash: String
+    ) async -> WorkspaceGitCommitFileChange? {
+        if selectedCommitHash != commitHash {
+            selectCommit(commitHash)
+        } else if selectedCommitDetail?.hash != commitHash && !isLoadingSelectedCommitDetail {
+            loadCommitDetail(for: commitHash)
+        }
+
+        if selectedCommitDetail?.hash != commitHash {
+            await commitDetailTask?.value
+        }
+
+        guard selectedCommitHash == commitHash,
+              let detail = selectedCommitDetail,
+              detail.hash == commitHash
+        else {
+            return nil
+        }
+
+        let preferredFile = preferredFileForOpeningDiff(in: detail)
+        selectCommitFile(preferredFile?.path, loadDiffPreview: false)
+        return preferredFile
+    }
+
     public func isCommitHighlightedOnCurrentBranch(_ commit: WorkspaceGitCommitSummary) -> Bool {
         guard selectedRevisionFilter == nil else {
             return false
@@ -577,6 +602,16 @@ public final class WorkspaceGitLogViewModel {
         return decorations.contains("HEAD -> \(currentBranchName)") ||
             decorations == currentBranchName ||
             decorations.contains(", \(currentBranchName)")
+    }
+
+    private func preferredFileForOpeningDiff(
+        in detail: WorkspaceGitCommitDetail
+    ) -> WorkspaceGitCommitFileChange? {
+        if let selectedFilePath,
+           let selectedFile = detail.files.first(where: { $0.path == selectedFilePath }) {
+            return selectedFile
+        }
+        return detail.files.first
     }
 
     private func applyLogSnapshot(

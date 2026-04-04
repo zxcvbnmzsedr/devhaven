@@ -110,7 +110,19 @@ struct WorkspaceGitIdeaLogView: View {
                     .background(NativeTheme.warning.opacity(0.12))
             }
 
-            WorkspaceGitIdeaLogTableView(viewModel: viewModel)
+            WorkspaceGitIdeaLogTableView(
+                viewModel: viewModel,
+                onOpenCommitDiff: openCommitDiff
+            )
+        }
+    }
+
+    private func openCommitDiff(_ commit: WorkspaceGitCommitSummary) {
+        Task { @MainActor in
+            guard let file = await viewModel.resolveFileChangeForOpeningDiff(commitHash: commit.hash) else {
+                return
+            }
+            onOpenDiff(file)
         }
     }
 }
