@@ -10,15 +10,7 @@ struct WorkspaceProjectPickerView: View {
     @FocusState private var isSearchFieldFocused: Bool
 
     private var filteredProjects: [Project] {
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else {
-            return projects
-        }
-        return projects.filter { project in
-            project.name.lowercased().contains(query)
-                || project.path.lowercased().contains(query)
-                || project.tags.contains(where: { $0.lowercased().contains(query) })
-        }
+        projects.filter { workspaceProjectPickerMatchesSearch($0, query: searchQuery) }
     }
 
     var body: some View {
@@ -38,7 +30,7 @@ struct WorkspaceProjectPickerView: View {
                 ContentUnavailableView(
                     "没有匹配项目",
                     systemImage: "magnifyingglass",
-                    description: Text("可以换个关键词继续搜索。")
+                    description: Text("可以搜索项目名 / 路径 / 备注 / 标签，或者换个关键词继续搜索。")
                 )
                 .foregroundStyle(NativeTheme.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -95,7 +87,7 @@ struct WorkspaceProjectPickerView: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(NativeTheme.textSecondary)
-            TextField("搜索项目名称或路径...", text: $searchQuery)
+            TextField("搜索项目名称、路径或备注...", text: $searchQuery)
                 .textFieldStyle(.plain)
                 .foregroundStyle(NativeTheme.textPrimary)
                 .focused($isSearchFieldFocused)
@@ -111,16 +103,23 @@ struct WorkspaceProjectPickerView: View {
     private func projectRow(_ project: Project) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(project.name)
+                Text(projectSearchHighlightedText(project.name, query: searchQuery))
                     .font(.body.weight(.semibold))
                     .foregroundStyle(NativeTheme.textPrimary)
                     .lineLimit(1)
-                Text(project.path)
+                Text(projectSearchHighlightedText(project.path, query: searchQuery))
                     .font(.caption)
                     .foregroundStyle(NativeTheme.textSecondary)
                     .lineLimit(1)
+                if let notesSummary = project.notesSummary,
+                   !notesSummary.isEmpty {
+                    Text(projectSearchHighlightedText(notesSummary, query: searchQuery))
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textPrimary.opacity(0.82))
+                        .lineLimit(1)
+                }
                 if !project.tags.isEmpty {
-                    Text(project.tags.joined(separator: " · "))
+                    Text(projectSearchHighlightedText(project.tags.joined(separator: " · "), query: searchQuery))
                         .font(.caption2)
                         .foregroundStyle(NativeTheme.textSecondary)
                         .lineLimit(1)
@@ -149,4 +148,19 @@ struct WorkspaceProjectPickerView: View {
             isSearchFieldFocused = true
         }
     }
+}
+
+func workspaceProjectPickerMatchesSearch(
+    _ project: Project,
+    query: String
+) -> Bool {
+    let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !normalizedQuery.isEmpty else {
+        return true
+    }
+
+    return project.name.lowercased().contains(normalizedQuery)
+        || project.path.lowercased().contains(normalizedQuery)
+        || (project.notesSummary?.lowercased().contains(normalizedQuery) ?? false)
+        || project.tags.contains(where: { $0.lowercased().contains(normalizedQuery) })
 }

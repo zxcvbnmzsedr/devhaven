@@ -62,7 +62,7 @@ struct MainContentView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(NativeTheme.textSecondary)
-                TextField("搜索项目...", text: $viewModel.searchQuery)
+                TextField("搜索项目、备注...", text: $viewModel.searchQuery)
                     .textFieldStyle(.plain)
                     .foregroundStyle(NativeTheme.textPrimary)
                     .focused($focusedField, equals: .search)
@@ -135,7 +135,7 @@ struct MainContentView: View {
                 ContentUnavailableView(
                     "没有匹配项目",
                     systemImage: "magnifyingglass",
-                    description: Text("可以调整搜索条件，或者切换目录 / 标签 / Git 筛选。")
+                    description: Text("可以搜索项目名 / 路径 / 备注 / 标签 / Git 摘要，或者切换目录 / 标签 / Git 筛选。")
                 )
             }
         }
@@ -146,7 +146,7 @@ struct MainContentView: View {
     private func projectCard(_ project: Project) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
-                Text(project.name)
+                Text(projectSearchHighlightedText(project.name, query: viewModel.searchQuery))
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(NativeTheme.textPrimary)
                     .lineLimit(2)
@@ -163,13 +163,13 @@ struct MainContentView: View {
                 }
             }
 
-            Text("~/\(compactDisplayPath(project.path))")
+            Text(projectSearchHighlightedText("~/\(compactDisplayPath(project.path))", query: viewModel.searchQuery))
                 .font(.caption)
                 .foregroundStyle(NativeTheme.textSecondary)
                 .lineLimit(1)
 
             if let notesSummary = project.notesSummary {
-                Text(notesSummary)
+                Text(projectSearchHighlightedText(notesSummary, query: viewModel.searchQuery))
                     .font(.caption)
                     .foregroundStyle(NativeTheme.textPrimary.opacity(0.82))
                     .lineLimit(2)
@@ -222,22 +222,22 @@ struct MainContentView: View {
     private func projectRow(_ project: Project) -> some View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(project.name)
+                Text(projectSearchHighlightedText(project.name, query: viewModel.searchQuery))
                     .font(.headline)
                     .foregroundStyle(NativeTheme.textPrimary)
-                Text(project.path)
+                Text(projectSearchHighlightedText(project.path, query: viewModel.searchQuery))
                     .font(.caption)
                     .foregroundStyle(NativeTheme.textSecondary)
                     .lineLimit(1)
                 if let notesSummary = project.notesSummary {
-                    Text(notesSummary)
+                    Text(projectSearchHighlightedText(notesSummary, query: viewModel.searchQuery))
                         .font(.caption)
                         .foregroundStyle(NativeTheme.textPrimary.opacity(0.82))
                         .lineLimit(1)
                 }
             }
             Spacer()
-            Text(project.isGitRepository ? (project.gitLastCommitMessage ?? "暂无提交摘要") : "--")
+            Text(projectSearchHighlightedText(project.isGitRepository ? (project.gitLastCommitMessage ?? "暂无提交摘要") : "--", query: viewModel.searchQuery))
                 .font(.caption)
                 .foregroundStyle(NativeTheme.textSecondary)
                 .frame(maxWidth: 260, alignment: .leading)

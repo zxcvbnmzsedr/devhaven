@@ -4908,6 +4908,7 @@ public final class NativeAppViewModel {
         }
         return project.name.lowercased().contains(query)
             || project.path.lowercased().contains(query)
+            || (project.notesSummary?.lowercased().contains(query) ?? false)
             || project.tags.contains(where: { $0.lowercased().contains(query) })
             || (project.isGitRepository && (project.gitLastCommitMessage?.lowercased().contains(query) ?? false))
     }
