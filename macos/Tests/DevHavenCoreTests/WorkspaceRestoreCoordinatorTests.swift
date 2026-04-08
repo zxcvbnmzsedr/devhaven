@@ -27,7 +27,7 @@ final class WorkspaceRestoreCoordinatorTests: XCTestCase {
             activeProjectPath: projectPath,
             selectedProjectPath: projectPath,
             sessions: [session],
-            paneSnapshotProvider: { _, _ in
+            paneSnapshotProvider: { _, _, _ in
                 WorkspaceTerminalRestoreContext(
                     workingDirectory: projectPath,
                     title: "Shell",
@@ -45,7 +45,7 @@ final class WorkspaceRestoreCoordinatorTests: XCTestCase {
             activeProjectPath: projectPath,
             selectedProjectPath: projectPath,
             sessions: [session],
-            paneSnapshotProvider: { _, _ in
+            paneSnapshotProvider: { _, _, _ in
                 WorkspaceTerminalRestoreContext(
                     workingDirectory: projectPath,
                     title: "Shell",
@@ -57,6 +57,49 @@ final class WorkspaceRestoreCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(manifestWriteCounter.value, writesAfterFirstFlush)
+    }
+
+    func testAutosaveAndFlushUseExpectedSnapshotFreshness() async throws {
+        let tempHomeURL = makeTemporaryHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: tempHomeURL) }
+
+        let store = WorkspaceRestoreStore(homeDirectoryURL: tempHomeURL)
+        let coordinator = WorkspaceRestoreCoordinator(store: store, autosaveDelayNanoseconds: 0)
+        let projectPath = "/tmp/devhaven-restore"
+        let session = OpenWorkspaceSessionState(
+            projectPath: projectPath,
+            controller: GhosttyWorkspaceController(projectPath: projectPath)
+        )
+
+        var observedFreshness: [WorkspacePaneSnapshotFreshness] = []
+        let provider: WorkspacePaneSnapshotProvider = { _, _, freshness in
+            observedFreshness.append(freshness)
+            return WorkspaceTerminalRestoreContext(
+                workingDirectory: projectPath,
+                title: "Shell",
+                snapshotText: "echo first",
+                agentSummary: nil
+            )
+        }
+
+        coordinator.scheduleAutosave(
+            activeProjectPath: projectPath,
+            selectedProjectPath: projectPath,
+            sessions: [session],
+            paneSnapshotProvider: provider,
+            editorRestoreProvider: nil
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        try coordinator.flushNow(
+            activeProjectPath: projectPath,
+            selectedProjectPath: projectPath,
+            sessions: [session],
+            paneSnapshotProvider: provider,
+            editorRestoreProvider: nil
+        )
+
+        XCTAssertEqual(observedFreshness, [.autosave, .flush])
     }
 
     func testSaveAutosaveSnapshotDropsStaleGeneration() throws {

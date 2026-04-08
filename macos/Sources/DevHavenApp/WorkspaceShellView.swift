@@ -308,10 +308,12 @@ struct WorkspaceShellView: View {
     }
 
     private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider {
-        { projectPath, paneID in
+        { projectPath, paneID, freshness in
             terminalStoreRegistry
                 .modelIfLoaded(for: projectPath, paneID: paneID)?
-                .snapshotContext()
+                .snapshotContext(
+                    visibleTextSampling: freshness == .flush ? .forceRefresh : .preferCache
+                )
                 .restoreContext
         }
     }

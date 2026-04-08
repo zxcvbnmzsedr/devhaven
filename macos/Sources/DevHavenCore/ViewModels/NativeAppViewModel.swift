@@ -601,9 +601,9 @@ public final class NativeAppViewModel {
         }
 
         let projectsByNormalizedPath = self.projectsByNormalizedPath
-        let activeAlignmentGroupID = activeWorkspaceSession?.workspaceRootContext?.workspaceID
+        let activeWorkspaceRootGroupID = activeWorkspaceSession?.workspaceRootContext?.workspaceID
+        let activeWorkspaceOwnedGroupID = activeWorkspaceSession?.workspaceAlignmentGroupID
         let normalizedActiveWorkspaceProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath)
-        let normalizedActiveWorkspaceRootProjectPath = normalizedOptionalPathForCompare(activeWorkspaceRootProjectPath)
         let groups = snapshot.appState.workspaceAlignmentGroups.map { definition in
             let aliasByProjectPath = resolvedWorkspaceAlignmentAliases(
                 for: definition,
@@ -623,10 +623,14 @@ public final class NativeAppViewModel {
                     targetBranch: memberDefinition.targetBranch,
                     status: status
                 )
-                let normalizedOpenTargetPath = normalizePathForCompare(openTarget.path)
-                let isActive = normalizedActiveWorkspaceRootProjectPath == normalizedProjectPath ||
-                    normalizedActiveWorkspaceProjectPath == normalizedProjectPath ||
-                    normalizedActiveWorkspaceProjectPath == normalizedOpenTargetPath
+                let isActive = isActiveWorkspaceAlignmentMember(
+                    groupID: definition.id,
+                    memberProjectPath: normalizedProjectPath,
+                    status: status,
+                    openTarget: openTarget,
+                    normalizedActiveWorkspaceProjectPath: normalizedActiveWorkspaceProjectPath,
+                    activeWorkspaceOwnedGroupID: activeWorkspaceOwnedGroupID
+                )
                 return WorkspaceAlignmentMemberProjection(
                     groupID: definition.id,
                     projectPath: normalizedProjectPath,
@@ -644,7 +648,9 @@ public final class NativeAppViewModel {
                     isActive: isActive
                 )
             }
-            let isActive = activeAlignmentGroupID == definition.id || members.contains(where: \.isActive)
+            let isActive = activeWorkspaceRootGroupID == definition.id ||
+                activeWorkspaceOwnedGroupID == definition.id ||
+                members.contains(where: \.isActive)
             return WorkspaceAlignmentGroupProjection(
                 definition: definition,
                 members: members,
@@ -656,6 +662,44 @@ public final class NativeAppViewModel {
             groups: groups
         )
         return groups
+    }
+
+    private func isActiveWorkspaceAlignmentMember(
+        groupID: String,
+        memberProjectPath: String,
+        status: WorkspaceAlignmentMemberStatus,
+        openTarget: WorkspaceAlignmentOpenTarget,
+        normalizedActiveWorkspaceProjectPath: String?,
+        activeWorkspaceOwnedGroupID: String?
+    ) -> Bool {
+        guard let normalizedActiveWorkspaceProjectPath else {
+            return false
+        }
+
+        let normalizedMemberProjectPath = normalizePathForCompare(memberProjectPath)
+        let normalizedOpenTargetPath = normalizePathForCompare(openTarget.path)
+
+        if let activeWorkspaceOwnedGroupID {
+            guard activeWorkspaceOwnedGroupID == groupID else {
+                return false
+            }
+            return normalizedActiveWorkspaceProjectPath == normalizedOpenTargetPath ||
+                normalizedActiveWorkspaceProjectPath == normalizedMemberProjectPath
+        }
+
+        guard normalizedActiveWorkspaceProjectPath == normalizedOpenTargetPath else {
+            return false
+        }
+
+        switch openTarget {
+        case .worktree:
+            return true
+        case .project:
+            guard case .aligned = status else {
+                return false
+            }
+            return normalizedActiveWorkspaceProjectPath == normalizedMemberProjectPath
+        }
     }
 
     public func workspaceSidebarProjectionState() -> WorkspaceSidebarProjectionState {

@@ -587,6 +587,144 @@ final class NativeAppViewModelWorkspaceAlignmentTests: XCTestCase {
         XCTAssertNil(activeSession.workspaceAlignmentGroupID)
     }
 
+    func testRegularOpenedWorktreeOnlyHighlightsMatchingWorkspaceGroupWhenMultipleGroupsShareRootProject() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "develop")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let issuesWorktreeURL = fixture.rootURL.appendingPathComponent("issues-8-worktree", isDirectory: true)
+        let excelWorktreeURL = fixture.rootURL.appendingPathComponent("feature-excel-worktree", isDirectory: true)
+        let partnerWorktreeURL = fixture.rootURL.appendingPathComponent("feature-openapi-partner-integration-worktree", isDirectory: true)
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", issuesWorktreeURL.path, "-b", "issues/8", "develop"]
+        )
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", excelWorktreeURL.path, "-b", "feature/excel", "develop"]
+        )
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", partnerWorktreeURL.path, "-b", "feature/openapi-partner-integration", "develop"]
+        )
+        let expectedIssuesWorktreePath = issuesWorktreeURL.resolvingSymlinksInPath().path
+
+        let issuesGroup = WorkspaceAlignmentGroupDefinition(
+            name: "回寄报告状态同步",
+            targetBranch: "issues/8",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        let excelGroup = WorkspaceAlignmentGroupDefinition(
+            name: "检测回寄导出excel",
+            targetBranch: "feature/excel",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        let partnerGroup = WorkspaceAlignmentGroupDefinition(
+            name: "对接艾米森",
+            targetBranch: "feature/openapi-partner-integration",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+
+        let viewModel = fixture.makeViewModel()
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [partnerGroup, excelGroup, issuesGroup]),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.recheckWorkspaceAlignmentGroup(partnerGroup.id)
+        try await viewModel.recheckWorkspaceAlignmentGroup(excelGroup.id)
+        try await viewModel.recheckWorkspaceAlignmentGroup(issuesGroup.id)
+
+        viewModel.openWorkspaceWorktree(expectedIssuesWorktreePath, from: fixture.repositoryURL.path)
+
+        let groupsByName = Dictionary(uniqueKeysWithValues: viewModel.workspaceAlignmentGroups.map { ($0.definition.name, $0) })
+        let activeIssuesGroup = try XCTUnwrap(groupsByName["回寄报告状态同步"])
+        let inactiveExcelGroup = try XCTUnwrap(groupsByName["检测回寄导出excel"])
+        let inactivePartnerGroup = try XCTUnwrap(groupsByName["对接艾米森"])
+
+        XCTAssertTrue(activeIssuesGroup.isActive)
+        XCTAssertTrue(activeIssuesGroup.members.first?.isActive == true)
+        XCTAssertFalse(inactiveExcelGroup.isActive)
+        XCTAssertFalse(inactiveExcelGroup.members.first?.isActive == true)
+        XCTAssertFalse(inactivePartnerGroup.isActive)
+        XCTAssertFalse(inactivePartnerGroup.members.first?.isActive == true)
+    }
+
+    func testAlignmentOwnedWorktreeOnlyHighlightsOwningWorkspaceGroupWhenMultipleGroupsShareRootProject() async throws {
+        let fixture = try GitWorkspaceAlignmentFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "develop")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let issuesWorktreeURL = fixture.rootURL.appendingPathComponent("issues-8-worktree", isDirectory: true)
+        let excelWorktreeURL = fixture.rootURL.appendingPathComponent("feature-excel-worktree", isDirectory: true)
+        let partnerWorktreeURL = fixture.rootURL.appendingPathComponent("feature-openapi-partner-integration-worktree", isDirectory: true)
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", issuesWorktreeURL.path, "-b", "issues/8", "develop"]
+        )
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", excelWorktreeURL.path, "-b", "feature/excel", "develop"]
+        )
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", partnerWorktreeURL.path, "-b", "feature/openapi-partner-integration", "develop"]
+        )
+        let expectedIssuesWorktreePath = issuesWorktreeURL.resolvingSymlinksInPath().path
+
+        let issuesGroup = WorkspaceAlignmentGroupDefinition(
+            name: "回寄报告状态同步",
+            targetBranch: "issues/8",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        let excelGroup = WorkspaceAlignmentGroupDefinition(
+            name: "检测回寄导出excel",
+            targetBranch: "feature/excel",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+        let partnerGroup = WorkspaceAlignmentGroupDefinition(
+            name: "对接艾米森",
+            targetBranch: "feature/openapi-partner-integration",
+            projectPaths: [fixture.repositoryURL.path]
+        )
+
+        let viewModel = fixture.makeViewModel()
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(workspaceAlignmentGroups: [partnerGroup, excelGroup, issuesGroup]),
+            projects: [fixture.makeProject()]
+        )
+
+        try await viewModel.recheckWorkspaceAlignmentGroup(partnerGroup.id)
+        try await viewModel.recheckWorkspaceAlignmentGroup(excelGroup.id)
+        try await viewModel.recheckWorkspaceAlignmentGroup(issuesGroup.id)
+
+        let issuesMember = try XCTUnwrap(
+            viewModel.workspaceAlignmentGroups.first(where: { $0.id == issuesGroup.id })?.members.first
+        )
+        viewModel.openWorkspaceAlignmentMember(issuesMember)
+
+        let activeSession = try XCTUnwrap(viewModel.openWorkspaceSessions.first(where: {
+            canonicalPath($0.projectPath) == canonicalPath(expectedIssuesWorktreePath)
+        }))
+        XCTAssertEqual(activeSession.workspaceAlignmentGroupID, issuesGroup.id)
+
+        let groupsByName = Dictionary(uniqueKeysWithValues: viewModel.workspaceAlignmentGroups.map { ($0.definition.name, $0) })
+        let activeIssuesGroup = try XCTUnwrap(groupsByName["回寄报告状态同步"])
+        let inactiveExcelGroup = try XCTUnwrap(groupsByName["检测回寄导出excel"])
+        let inactivePartnerGroup = try XCTUnwrap(groupsByName["对接艾米森"])
+
+        XCTAssertTrue(activeIssuesGroup.isActive)
+        XCTAssertTrue(activeIssuesGroup.members.first?.isActive == true)
+        XCTAssertFalse(inactiveExcelGroup.isActive)
+        XCTAssertFalse(inactiveExcelGroup.members.first?.isActive == true)
+        XCTAssertFalse(inactivePartnerGroup.isActive)
+        XCTAssertFalse(inactivePartnerGroup.members.first?.isActive == true)
+    }
+
     func testSidebarSelectingRootProjectOpensRealRootSessionForRegularWorktree() async throws {
         let fixture = try GitWorkspaceAlignmentFixture.make()
         defer { fixture.cleanup() }

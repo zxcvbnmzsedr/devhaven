@@ -1,6 +1,15 @@
 import Foundation
 
-public typealias WorkspacePaneSnapshotProvider = @MainActor (_ projectPath: String, _ paneID: String) -> WorkspaceTerminalRestoreContext?
+public enum WorkspacePaneSnapshotFreshness: Sendable {
+    case autosave
+    case flush
+}
+
+public typealias WorkspacePaneSnapshotProvider = @MainActor (
+    _ projectPath: String,
+    _ paneID: String,
+    _ freshness: WorkspacePaneSnapshotFreshness
+) -> WorkspaceTerminalRestoreContext?
 public typealias WorkspaceEditorRestoreProvider = @MainActor (_ projectPath: String) -> WorkspaceEditorRestoreState
 
 public struct WorkspaceEditorRestoreState: Equatable, Sendable {
@@ -70,7 +79,8 @@ final class WorkspaceRestoreCoordinator {
                 selectedProjectPath: selectedProjectPath,
                 sessions: sessions,
                 paneSnapshotProvider: paneSnapshotProvider,
-                editorRestoreProvider: editorRestoreProvider
+                editorRestoreProvider: editorRestoreProvider,
+                snapshotFreshness: .autosave
             )
             guard self.shouldPersistSnapshot(snapshot) else {
                 return
@@ -106,7 +116,8 @@ final class WorkspaceRestoreCoordinator {
             selectedProjectPath: selectedProjectPath,
             sessions: sessions,
             paneSnapshotProvider: paneSnapshotProvider,
-            editorRestoreProvider: editorRestoreProvider
+            editorRestoreProvider: editorRestoreProvider,
+            snapshotFreshness: .flush
         )
 
         guard !snapshot.isEmpty else {
@@ -160,7 +171,8 @@ final class WorkspaceRestoreCoordinator {
         selectedProjectPath: String?,
         sessions: [OpenWorkspaceSessionState],
         paneSnapshotProvider: WorkspacePaneSnapshotProvider?,
-        editorRestoreProvider: WorkspaceEditorRestoreProvider?
+        editorRestoreProvider: WorkspaceEditorRestoreProvider?,
+        snapshotFreshness: WorkspacePaneSnapshotFreshness
     ) -> WorkspaceRestoreSnapshot {
         let previousPaneMap = makePreviousPaneMap()
         let sessionSnapshots = sessions.map { session in
@@ -177,7 +189,8 @@ final class WorkspaceRestoreCoordinator {
                         node: tab.tree.root,
                         projectPath: session.projectPath,
                         paneSnapshotProvider: paneSnapshotProvider,
-                        previousPaneMap: previousPaneMap
+                        previousPaneMap: previousPaneMap,
+                        snapshotFreshness: snapshotFreshness
                     ),
                     zoomedPaneId: tab.tree.zoomedPaneId
                 )
@@ -240,11 +253,12 @@ final class WorkspaceRestoreCoordinator {
         node: WorkspacePaneTreeRestoreSnapshot.Node,
         projectPath: String,
         paneSnapshotProvider: WorkspacePaneSnapshotProvider?,
-        previousPaneMap: [String: WorkspacePaneRestoreSnapshot]
+        previousPaneMap: [String: WorkspacePaneRestoreSnapshot],
+        snapshotFreshness: WorkspacePaneSnapshotFreshness
     ) -> WorkspacePaneTreeRestoreSnapshot.Node {
         switch node {
         case let .leaf(pane):
-            let currentContext = paneSnapshotProvider?(projectPath, pane.paneId)
+            let currentContext = paneSnapshotProvider?(projectPath, pane.paneId, snapshotFreshness)
             let previousPane = previousPaneMap[paneKey(projectPath: projectPath, paneID: pane.paneId)]
             var items = pane.items
             let selectedItemID = pane.selectedItemId ?? pane.selectedItem?.surfaceId
@@ -286,13 +300,15 @@ final class WorkspaceRestoreCoordinator {
                         node: split.left,
                         projectPath: projectPath,
                         paneSnapshotProvider: paneSnapshotProvider,
-                        previousPaneMap: previousPaneMap
+                        previousPaneMap: previousPaneMap,
+                        snapshotFreshness: snapshotFreshness
                     ),
                     right: enrich(
                         node: split.right,
                         projectPath: projectPath,
                         paneSnapshotProvider: paneSnapshotProvider,
-                        previousPaneMap: previousPaneMap
+                        previousPaneMap: previousPaneMap,
+                        snapshotFreshness: snapshotFreshness
                     )
                 )
             )

@@ -360,6 +360,12 @@ final class GhosttySurfaceHostModel {
     static let codexDisplaySnapshotWindowLimit = CodexAgentDisplaySnapshot.windowLimit
     static let codexDisplaySnapshotRefreshDelay: TimeInterval = 0.6
     static let codexDisplayVisibleTextCacheInterval: TimeInterval = 1
+    static let restoreVisibleTextCacheInterval: TimeInterval = 5
+
+    enum VisibleTextSamplingMode: Sendable {
+        case preferCache
+        case forceRefresh
+    }
 
     struct SnapshotContext: Equatable, Sendable {
         var workingDirectory: String?
@@ -429,6 +435,10 @@ final class GhosttySurfaceHostModel {
     private var cachedCodexVisibleTextSample: String?
     @ObservationIgnored
     private var cachedCodexVisibleTextSampleAt: Date?
+    @ObservationIgnored
+    private var cachedRestoreVisibleTextSample: String?
+    @ObservationIgnored
+    private var cachedRestoreVisibleTextSampleAt: Date?
 
     var currentSurfaceView: GhosttyTerminalSurfaceView? {
         ownedSurfaceView
@@ -445,23 +455,43 @@ final class GhosttySurfaceHostModel {
         observer?(cachedCodexDisplaySnapshot)
     }
 
-    func currentVisibleText() -> String? {
-        guard let text = ownedSurfaceView?.debugVisibleText()
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty
-        else {
-            return request.restoreContext?.snapshotText
+    func currentVisibleText(
+        now: Date = Date(),
+        sampling: VisibleTextSamplingMode = .preferCache,
+        sampleVisibleText: (() -> String?)? = nil
+    ) -> String? {
+        if sampling == .preferCache,
+           let cachedRestoreVisibleTextSampleAt,
+           now.timeIntervalSince(cachedRestoreVisibleTextSampleAt) < Self.restoreVisibleTextCacheInterval {
+            return cachedRestoreVisibleTextSample ?? request.restoreContext?.snapshotText
         }
-        return text
+
+        let sampledText = (sampleVisibleText?() ?? ownedSurfaceView?.debugVisibleText())
+            .flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty }
+        if let sampledText {
+            cachedRestoreVisibleTextSample = sampledText
+            cachedRestoreVisibleTextSampleAt = now
+            return sampledText
+        }
+
+        return cachedRestoreVisibleTextSample ?? request.restoreContext?.snapshotText
     }
 
-    func snapshotContext() -> SnapshotContext {
+    func snapshotContext(
+        visibleTextSampling: VisibleTextSamplingMode = .preferCache,
+        now: Date = Date(),
+        sampleVisibleText: (() -> String?)? = nil
+    ) -> SnapshotContext {
         SnapshotContext(
             workingDirectory: surfaceWorkingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? request.restoreContext?.workingDirectory,
             title: surfaceTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
                 ?? request.restoreContext?.title,
-            visibleText: currentVisibleText(),
+            visibleText: currentVisibleText(
+                now: now,
+                sampling: visibleTextSampling,
+                sampleVisibleText: sampleVisibleText
+            ),
             agentSummary: request.restoreContext?.agentSummary
         )
     }
