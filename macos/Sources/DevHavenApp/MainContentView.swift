@@ -7,6 +7,14 @@ struct MainContentView: View {
         case search
     }
 
+    private enum ProjectListMetrics {
+        static let projectColumnWidth: CGFloat = 250
+        static let notesColumnWidth: CGFloat = 280
+        static let gitSummaryColumnWidth: CGFloat = 220
+        static let dateColumnWidth: CGFloat = 96
+        static let statusColumnWidth: CGFloat = 74
+    }
+
     @Bindable var viewModel: NativeAppViewModel
     @FocusState private var focusedField: FocusableField?
 
@@ -36,13 +44,14 @@ struct MainContentView: View {
                         }
                         .padding(18)
                     } else {
-                        LazyVStack(spacing: 0) {
+                        LazyVStack(spacing: 6) {
+                            projectListHeader
                             ForEach(viewModel.filteredProjects) { project in
                                 projectRow(project)
                             }
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 14)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12)
                     }
                 }
                 .background(NativeTheme.window)
@@ -220,44 +229,36 @@ struct MainContentView: View {
     }
 
     private func projectRow(_ project: Project) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(projectSearchHighlightedText(project.name, query: viewModel.searchQuery))
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(NativeTheme.textPrimary)
-                Text(projectSearchHighlightedText(project.path, query: viewModel.searchQuery))
-                    .font(.caption)
-                    .foregroundStyle(NativeTheme.textSecondary)
                     .lineLimit(1)
-                if let notesSummary = project.notesSummary {
-                    Text(projectSearchHighlightedText(notesSummary, query: viewModel.searchQuery))
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textPrimary.opacity(0.82))
-                        .lineLimit(1)
-                }
-            }
-            Spacer()
-            Text(projectSearchHighlightedText(project.isGitRepository ? (project.gitLastCommitMessage ?? "暂无提交摘要") : "--", query: viewModel.searchQuery))
-                .font(.caption)
-                .foregroundStyle(NativeTheme.textSecondary)
-                .frame(maxWidth: 260, alignment: .leading)
-            Text(dateString(project.mtime))
-                .font(.caption)
-                .foregroundStyle(NativeTheme.textSecondary)
-                .frame(width: 120, alignment: .leading)
-            if project.gitCommits > 0 {
-                Text("\(project.gitCommits) 次提交")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(NativeTheme.accent)
-            } else if project.isGitRepository {
-                Text("Git 项目")
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(NativeTheme.accent)
-            } else {
-                Text("非 Git")
+                Text(projectSearchHighlightedText(project.path, query: viewModel.searchQuery))
                     .font(.caption2)
                     .foregroundStyle(NativeTheme.textSecondary)
+                    .lineLimit(1)
             }
+            .frame(width: ProjectListMetrics.projectColumnWidth, alignment: .leading)
+
+            projectRowNotesColumn(project)
+
+            Text(projectSearchHighlightedText(project.isGitRepository ? (project.gitLastCommitMessage ?? "暂无提交摘要") : "--", query: viewModel.searchQuery))
+                .font(.caption2)
+                .foregroundStyle(NativeTheme.textSecondary)
+                .frame(width: ProjectListMetrics.gitSummaryColumnWidth, alignment: .leading)
+                .lineLimit(2)
+            Text(dateString(project.mtime))
+                .font(.caption2)
+                .foregroundStyle(NativeTheme.textSecondary)
+                .frame(width: ProjectListMetrics.dateColumnWidth, alignment: .leading)
+
+            projectRowStatusBadge(project)
+                .frame(width: ProjectListMetrics.statusColumnWidth, alignment: .leading)
+
+            Spacer(minLength: 0)
+
             HStack(spacing: 10) {
                 rowActionIcon("folder") { openInFinder(project.path) }
                 rowActionIcon(viewModel.snapshot.appState.favoriteProjectPaths.contains(project.path) ? "star.fill" : "star") {
@@ -269,8 +270,8 @@ struct MainContentView: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
         .background(viewModel.selectedProjectPath == project.path && viewModel.isDetailPanelPresented ? NativeTheme.accent.opacity(0.12) : Color.clear)
         .clipShape(.rect(cornerRadius: 10))
         .contentShape(.rect(cornerRadius: 10))
@@ -283,6 +284,79 @@ struct MainContentView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .help("单击查看详情，双击进入工作区")
+    }
+
+    private var projectListHeader: some View {
+        HStack(spacing: 12) {
+            projectListHeaderLabel("项目")
+                .frame(width: ProjectListMetrics.projectColumnWidth, alignment: .leading)
+            projectListHeaderLabel("备注")
+                .frame(width: ProjectListMetrics.notesColumnWidth, alignment: .leading)
+            projectListHeaderLabel("Git 摘要")
+                .frame(width: ProjectListMetrics.gitSummaryColumnWidth, alignment: .leading)
+            projectListHeaderLabel("修改时间")
+                .frame(width: ProjectListMetrics.dateColumnWidth, alignment: .leading)
+            projectListHeaderLabel("状态")
+                .frame(width: ProjectListMetrics.statusColumnWidth, alignment: .leading)
+            Spacer(minLength: 0)
+            projectListHeaderLabel("操作")
+                .frame(width: 110, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 2)
+    }
+
+    private func projectListHeaderLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(NativeTheme.textSecondary)
+            .textCase(.uppercase)
+    }
+
+    private func projectRowNotesColumn(_ project: Project) -> some View {
+        let notesSummary = project.notesSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Group {
+            if let notesSummary, !notesSummary.isEmpty {
+                Text(projectSearchHighlightedText(notesSummary, query: viewModel.searchQuery))
+                    .font(.caption)
+                    .foregroundStyle(NativeTheme.textPrimary.opacity(0.86))
+                    .lineLimit(2)
+            } else {
+                Text("暂无备注")
+                    .font(.caption)
+                    .foregroundStyle(NativeTheme.textSecondary.opacity(0.78))
+                    .lineLimit(1)
+            }
+        }
+        .frame(width: ProjectListMetrics.notesColumnWidth, alignment: .leading)
+    }
+
+    private func projectRowStatusBadge(_ project: Project) -> some View {
+        let title: String
+        let foreground: Color
+        let background: Color
+
+        if project.gitCommits > 0 {
+            title = "\(project.gitCommits) 提交"
+            foreground = NativeTheme.accent
+            background = NativeTheme.accent.opacity(0.14)
+        } else if project.isGitRepository {
+            title = "Git"
+            foreground = NativeTheme.accent
+            background = NativeTheme.accent.opacity(0.14)
+        } else {
+            title = "非 Git"
+            foreground = NativeTheme.textSecondary
+            background = NativeTheme.surface
+        }
+
+        return Text(title)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(background)
+            .clipShape(.rect(cornerRadius: 8))
     }
 
     private func toolbarChip(_ title: String, systemImage: String) -> some View {
@@ -329,9 +403,9 @@ struct MainContentView: View {
     private func rowActionIcon(_ systemName: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(NativeTheme.textSecondary)
-                .frame(width: 28, height: 28)
+                .frame(width: 26, height: 26)
                 .background(NativeTheme.elevated)
                 .clipShape(.rect(cornerRadius: 8))
         }
