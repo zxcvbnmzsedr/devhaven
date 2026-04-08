@@ -16,6 +16,7 @@ struct WorkspaceProjectListView: View {
     let onRequestDeleteWorktree: (String, String) -> Void
     let onFocusNotification: (WorkspaceTerminalNotification) -> Void
     let onCloseProject: (String) -> Void
+    let onMoveProjectGroup: (String, String, Bool) -> Void
     let onRequestCreateWorkspaceAlignment: (String?) -> Void
     let onOpenWorkspaceAlignment: (String) -> Void
     let onRequestEditWorkspaceAlignment: (String) -> Void
@@ -23,10 +24,16 @@ struct WorkspaceProjectListView: View {
     let onRequestRecheckWorkspaceAlignment: (String) -> Void
     let onRequestApplyWorkspaceAlignment: (String) -> Void
     let onRequestDeleteWorkspaceAlignment: (String) -> Void
+    let onMoveWorkspaceAlignmentGroup: (String, String, Bool) -> Void
     let onRequestApplyWorkspaceAlignmentProject: (String, String) -> Void
     let onRequestRemoveWorkspaceAlignmentProject: (String, String) -> Void
     let onAddProjectToWorkspaceAlignment: (String, String) -> Void
     let onExit: () -> Void
+
+    @State private var projectDropTargetID: String?
+    @State private var projectDropTargetInsertAfter: Bool?
+    @State private var workspaceDropTargetID: String?
+    @State private var workspaceDropTargetInsertAfter: Bool?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,7 +53,26 @@ struct WorkspaceProjectListView: View {
                             onRequestDeleteWorktree: onRequestDeleteWorktree,
                             onFocusNotification: onFocusNotification,
                             onRequestCreateWorkspaceAlignmentFromProject: onRequestCreateWorkspaceAlignment,
-                            onAddProjectToWorkspaceAlignment: onAddProjectToWorkspaceAlignment
+                            onAddProjectToWorkspaceAlignment: onAddProjectToWorkspaceAlignment,
+                            dropIndicatorPosition: {
+                                guard projectDropTargetID == group.id else {
+                                    return nil
+                                }
+                                return projectDropTargetInsertAfter == true ? .after : .before
+                            }(),
+                            onDropTargetChange: { insertAfter, isTargeted in
+                                if isTargeted {
+                                    projectDropTargetID = group.id
+                                    projectDropTargetInsertAfter = insertAfter
+                                } else if projectDropTargetID == group.id,
+                                          projectDropTargetInsertAfter == insertAfter {
+                                    projectDropTargetID = nil
+                                    projectDropTargetInsertAfter = nil
+                                }
+                            },
+                            onMoveDrop: { sourceID, insertAfter in
+                                onMoveProjectGroup(sourceID, group.id, insertAfter)
+                            }
                         )
                     }
 
@@ -62,9 +88,14 @@ struct WorkspaceProjectListView: View {
                         onRequestRecheck: onRequestRecheckWorkspaceAlignment,
                         onRequestApply: onRequestApplyWorkspaceAlignment,
                         onRequestDelete: onRequestDeleteWorkspaceAlignment,
+                        onMoveGroup: { sourceID, targetID, insertAfter in
+                            onMoveWorkspaceAlignmentGroup(sourceID, targetID, insertAfter)
+                        },
                         onOpenProject: onOpenWorkspaceAlignmentProject,
                         onRequestApplyProject: onRequestApplyWorkspaceAlignmentProject,
-                        onRequestRemoveProject: onRequestRemoveWorkspaceAlignmentProject
+                        onRequestRemoveProject: onRequestRemoveWorkspaceAlignmentProject,
+                        dropTargetGroupID: $workspaceDropTargetID,
+                        dropTargetInsertAfter: $workspaceDropTargetInsertAfter
                     )
                 }
                 .padding(10)
@@ -108,6 +139,11 @@ struct WorkspaceProjectListView: View {
 
 // MARK: - Project Group Row
 
+private enum ProjectGroupDropIndicatorPosition {
+    case before
+    case after
+}
+
 private struct ProjectGroupView: View {
     let group: WorkspaceSidebarProjectGroup
     let workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection]
@@ -121,11 +157,21 @@ private struct ProjectGroupView: View {
     let onFocusNotification: (WorkspaceTerminalNotification) -> Void
     let onRequestCreateWorkspaceAlignmentFromProject: (String?) -> Void
     let onAddProjectToWorkspaceAlignment: (String, String) -> Void
+    let dropIndicatorPosition: ProjectGroupDropIndicatorPosition?
+    let onDropTargetChange: (Bool, Bool) -> Void
+    let onMoveDrop: (String, Bool) -> Void
 
     @State private var isHovering = false
 
     private var cardBg: Color {
         group.isActive ? NativeTheme.accent.opacity(0.12) : NativeTheme.elevated
+    }
+
+    private var outlineColor: Color {
+        if dropIndicatorPosition != nil {
+            return NativeTheme.accent.opacity(0.92)
+        }
+        return group.isActive ? NativeTheme.accent.opacity(0.5) : NativeTheme.border.opacity(0.5)
     }
 
     var body: some View {
@@ -174,12 +220,20 @@ private struct ProjectGroupView: View {
             .background(cardBg)
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(group.isActive ? NativeTheme.accent.opacity(0.5) : NativeTheme.border.opacity(0.5), lineWidth: 1)
+                    .stroke(outlineColor, lineWidth: dropIndicatorPosition != nil ? 1.4 : 1)
             )
             .clipShape(.rect(cornerRadius: 10))
             .contentShape(.rect(cornerRadius: 10))
             .help(group.rootProject.path)
             .onHover { isHovering = $0 }
+            .draggable(group.id)
+            .background(dropHotspots)
+            .overlay(alignment: .top) {
+                insertionIndicator(position: .before)
+            }
+            .overlay(alignment: .bottom) {
+                insertionIndicator(position: .after)
+            }
             .contextMenu {
                 if !group.rootProject.isTransientWorkspaceProject {
                     Button("基于当前项目新建工作区…") {
@@ -210,6 +264,59 @@ private struct ProjectGroupView: View {
                 }
                 .padding(.leading, 12)
             }
+        }
+    }
+
+    private var dropHotspots: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                dropHotspot(insertAfter: false)
+                    .frame(height: max(proxy.size.height / 2, 1))
+                dropHotspot(insertAfter: true)
+                    .frame(height: max(proxy.size.height / 2, 1))
+            }
+        }
+        .clipShape(.rect(cornerRadius: 10))
+    }
+
+    private func dropHotspot(insertAfter: Bool) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { items, _ in
+                guard let sourceID = items.first else {
+                    return false
+                }
+                onMoveDrop(sourceID, insertAfter)
+                return true
+            } isTargeted: { isTargeted in
+                onDropTargetChange(insertAfter, isTargeted)
+            }
+    }
+
+    @ViewBuilder
+    private func insertionIndicator(position: ProjectGroupDropIndicatorPosition) -> some View {
+        if dropIndicatorPosition == position {
+            ZStack {
+                Capsule()
+                    .fill(NativeTheme.accent.opacity(0.14))
+                    .frame(height: 12)
+                HStack(spacing: 0) {
+                    Circle()
+                        .fill(NativeTheme.accent)
+                        .frame(width: 8, height: 8)
+                    Capsule()
+                        .fill(NativeTheme.accent)
+                        .frame(height: 4)
+                    Circle()
+                        .fill(NativeTheme.accent)
+                        .frame(width: 8, height: 8)
+                }
+                .shadow(color: NativeTheme.accent.opacity(0.35), radius: 6)
+            }
+            .padding(.horizontal, 10)
+            .offset(y: position == .before ? -6 : 6)
+            .allowsHitTesting(false)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
         }
     }
 

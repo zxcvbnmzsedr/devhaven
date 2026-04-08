@@ -10,9 +10,12 @@ struct WorkspaceAlignmentSectionView: View {
     let onRequestRecheck: (String) -> Void
     let onRequestApply: (String) -> Void
     let onRequestDelete: (String) -> Void
+    let onMoveGroup: (String, String, Bool) -> Void
     let onOpenProject: (WorkspaceAlignmentMemberProjection) -> Void
     let onRequestApplyProject: (String, String) -> Void
     let onRequestRemoveProject: (String, String) -> Void
+    @Binding var dropTargetGroupID: String?
+    @Binding var dropTargetInsertAfter: Bool?
 
     @State private var expandedGroupIDs = Set<String>()
 
@@ -36,6 +39,25 @@ struct WorkspaceAlignmentSectionView: View {
                         onRequestRecheck: { onRequestRecheck(group.id) },
                         onRequestApply: { onRequestApply(group.id) },
                         onRequestDelete: { onRequestDelete(group.id) },
+                        dropIndicatorPosition: {
+                            guard dropTargetGroupID == group.id else {
+                                return nil
+                            }
+                            return dropTargetInsertAfter == true ? .after : .before
+                        }(),
+                        onDropTargetChange: { insertAfter, isTargeted in
+                            if isTargeted {
+                                dropTargetGroupID = group.id
+                                dropTargetInsertAfter = insertAfter
+                            } else if dropTargetGroupID == group.id,
+                                          dropTargetInsertAfter == insertAfter {
+                                dropTargetGroupID = nil
+                                dropTargetInsertAfter = nil
+                            }
+                        },
+                        onMoveDrop: { sourceID, insertAfter in
+                            onMoveGroup(sourceID, group.id, insertAfter)
+                        },
                         onOpenProject: onOpenProject,
                         onRequestApplyProject: { projectPath in
                             onRequestApplyProject(group.id, projectPath)
@@ -120,6 +142,11 @@ struct WorkspaceAlignmentSectionView: View {
     }
 }
 
+private enum WorkspaceAlignmentDropIndicatorPosition {
+    case before
+    case after
+}
+
 private struct WorkspaceAlignmentGroupCard: View {
     let group: WorkspaceAlignmentGroupProjection
     let isExpanded: Bool
@@ -130,6 +157,9 @@ private struct WorkspaceAlignmentGroupCard: View {
     let onRequestRecheck: () -> Void
     let onRequestApply: () -> Void
     let onRequestDelete: () -> Void
+    let dropIndicatorPosition: WorkspaceAlignmentDropIndicatorPosition?
+    let onDropTargetChange: (Bool, Bool) -> Void
+    let onMoveDrop: (String, Bool) -> Void
     let onOpenProject: (WorkspaceAlignmentMemberProjection) -> Void
     let onRequestApplyProject: (String) -> Void
     let onRequestRemoveProject: (String) -> Void
@@ -139,6 +169,9 @@ private struct WorkspaceAlignmentGroupCard: View {
     }
 
     private var outlineColor: Color {
+        if dropIndicatorPosition != nil {
+            return NativeTheme.accent.opacity(0.92)
+        }
         if group.isActive {
             return NativeTheme.accent.opacity(0.55)
         }
@@ -173,6 +206,13 @@ private struct WorkspaceAlignmentGroupCard: View {
                 .stroke(outlineColor, lineWidth: group.isActive ? 1.2 : 1)
         )
         .clipShape(.rect(cornerRadius: 12))
+        .background(dropHotspots)
+        .overlay(alignment: .top) {
+            insertionIndicator(position: .before)
+        }
+        .overlay(alignment: .bottom) {
+            insertionIndicator(position: .after)
+        }
         .contentShape(.rect(cornerRadius: 12))
         .animation(.easeInOut(duration: 0.16), value: isExpanded)
         .contextMenu {
@@ -222,6 +262,60 @@ private struct WorkspaceAlignmentGroupCard: View {
             .buttonStyle(.plain)
         }
         .padding(12)
+        .draggable(group.id)
+    }
+
+    private var dropHotspots: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                dropHotspot(insertAfter: false)
+                    .frame(height: max(proxy.size.height / 2, 1))
+                dropHotspot(insertAfter: true)
+                    .frame(height: max(proxy.size.height / 2, 1))
+            }
+        }
+        .clipShape(.rect(cornerRadius: 12))
+    }
+
+    private func dropHotspot(insertAfter: Bool) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { items, _ in
+                guard let sourceID = items.first else {
+                    return false
+                }
+                onMoveDrop(sourceID, insertAfter)
+                return true
+            } isTargeted: { isTargeted in
+                onDropTargetChange(insertAfter, isTargeted)
+            }
+    }
+
+    @ViewBuilder
+    private func insertionIndicator(position: WorkspaceAlignmentDropIndicatorPosition) -> some View {
+        if dropIndicatorPosition == position {
+            ZStack {
+                Capsule()
+                    .fill(NativeTheme.accent.opacity(0.14))
+                    .frame(height: 12)
+                HStack(spacing: 0) {
+                    Circle()
+                        .fill(NativeTheme.accent)
+                        .frame(width: 8, height: 8)
+                    Capsule()
+                        .fill(NativeTheme.accent)
+                        .frame(height: 4)
+                    Circle()
+                        .fill(NativeTheme.accent)
+                        .frame(width: 8, height: 8)
+                }
+                .shadow(color: NativeTheme.accent.opacity(0.35), radius: 6)
+            }
+            .padding(.horizontal, 12)
+            .offset(y: position == .before ? -6 : 6)
+            .allowsHitTesting(false)
+            .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        }
     }
 
     private var memberList: some View {

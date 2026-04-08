@@ -119,6 +119,13 @@ struct WorkspaceProjectSidebarHostView: View {
             },
             onFocusNotification: viewModel.focusWorkspaceNotification,
             onCloseProject: viewModel.closeWorkspaceProject,
+            onMoveProjectGroup: { sourceID, targetID, insertAfter in
+                viewModel.moveWorkspaceSidebarGroup(
+                    sourceID,
+                    relativeTo: targetID,
+                    insertAfter: insertAfter
+                )
+            },
             onRequestCreateWorkspaceAlignment: { projectPath in
                 presentCreateWorkspaceAlignmentSheet(prefilledProjectPath: projectPath)
             },
@@ -154,6 +161,17 @@ struct WorkspaceProjectSidebarHostView: View {
             onRequestDeleteWorkspaceAlignment: { workspaceID in
                 if let group = sidebarProjectionStore.projection.workspaceAlignmentGroups.first(where: { $0.id == workspaceID }) {
                     pendingDeleteWorkspaceAlignment = WorkspaceAlignmentDeleteRequest(id: group.id, name: group.definition.name)
+                }
+            },
+            onMoveWorkspaceAlignmentGroup: { sourceID, targetID, insertAfter in
+                do {
+                    try viewModel.moveWorkspaceAlignmentGroup(
+                        sourceID,
+                        relativeTo: targetID,
+                        insertAfter: insertAfter
+                    )
+                } catch {
+                    viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 }
             },
             onRequestApplyWorkspaceAlignmentProject: { workspaceID, projectPath in

@@ -68,6 +68,12 @@ private struct WorkspaceAlignmentGroupsCacheEntry {
     let groups: [WorkspaceAlignmentGroupProjection]
 }
 
+private struct WorkspaceSidebarGroupIdentity: Hashable {
+    let id: String
+    let normalizedPath: String
+    let transientKind: Project.TransientWorkspaceKind?
+}
+
 private struct WorkspaceEditorBatchCloseState {
     let projectPath: String
     let remainingTabIDs: [String]
@@ -503,7 +509,38 @@ public final class NativeAppViewModel {
         let moveNotifiedWorktreeToTop = snapshot.appState.settings.moveNotifiedWorktreeToTop
         let projectsByNormalizedPath = self.projectsByNormalizedPath
 
-        var groups: [WorkspaceSidebarProjectGroup] = openWorkspaceRootProjectPaths.compactMap { rootPath in
+        return orderedWorkspaceSidebarGroupIdentities().compactMap { identity in
+            if let transientKind = identity.transientKind {
+                guard let session = openWorkspaceSessions.first(where: {
+                    workspaceSidebarGroupIdentity(for: $0)?.id == identity.id
+                }) else {
+                    return nil
+                }
+                let attention = attentionStateByProjectPath[session.projectPath]
+                let agentOverrides = agentDisplayOverridesByProjectPath[session.projectPath] ?? [:]
+                let transientProject = switch transientKind {
+                case .workspaceRoot:
+                    Project.workspaceRoot(
+                        name: session.workspaceRootContext?.workspaceName ?? pathLastComponent(session.projectPath),
+                        path: session.projectPath
+                    )
+                case .quickTerminal:
+                    Project.quickTerminal(at: session.projectPath)
+                }
+                return WorkspaceSidebarProjectGroup(
+                    rootProject: transientProject,
+                    worktrees: [],
+                    isActive: activeWorkspaceProjectPath == session.projectPath,
+                    notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
+                    unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
+                    taskStatus: attention?.taskStatus,
+                    agentState: attention?.resolvedAgentState(overridesByPaneID: agentOverrides),
+                    agentSummary: attention?.resolvedAgentSummary(overridesByPaneID: agentOverrides),
+                    agentKind: attention?.resolvedAgentKind(overridesByPaneID: agentOverrides)
+                )
+            }
+
+            let rootPath = identity.normalizedPath
             guard let rootProject = projectsByNormalizedPath[rootPath] else {
                 return nil
             }
@@ -555,27 +592,6 @@ public final class NativeAppViewModel {
                 )
             )
         }
-        for session in openWorkspaceSessions where session.isQuickTerminal {
-            let attention = attentionStateByProjectPath[session.projectPath]
-            let agentOverrides = agentDisplayOverridesByProjectPath[session.projectPath] ?? [:]
-            let transientProject = if let workspaceRootContext = session.workspaceRootContext {
-                Project.workspaceRoot(name: workspaceRootContext.workspaceName, path: session.projectPath)
-            } else {
-                Project.quickTerminal(at: session.projectPath)
-            }
-            groups.append(WorkspaceSidebarProjectGroup(
-                rootProject: transientProject,
-                worktrees: [],
-                isActive: activeWorkspaceProjectPath == session.projectPath,
-                notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
-                unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
-                taskStatus: attention?.taskStatus,
-                agentState: attention?.resolvedAgentState(overridesByPaneID: agentOverrides),
-                agentSummary: attention?.resolvedAgentSummary(overridesByPaneID: agentOverrides),
-                agentKind: attention?.resolvedAgentKind(overridesByPaneID: agentOverrides)
-            ))
-        }
-        return groups
     }
 
     public var workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection] {
@@ -1762,6 +1778,45 @@ public final class NativeAppViewModel {
         if !isQuickTerminalSessionPath(canonicalPath) {
             scheduleSelectedProjectDocumentRefresh()
         }
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func moveWorkspaceSidebarGroup(
+        _ sourceGroupID: String,
+        relativeTo targetGroupID: String,
+        insertAfter: Bool
+    ) {
+        guard sourceGroupID != targetGroupID else {
+            return
+        }
+
+        let sourceSessions = openWorkspaceSessions.filter {
+            workspaceSidebarGroupIdentity(for: $0)?.id == sourceGroupID
+        }
+        guard !sourceSessions.isEmpty else {
+            return
+        }
+
+        let remainingSessions = openWorkspaceSessions.filter {
+            workspaceSidebarGroupIdentity(for: $0)?.id != sourceGroupID
+        }
+        let targetIndices = remainingSessions.enumerated().compactMap { element -> Int? in
+            workspaceSidebarGroupIdentity(for: element.element)?.id == targetGroupID ? element.offset : nil
+        }
+        guard let insertionIndex = insertAfter
+            ? targetIndices.last.map({ $0 + 1 })
+            : targetIndices.first
+        else {
+            return
+        }
+
+        var reorderedSessions = remainingSessions
+        reorderedSessions.insert(contentsOf: sourceSessions, at: insertionIndex)
+        guard reorderedSessions != openWorkspaceSessions else {
+            return
+        }
+
+        openWorkspaceSessions = reorderedSessions
         scheduleWorkspaceRestoreAutosave()
     }
 
@@ -3666,6 +3721,34 @@ public final class NativeAppViewModel {
         }
     }
 
+    public func moveWorkspaceAlignmentGroup(
+        _ sourceGroupID: String,
+        relativeTo targetGroupID: String,
+        insertAfter: Bool
+    ) throws {
+        guard sourceGroupID != targetGroupID else {
+            return
+        }
+
+        var groups = snapshot.appState.workspaceAlignmentGroups
+        guard let sourceIndex = groups.firstIndex(where: { $0.id == sourceGroupID }) else {
+            return
+        }
+
+        let sourceGroup = groups.remove(at: sourceIndex)
+        guard let targetIndex = groups.firstIndex(where: { $0.id == targetGroupID }) else {
+            return
+        }
+
+        let insertionIndex = insertAfter ? targetIndex + 1 : targetIndex
+        groups.insert(sourceGroup, at: insertionIndex)
+        guard groups != snapshot.appState.workspaceAlignmentGroups else {
+            return
+        }
+
+        try persistWorkspaceAlignmentGroups(groups)
+    }
+
     public func addWorkspaceAlignmentMembers(
         _ members: [WorkspaceAlignmentMemberDefinition],
         memberAliases: [String: String] = [:],
@@ -5052,6 +5135,57 @@ public final class NativeAppViewModel {
         }
 
         return paths
+    }
+
+    private func orderedWorkspaceSidebarGroupIdentities() -> [WorkspaceSidebarGroupIdentity] {
+        var identities: [WorkspaceSidebarGroupIdentity] = []
+        var seen = Set<String>()
+
+        for session in openWorkspaceSessions {
+            guard let identity = workspaceSidebarGroupIdentity(for: session),
+                  seen.insert(identity.id).inserted
+            else {
+                continue
+            }
+            identities.append(identity)
+        }
+
+        return identities
+    }
+
+    private func workspaceSidebarGroupIdentity(
+        for session: OpenWorkspaceSessionState
+    ) -> WorkspaceSidebarGroupIdentity? {
+        if session.isQuickTerminal {
+            if let workspaceRootContext = session.workspaceRootContext {
+                let transientProject = Project.workspaceRoot(
+                    name: workspaceRootContext.workspaceName,
+                    path: session.projectPath
+                )
+                return WorkspaceSidebarGroupIdentity(
+                    id: transientProject.id,
+                    normalizedPath: normalizePathForCompare(session.projectPath),
+                    transientKind: .workspaceRoot
+                )
+            }
+
+            let transientProject = Project.quickTerminal(at: session.projectPath)
+            return WorkspaceSidebarGroupIdentity(
+                id: transientProject.id,
+                normalizedPath: normalizePathForCompare(session.projectPath),
+                transientKind: .quickTerminal
+            )
+        }
+
+        let normalizedRootProjectPath = normalizePathForCompare(session.rootProjectPath)
+        guard let rootProject = projectsByNormalizedPath[normalizedRootProjectPath] else {
+            return nil
+        }
+        return WorkspaceSidebarGroupIdentity(
+            id: rootProject.id,
+            normalizedPath: normalizedRootProjectPath,
+            transientKind: nil
+        )
     }
 
     private func promoteWorkspaceSessionIfNeeded(for path: String, rootProjectPath: String) {
