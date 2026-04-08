@@ -1724,6 +1724,26 @@ public final class NativeAppViewModel {
         scheduleWorkspaceRestoreAutosave()
     }
 
+    public func activateWorkspaceSidebarProject(_ path: String) {
+        let normalizedPath = normalizePathForCompare(path)
+
+        // 左侧已打开项目里的 root 卡片代表“父项目”语义；
+        // 当当前只打开了 worktree / workspace member，而 root 本身还没有 session 时，
+        // 需要先补开 root session，避免点击后又回退到某个子 session。
+        guard let project = projectsByNormalizedPath[normalizedPath],
+              !project.isTransientWorkspaceProject
+        else {
+            activateWorkspaceProject(normalizedPath)
+            return
+        }
+
+        if workspaceSessionIndex(for: normalizedPath) != nil {
+            activateWorkspaceProject(normalizedPath)
+        } else {
+            enterWorkspace(normalizedPath)
+        }
+    }
+
     public func activateWorkspaceProject(_ path: String) {
         guard let canonicalPath = canonicalWorkspaceSessionPath(for: path) else {
             return

@@ -81,7 +81,7 @@ struct WorkspaceProjectSidebarHostView: View {
             canOpenMoreProjects: !sidebarProjectionStore.projection.availableProjects.isEmpty,
             workspaceAlignmentGroups: sidebarProjectionStore.projection.workspaceAlignmentGroups,
             workspaceAlignmentProjectOptions: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions,
-            onSelectProject: viewModel.activateWorkspaceProject,
+            onSelectProject: viewModel.activateWorkspaceSidebarProject,
             onOpenWorkspaceAlignmentProject: openOrActivateProject,
             onOpenProjectPicker: { isProjectPickerPresented = true },
             onRequestCreateWorktree: { projectPath in
