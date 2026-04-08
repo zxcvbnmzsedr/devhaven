@@ -8,6 +8,9 @@ struct WorkspaceRunConsolePanel: View {
     let onClear: () -> Void
     let onOpenLog: () -> Void
     let onHide: () -> Void
+    @State private var isPinnedToBottom = true
+    @State private var scrollViewportMaxY: CGFloat = .zero
+    @State private var scrollBottomMarkerMaxY: CGFloat = .zero
 
     var body: some View {
         VStack(spacing: 0) {
@@ -90,15 +93,44 @@ struct WorkspaceRunConsolePanel: View {
                     Color.clear
                         .frame(height: 1)
                         .id("workspace-run-console-bottom")
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(
+                                    key: WorkspaceRunConsoleBottomMarkerMaxYPreferenceKey.self,
+                                    value: geometry.frame(in: .global).maxY
+                                )
+                            }
+                        }
                 }
                 .padding(12)
             }
             .background(NativeTheme.window)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(
+                        key: WorkspaceRunConsoleViewportMaxYPreferenceKey.self,
+                        value: geometry.frame(in: .global).maxY
+                    )
+                }
+            }
+            .onPreferenceChange(WorkspaceRunConsoleViewportMaxYPreferenceKey.self) { value in
+                scrollViewportMaxY = value
+                refreshPinnedToBottomState()
+            }
+            .onPreferenceChange(WorkspaceRunConsoleBottomMarkerMaxYPreferenceKey.self) { value in
+                scrollBottomMarkerMaxY = value
+                refreshPinnedToBottomState()
+            }
+            .onChange(of: consoleState.selectedSession?.id) { _, _ in
+                isPinnedToBottom = true
+                scrollToBottom(proxy)
+            }
             .onChange(of: consoleState.selectedSession?.displayBuffer) { _, _ in
-                proxy.scrollTo("workspace-run-console-bottom", anchor: .bottom)
+                guard isPinnedToBottom else { return }
+                scrollToBottom(proxy)
             }
             .onAppear {
-                proxy.scrollTo("workspace-run-console-bottom", anchor: .bottom)
+                scrollToBottom(proxy)
             }
         }
     }
@@ -146,10 +178,39 @@ struct WorkspaceRunConsolePanel: View {
         }
         return "\(session.configurationName) · \(status)"
     }
+
+    private func refreshPinnedToBottomState() {
+        let distance = scrollBottomMarkerMaxY - scrollViewportMaxY
+        isPinnedToBottom = distance <= WorkspaceRunConsoleMetrics.autoScrollTolerance
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        proxy.scrollTo("workspace-run-console-bottom", anchor: .bottom)
+    }
 }
 
 private extension String {
     var nilIfEmpty: String? {
         isEmpty ? nil : self
+    }
+}
+
+private enum WorkspaceRunConsoleMetrics {
+    static let autoScrollTolerance: CGFloat = 24
+}
+
+private struct WorkspaceRunConsoleViewportMaxYPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .zero
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct WorkspaceRunConsoleBottomMarkerMaxYPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .zero
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }

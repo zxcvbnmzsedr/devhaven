@@ -19,11 +19,11 @@ struct WorkspaceCommitChangesBrowserView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             if !versionedChanges.isEmpty {
-                                section(title: "Changes", changes: versionedChanges)
+                                section(title: "变更", changes: versionedChanges)
                             }
 
                             if !unversionedChanges.isEmpty {
-                                section(title: "Unversioned Files", changes: unversionedChanges)
+                                section(title: "未跟踪文件", changes: unversionedChanges)
                             }
                         }
                     }
@@ -108,13 +108,13 @@ struct WorkspaceCommitChangesBrowserView: View {
             }
             .buttonStyle(.plain)
 
-            Text("\(title) \(changes.count) files")
+            Text("\(title) \(changes.count) 个文件")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(NativeTheme.textPrimary)
 
             Spacer(minLength: 8)
 
-            Text("\(includedCount(in: changes)) included")
+            Text("已纳入 \(includedCount(in: changes))")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(NativeTheme.textSecondary)
         }
@@ -144,9 +144,32 @@ struct WorkspaceCommitChangesBrowserView: View {
                 .interpolation(.high)
                 .frame(width: 16, height: 16)
 
-            inlineTitleRow(change)
-
-            Spacer(minLength: 8)
+            Button {
+                viewModel.selectChange(change.path)
+                onSyncDiffIfNeeded(change)
+            } label: {
+                HStack(spacing: 8) {
+                    inlineTitleRow(change)
+                    Spacer(minLength: 8)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    openChangeDiff(change)
+                }
+            )
+            .contextMenu {
+                Button("打开差异") {
+                    openChangeDiff(change)
+                }
+            }
+            .help("双击打开差异")
+            .accessibilityAction(named: Text("打开差异")) {
+                openChangeDiff(change)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -160,14 +183,6 @@ struct WorkspaceCommitChangesBrowserView: View {
             Rectangle()
                 .fill(NativeTheme.border.opacity(0.65))
                 .frame(height: 1)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            viewModel.selectChange(change.path)
-            onSyncDiffIfNeeded(change)
-        }
-        .onTapGesture(count: 2) {
-            openChangeDiff(change)
         }
     }
 

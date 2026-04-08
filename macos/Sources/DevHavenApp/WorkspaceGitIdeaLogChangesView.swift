@@ -48,10 +48,10 @@ struct WorkspaceGitIdeaLogChangesView: View {
 
     private func changesBrowserToolbar(_ projection: ChangeTreeProjection?) -> some View {
         HStack(spacing: 6) {
-            toolbarButton(systemImage: "arrow.left", title: "后退") {
+            toolbarButton(systemImage: "arrow.left", title: "后退", isEnabled: false) {
                 // 结构优先：本轮先对齐 toolbar 布局，交互后续再补齐。
             }
-            toolbarButton(systemImage: "arrow.right", title: "前进") {
+            toolbarButton(systemImage: "arrow.right", title: "前进", isEnabled: false) {
                 // 结构优先：本轮先对齐 toolbar 布局，交互后续再补齐。
             }
             toolbarButton(systemImage: "arrow.up.left.and.arrow.down.right", title: "展开全部") {
@@ -60,10 +60,10 @@ struct WorkspaceGitIdeaLogChangesView: View {
             toolbarButton(systemImage: "arrow.down.forward.and.arrow.up.backward", title: "折叠全部") {
                 collapseAllDirectories()
             }
-            toolbarButton(systemImage: "clock", title: "历史") {
+            toolbarButton(systemImage: "clock", title: "历史", isEnabled: false) {
                 // 结构优先：本轮先对齐 toolbar 布局，交互后续再补齐。
             }
-            toolbarButton(systemImage: "eye", title: "显示") {
+            toolbarButton(systemImage: "eye", title: "显示", isEnabled: false) {
                 // 结构优先：本轮先对齐 toolbar 布局，交互后续再补齐。
             }
             Spacer(minLength: 0)
@@ -73,16 +73,22 @@ struct WorkspaceGitIdeaLogChangesView: View {
         .background(NativeTheme.surface)
     }
 
-    private func toolbarButton(systemImage: String, title: String, action: @escaping () -> Void) -> some View {
+    private func toolbarButton(
+        systemImage: String,
+        title: String,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.callout)
-                .foregroundStyle(NativeTheme.textSecondary)
+                .foregroundStyle(isEnabled ? NativeTheme.textSecondary : NativeTheme.textSecondary.opacity(0.5))
                 .frame(width: 28, height: 24)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .help(title)
+        .disabled(!isEnabled)
+        .help(isEnabled ? title : "\(title)（暂未实现）")
     }
 
     private func paneHeader(title: String, subtitle: String) -> some View {
@@ -200,7 +206,18 @@ struct WorkspaceGitIdeaLogChangesView: View {
             .clipShape(.rect(cornerRadius: 6))
         }
         .buttonStyle(.plain)
-        .onTapGesture(count: 2) {
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                openFileDiff(file)
+            }
+        )
+        .contextMenu {
+            Button("打开差异") {
+                openFileDiff(file)
+            }
+        }
+        .help("双击打开差异")
+        .accessibilityAction(named: Text("打开差异")) {
             openFileDiff(file)
         }
     }
