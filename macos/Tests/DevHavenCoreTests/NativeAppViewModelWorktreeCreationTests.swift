@@ -57,6 +57,40 @@ final class NativeAppViewModelWorktreeCreationTests: XCTestCase {
         XCTAssertEqual(branch, "develop")
     }
 
+    func testEnterWorkspaceAutoRefreshesExternallyCreatedWorktree() async throws {
+        let fixture = try GitWorktreeCreationFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let existingWorktreeURL = fixture.rootURL.appendingPathComponent("external-feature-worktree", isDirectory: true)
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", existingWorktreeURL.path, "-b", "feature/external", "main"]
+        )
+        let expectedWorktreePath = existingWorktreeURL.resolvingSymlinksInPath().path
+
+        let viewModel = fixture.makeViewModel()
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(),
+            projects: [fixture.makeProject()]
+        )
+
+        viewModel.enterWorkspace(fixture.repositoryURL.path)
+
+        for _ in 0..<100 where viewModel.snapshot.projects.first?.worktrees.contains(where: {
+            canonicalPath($0.path) == canonicalPath(expectedWorktreePath)
+        }) != true {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        XCTAssertTrue(viewModel.snapshot.projects.first?.worktrees.contains(where: {
+            canonicalPath($0.path) == canonicalPath(expectedWorktreePath)
+        }) == true)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
     func testRefreshProjectWorktreesDoesNotFailForUnbornHead() async throws {
         let fixture = try GitWorktreeCreationFixture.make()
         defer { fixture.cleanup() }
@@ -72,6 +106,112 @@ final class NativeAppViewModelWorktreeCreationTests: XCTestCase {
         try await viewModel.refreshProjectWorktrees(fixture.repositoryURL.path)
 
         XCTAssertEqual(viewModel.snapshot.projects.first?.worktrees.count, 0)
+    }
+
+    func testOpenWorkspaceWorktreeRefreshesMissingExternalWorktreeBeforeOpening() async throws {
+        let fixture = try GitWorktreeCreationFixture.make()
+        defer { fixture.cleanup() }
+
+        try fixture.initializeRepository(defaultBranch: "main")
+        try fixture.commit(fileName: "README.md", content: "hello")
+
+        let existingWorktreeURL = fixture.rootURL.appendingPathComponent("external-direct-open-worktree", isDirectory: true)
+        try fixture.git(
+            in: fixture.repositoryURL,
+            ["worktree", "add", existingWorktreeURL.path, "-b", "feature/direct-open", "main"]
+        )
+        let expectedWorktreePath = existingWorktreeURL.resolvingSymlinksInPath().path
+
+        let viewModel = fixture.makeViewModel()
+        viewModel.snapshot = NativeAppSnapshot(
+            appState: AppStateFile(),
+            projects: [fixture.makeProject()]
+        )
+
+        viewModel.openWorkspaceWorktree(expectedWorktreePath, from: fixture.repositoryURL.path)
+
+        XCTAssertEqual(
+            canonicalPath(try XCTUnwrap(viewModel.activeWorkspaceProjectPath)),
+            canonicalPath(expectedWorktreePath)
+        )
+        XCTAssertTrue(viewModel.openWorkspaceSessions.contains(where: {
+            canonicalPath($0.projectPath) == canonicalPath(expectedWorktreePath)
+        }))
+        XCTAssertTrue(viewModel.snapshot.projects.first?.worktrees.contains(where: {
+            canonicalPath($0.path) == canonicalPath(expectedWorktreePath)
+        }) == true)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    func testLoadCanonicalizesTmpWorktreeRestoreSessionPath() throws {
+        let fixture = try GitWorktreeCreationFixture.make()
+        defer { fixture.cleanup() }
+
+        let store = LegacyCompatStore(homeDirectoryURL: fixture.homeURL)
+        let restoreStore = WorkspaceRestoreStore(homeDirectoryURL: fixture.homeURL)
+        let rawTmpPath = "/tmp/devhaven-restore-canonical-\(UUID().uuidString)"
+        let canonicalTmpPath = "/private\(rawTmpPath)"
+
+        var rootProject = fixture.makeProject()
+        rootProject.worktrees = [
+            ProjectWorktree(
+                id: "worktree:\(canonicalTmpPath)",
+                name: "devhaven-restore-canonical",
+                path: canonicalTmpPath,
+                branch: "feature/restore-canonical",
+                baseBranch: "main",
+                inheritConfig: true,
+                created: Date().timeIntervalSinceReferenceDate
+            )
+        ]
+        try store.updateProjects([rootProject])
+
+        let selectedItem = WorkspacePaneItemRestoreSnapshot(
+            surfaceId: "surface-1",
+            terminalSessionId: "terminal-1",
+            restoredWorkingDirectory: rawTmpPath,
+            restoredTitle: rawTmpPath,
+            agentSummary: nil,
+            snapshotTextRef: nil,
+            snapshotText: nil
+        )
+        let pane = WorkspacePaneRestoreSnapshot(
+            paneId: "pane-1",
+            selectedItemId: selectedItem.surfaceId,
+            items: [selectedItem]
+        )
+        let tab = WorkspaceTabRestoreSnapshot(
+            id: "tab-1",
+            title: "Tab 1",
+            focusedPaneId: pane.paneId,
+            tree: WorkspacePaneTreeRestoreSnapshot(root: .leaf(pane), zoomedPaneId: nil)
+        )
+        let restoreSnapshot = WorkspaceRestoreSnapshot(
+            activeProjectPath: rawTmpPath,
+            selectedProjectPath: rawTmpPath,
+            sessions: [
+                ProjectWorkspaceRestoreSnapshot(
+                    projectPath: rawTmpPath,
+                    rootProjectPath: fixture.repositoryURL.path,
+                    isQuickTerminal: false,
+                    workspaceId: "workspace-1",
+                    selectedTabId: tab.id,
+                    nextTabNumber: 2,
+                    nextPaneNumber: 2,
+                    tabs: [tab]
+                )
+            ]
+        )
+        try restoreStore.saveSnapshot(restoreSnapshot)
+
+        let viewModel = NativeAppViewModel(store: store)
+        viewModel.load()
+
+        XCTAssertEqual(viewModel.openWorkspaceSessions.count, 1)
+        XCTAssertEqual(viewModel.openWorkspaceSessions.first?.projectPath, canonicalTmpPath)
+        XCTAssertEqual(viewModel.activeWorkspaceProjectPath, canonicalTmpPath)
+        XCTAssertEqual(viewModel.selectedProjectPath, canonicalTmpPath)
+        XCTAssertEqual(viewModel.openWorkspaceProjects.first?.path, canonicalTmpPath)
     }
 
     func testCreateWorkspaceWorktreeSuccessPersistsRealWorktreeWithoutTransientStatus() async throws {
@@ -927,4 +1067,8 @@ private final class BlockingWorktreeService: NativeWorktreeServicing, @unchecked
     func finishCreate() {
         allowFinish.signal()
     }
+}
+
+private func canonicalPath(_ path: String) -> String {
+    URL(fileURLWithPath: path).standardizedFileURL.path
 }

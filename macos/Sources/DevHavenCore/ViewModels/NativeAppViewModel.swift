@@ -160,6 +160,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var workspaceEditorDirectoryWatchersByProjectPath: [String: [String: WorkspaceDirectoryWatcher]] = [:]
     @ObservationIgnored private var workspaceProjectTreeRefreshTasksByProjectPath: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var workspaceProjectTreeRefreshGenerationByProjectPath: [String: Int] = [:]
+    @ObservationIgnored private var workspaceWorktreeRefreshTasksByRootProjectPath: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var projectsByNormalizedPath: [String: Project] = [:]
     @ObservationIgnored private var workspaceSessionIndexByNormalizedPath: [String: Int] = [:]
     @ObservationIgnored private var workspaceSidebarProjectionCache: WorkspaceSidebarProjectionCacheEntry?
@@ -1687,6 +1688,7 @@ public final class NativeAppViewModel {
         selectedProjectPath = normalizedPath
         promoteWorkspaceSessionIfNeeded(for: normalizedPath, rootProjectPath: normalizedPath)
         openWorkspaceSessionIfNeeded(for: normalizedPath, rootProjectPath: normalizedPath)
+        scheduleWorkspaceRootWorktreeRefreshIfNeeded(normalizedPath)
         activeWorkspaceProjectPath = canonicalWorkspaceSessionPath(for: normalizedPath) ?? normalizedPath
         isDetailPanelPresented = false
         if let controller = activeWorkspaceController {
@@ -1742,6 +1744,7 @@ public final class NativeAppViewModel {
         } else {
             enterWorkspace(normalizedPath)
         }
+        scheduleWorkspaceRootWorktreeRefreshIfNeeded(normalizedPath)
     }
 
     public func activateWorkspaceProject(_ path: String) {
@@ -2010,9 +2013,11 @@ public final class NativeAppViewModel {
             return
         }
 
-        guard let worktree = rootProject.worktrees.first(where: {
-            normalizePathForCompare($0.path) == normalizedWorktreePath
-        }) else {
+        guard let worktree = resolveWorkspaceWorktree(
+            at: normalizedWorktreePath,
+            from: normalizedRootProjectPath,
+            rootProject: rootProject
+        ) else {
             errorMessage = NativeWorktreeError.invalidPath("worktree 不存在或已移除").localizedDescription
             return
         }
@@ -6664,6 +6669,60 @@ public final class NativeAppViewModel {
         }
     }
 
+    private func scheduleWorkspaceRootWorktreeRefreshIfNeeded(_ rootProjectPath: String) {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard !normalizedRootProjectPath.isEmpty,
+              let project = projectsByNormalizedPath[normalizedRootProjectPath],
+              project.isGitRepository,
+              !project.isTransientWorkspaceProject,
+              workspaceWorktreeRefreshTasksByRootProjectPath[normalizedRootProjectPath] == nil
+        else {
+            return
+        }
+
+        workspaceWorktreeRefreshTasksByRootProjectPath[normalizedRootProjectPath] = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            defer {
+                Task { @MainActor [weak self] in
+                    self?.workspaceWorktreeRefreshTasksByRootProjectPath.removeValue(forKey: normalizedRootProjectPath)
+                }
+            }
+            try? await self.refreshProjectWorktrees(normalizedRootProjectPath)
+        }
+    }
+
+    private func resolveWorkspaceWorktree(
+        at normalizedWorktreePath: String,
+        from normalizedRootProjectPath: String,
+        rootProject: Project
+    ) -> ProjectWorktree? {
+        if let worktree = rootProject.worktrees.first(where: {
+            normalizePathForCompare($0.path) == normalizedWorktreePath
+        }) {
+            return worktree
+        }
+
+        do {
+            let resolvedWorktrees = try worktreeService.listWorktrees(at: rootProject.path)
+            let resolvedCurrentBranch = try? worktreeService.currentBranch(at: rootProject.path)
+            try syncProjectRepositoryState(
+                rootProjectPath: normalizedRootProjectPath,
+                gitWorktrees: resolvedWorktrees,
+                currentBranch: resolvedCurrentBranch
+            )
+        } catch {
+            return nil
+        }
+
+        return snapshot.projects.first(where: {
+            normalizePathForCompare($0.path) == normalizedRootProjectPath
+        })?.worktrees.first(where: {
+            normalizePathForCompare($0.path) == normalizedWorktreePath
+        })
+    }
+
     private func syncProjectRepositoryState(
         rootProjectPath: String,
         gitWorktrees: [NativeGitWorktree],
@@ -7650,12 +7709,54 @@ private func normalizePathForCompare(_ path: String) -> String {
     guard !trimmed.isEmpty else {
         return ""
     }
-    var normalized = URL(fileURLWithPath: trimmed).standardizedFileURL.path
+    var normalized = canonicalPathForFileSystemCompare(trimmed)
         .replacingOccurrences(of: "\\", with: "/")
     while normalized.count > 1 && normalized.hasSuffix("/") {
         normalized.removeLast()
     }
     return normalized
+}
+
+private func canonicalPathForFileSystemCompare(_ path: String) -> String {
+    let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+    let fileManager = FileManager.default
+    var ancestorPath = standardizedPath
+    var trailingComponents = [String]()
+
+    while ancestorPath != "/", !fileManager.fileExists(atPath: ancestorPath) {
+        let lastComponent = (ancestorPath as NSString).lastPathComponent
+        guard !lastComponent.isEmpty else {
+            break
+        }
+        trailingComponents.insert(lastComponent, at: 0)
+        ancestorPath = (ancestorPath as NSString).deletingLastPathComponent
+        if ancestorPath.isEmpty {
+            ancestorPath = "/"
+            break
+        }
+    }
+
+    let canonicalAncestorPath = realpathString(ancestorPath) ?? ancestorPath
+    guard !trailingComponents.isEmpty else {
+        return canonicalAncestorPath
+    }
+
+    return trailingComponents.reduce(canonicalAncestorPath as NSString) { partial, component in
+        partial.appendingPathComponent(component) as NSString
+    } as String
+}
+
+private func realpathString(_ path: String) -> String? {
+    guard !path.isEmpty else {
+        return nil
+    }
+    return path.withCString { pointer in
+        guard let resolvedPointer = realpath(pointer, nil) else {
+            return nil
+        }
+        defer { free(resolvedPointer) }
+        return String(cString: resolvedPointer)
+    }
 }
 
 private func elapsedMilliseconds(since startTime: TimeInterval) -> Int {
