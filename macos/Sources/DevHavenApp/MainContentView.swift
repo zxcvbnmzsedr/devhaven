@@ -146,6 +146,7 @@ struct MainContentView: View {
                 toolbarIcon("waveform.path.ecg", action: { viewModel.revealDashboard() })
                 toolbarIcon("terminal", action: { viewModel.enterOrResumeWorkspace() })
                 toolbarIcon("gearshape", action: { viewModel.revealSettings() })
+                refreshProjectCatalogButton
 
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -221,6 +222,30 @@ struct MainContentView: View {
                 .clipShape(.rect(cornerRadius: 10))
             }
         }
+    }
+
+    private var refreshProjectCatalogButton: some View {
+        Button(action: viewModel.refresh) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(NativeTheme.elevated)
+
+                if viewModel.isRefreshingProjectCatalog {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.body)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                }
+            }
+            .frame(width: 32, height: 32)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .disabled(viewModel.isRefreshingProjectCatalog)
+        .help(viewModel.isRefreshingProjectCatalog ? "正在刷新项目列表" : "刷新项目")
+        .accessibilityLabel(viewModel.isRefreshingProjectCatalog ? "正在刷新项目列表" : "刷新项目")
     }
 
     private var emptyStateView: some View {
@@ -595,19 +620,6 @@ struct MainContentView: View {
             .padding(.vertical, 5)
             .background(background)
             .clipShape(.rect(cornerRadius: 8))
-    }
-
-    private func toolbarChip(_ title: String, systemImage: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage)
-            Text(title)
-        }
-        .font(.caption)
-        .foregroundStyle(NativeTheme.textPrimary)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(NativeTheme.elevated)
-        .clipShape(.rect(cornerRadius: 10))
     }
 
     private func toolbarIcon(_ systemName: String, action: @escaping () -> Void) -> some View {

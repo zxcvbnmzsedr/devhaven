@@ -19,6 +19,7 @@ struct ProjectSidebarView: View {
                                     row: row,
                                     isSelected: row.filter == viewModel.selectedDirectory,
                                     onSelect: { viewModel.selectDirectory(row.filter) },
+                                    onOpenWorkspace: { viewModel.enterDirectoryWorkspace(directoryPath) },
                                     onRemove: {
                                         Task {
                                             do {
@@ -266,10 +267,6 @@ struct ProjectSidebarView: View {
                         pendingDirectoryImportAction = .addProjects
                         isDirectoryImporterPresented = true
                     }
-                    Button(viewModel.isRefreshingProjectCatalog ? "正在刷新项目列表…" : "刷新项目列表") {
-                        Task { await refreshProjectList() }
-                    }
-                    .disabled(viewModel.isRefreshingProjectCatalog)
                 } label: {
                     Image(systemName: "plus.circle")
                         .font(.caption)
@@ -349,16 +346,6 @@ struct ProjectSidebarView: View {
         return path
     }
 
-
-    @MainActor
-    private func refreshProjectList() async {
-        do {
-            try await viewModel.refreshProjectCatalog()
-        } catch {
-            viewModel.errorMessage = error.localizedDescription
-        }
-    }
-
     private func sidebarRow(title: String, count: Int, selected: Bool, accentHex: String? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
@@ -395,37 +382,43 @@ private struct DirectoryRowView: View {
     let row: NativeAppViewModel.DirectoryRow
     let isSelected: Bool
     let onSelect: () -> Void
+    let onOpenWorkspace: () -> Void
     let onRemove: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         ZStack(alignment: .trailing) {
-            Button(action: onSelect) {
-                HStack(spacing: 10) {
-                    Text(row.title)
-                        .font(.callout)
-                        .foregroundStyle(NativeTheme.textPrimary)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Text("\(row.count)")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(isSelected ? Color.white : NativeTheme.textSecondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(isSelected ? NativeTheme.accent.opacity(0.85) : Color.white.opacity(0.05))
-                        .clipShape(.rect(cornerRadius: 6))
-                        .opacity(isHovering ? 0 : 1)
-                        .animation(.easeInOut(duration: 0.15), value: isHovering)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(isSelected ? NativeTheme.accent.opacity(0.18) : Color.clear)
-                .clipShape(.rect(cornerRadius: 8))
-                .contentShape(.rect(cornerRadius: 8))
+            HStack(spacing: 10) {
+                Text(row.title)
+                    .font(.callout)
+                    .foregroundStyle(NativeTheme.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text("\(row.count)")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(isSelected ? Color.white : NativeTheme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(isSelected ? NativeTheme.accent.opacity(0.85) : Color.white.opacity(0.05))
+                    .clipShape(.rect(cornerRadius: 6))
+                    .opacity(isHovering ? 0 : 1)
+                    .animation(.easeInOut(duration: 0.15), value: isHovering)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? NativeTheme.accent.opacity(0.18) : Color.clear)
+            .clipShape(.rect(cornerRadius: 8))
+            .contentShape(.rect(cornerRadius: 8))
+            .onTapGesture(count: 2) {
+                onSelect()
+                onOpenWorkspace()
+            }
+            .onTapGesture {
+                onSelect()
+            }
+            .help("单击筛选目录，双击进入目录工作区")
 
             Button(action: onRemove) {
                 Image(systemName: "minus.circle")

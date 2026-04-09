@@ -251,6 +251,7 @@ public final class NativeAppViewModel {
     public var openWorkspaceSessions: [OpenWorkspaceSessionState] {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: openWorkspaceSessions)
+            displayProjectCacheByLookupKey.removeAll()
             rebuildWorkspaceSessionIndex()
             refreshCodexDisplayCandidates()
         }
@@ -530,6 +531,8 @@ public final class NativeAppViewModel {
                     )
                 case .quickTerminal:
                     Project.quickTerminal(at: session.projectPath)
+                case .directoryWorkspace:
+                    session.transientDisplayProject ?? Project.directoryWorkspace(at: session.projectPath)
                 }
                 return WorkspaceSidebarProjectGroup(
                     rootProject: transientProject,
@@ -1750,6 +1753,7 @@ public final class NativeAppViewModel {
     public func enterWorkspace(_ path: String) {
         let normalizedPath = normalizePathForCompare(path)
         selectedProjectPath = normalizedPath
+        clearDirectoryWorkspacePresentationIfNeeded(for: normalizedPath)
         promoteWorkspaceSessionIfNeeded(for: normalizedPath, rootProjectPath: normalizedPath)
         openWorkspaceSessionIfNeeded(for: normalizedPath, rootProjectPath: normalizedPath)
         scheduleWorkspaceRootWorktreeRefreshIfNeeded(normalizedPath)
@@ -1761,6 +1765,27 @@ public final class NativeAppViewModel {
                 openSessionCount: openWorkspaceSessions.count
             )
         }
+        scheduleSelectedProjectDocumentRefresh()
+        scheduleWorkspaceRestoreAutosave()
+    }
+
+    public func enterDirectoryWorkspace(_ path: String) {
+        let normalizedPath = normalizePathForCompare(path)
+        let transientProject = Project.directoryWorkspace(at: normalizedPath)
+
+        selectedProjectPath = normalizedPath
+        promoteWorkspaceSessionIfNeeded(for: normalizedPath, rootProjectPath: normalizedPath)
+        openWorkspaceSessionIfNeeded(
+            for: normalizedPath,
+            rootProjectPath: normalizedPath,
+            transientDisplayProject: transientProject
+        )
+        if let index = workspaceSessionIndex(for: normalizedPath) {
+            openWorkspaceSessions[index].transientDisplayProject = transientProject
+        }
+        scheduleWorkspaceRootWorktreeRefreshIfNeeded(normalizedPath)
+        activeWorkspaceProjectPath = canonicalWorkspaceSessionPath(for: normalizedPath) ?? normalizedPath
+        isDetailPanelPresented = false
         scheduleSelectedProjectDocumentRefresh()
         scheduleWorkspaceRestoreAutosave()
     }
@@ -1804,6 +1829,7 @@ public final class NativeAppViewModel {
         }
 
         if workspaceSessionIndex(for: normalizedPath) != nil {
+            clearDirectoryWorkspacePresentationIfNeeded(for: normalizedPath)
             activateWorkspaceProject(normalizedPath)
         } else {
             enterWorkspace(normalizedPath)
@@ -2066,6 +2092,7 @@ public final class NativeAppViewModel {
             switch member.openTarget {
             case let .project(projectPath):
                 selectedProjectPath = projectPath
+                clearDirectoryWorkspacePresentationIfNeeded(for: projectPath)
                 if let index = workspaceSessionIndex(for: projectPath),
                    openWorkspaceSessions[index].workspaceAlignmentGroupID != nil {
                     openWorkspaceSessions[index].workspaceAlignmentGroupID = member.groupID
@@ -2125,6 +2152,7 @@ public final class NativeAppViewModel {
             return
         }
         if workspaceAlignmentGroupID == nil {
+            clearDirectoryWorkspacePresentationIfNeeded(for: worktree.path)
             promoteWorkspaceSessionIfNeeded(for: worktree.path, rootProjectPath: rootProject.path)
         } else if let index = workspaceSessionIndex(for: worktree.path),
                   openWorkspaceSessions[index].workspaceAlignmentGroupID != nil {
@@ -4611,7 +4639,9 @@ public final class NativeAppViewModel {
     private func alignSelectionAfterReload() {
         let rootProjectPaths = Set(snapshot.projects.map { normalizePathForCompare($0.path) })
         openWorkspaceSessions.removeAll { session in
-            if session.isQuickTerminal { return false }
+            if session.isQuickTerminal || session.transientDisplayProject?.isDirectoryWorkspace == true {
+                return false
+            }
             let normalizedRootProjectPath = normalizePathForCompare(session.rootProjectPath)
             guard rootProjectPaths.contains(normalizedRootProjectPath) else {
                 return true
@@ -4712,6 +4742,7 @@ public final class NativeAppViewModel {
         rootProjectPaths: Set<String>
     ) -> Bool {
         guard !session.isQuickTerminal,
+              session.transientDisplayProject?.isDirectoryWorkspace != true,
               session.workspaceAlignmentGroupID == nil
         else {
             return false
@@ -5048,6 +5079,10 @@ public final class NativeAppViewModel {
                 projectPath: normalizedProjectPath,
                 rootProjectPath: normalizedRootProjectPath,
                 isQuickTerminal: sessionSnapshot.isQuickTerminal,
+                transientDisplayProject: normalizedTransientDisplayProject(
+                    sessionSnapshot.transientDisplayProject,
+                    fallbackPath: normalizedProjectPath
+                ),
                 workspaceRootContext: sessionSnapshot.workspaceRootContext,
                 workspaceAlignmentGroupID: sessionSnapshot.workspaceAlignmentGroupID,
                 workspaceId: sessionSnapshot.workspaceId,
@@ -5080,6 +5115,10 @@ public final class NativeAppViewModel {
                 rootProjectPath: normalizedRootProjectPath,
                 controller: controller,
                 isQuickTerminal: sessionSnapshot.isQuickTerminal,
+                transientDisplayProject: normalizedTransientDisplayProject(
+                    sessionSnapshot.transientDisplayProject,
+                    fallbackPath: normalizedProjectPath
+                ),
                 workspaceRootContext: restoredWorkspaceRootContext,
                 workspaceAlignmentGroupID: sessionSnapshot.workspaceAlignmentGroupID
             )
@@ -5134,6 +5173,9 @@ public final class NativeAppViewModel {
         if sessionSnapshot.isQuickTerminal {
             return !sessionSnapshot.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+        if sessionSnapshot.transientDisplayProject?.isDirectoryWorkspace == true {
+            return !sessionSnapshot.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
         return resolveDisplayProject(
             for: sessionSnapshot.projectPath,
             rootProjectPath: sessionSnapshot.rootProjectPath
@@ -5152,6 +5194,7 @@ public final class NativeAppViewModel {
         for path: String,
         rootProjectPath: String,
         isQuickTerminal: Bool = false,
+        transientDisplayProject: Project? = nil,
         workspaceRootContext: WorkspaceRootSessionContext? = nil,
         workspaceAlignmentGroupID: String? = nil
     ) {
@@ -5169,6 +5212,7 @@ public final class NativeAppViewModel {
                 rootProjectPath: normalizedRootProjectPath,
                 controller: controller,
                 isQuickTerminal: isQuickTerminal,
+                transientDisplayProject: transientDisplayProject,
                 workspaceRootContext: workspaceRootContext,
                 workspaceAlignmentGroupID: workspaceAlignmentGroupID
             )
@@ -5183,6 +5227,7 @@ public final class NativeAppViewModel {
         rootProjectPath: String
     ) -> Bool {
         guard !session.isQuickTerminal,
+              session.transientDisplayProject?.isDirectoryWorkspace != true,
               session.workspaceAlignmentGroupID == nil
         else {
             return false
@@ -5266,6 +5311,14 @@ public final class NativeAppViewModel {
     private func workspaceSidebarGroupIdentity(
         for session: OpenWorkspaceSessionState
     ) -> WorkspaceSidebarGroupIdentity? {
+        if let transientProject = session.transientDisplayProject,
+           transientProject.isDirectoryWorkspace {
+            return WorkspaceSidebarGroupIdentity(
+                id: transientProject.id,
+                normalizedPath: normalizePathForCompare(session.projectPath),
+                transientKind: .directoryWorkspace
+            )
+        }
         if session.isQuickTerminal {
             if let workspaceRootContext = session.workspaceRootContext {
                 let transientProject = Project.workspaceRoot(
@@ -5304,6 +5357,15 @@ public final class NativeAppViewModel {
         }
         openWorkspaceSessions[index].rootProjectPath = normalizePathForCompare(rootProjectPath)
         openWorkspaceSessions[index].workspaceAlignmentGroupID = nil
+    }
+
+    private func clearDirectoryWorkspacePresentationIfNeeded(for path: String) {
+        guard let index = workspaceSessionIndex(for: path),
+              openWorkspaceSessions[index].transientDisplayProject?.isDirectoryWorkspace == true
+        else {
+            return
+        }
+        openWorkspaceSessions[index].transientDisplayProject = nil
     }
 
     private func ensureWorkspaceAlignmentRootSession(for id: String) throws -> String {
@@ -7721,6 +7783,9 @@ public final class NativeAppViewModel {
             if let rootProject,
                let worktree = rootProject.worktrees.first(where: { normalizePathForCompare($0.path) == normalizedPath }) {
                 resolvedProject = buildWorktreeVirtualProject(sourceProject: rootProject, worktree: worktree)
+            } else if let session = workspaceSessionWithoutNormalizing(for: normalizedPath)
+                        ?? workspaceSession(for: normalizedPath) {
+                resolvedProject = session.transientDisplayProject
             } else {
                 resolvedProject = nil
             }
@@ -7728,6 +7793,19 @@ public final class NativeAppViewModel {
 
         displayProjectCacheByLookupKey[lookupKey] = resolvedProject
         return resolvedProject
+    }
+
+    private func normalizedTransientDisplayProject(
+        _ project: Project?,
+        fallbackPath: String
+    ) -> Project? {
+        guard let project else {
+            return nil
+        }
+        if project.isDirectoryWorkspace {
+            return Project.directoryWorkspace(at: fallbackPath)
+        }
+        return project
     }
 
     private func persistProjects(_ projects: [Project]) throws {

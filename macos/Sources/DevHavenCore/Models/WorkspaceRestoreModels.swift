@@ -33,6 +33,7 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
         case projectPath
         case rootProjectPath
         case isQuickTerminal
+        case transientDisplayProject
         case workspaceRootContext
         case workspaceAlignmentGroupID
         case workspaceId
@@ -48,6 +49,7 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
     public var projectPath: String
     public var rootProjectPath: String
     public var isQuickTerminal: Bool
+    public var transientDisplayProject: Project?
     public var workspaceRootContext: WorkspaceRootSessionContext?
     public var workspaceAlignmentGroupID: String?
     public var workspaceId: String
@@ -63,6 +65,7 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
         projectPath: String,
         rootProjectPath: String,
         isQuickTerminal: Bool,
+        transientDisplayProject: Project? = nil,
         workspaceRootContext: WorkspaceRootSessionContext? = nil,
         workspaceAlignmentGroupID: String? = nil,
         workspaceId: String,
@@ -77,6 +80,7 @@ public struct ProjectWorkspaceRestoreSnapshot: Codable, Equatable, Sendable {
         self.projectPath = projectPath
         self.rootProjectPath = rootProjectPath
         self.isQuickTerminal = isQuickTerminal
+        self.transientDisplayProject = transientDisplayProject
         self.workspaceRootContext = workspaceRootContext
         self.workspaceAlignmentGroupID = workspaceAlignmentGroupID?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.workspaceId = workspaceId
@@ -98,6 +102,7 @@ extension ProjectWorkspaceRestoreSnapshot {
             projectPath: try container.decode(String.self, forKey: .projectPath),
             rootProjectPath: try container.decode(String.self, forKey: .rootProjectPath),
             isQuickTerminal: try container.decode(Bool.self, forKey: .isQuickTerminal),
+            transientDisplayProject: try container.decodeIfPresent(Project.self, forKey: .transientDisplayProject),
             workspaceRootContext: try container.decodeIfPresent(WorkspaceRootSessionContext.self, forKey: .workspaceRootContext),
             workspaceAlignmentGroupID: try container.decodeIfPresent(String.self, forKey: .workspaceAlignmentGroupID),
             workspaceId: try container.decode(String.self, forKey: .workspaceId),
@@ -116,6 +121,7 @@ extension ProjectWorkspaceRestoreSnapshot {
         try container.encode(projectPath, forKey: .projectPath)
         try container.encode(rootProjectPath, forKey: .rootProjectPath)
         try container.encode(isQuickTerminal, forKey: .isQuickTerminal)
+        try container.encodeIfPresent(transientDisplayProject, forKey: .transientDisplayProject)
         try container.encodeIfPresent(workspaceRootContext, forKey: .workspaceRootContext)
         try container.encodeIfPresent(workspaceAlignmentGroupID, forKey: .workspaceAlignmentGroupID)
         try container.encode(workspaceId, forKey: .workspaceId)

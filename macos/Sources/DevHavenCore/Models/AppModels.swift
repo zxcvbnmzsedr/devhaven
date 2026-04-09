@@ -772,10 +772,12 @@ public struct MarkdownDocument: Equatable, Sendable {
 extension Project {
     public static let quickTerminalIDPrefix = "__devhaven_quick_terminal__:"
     public static let workspaceRootIDPrefix = "__devhaven_workspace_root__:"
+    public static let directoryWorkspaceIDPrefix = "__devhaven_directory_workspace__:"
 
     public enum TransientWorkspaceKind: Equatable, Sendable {
         case quickTerminal
         case workspaceRoot
+        case directoryWorkspace
     }
 
     public var transientWorkspaceKind: TransientWorkspaceKind? {
@@ -784,6 +786,9 @@ extension Project {
         }
         if id.hasPrefix(Self.workspaceRootIDPrefix) {
             return .workspaceRoot
+        }
+        if id.hasPrefix(Self.directoryWorkspaceIDPrefix) {
+            return .directoryWorkspace
         }
         return nil
     }
@@ -794,6 +799,10 @@ extension Project {
 
     public var isWorkspaceRoot: Bool {
         transientWorkspaceKind == .workspaceRoot
+    }
+
+    public var isDirectoryWorkspace: Bool {
+        transientWorkspaceKind == .directoryWorkspace
     }
 
     public var isTransientWorkspaceProject: Bool {
@@ -824,6 +833,28 @@ extension Project {
             id: "\(Self.workspaceRootIDPrefix)\(path)",
             name: name,
             path: path,
+            tags: [],
+            runConfigurations: [],
+            worktrees: [],
+            mtime: 0,
+            size: 0,
+            checksum: "",
+            gitCommits: 0,
+            gitLastCommit: 0,
+            notesSummary: nil,
+            created: 0,
+            checked: 0
+        )
+    }
+
+    public static func directoryWorkspace(at path: String) -> Project {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fileName = (trimmedPath as NSString).lastPathComponent
+        let displayName = fileName.isEmpty ? trimmedPath : fileName
+        return Project(
+            id: "\(Self.directoryWorkspaceIDPrefix)\(trimmedPath)",
+            name: displayName.isEmpty ? "目录工作区" : displayName,
+            path: trimmedPath,
             tags: [],
             runConfigurations: [],
             worktrees: [],

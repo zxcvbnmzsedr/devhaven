@@ -182,6 +182,7 @@ final class WorkspaceRestoreCoordinator {
                 workspaceRootContext: session.workspaceRootContext,
                 workspaceAlignmentGroupID: session.workspaceAlignmentGroupID
             )
+            snapshot.transientDisplayProject = session.transientDisplayProject
             snapshot.tabs = snapshot.tabs.map { tab in
                 var tab = tab
                 tab.tree = WorkspacePaneTreeRestoreSnapshot(

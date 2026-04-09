@@ -2,6 +2,18 @@ import AppKit
 import SwiftUI
 import DevHavenCore
 
+struct ProjectCatalogRefreshCommandState: Equatable {
+    let title: String
+    let isDisabled: Bool
+}
+
+func projectCatalogRefreshCommandState(isRefreshing: Bool) -> ProjectCatalogRefreshCommandState {
+    ProjectCatalogRefreshCommandState(
+        title: isRefreshing ? "正在刷新项目…" : "刷新项目",
+        isDisabled: isRefreshing
+    )
+}
+
 @MainActor
 final class DevHavenAppDelegate: NSObject, NSApplicationDelegate {
     private let mainWindowRestorer = MainWindowRestorer()
@@ -64,11 +76,14 @@ struct DevHavenApp: App {
             }
 
             CommandMenu("DevHaven") {
-                Button(viewModel.isRefreshingProjectCatalog ? "正在刷新项目…" : "刷新项目") {
+                let refreshCommandState = projectCatalogRefreshCommandState(
+                    isRefreshing: viewModel.isRefreshingProjectCatalog
+                )
+                Button(refreshCommandState.title) {
                     viewModel.refresh()
                 }
                 .keyboardShortcut("r", modifiers: [.command])
-                .disabled(viewModel.isRefreshingProjectCatalog)
+                .disabled(refreshCommandState.isDisabled)
 
                 Divider()
 
