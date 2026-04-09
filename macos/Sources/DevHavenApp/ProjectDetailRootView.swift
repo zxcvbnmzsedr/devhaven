@@ -4,6 +4,7 @@ import DevHavenCore
 
 struct ProjectDetailRootView: View {
     @Bindable var viewModel: NativeAppViewModel
+    let showsCloseButton: Bool
     let onClose: () -> Void
 
     var body: some View {
@@ -21,17 +22,19 @@ struct ProjectDetailRootView: View {
                                 .textSelection(.enabled)
                         }
                         Spacer()
-                        Button {
-                            onClose()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(NativeTheme.textSecondary)
-                                .frame(width: 24, height: 24)
-                                .background(Color.white.opacity(0.05))
-                                .clipShape(.circle)
+                        if showsCloseButton {
+                            Button {
+                                onClose()
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(NativeTheme.textSecondary)
+                                    .frame(width: 24, height: 24)
+                                    .background(Color.white.opacity(0.05))
+                                    .clipShape(.circle)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
 
                     if viewModel.isProjectDocumentLoading {

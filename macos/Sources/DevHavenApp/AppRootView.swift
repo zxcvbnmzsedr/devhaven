@@ -24,6 +24,11 @@ struct AppRootView: View {
         let contentVisibilityPolicy = AppRootContentVisibilityPolicy.resolve(
             isWorkspacePresented: viewModel.isWorkspacePresented
         )
+        let projectDetailPresentation = AppRootProjectDetailPresentationPolicy.resolve(
+            isWorkspacePresented: viewModel.isWorkspacePresented,
+            selectedProjectExists: viewModel.selectedProject != nil,
+            isDetailPanelRequested: viewModel.isDetailPanelPresented
+        )
 
         ZStack(alignment: .trailing) {
             HStack(spacing: 0) {
@@ -36,9 +41,18 @@ struct AppRootView: View {
                 primaryContent(contentVisibilityPolicy: contentVisibilityPolicy)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(NativeTheme.window)
+
+                if projectDetailPresentation.showsPersistentSidebar {
+                    ProjectDetailRootView(
+                        viewModel: viewModel,
+                        showsCloseButton: false,
+                        onClose: {}
+                    )
+                        .frame(width: 360)
+                }
             }
 
-            if viewModel.isDetailPanelPresented, viewModel.selectedProject != nil {
+            if projectDetailPresentation.showsDismissableOverlay {
                 Color.black.opacity(0.25)
                     .ignoresSafeArea()
                     .onTapGesture {
@@ -47,6 +61,7 @@ struct AppRootView: View {
 
                 ProjectDetailRootView(
                     viewModel: viewModel,
+                    showsCloseButton: true,
                     onClose: { DetailPanelCloseAction.perform(for: viewModel) }
                 )
                     .frame(width: 360)
@@ -87,7 +102,7 @@ struct AppRootView: View {
                 .allowsHitTesting(false)
         )
         .preferredColorScheme(.dark)
-        .animation(.easeInOut(duration: 0.18), value: viewModel.isDetailPanelPresented)
+        .animation(.easeInOut(duration: 0.18), value: projectDetailPresentation)
         .animation(.easeInOut(duration: 0.16), value: quitGuard.toastMessage != nil)
         .animation(.easeInOut(duration: 0.16), value: viewModel.workspaceToastMessage != nil)
         .sheet(isPresented: $viewModel.isDashboardPresented) {
@@ -213,7 +228,11 @@ struct AppRootView: View {
             isDashboardPresented: viewModel.isDashboardPresented,
             isSettingsPresented: viewModel.isSettingsPresented,
             isRecycleBinPresented: viewModel.isRecycleBinPresented,
-            isDetailPanelPresented: viewModel.isDetailPanelPresented,
+            isDetailPanelPresented: AppRootProjectDetailPresentationPolicy.resolve(
+                isWorkspacePresented: viewModel.isWorkspacePresented,
+                selectedProjectExists: viewModel.selectedProject != nil,
+                isDetailPanelRequested: viewModel.isDetailPanelPresented
+            ).showsDismissableOverlay,
             workspace: activeWorkspaceCloseShortcutContext
         )
     }
@@ -441,6 +460,36 @@ struct MainWindowCloseShortcutPlanner {
             return .closeTab(tabID)
         }
         return .exitWorkspace
+    }
+}
+
+struct AppRootProjectDetailPresentationPolicy: Equatable {
+    var showsPersistentSidebar: Bool
+    var showsDismissableOverlay: Bool
+
+    static func resolve(
+        isWorkspacePresented: Bool,
+        selectedProjectExists: Bool,
+        isDetailPanelRequested: Bool
+    ) -> AppRootProjectDetailPresentationPolicy {
+        guard selectedProjectExists else {
+            return AppRootProjectDetailPresentationPolicy(
+                showsPersistentSidebar: false,
+                showsDismissableOverlay: false
+            )
+        }
+
+        if !isWorkspacePresented {
+            return AppRootProjectDetailPresentationPolicy(
+                showsPersistentSidebar: true,
+                showsDismissableOverlay: false
+            )
+        }
+
+        return AppRootProjectDetailPresentationPolicy(
+            showsPersistentSidebar: false,
+            showsDismissableOverlay: isDetailPanelRequested
+        )
     }
 }
 

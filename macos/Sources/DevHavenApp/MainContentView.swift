@@ -213,7 +213,7 @@ struct MainContentView: View {
         .background(NativeTheme.elevated)
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(viewModel.selectedProjectPath == project.path && viewModel.isDetailPanelPresented ? NativeTheme.accent.opacity(0.8) : NativeTheme.border, lineWidth: 1)
+                .stroke(isProjectDetailSelectionActive(project) ? NativeTheme.accent.opacity(0.8) : NativeTheme.border, lineWidth: 1)
         )
         .clipShape(.rect(cornerRadius: 14))
         .contentShape(.rect(cornerRadius: 14))
@@ -272,7 +272,7 @@ struct MainContentView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(viewModel.selectedProjectPath == project.path && viewModel.isDetailPanelPresented ? NativeTheme.accent.opacity(0.12) : Color.clear)
+        .background(isProjectDetailSelectionActive(project) ? NativeTheme.accent.opacity(0.12) : Color.clear)
         .clipShape(.rect(cornerRadius: 10))
         .contentShape(.rect(cornerRadius: 10))
         .onTapGesture(count: 2) {
@@ -383,6 +383,13 @@ struct MainContentView: View {
         }
         .buttonStyle(.plain)
         .focusable(false)
+    }
+
+    private func isProjectDetailSelectionActive(_ project: Project) -> Bool {
+        guard !viewModel.isWorkspacePresented else {
+            return false
+        }
+        return viewModel.selectedProject?.path == project.path
     }
 
     private func requestInitialSearchFocus() {
