@@ -55,6 +55,72 @@ public enum ProjectListViewMode: String, Codable, Sendable, CaseIterable {
     case list
 }
 
+public enum ProjectListSortableColumn: String, Codable, Sendable, CaseIterable, Identifiable {
+    case name
+    case modifiedTime
+
+    public var id: String { rawValue }
+}
+
+public enum ProjectListSortOrder: String, Codable, Sendable, CaseIterable, Identifiable {
+    case defaultOrder
+    case nameAscending
+    case nameDescending
+    case modifiedNewestFirst
+    case modifiedOldestFirst
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .defaultOrder:
+            return "默认顺序"
+        case .nameAscending:
+            return "名称 A-Z"
+        case .nameDescending:
+            return "名称 Z-A"
+        case .modifiedNewestFirst:
+            return "最近修改 新到旧"
+        case .modifiedOldestFirst:
+            return "最近修改 旧到新"
+        }
+    }
+
+    public var shortTitle: String {
+        switch self {
+        case .defaultOrder:
+            return "默认顺序"
+        case .nameAscending:
+            return "名称 A-Z"
+        case .nameDescending:
+            return "名称 Z-A"
+        case .modifiedNewestFirst:
+            return "更新 ↓"
+        case .modifiedOldestFirst:
+            return "更新 ↑"
+        }
+    }
+
+    public func toggled(for column: ProjectListSortableColumn) -> ProjectListSortOrder {
+        switch column {
+        case .name:
+            switch self {
+            case .nameAscending:
+                return .nameDescending
+            default:
+                return .nameAscending
+            }
+        case .modifiedTime:
+            switch self {
+            case .modifiedNewestFirst:
+                return .modifiedOldestFirst
+            default:
+                return .modifiedNewestFirst
+            }
+        }
+    }
+}
+
 public enum NativeDateFilter: String, Sendable, CaseIterable, Identifiable {
     case all
     case lastDay
@@ -182,6 +248,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var updateAutomaticallyDownloads: Bool
     public var gitIdentities: [GitIdentity]
     public var projectListViewMode: ProjectListViewMode
+    public var projectListSortOrder: ProjectListSortOrder
     public var workspaceSidebarWidth: Double
     public var workspaceInAppNotificationsEnabled: Bool
     public var workspaceNotificationSoundEnabled: Bool
@@ -204,6 +271,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         updateAutomaticallyDownloads: Bool = false,
         gitIdentities: [GitIdentity] = [],
         projectListViewMode: ProjectListViewMode = .card,
+        projectListSortOrder: ProjectListSortOrder = .defaultOrder,
         workspaceSidebarWidth: Double = 280,
         workspaceInAppNotificationsEnabled: Bool = true,
         workspaceNotificationSoundEnabled: Bool = true,
@@ -225,6 +293,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.updateAutomaticallyDownloads = updateAutomaticallyDownloads
         self.gitIdentities = gitIdentities
         self.projectListViewMode = projectListViewMode
+        self.projectListSortOrder = projectListSortOrder
         self.workspaceSidebarWidth = workspaceSidebarWidth
         self.workspaceInAppNotificationsEnabled = workspaceInAppNotificationsEnabled
         self.workspaceNotificationSoundEnabled = workspaceNotificationSoundEnabled
@@ -248,6 +317,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case updateAutomaticallyDownloads
         case gitIdentities
         case projectListViewMode
+        case projectListSortOrder
         case workspaceSidebarWidth
         case workspaceInAppNotificationsEnabled
         case workspaceNotificationSoundEnabled
@@ -272,6 +342,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.updateAutomaticallyDownloads = try container.decodeIfPresent(Bool.self, forKey: .updateAutomaticallyDownloads) ?? false
         self.gitIdentities = try container.decodeIfPresent([GitIdentity].self, forKey: .gitIdentities) ?? []
         self.projectListViewMode = try container.decodeIfPresent(ProjectListViewMode.self, forKey: .projectListViewMode) ?? .card
+        self.projectListSortOrder = try container.decodeIfPresent(ProjectListSortOrder.self, forKey: .projectListSortOrder) ?? .defaultOrder
         self.workspaceSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .workspaceSidebarWidth) ?? 280
         self.workspaceInAppNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceInAppNotificationsEnabled) ?? true
         self.workspaceNotificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceNotificationSoundEnabled) ?? true

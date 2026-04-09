@@ -444,6 +444,10 @@ public final class NativeAppViewModel {
         snapshot.appState.settings.projectListViewMode
     }
 
+    public var projectListSortOrder: ProjectListSortOrder {
+        snapshot.appState.settings.projectListSortOrder
+    }
+
     public var workspaceSidebarWidth: Double {
         snapshot.appState.settings.workspaceSidebarWidth
     }
@@ -454,7 +458,7 @@ public final class NativeAppViewModel {
     }
 
     public var filteredProjects: [Project] {
-        visibleProjects.filter(matchesAllFilters)
+        sortProjects(visibleProjects.filter(matchesAllFilters))
     }
 
     public var selectedProject: Project? {
@@ -4437,6 +4441,15 @@ public final class NativeAppViewModel {
         saveSettings(nextSettings)
     }
 
+    public func updateProjectListSortOrder(_ order: ProjectListSortOrder) {
+        guard snapshot.appState.settings.projectListSortOrder != order else {
+            return
+        }
+        var nextSettings = snapshot.appState.settings
+        nextSettings.projectListSortOrder = order
+        saveSettings(nextSettings)
+    }
+
     public func updateWorkspaceSidebarWidth(_ width: Double) {
         guard snapshot.appState.settings.workspaceSidebarWidth != width else {
             return
@@ -4927,6 +4940,58 @@ public final class NativeAppViewModel {
         let now = Date()
         let interval: TimeInterval = selectedDateFilter == .lastDay ? 24 * 60 * 60 : 7 * 24 * 60 * 60
         return now.timeIntervalSince(date) <= interval
+    }
+
+    private func sortProjects(_ projects: [Project]) -> [Project] {
+        switch projectListSortOrder {
+        case .defaultOrder:
+            return projects
+        case .nameAscending:
+            return projects.sorted { lhs, rhs in
+                compareProjectsByName(lhs: lhs, rhs: rhs, ascending: true)
+            }
+        case .nameDescending:
+            return projects.sorted { lhs, rhs in
+                compareProjectsByName(lhs: lhs, rhs: rhs, ascending: false)
+            }
+        case .modifiedNewestFirst:
+            return projects.sorted { lhs, rhs in
+                compareProjectsByModifiedTime(lhs: lhs, rhs: rhs, newestFirst: true)
+            }
+        case .modifiedOldestFirst:
+            return projects.sorted { lhs, rhs in
+                compareProjectsByModifiedTime(lhs: lhs, rhs: rhs, newestFirst: false)
+            }
+        }
+    }
+
+    private func compareProjectsByName(
+        lhs: Project,
+        rhs: Project,
+        ascending: Bool
+    ) -> Bool {
+        let comparison = lhs.name.localizedStandardCompare(rhs.name)
+        if comparison != .orderedSame {
+            return ascending
+                ? comparison == .orderedAscending
+                : comparison == .orderedDescending
+        }
+        return compareProjectsByModifiedTime(lhs: lhs, rhs: rhs, newestFirst: true)
+    }
+
+    private func compareProjectsByModifiedTime(
+        lhs: Project,
+        rhs: Project,
+        newestFirst: Bool
+    ) -> Bool {
+        if lhs.mtime != rhs.mtime {
+            return newestFirst ? lhs.mtime > rhs.mtime : lhs.mtime < rhs.mtime
+        }
+        let comparison = lhs.name.localizedStandardCompare(rhs.name)
+        if comparison != .orderedSame {
+            return comparison == .orderedAscending
+        }
+        return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
     }
 
     public func gitDashboardSummary(for range: GitDashboardRange) -> GitDashboardSummary {

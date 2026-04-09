@@ -16,6 +16,7 @@ struct MainContentView: View {
     }
 
     @Bindable var viewModel: NativeAppViewModel
+    @State private var isFilterPopoverPresented = false
     @FocusState private var focusedField: FocusableField?
 
     private let listColumns = [
@@ -63,58 +64,85 @@ struct MainContentView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            toolbarIcon("waveform.path.ecg", action: { viewModel.revealDashboard() })
-            toolbarIcon("terminal", action: { viewModel.enterOrResumeWorkspace() })
-            toolbarIcon("gearshape", action: { viewModel.revealSettings() })
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                toolbarIcon("waveform.path.ecg", action: { viewModel.revealDashboard() })
+                toolbarIcon("terminal", action: { viewModel.enterOrResumeWorkspace() })
+                toolbarIcon("gearshape", action: { viewModel.revealSettings() })
 
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(NativeTheme.textSecondary)
-                TextField("搜索项目、备注...", text: $viewModel.searchQuery)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(NativeTheme.textPrimary)
-                    .focused($focusedField, equals: .search)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(NativeTheme.elevated)
-            .clipShape(.rect(cornerRadius: 10))
-            .frame(maxWidth: 340)
-
-            Spacer(minLength: 10)
-
-            Menu {
-                ForEach(NativeDateFilter.allCases) { filter in
-                    Button(filter.title) {
-                        viewModel.updateDateFilter(filter)
-                    }
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(NativeTheme.textSecondary)
+                    TextField("搜索项目、备注...", text: $viewModel.searchQuery)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(NativeTheme.textPrimary)
+                        .focused($focusedField, equals: .search)
                 }
-            } label: {
-                toolbarChip(viewModel.selectedDateFilter.title, systemImage: "calendar")
-            }
-            .menuStyle(.borderlessButton)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(NativeTheme.elevated)
+                .clipShape(.rect(cornerRadius: 10))
+                .frame(maxWidth: 360)
 
-            Menu {
-                ForEach(NativeGitFilter.allCases) { filter in
-                    Button(filter.title) {
-                        viewModel.updateGitFilter(filter)
+                Spacer(minLength: 10)
+
+                Button {
+                    isFilterPopoverPresented.toggle()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                        Text("筛选")
+                        if activeFilterCount > 0 {
+                            Text("\(activeFilterCount)")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(NativeTheme.accent)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(NativeTheme.accent.opacity(0.14))
+                                .clipShape(.capsule)
+                        }
                     }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(activeFilterCount > 0 ? NativeTheme.textPrimary : NativeTheme.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(NativeTheme.elevated)
+                    .clipShape(.rect(cornerRadius: 10))
                 }
-            } label: {
-                toolbarChip(viewModel.selectedGitFilter.title, systemImage: "point.3.connected.trianglepath.dotted")
-            }
-            .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
+                .popover(isPresented: $isFilterPopoverPresented, arrowEdge: .top) {
+                    filterPopover
+                }
 
-            Picker("视图模式", selection: Binding(
-                get: { viewModel.projectListViewMode },
-                set: { viewModel.updateProjectListViewMode($0) }
-            )) {
-                Label("卡片", systemImage: "square.grid.2x2.fill").tag(ProjectListViewMode.card)
-                Label("列表", systemImage: "list.bullet").tag(ProjectListViewMode.list)
+                Picker("视图模式", selection: Binding(
+                    get: { viewModel.projectListViewMode },
+                    set: { viewModel.updateProjectListViewMode($0) }
+                )) {
+                    Label("卡片", systemImage: "square.grid.2x2.fill").tag(ProjectListViewMode.card)
+                    Label("列表", systemImage: "list.bullet").tag(ProjectListViewMode.list)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
             }
-            .pickerStyle(.segmented)
-            .frame(width: 180)
+
+            if let filterSummaryText {
+                HStack(spacing: 10) {
+                    Label(filterSummaryText, systemImage: "slider.horizontal.3")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                        .lineLimit(1)
+                    Button("恢复默认") {
+                        resetProjectFilters()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(NativeTheme.accent)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(NativeTheme.elevated.opacity(0.82))
+                .clipShape(.rect(cornerRadius: 10))
+            }
         }
     }
 
@@ -288,13 +316,21 @@ struct MainContentView: View {
 
     private var projectListHeader: some View {
         HStack(spacing: 12) {
-            projectListHeaderLabel("项目")
+            sortableProjectListHeaderLabel(
+                projectColumnTitle,
+                isActive: isNameSortActive,
+                action: { toggleSort(for: .name) }
+            )
                 .frame(width: ProjectListMetrics.projectColumnWidth, alignment: .leading)
             projectListHeaderLabel("备注")
                 .frame(width: ProjectListMetrics.notesColumnWidth, alignment: .leading)
             projectListHeaderLabel("Git 摘要")
                 .frame(width: ProjectListMetrics.gitSummaryColumnWidth, alignment: .leading)
-            projectListHeaderLabel("修改时间")
+            sortableProjectListHeaderLabel(
+                modifiedColumnTitle,
+                isActive: isModifiedTimeSortActive,
+                action: { toggleSort(for: .modifiedTime) }
+            )
                 .frame(width: ProjectListMetrics.dateColumnWidth, alignment: .leading)
             projectListHeaderLabel("状态")
                 .frame(width: ProjectListMetrics.statusColumnWidth, alignment: .leading)
@@ -306,11 +342,29 @@ struct MainContentView: View {
         .padding(.bottom, 2)
     }
 
-    private func projectListHeaderLabel(_ title: String) -> some View {
+    private func projectListHeaderLabel(_ title: String, isActive: Bool = false) -> some View {
         Text(title)
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(NativeTheme.textSecondary)
+            .foregroundStyle(isActive ? NativeTheme.textPrimary : NativeTheme.textSecondary)
             .textCase(.uppercase)
+    }
+
+    private func sortableProjectListHeaderLabel(
+        _ title: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                projectListHeaderLabel(title, isActive: isActive)
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(isActive ? NativeTheme.accent : NativeTheme.textSecondary.opacity(0.6))
+            }
+            .contentShape(.rect(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help("点击切换排序")
     }
 
     private func projectRowNotesColumn(_ project: Project) -> some View {
@@ -390,6 +444,183 @@ struct MainContentView: View {
             return false
         }
         return viewModel.selectedProject?.path == project.path
+    }
+
+    private var activeFilterCount: Int {
+        var count = 0
+        if viewModel.selectedGitFilter != .all {
+            count += 1
+        }
+        if viewModel.selectedDateFilter != .all {
+            count += 1
+        }
+        if viewModel.projectListSortOrder != .defaultOrder {
+            count += 1
+        }
+        return count
+    }
+
+    private var filterSummaryText: String? {
+        guard activeFilterCount > 0 else {
+            return nil
+        }
+
+        var parts: [String] = []
+        if viewModel.selectedGitFilter != .all {
+            parts.append(viewModel.selectedGitFilter.title)
+        }
+        if viewModel.selectedDateFilter != .all {
+            parts.append(viewModel.selectedDateFilter.title)
+        }
+        if viewModel.projectListSortOrder != .defaultOrder {
+            parts.append(viewModel.projectListSortOrder.title)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var isNameSortActive: Bool {
+        viewModel.projectListSortOrder == .nameAscending
+            || viewModel.projectListSortOrder == .nameDescending
+    }
+
+    private var isModifiedTimeSortActive: Bool {
+        viewModel.projectListSortOrder == .modifiedNewestFirst
+            || viewModel.projectListSortOrder == .modifiedOldestFirst
+    }
+
+    private var projectColumnTitle: String {
+        switch viewModel.projectListSortOrder {
+        case .nameAscending:
+            return "项目 ↑"
+        case .nameDescending:
+            return "项目 ↓"
+        default:
+            return "项目"
+        }
+    }
+
+    private var modifiedColumnTitle: String {
+        switch viewModel.projectListSortOrder {
+        case .modifiedNewestFirst:
+            return "修改时间 ↓"
+        case .modifiedOldestFirst:
+            return "修改时间 ↑"
+        default:
+            return "修改时间"
+        }
+    }
+
+    private var filterPopover: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("筛选与排序")
+                    .font(.headline)
+                    .foregroundStyle(NativeTheme.textPrimary)
+                Text("把筛选条件和排序放到一个地方，平时让顶部更干净。")
+                    .font(.caption)
+                    .foregroundStyle(NativeTheme.textSecondary)
+            }
+
+            filterSection(title: "项目类型") {
+                ForEach(NativeGitFilter.allCases) { filter in
+                    filterOptionButton(
+                        title: filter.title,
+                        isSelected: viewModel.selectedGitFilter == filter
+                    ) {
+                        viewModel.updateGitFilter(filter)
+                    }
+                }
+            }
+
+            filterSection(title: "时间范围") {
+                ForEach(NativeDateFilter.allCases) { filter in
+                    filterOptionButton(
+                        title: filter.title,
+                        isSelected: viewModel.selectedDateFilter == filter
+                    ) {
+                        viewModel.updateDateFilter(filter)
+                    }
+                }
+            }
+
+            filterSection(title: "排序") {
+                ForEach(ProjectListSortOrder.allCases) { order in
+                    filterOptionButton(
+                        title: order.title,
+                        isSelected: viewModel.projectListSortOrder == order
+                    ) {
+                        viewModel.updateProjectListSortOrder(order)
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Button("恢复默认") {
+                    resetProjectFilters()
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(NativeTheme.accent)
+
+                Spacer(minLength: 0)
+
+                Button("完成") {
+                    isFilterPopoverPresented = false
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(NativeTheme.accent)
+                .controlSize(.small)
+            }
+        }
+        .padding(16)
+        .frame(width: 280)
+        .background(NativeTheme.window)
+    }
+
+    private func filterSection<Content: View>(
+        title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(NativeTheme.textSecondary)
+            content()
+        }
+    }
+
+    private func filterOptionButton(
+        title: String,
+        isSelected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? NativeTheme.accent : NativeTheme.textSecondary.opacity(0.7))
+                Text(title)
+                    .foregroundStyle(NativeTheme.textPrimary)
+                Spacer(minLength: 0)
+            }
+            .font(.caption)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(isSelected ? NativeTheme.accent.opacity(0.12) : NativeTheme.elevated)
+            .clipShape(.rect(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func resetProjectFilters() {
+        viewModel.updateGitFilter(.all)
+        viewModel.updateDateFilter(.all)
+        viewModel.updateProjectListSortOrder(.defaultOrder)
+    }
+
+    private func toggleSort(for column: ProjectListSortableColumn) {
+        viewModel.updateProjectListSortOrder(viewModel.projectListSortOrder.toggled(for: column))
     }
 
     private func requestInitialSearchFocus() {

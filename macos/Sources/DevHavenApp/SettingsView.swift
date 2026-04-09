@@ -543,6 +543,7 @@ struct SettingsView: View {
             updateAutomaticallyDownloads: updateAutomaticallyDownloads,
             gitIdentities: normalizedGitIdentities,
             projectListViewMode: originalSettings.projectListViewMode,
+            projectListSortOrder: originalSettings.projectListSortOrder,
             workspaceSidebarWidth: originalSettings.workspaceSidebarWidth,
             workspaceInAppNotificationsEnabled: workspaceInAppNotificationsEnabled,
             workspaceNotificationSoundEnabled: workspaceNotificationSoundEnabled,
