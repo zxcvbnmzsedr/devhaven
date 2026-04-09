@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 import DevHavenCore
 
 struct MainContentView: View {
@@ -17,6 +18,9 @@ struct MainContentView: View {
 
     @Bindable var viewModel: NativeAppViewModel
     @State private var isFilterPopoverPresented = false
+    @State private var isDirectoryDropTargeted = false
+    @State private var isDirectoryDropActionDialogPresented = false
+    @State private var pendingDroppedDirectoryURLs: [URL] = []
     @FocusState private var focusedField: FocusableField?
 
     private let listColumns = [
@@ -58,8 +62,81 @@ struct MainContentView: View {
                 .background(NativeTheme.window)
             }
         }
+        .overlay {
+            if isDirectoryDropTargeted {
+                directoryDropOverlay
+            }
+        }
+        .animation(.easeInOut(duration: 0.16), value: isDirectoryDropTargeted)
+        .confirmationDialog(
+            "导入拖入的文件夹",
+            isPresented: $isDirectoryDropActionDialogPresented,
+            titleVisibility: .visible
+        ) {
+            Button("添加工作目录（扫描项目）") {
+                submitDroppedDirectoryImport(.addDirectory)
+            }
+            Button("直接添加为项目") {
+                submitDroppedDirectoryImport(.addProjects)
+            }
+            Button("取消", role: .cancel) {
+                clearPendingDroppedDirectories()
+            }
+        } message: {
+            Text(directoryDropConfirmationMessage)
+        }
+        .onDrop(of: [UTType.fileURL], isTargeted: $isDirectoryDropTargeted, perform: handleDirectoryDrop)
         .onAppear {
             requestInitialSearchFocus()
+        }
+        .onChange(of: isDirectoryDropActionDialogPresented) { _, isPresented in
+            if !isPresented {
+                pendingDroppedDirectoryURLs = []
+            }
+        }
+    }
+
+    private var directoryDropOverlay: some View {
+        ZStack {
+            NativeTheme.window.opacity(0.72)
+                .ignoresSafeArea()
+
+            VStack(spacing: 14) {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(NativeTheme.accent)
+                Text("拖入文件夹以导入项目")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(NativeTheme.textPrimary)
+                Text("松开后可选择扫描目录，或直接把文件夹添加为项目。")
+                    .font(.callout)
+                    .foregroundStyle(NativeTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 26)
+            .background(NativeTheme.surface.opacity(0.96))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(
+                        NativeTheme.accent.opacity(0.95),
+                        style: StrokeStyle(lineWidth: 2, dash: [10, 8])
+                    )
+            )
+            .clipShape(.rect(cornerRadius: 18))
+            .padding(28)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var directoryDropConfirmationMessage: String {
+        switch pendingDroppedDirectoryURLs.count {
+        case 0:
+            "请选择导入方式。"
+        case 1:
+            "将导入 1 个文件夹：\(pendingDroppedDirectoryURLs[0].lastPathComponent)"
+        default:
+            "将导入 \(pendingDroppedDirectoryURLs.count) 个文件夹。"
         }
     }
 
@@ -178,6 +255,113 @@ struct MainContentView: View {
         }
         .foregroundStyle(NativeTheme.textSecondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func handleDirectoryDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else {
+            return false
+        }
+
+        Task { @MainActor in
+            let droppedURLs = await loadDroppedFileURLs(from: fileProviders)
+            let directoryURLs = droppedURLs.filter {
+                $0.hasDirectoryPath || Self.isDirectoryURL($0)
+            }
+            guard !directoryURLs.isEmpty else {
+                viewModel.errorMessage = "仅支持拖入文件夹目录。"
+                return
+            }
+            pendingDroppedDirectoryURLs = uniqueStandardizedDirectoryURLs(directoryURLs)
+            isDirectoryDropActionDialogPresented = !pendingDroppedDirectoryURLs.isEmpty
+        }
+        return true
+    }
+
+    @MainActor
+    private func submitDroppedDirectoryImport(_ action: ProjectDirectoryImportAction) {
+        let urls = pendingDroppedDirectoryURLs
+        clearPendingDroppedDirectories()
+        guard !urls.isEmpty else {
+            return
+        }
+
+        ProjectImportDiagnostics.shared.recordImporterCallback(
+            action: action.diagnosticsAction,
+            urlCount: urls.count
+        )
+        Task { @MainActor in
+            await ProjectDirectoryImportSupport.withSecurityScopedAccess(urls, action: action) {
+                await ProjectDirectoryImportSupport.performImport(
+                    urls: urls,
+                    action: action,
+                    viewModel: viewModel
+                )
+            }
+        }
+    }
+
+    private func clearPendingDroppedDirectories() {
+        pendingDroppedDirectoryURLs = []
+        isDirectoryDropActionDialogPresented = false
+    }
+
+    private func loadDroppedFileURLs(from providers: [NSItemProvider]) async -> [URL] {
+        var urls = [URL]()
+        for provider in providers {
+            if let url = await loadDroppedFileURL(from: provider) {
+                urls.append(url)
+            }
+        }
+        return urls
+    }
+
+    private func loadDroppedFileURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(
+                forTypeIdentifier: UTType.fileURL.identifier,
+                options: nil
+            ) { item, _ in
+                continuation.resume(returning: Self.resolveDroppedFileURL(from: item))
+            }
+        }
+    }
+
+    private func uniqueStandardizedDirectoryURLs(_ urls: [URL]) -> [URL] {
+        var seenPaths = Set<String>()
+        return urls.compactMap { url in
+            let standardizedURL = url.standardizedFileURL
+            let path = standardizedURL.path()
+            guard !path.isEmpty, seenPaths.insert(path).inserted else {
+                return nil
+            }
+            return standardizedURL
+        }
+    }
+
+    private nonisolated static func isDirectoryURL(_ url: URL) -> Bool {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey]
+        guard let resourceValues = try? url.resourceValues(forKeys: keys) else {
+            return false
+        }
+        return resourceValues.isDirectory == true
+    }
+
+    private nonisolated static func resolveDroppedFileURL(from item: NSSecureCoding?) -> URL? {
+        switch item {
+        case let url as URL:
+            url
+        case let nsURL as NSURL:
+            nsURL as URL
+        case let data as Data:
+            URL(dataRepresentation: data, relativeTo: nil)
+        case let string as String:
+            URL(string: string)
+        default:
+            nil
+        }
     }
 
     private func projectCard(_ project: Project) -> some View {

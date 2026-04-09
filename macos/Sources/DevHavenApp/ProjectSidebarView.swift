@@ -3,13 +3,8 @@ import UniformTypeIdentifiers
 import DevHavenCore
 
 struct ProjectSidebarView: View {
-    private enum DirectoryImportAction {
-        case addDirectory
-        case addProjects
-    }
-
     @Bindable var viewModel: NativeAppViewModel
-    @State private var pendingDirectoryImportAction: DirectoryImportAction?
+    @State private var pendingDirectoryImportAction: ProjectDirectoryImportAction?
     @State private var isDirectoryImporterPresented = false
 
     var body: some View {
@@ -322,40 +317,29 @@ struct ProjectSidebarView: View {
 
         switch result {
         case let .success(urls):
-            let diagnosticsAction = importDiagnosticsAction(for: action)
-            ProjectImportDiagnostics.shared.recordImporterCallback(action: diagnosticsAction, urlCount: urls.count)
+            ProjectImportDiagnostics.shared.recordImporterCallback(
+                action: action?.diagnosticsAction,
+                urlCount: urls.count
+            )
             Task { @MainActor in
-                await withSecurityScopedDirectoryImportAccess(urls, action: diagnosticsAction) {
-                    await performDirectoryImport(urls: urls, action: action)
+                await ProjectDirectoryImportSupport.withSecurityScopedAccess(urls, action: action) {
+                    guard let action else {
+                        return
+                    }
+                    await ProjectDirectoryImportSupport.performImport(
+                        urls: urls,
+                        action: action,
+                        viewModel: viewModel
+                    )
                 }
             }
         case let .failure(error):
             ProjectImportDiagnostics.shared.recordFailure(
-                action: importDiagnosticsAction(for: action),
+                action: action?.diagnosticsAction,
                 errorDescription: error.localizedDescription
             )
             viewModel.errorMessage = error.localizedDescription
         }
-    }
-
-    @MainActor
-    private func withSecurityScopedDirectoryImportAccess(
-        _ urls: [URL],
-        action: ProjectImportAction?,
-        operation: @MainActor () async -> Void
-    ) async {
-        let accessedURLs = urls.filter { $0.startAccessingSecurityScopedResource() }
-        ProjectImportDiagnostics.shared.recordSecurityScope(
-            action: action,
-            requestedCount: urls.count,
-            grantedCount: accessedURLs.count
-        )
-        defer {
-            for url in accessedURLs {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-        await operation()
     }
 
     private func directoryPath(for row: NativeAppViewModel.DirectoryRow) -> String? {
@@ -365,59 +349,6 @@ struct ProjectSidebarView: View {
         return path
     }
 
-    @MainActor
-    private func performDirectoryImport(urls: [URL], action: DirectoryImportAction?) async {
-        let paths = urls.map { $0.standardizedFileURL.path() }
-        guard !paths.isEmpty else {
-            return
-        }
-        let diagnosticsAction = importDiagnosticsAction(for: action)
-        if let diagnosticsAction {
-            ProjectImportDiagnostics.shared.recordImportAttempt(action: diagnosticsAction, paths: paths)
-        }
-        do {
-            switch action {
-            case .addDirectory:
-                guard let firstPath = paths.first else {
-                    return
-                }
-                try viewModel.addProjectDirectory(firstPath)
-                try await viewModel.refreshProjectCatalog()
-                viewModel.selectDirectory(.directory(firstPath))
-                ProjectImportDiagnostics.shared.recordSelectionApplied(
-                    action: .addDirectory,
-                    filter: "directory:\(firstPath)"
-                )
-            case .addProjects:
-                try await viewModel.addDirectProjects(paths)
-                viewModel.selectDirectory(.directProjects)
-                ProjectImportDiagnostics.shared.recordSelectionApplied(
-                    action: .addProjects,
-                    filter: "direct-projects"
-                )
-            case nil:
-                return
-            }
-        } catch {
-            let resolvedError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            ProjectImportDiagnostics.shared.recordFailure(
-                action: diagnosticsAction,
-                errorDescription: resolvedError
-            )
-            viewModel.errorMessage = resolvedError
-        }
-    }
-
-    private func importDiagnosticsAction(for action: DirectoryImportAction?) -> ProjectImportAction? {
-        switch action {
-        case .addDirectory:
-            .addDirectory
-        case .addProjects:
-            .addProjects
-        case nil:
-            nil
-        }
-    }
 
     @MainActor
     private func refreshProjectList() async {
