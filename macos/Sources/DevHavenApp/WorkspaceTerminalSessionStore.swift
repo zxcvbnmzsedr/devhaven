@@ -69,6 +69,19 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
         selectedItemIDByPaneID[pane.id] = pane.selectedItem?.id
 
         if let existing = modelsByItemID[item.id] {
+            existing.updateHandlers(
+                onFocusChange: onFocusChange,
+                onSurfaceExit: onSurfaceExit,
+                onTabTitleChange: onTabTitleChange,
+                onWorkingDirectoryChange: onWorkingDirectoryChange,
+                onNotificationEvent: onNotificationEvent,
+                onTaskStatusChange: onTaskStatusChange,
+                onNewTab: onNewTab,
+                onCloseTab: onCloseTab,
+                onGotoTab: onGotoTab,
+                onMoveTab: onMoveTab,
+                onSplitAction: onSplitAction
+            )
             syncCodexTrackingForLoadedModels()
             return existing
         }

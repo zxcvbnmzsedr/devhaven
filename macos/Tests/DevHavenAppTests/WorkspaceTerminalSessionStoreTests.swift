@@ -35,6 +35,30 @@ final class WorkspaceTerminalSessionStoreTests: XCTestCase {
         XCTAssertEqual(observedPaneID, paneID)
     }
 
+    func testWarmSelectedPaneLaterRebindsFocusHandlerWithoutBeingClearedByRewarm() throws {
+        let store = WorkspaceTerminalSessionStore()
+        let controller = GhosttyWorkspaceController(projectPath: "/tmp/project")
+
+        let warmedModel = try XCTUnwrap(store.warmSelectedPane(in: controller))
+        let selectedPane = try XCTUnwrap(controller.selectedPane)
+        let selectedItem = try XCTUnwrap(selectedPane.selectedItem)
+
+        var observedFocuses: [Bool] = []
+        let reboundModel = store.model(
+            for: selectedItem,
+            in: selectedPane,
+            onFocusChange: { observedFocuses.append($0) }
+        )
+
+        XCTAssertTrue(warmedModel === reboundModel)
+
+        reboundModel.handleSurfaceFocusChange(true)
+        _ = store.warmSelectedPane(in: controller)
+        reboundModel.handleSurfaceFocusChange(false)
+
+        XCTAssertEqual(observedFocuses, [true, false])
+    }
+
     private func makePaneState(projectPath: String, paneID: String) -> WorkspacePaneState {
         let item = WorkspacePaneItemState(
             request: WorkspaceTerminalLaunchRequest(

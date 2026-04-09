@@ -390,26 +390,29 @@ final class GhosttySurfaceHostModel {
     @ObservationIgnored
     private let appRuntime: GhosttyAppRuntime
     @ObservationIgnored
-    private let onFocusChange: ((Bool) -> Void)?
+    private var onFocusChange: ((Bool) -> Void)?
     @ObservationIgnored
-    private let onSurfaceExit: (() -> Void)?
+    private var onSurfaceExit: (() -> Void)?
     @ObservationIgnored
-    private let onTabTitleChange: ((String) -> Void)?
+    private var onTabTitleChange: ((String) -> Void)?
     @ObservationIgnored
-    private let onWorkingDirectoryChange: ((String) -> Void)?
-    var onNotificationEvent: ((String, String) -> Void)?
-    var onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)?
-    var onBell: (() -> Void)?
+    private var onWorkingDirectoryChange: ((String) -> Void)?
     @ObservationIgnored
-    private let onNewTab: (() -> Bool)?
+    private var onNotificationEvent: ((String, String) -> Void)?
     @ObservationIgnored
-    private let onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)?
+    private var onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)?
     @ObservationIgnored
-    private let onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)?
+    private var onBell: (() -> Void)?
     @ObservationIgnored
-    private let onMoveTab: ((ghostty_action_move_tab_s) -> Bool)?
+    private var onNewTab: (() -> Bool)?
     @ObservationIgnored
-    private let onSplitAction: ((GhosttySplitAction) -> Bool)?
+    private var onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)?
+    @ObservationIgnored
+    private var onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)?
+    @ObservationIgnored
+    private var onMoveTab: ((ghostty_action_move_tab_s) -> Bool)?
+    @ObservationIgnored
+    private var onSplitAction: ((GhosttySplitAction) -> Bool)?
     @ObservationIgnored
     private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
     private var ownedSurfaceView: GhosttyTerminalSurfaceView?
@@ -534,6 +537,62 @@ final class GhosttySurfaceHostModel {
         self.initializationError = appRuntime.initializationError ?? terminalRuntime?.initializationError
         self.processState = initializationError == nil ? .running : .failed
         self.surfaceTitle = request.restoreContext?.title
+    }
+
+    func updateHandlers(
+        onFocusChange: ((Bool) -> Void)? = nil,
+        onSurfaceExit: (() -> Void)? = nil,
+        onTabTitleChange: ((String) -> Void)? = nil,
+        onWorkingDirectoryChange: ((String) -> Void)? = nil,
+        onNotificationEvent: ((String, String) -> Void)? = nil,
+        onTaskStatusChange: ((WorkspaceTaskStatus) -> Void)? = nil,
+        onBell: (() -> Void)? = nil,
+        onNewTab: (() -> Bool)? = nil,
+        onCloseTab: ((ghostty_action_close_tab_mode_e) -> Bool)? = nil,
+        onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
+        onMoveTab: ((ghostty_action_move_tab_s) -> Bool)? = nil,
+        onSplitAction: ((GhosttySplitAction) -> Bool)? = nil
+    ) {
+        if let onFocusChange {
+            self.onFocusChange = onFocusChange
+        }
+        if let onSurfaceExit {
+            self.onSurfaceExit = onSurfaceExit
+        }
+        if let onTabTitleChange {
+            self.onTabTitleChange = onTabTitleChange
+        }
+        if let onWorkingDirectoryChange {
+            self.onWorkingDirectoryChange = onWorkingDirectoryChange
+        }
+        if let onNotificationEvent {
+            self.onNotificationEvent = onNotificationEvent
+        }
+        if let onTaskStatusChange {
+            self.onTaskStatusChange = onTaskStatusChange
+        }
+        if let onBell {
+            self.onBell = onBell
+        }
+        if let onNewTab {
+            self.onNewTab = onNewTab
+        }
+        if let onCloseTab {
+            self.onCloseTab = onCloseTab
+        }
+        if let onGotoTab {
+            self.onGotoTab = onGotoTab
+        }
+        if let onMoveTab {
+            self.onMoveTab = onMoveTab
+        }
+        if let onSplitAction {
+            self.onSplitAction = onSplitAction
+        }
+    }
+
+    func handleSurfaceFocusChange(_ focused: Bool) {
+        onFocusChange?(focused)
     }
 
     func setCodexDisplayTrackingEnabled(_ enabled: Bool) {
@@ -724,11 +783,21 @@ final class GhosttySurfaceHostModel {
         bridge.onCloseRequest = { [weak self] processAlive in
             self?.handleProcessExit(processAlive: processAlive)
         }
-        bridge.onNewTab = onNewTab
-        bridge.onCloseTab = onCloseTab
-        bridge.onGotoTab = onGotoTab
-        bridge.onMoveTab = onMoveTab
-        bridge.onSplitAction = onSplitAction
+        bridge.onNewTab = { [weak self] in
+            self?.onNewTab?() ?? false
+        }
+        bridge.onCloseTab = { [weak self] mode in
+            self?.onCloseTab?(mode) ?? false
+        }
+        bridge.onGotoTab = { [weak self] target in
+            self?.onGotoTab?(target) ?? false
+        }
+        bridge.onMoveTab = { [weak self] move in
+            self?.onMoveTab?(move) ?? false
+        }
+        bridge.onSplitAction = { [weak self] action in
+            self?.onSplitAction?(action) ?? false
+        }
 
         workspaceLaunchDiagnostics.recordSurfaceCreationStarted(request: request)
         let extraEnvironment = resolvedRuntimeEnvironment()
@@ -739,7 +808,7 @@ final class GhosttySurfaceHostModel {
             extraEnvironment: extraEnvironment
         )
         view.onFocusChange = { [weak self] focused in
-            self?.onFocusChange?(focused)
+            self?.handleSurfaceFocusChange(focused)
         }
         ownedSurfaceView = view
         hasPreparedSurfaceView = view.initializationError == nil
