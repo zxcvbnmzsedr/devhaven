@@ -75,12 +75,17 @@ public final class WorkspaceAlignmentRootStore {
     public func syncRoot(for group: WorkspaceAlignmentGroupProjection) throws -> URL {
         let rootURL = rootURL(for: group.definition)
         try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        let originalProjectPathsByNormalizedPath = Dictionary(
+            uniqueKeysWithValues: group.definition.effectiveMembers.map { member in
+                (normalizeWorkspaceAlignmentProjectPath(member.projectPath), member.projectPath)
+            }
+        )
 
         let members = group.members.map { member in
             WorkspaceAlignmentRootManifest.Member(
                 alias: member.alias,
                 projectName: member.projectName,
-                projectPath: member.projectPath,
+                projectPath: originalProjectPathsByNormalizedPath[normalizeWorkspaceAlignmentProjectPath(member.projectPath)] ?? member.projectPath,
                 openPath: member.openTarget.path,
                 branch: member.branchLabel,
                 status: member.status.displayText
@@ -187,4 +192,12 @@ public func makeWorkspaceAlignmentRootDirectoryName(name: String, id: String) ->
     let normalizedSlug = slug.isEmpty ? "workspace" : slug.lowercased()
     let shortID = id.replacingOccurrences(of: "-", with: "")
     return "\(normalizedSlug)--\(String(shortID.prefix(6)))"
+}
+
+private func normalizeWorkspaceAlignmentProjectPath(_ path: String) -> String {
+    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        return ""
+    }
+    return URL(fileURLWithPath: trimmed).standardizedFileURL.path
 }

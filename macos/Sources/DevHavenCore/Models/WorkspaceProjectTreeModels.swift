@@ -425,5 +425,43 @@ private func findDisplayNode(
 }
 
 private func normalizeWorkspaceProjectTreePath(_ path: String) -> String {
-    URL(fileURLWithPath: path).standardizedFileURL.path
+    let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+    let fileManager = FileManager.default
+    var ancestorPath = standardizedPath
+    var trailingComponents = [String]()
+
+    while ancestorPath != "/", !fileManager.fileExists(atPath: ancestorPath) {
+        let lastComponent = (ancestorPath as NSString).lastPathComponent
+        guard !lastComponent.isEmpty else {
+            break
+        }
+        trailingComponents.insert(lastComponent, at: 0)
+        ancestorPath = (ancestorPath as NSString).deletingLastPathComponent
+        if ancestorPath.isEmpty {
+            ancestorPath = "/"
+            break
+        }
+    }
+
+    let canonicalAncestorPath = workspaceProjectTreeRealpathString(ancestorPath) ?? ancestorPath
+    guard !trailingComponents.isEmpty else {
+        return canonicalAncestorPath
+    }
+
+    return trailingComponents.reduce(canonicalAncestorPath as NSString) { partial, component in
+        partial.appendingPathComponent(component) as NSString
+    } as String
+}
+
+private func workspaceProjectTreeRealpathString(_ path: String) -> String? {
+    guard !path.isEmpty else {
+        return nil
+    }
+    return path.withCString { pointer in
+        guard let resolvedPointer = realpath(pointer, nil) else {
+            return nil
+        }
+        defer { free(resolvedPointer) }
+        return String(cString: resolvedPointer)
+    }
 }

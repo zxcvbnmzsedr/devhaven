@@ -489,7 +489,7 @@ public final class NativeAppViewModel {
     }
 
     public var openWorkspaceProjectPaths: [String] {
-        openWorkspaceSessions.map(\.projectPath)
+        openWorkspaceSessions.map { normalizePathForCompare($0.projectPath) }
     }
 
     public var openWorkspaceRootProjectPaths: [String] {
@@ -501,8 +501,8 @@ public final class NativeAppViewModel {
     }
 
     public var availableWorkspaceProjects: [Project] {
-        let openedPaths = Set(openWorkspaceRootProjectPaths)
-        return visibleProjects.filter { !openedPaths.contains($0.path) }
+        let openedPaths = Set(openWorkspaceRootProjectPaths.map(normalizePathForCompare))
+        return visibleProjects.filter { !openedPaths.contains(normalizePathForCompare($0.path)) }
     }
 
     public var workspaceAlignmentProjectOptions: [Project] {
@@ -521,8 +521,8 @@ public final class NativeAppViewModel {
                 }) else {
                     return nil
                 }
-                let attention = attentionStateByProjectPath[session.projectPath]
-                let agentOverrides = agentDisplayOverridesByProjectPath[session.projectPath] ?? [:]
+                let attention = workspaceAttentionState(for: session.projectPath)
+                let agentOverrides = agentDisplayOverridesByProjectPath[normalizePathForCompare(session.projectPath)] ?? [:]
                 let transientProject = switch transientKind {
                 case .workspaceRoot:
                     Project.workspaceRoot(
@@ -537,7 +537,7 @@ public final class NativeAppViewModel {
                 return WorkspaceSidebarProjectGroup(
                     rootProject: transientProject,
                     worktrees: [],
-                    isActive: activeWorkspaceProjectPath == session.projectPath,
+                    isActive: normalizedPathsMatch(activeWorkspaceProjectPath, session.projectPath),
                     notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
                     unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
                     taskStatus: attention?.taskStatus,
@@ -557,7 +557,7 @@ public final class NativeAppViewModel {
                 showsInAppNotifications: showsInAppNotifications,
                 moveNotifiedWorktreeToTop: moveNotifiedWorktreeToTop
             )
-            let rootAttention = attentionStateByProjectPath[rootPath]
+            let rootAttention = workspaceAttentionState(for: rootPath)
             let rootAgentOverrides = agentDisplayOverridesByProjectPath[rootPath] ?? [:]
             let rootAgentState = rootAttention?.resolvedAgentState(overridesByPaneID: rootAgentOverrides)
             let rootAgentSummary = rootAttention?.resolvedAgentSummary(overridesByPaneID: rootAgentOverrides)
@@ -573,7 +573,7 @@ public final class NativeAppViewModel {
                         count += item.unreadNotificationCount
                     }
                 : 0
-            let isGroupActive = activeWorkspaceProjectPath == rootPath || worktrees.contains(where: \.isActive)
+            let isGroupActive = normalizedPathsMatch(activeWorkspaceProjectPath, rootPath) || worktrees.contains(where: \.isActive)
             return WorkspaceSidebarProjectGroup(
                 rootProject: rootProject,
                 worktrees: worktrees,
@@ -729,11 +729,11 @@ public final class NativeAppViewModel {
     }
 
     func workspaceAttentionState(for projectPath: String) -> WorkspaceAttentionState? {
-        attentionStateByProjectPath[projectPath]
+        attentionStateByProjectPath[normalizePathForCompare(projectPath)]
     }
 
     public func workspaceRunConsoleState(for projectPath: String) -> WorkspaceRunConsoleState? {
-        workspaceRunConsoleStateByProjectPath[projectPath]
+        workspaceRunConsoleStateByProjectPath[normalizePathForCompare(projectPath)]
     }
 
     public func availableWorkspaceRunConfigurations(in projectPath: String? = nil) -> [WorkspaceRunConfiguration] {
@@ -989,11 +989,12 @@ public final class NativeAppViewModel {
         guard snapshot.appState.settings.workspaceInAppNotificationsEnabled else {
             return
         }
-        guard let session = openWorkspaceSessions.first(where: { $0.projectPath == projectPath }) else {
+        guard let session = workspaceSession(for: projectPath) else {
             return
         }
 
-        var attention = attentionStateByProjectPath[projectPath] ?? WorkspaceAttentionState()
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        var attention = attentionStateByProjectPath[normalizedProjectPath] ?? WorkspaceAttentionState()
         attention.appendNotification(
             WorkspaceTerminalNotification(
                 projectPath: projectPath,
@@ -1007,7 +1008,7 @@ public final class NativeAppViewModel {
                 isRead: isWorkspacePaneCurrentlyFocused(projectPath: projectPath, tabID: tabID, paneID: paneID)
             )
         )
-        attentionStateByProjectPath[projectPath] = attention
+        attentionStateByProjectPath[normalizedProjectPath] = attention
     }
 
     public func updateWorkspaceTaskStatus(
@@ -1015,21 +1016,23 @@ public final class NativeAppViewModel {
         paneID: String,
         status: WorkspaceTaskStatus
     ) {
-        var attention = attentionStateByProjectPath[projectPath] ?? WorkspaceAttentionState()
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        var attention = attentionStateByProjectPath[normalizedProjectPath] ?? WorkspaceAttentionState()
         let previousAttention = attention
         attention.setTaskStatus(status, for: paneID)
         guard attention != previousAttention else {
             return
         }
-        attentionStateByProjectPath[projectPath] = attention
+        attentionStateByProjectPath[normalizedProjectPath] = attention
     }
 
     public func recordAgentSignal(_ signal: WorkspaceAgentSessionSignal) {
-        guard openWorkspaceProjectPaths.contains(signal.projectPath) else {
+        let normalizedProjectPath = normalizePathForCompare(signal.projectPath)
+        guard openWorkspaceProjectPaths.contains(normalizedProjectPath) else {
             return
         }
         let normalizedSignal = normalizedAgentSignal(signal)
-        var attention = attentionStateByProjectPath[signal.projectPath] ?? WorkspaceAttentionState()
+        var attention = attentionStateByProjectPath[normalizedProjectPath] ?? WorkspaceAttentionState()
         let previousAttention = attention
         applyAgentSignal(normalizedSignal, to: &attention)
         guard attention != previousAttention else {
@@ -1040,7 +1043,8 @@ public final class NativeAppViewModel {
     }
 
     public func clearAgentSignal(projectPath: String, paneID: String) {
-        guard var attention = attentionStateByProjectPath[projectPath] else {
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        guard var attention = attentionStateByProjectPath[normalizedProjectPath] else {
             return
         }
         let previousAttention = attention
@@ -1049,7 +1053,7 @@ public final class NativeAppViewModel {
             return
         }
         invalidateAppliedAgentSignalCache()
-        attentionStateByProjectPath[projectPath] = attention
+        attentionStateByProjectPath[normalizedProjectPath] = attention
     }
 
     public func startWorkspaceAgentSignalObservation() {
@@ -1092,14 +1096,14 @@ public final class NativeAppViewModel {
     private func refreshCodexDisplayCandidates() {
         let candidates: [WorkspaceAgentDisplayCandidate]
         if let activeWorkspaceProjectPath,
-           openWorkspaceProjectPaths.contains(activeWorkspaceProjectPath),
+           openWorkspaceProjectPaths.contains(normalizePathForCompare(activeWorkspaceProjectPath)),
            let controller = workspaceController(for: activeWorkspaceProjectPath),
            case let .terminal(selectedTerminalTabID)? = resolvedWorkspacePresentedTabSelection(
                for: activeWorkspaceProjectPath,
                controller: controller
            ),
            let selectedTab = controller.tabs.first(where: { $0.id == selectedTerminalTabID }),
-           let attention = attentionStateByProjectPath[activeWorkspaceProjectPath] {
+           let attention = workspaceAttentionState(for: activeWorkspaceProjectPath) {
             let visiblePaneIDs = Set(selectedTab.leaves.map(\.id))
             candidates = attention.agentStateByPaneID.compactMap { entry -> WorkspaceAgentDisplayCandidate? in
                 let (paneID, state) = entry
@@ -1138,15 +1142,17 @@ public final class NativeAppViewModel {
     }
 
     public func markWorkspaceNotificationsRead(projectPath: String, paneID: String) {
-        guard var attention = attentionStateByProjectPath[projectPath] else {
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        guard var attention = attentionStateByProjectPath[normalizedProjectPath] else {
             return
         }
         attention.markNotificationsRead(for: paneID)
-        attentionStateByProjectPath[projectPath] = attention
+        attentionStateByProjectPath[normalizedProjectPath] = attention
     }
 
     public func focusWorkspaceNotification(_ notification: WorkspaceTerminalNotification) {
-        guard openWorkspaceProjectPaths.contains(notification.projectPath) else {
+        let normalizedProjectPath = normalizePathForCompare(notification.projectPath)
+        guard openWorkspaceProjectPaths.contains(normalizedProjectPath) else {
             return
         }
         activateWorkspaceProject(notification.projectPath)
@@ -1156,11 +1162,11 @@ public final class NativeAppViewModel {
         controller.selectTab(notification.tabId)
         controller.focusPane(notification.paneId)
 
-        guard var attention = attentionStateByProjectPath[notification.projectPath] else {
+        guard var attention = attentionStateByProjectPath[normalizedProjectPath] else {
             return
         }
         attention.markNotificationRead(id: notification.id)
-        attentionStateByProjectPath[notification.projectPath] = attention
+        attentionStateByProjectPath[normalizedProjectPath] = attention
     }
 
     public var activeWorkspaceController: GhosttyWorkspaceController? {
@@ -1320,35 +1326,35 @@ public final class NativeAppViewModel {
     }
 
     public var activeWorkspaceDiffTabs: [WorkspaceDiffTabState] {
-        guard let activeWorkspaceProjectPath else {
+        guard let activeWorkspaceProjectPath = resolvedWorkspaceProjectPathKey(nil) else {
             return []
         }
         return workspaceDiffTabsByProjectPath[activeWorkspaceProjectPath] ?? []
     }
 
     public var activeWorkspaceEditorTabs: [WorkspaceEditorTabState] {
-        guard let activeWorkspaceProjectPath else {
+        guard let activeWorkspaceProjectPath = resolvedWorkspaceProjectPathKey(nil) else {
             return []
         }
         return workspaceEditorTabsByProjectPath[activeWorkspaceProjectPath] ?? []
     }
 
     public var activeWorkspaceEditorPresentationState: WorkspaceEditorPresentationState? {
-        guard let activeWorkspaceProjectPath else {
+        guard let activeWorkspaceProjectPath = resolvedWorkspaceProjectPathKey(nil) else {
             return nil
         }
         return workspaceEditorPresentationState(for: activeWorkspaceProjectPath)
     }
 
     public var activeWorkspaceProjectTreeState: WorkspaceProjectTreeState? {
-        guard let activeWorkspaceProjectPath else {
+        guard let activeWorkspaceProjectPath = resolvedWorkspaceProjectPathKey(nil) else {
             return nil
         }
         return workspaceProjectTreeStatesByProjectPath[activeWorkspaceProjectPath]
     }
 
     public var activeWorkspaceProjectTreeDisplayProjection: WorkspaceProjectTreeDisplayProjection? {
-        guard let activeWorkspaceProjectPath,
+        guard let activeWorkspaceProjectPath = resolvedWorkspaceProjectPathKey(nil),
               let state = workspaceProjectTreeStatesByProjectPath[activeWorkspaceProjectPath]
         else {
             return nil
@@ -1360,15 +1366,16 @@ public final class NativeAppViewModel {
     }
 
     public var activeWorkspaceProjectTreeIsRefreshing: Bool {
-        guard let activeWorkspaceProjectPath else {
+        guard let activeWorkspaceProjectPath = resolvedWorkspaceProjectPathKey(nil) else {
             return false
         }
         return workspaceProjectTreeRefreshingProjectPaths.contains(activeWorkspaceProjectPath)
     }
 
     public func workspacePresentedTabSnapshot(for projectPath: String) -> WorkspacePresentedTabSnapshot {
-        let controller = workspaceController(for: projectPath)
-        let selected = resolvedWorkspacePresentedTabSelection(for: projectPath, controller: controller)
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        let controller = workspaceController(for: normalizedProjectPath)
+        let selected = resolvedWorkspacePresentedTabSelection(for: normalizedProjectPath, controller: controller)
         let terminalTabs = controller?.tabs.map { tab in
             WorkspacePresentedTabItem(
                 id: tab.id,
@@ -1377,7 +1384,7 @@ public final class NativeAppViewModel {
                 isSelected: selected == .terminal(tab.id)
             )
         } ?? []
-        let editorTabs = (workspaceEditorTabsByProjectPath[projectPath] ?? []).map { tab in
+        let editorTabs = (workspaceEditorTabsByProjectPath[normalizedProjectPath] ?? []).map { tab in
             WorkspacePresentedTabItem(
                 id: tab.id,
                 title: tab.isDirty ? "● \(tab.title)" : tab.title,
@@ -1387,7 +1394,7 @@ public final class NativeAppViewModel {
                 isPreview: tab.isPreview
             )
         }
-        let diffTabs = (workspaceDiffTabsByProjectPath[projectPath] ?? []).map { tab in
+        let diffTabs = (workspaceDiffTabsByProjectPath[normalizedProjectPath] ?? []).map { tab in
             WorkspacePresentedTabItem(
                 id: tab.id,
                 title: tab.title,
@@ -1406,7 +1413,7 @@ public final class NativeAppViewModel {
     }
 
     public func workspaceEditorPresentationState(for projectPath: String) -> WorkspaceEditorPresentationState? {
-        resolvedWorkspaceEditorPresentationState(for: projectPath)
+        resolvedWorkspaceEditorPresentationState(for: normalizePathForCompare(projectPath))
     }
 
     public func workspaceSelectedPresentedTab(for projectPath: String) -> WorkspacePresentedTabSelection? {
@@ -1414,7 +1421,8 @@ public final class NativeAppViewModel {
     }
 
     public func workspaceDiffTabViewModel(for projectPath: String, tabID: String) -> WorkspaceDiffTabViewModel? {
-        guard let tab = workspaceDiffTabsByProjectPath[projectPath]?.first(where: { $0.id == tabID }) else {
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        guard let tab = workspaceDiffTabsByProjectPath[normalizedProjectPath]?.first(where: { $0.id == tabID }) else {
             return nil
         }
         if let existing = workspaceDiffTabViewModels[tabID] {
@@ -1429,17 +1437,18 @@ public final class NativeAppViewModel {
     }
 
     public func workspaceEditorTabState(for projectPath: String, tabID: String) -> WorkspaceEditorTabState? {
-        workspaceEditorTabsByProjectPath[projectPath]?.first(where: { $0.id == tabID })
+        workspaceEditorTabsByProjectPath[normalizePathForCompare(projectPath)]?.first(where: { $0.id == tabID })
     }
 
     public func workspaceEditorRuntimeSession(
         for projectPath: String,
         tabID: String
     ) -> WorkspaceEditorRuntimeSessionState {
-        guard workspaceEditorTabState(for: projectPath, tabID: tabID) != nil else {
+        let normalizedProjectPath = normalizePathForCompare(projectPath)
+        guard workspaceEditorTabState(for: normalizedProjectPath, tabID: tabID) != nil else {
             return WorkspaceEditorRuntimeSessionState()
         }
-        return workspaceEditorRuntimeSessionsByProjectPath[projectPath]?[tabID]
+        return workspaceEditorRuntimeSessionsByProjectPath[normalizedProjectPath]?[tabID]
             ?? WorkspaceEditorRuntimeSessionState()
     }
 
@@ -1448,7 +1457,7 @@ public final class NativeAppViewModel {
         tabID: String,
         in projectPath: String? = nil
     ) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               workspaceEditorTabState(for: resolvedProjectPath, tabID: tabID) != nil
         else {
             return
@@ -1584,7 +1593,7 @@ public final class NativeAppViewModel {
                 projectPath: session.projectPath,
                 title: Project.quickTerminal(at: session.projectPath).name,
                 subtitle: session.projectPath,
-                statusText: activeWorkspaceProjectPath == session.projectPath ? "已打开" : "可恢复"
+                statusText: normalizedPathsMatch(activeWorkspaceProjectPath, session.projectPath) ? "已打开" : "可恢复"
             )
             }
     }
@@ -2091,18 +2100,25 @@ public final class NativeAppViewModel {
             _ = try ensureWorkspaceAlignmentRootSession(for: member.groupID)
             switch member.openTarget {
             case let .project(projectPath):
-                selectedProjectPath = projectPath
+                let originalProjectPath = snapshot.projects.first(where: {
+                    normalizePathForCompare($0.path) == normalizePathForCompare(projectPath)
+                })?.path ?? projectPath
+                selectedProjectPath = originalProjectPath
                 clearDirectoryWorkspacePresentationIfNeeded(for: projectPath)
                 if let index = workspaceSessionIndex(for: projectPath),
                    openWorkspaceSessions[index].workspaceAlignmentGroupID != nil {
                     openWorkspaceSessions[index].workspaceAlignmentGroupID = member.groupID
                 }
                 openWorkspaceSessionIfNeeded(
-                    for: projectPath,
-                    rootProjectPath: projectPath,
+                    for: originalProjectPath,
+                    rootProjectPath: originalProjectPath,
                     workspaceAlignmentGroupID: member.groupID
                 )
-                activeWorkspaceProjectPath = projectPath
+                if let index = workspaceSessionIndex(for: originalProjectPath) {
+                    openWorkspaceSessions[index].projectPath = originalProjectPath
+                    openWorkspaceSessions[index].rootProjectPath = originalProjectPath
+                }
+                activeWorkspaceProjectPath = originalProjectPath
                 isDetailPanelPresented = false
                 scheduleSelectedProjectDocumentRefresh()
                 scheduleWorkspaceRestoreAutosave()
@@ -2165,6 +2181,11 @@ public final class NativeAppViewModel {
             rootProjectPath: rootProject.path,
             workspaceAlignmentGroupID: workspaceAlignmentGroupID
         )
+        if let index = workspaceSessionIndex(for: worktree.path),
+           workspaceAlignmentGroupID != nil {
+            openWorkspaceSessions[index].projectPath = worktree.path
+            openWorkspaceSessions[index].rootProjectPath = rootProject.path
+        }
         activeWorkspaceProjectPath = worktree.path
         isDetailPanelPresented = false
         scheduleSelectedProjectDocumentRefresh()
@@ -2222,14 +2243,15 @@ public final class NativeAppViewModel {
         guard let activeWorkspaceProjectTreeProject else {
             return
         }
-        if workspaceProjectTreeStatesByProjectPath[activeWorkspaceProjectTreeProject.path] == nil,
-           !workspaceProjectTreeRefreshingProjectPaths.contains(activeWorkspaceProjectTreeProject.path) {
-            refreshWorkspaceProjectTree(for: activeWorkspaceProjectTreeProject.path)
+        let normalizedProjectPath = normalizePathForCompare(activeWorkspaceProjectTreeProject.path)
+        if workspaceProjectTreeStatesByProjectPath[normalizedProjectPath] == nil,
+           !workspaceProjectTreeRefreshingProjectPaths.contains(normalizedProjectPath) {
+            refreshWorkspaceProjectTree(for: normalizedProjectPath)
         }
     }
 
     public func refreshWorkspaceProjectTree(for projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
             return
         }
         scheduleWorkspaceProjectTreeRefresh(
@@ -2239,7 +2261,7 @@ public final class NativeAppViewModel {
     }
 
     public func refreshWorkspaceProjectTreeNode(_ path: String?, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
             return
         }
         // 首版先走整棵树重建，优先保证 rename/delete/create 后路径映射与展开态一致。
@@ -2251,7 +2273,7 @@ public final class NativeAppViewModel {
     }
 
     public func selectWorkspaceProjectTreeNode(_ path: String?, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               var state = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
         else {
             return
@@ -2261,7 +2283,7 @@ public final class NativeAppViewModel {
     }
 
     public func toggleWorkspaceProjectTreeDirectory(_ directoryPath: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               var state = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
         else {
             return
@@ -2577,7 +2599,7 @@ public final class NativeAppViewModel {
         in projectPath: String? = nil,
         openingPolicy: WorkspaceEditorTabOpeningPolicy = .regular
     ) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
             return
         }
 
@@ -2689,7 +2711,7 @@ public final class NativeAppViewModel {
         under targetPath: String? = nil,
         in projectPath: String? = nil
     ) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
             return
         }
 
@@ -2727,7 +2749,7 @@ public final class NativeAppViewModel {
         to newName: String,
         in projectPath: String? = nil
     ) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
             return
         }
 
@@ -2762,7 +2784,7 @@ public final class NativeAppViewModel {
         _ path: String,
         in projectPath: String? = nil
     ) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
             return
         }
 
@@ -2784,7 +2806,7 @@ public final class NativeAppViewModel {
     }
 
     public func updateWorkspaceEditorText(_ text: String, tabID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
               let index = tabs.firstIndex(where: { $0.id == tabID })
         else {
@@ -2807,7 +2829,7 @@ public final class NativeAppViewModel {
     }
 
     public func checkWorkspaceEditorTabExternalChange(_ tabID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID })
         else {
             return
@@ -2851,7 +2873,7 @@ public final class NativeAppViewModel {
     }
 
     public func reloadWorkspaceEditorTab(_ tabID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID })
         else {
             return
@@ -2883,7 +2905,7 @@ public final class NativeAppViewModel {
     }
 
     public func saveWorkspaceEditorTab(_ tabID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID }),
               tab.kind == .text
         else {
@@ -2939,14 +2961,14 @@ public final class NativeAppViewModel {
     }
 
     public func closeWorkspaceEditorTab(_ tabID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
             return
         }
         closeWorkspaceEditorTabs([tabID], in: resolvedProjectPath)
     }
 
     public func closeOtherWorkspaceEditorTabs(keeping tabID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               let tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath]
         else {
             return
@@ -2956,7 +2978,7 @@ public final class NativeAppViewModel {
     }
 
     public func closeWorkspaceEditorTabsToRight(of tabID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               let tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
               let index = tabs.firstIndex(where: { $0.id == tabID })
         else {
@@ -2967,7 +2989,7 @@ public final class NativeAppViewModel {
     }
 
     public func promoteWorkspaceEditorTabToRegular(_ tabID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
               let index = tabs.firstIndex(where: { $0.id == tabID })
         else {
@@ -2988,7 +3010,7 @@ public final class NativeAppViewModel {
         tabID: String,
         in projectPath: String? = nil
     ) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               var tabs = workspaceEditorTabsByProjectPath[resolvedProjectPath],
               let index = tabs.firstIndex(where: { $0.id == tabID })
         else {
@@ -3021,15 +3043,16 @@ public final class NativeAppViewModel {
             return
         }
         workspacePendingEditorCloseRequest = nil
-        forceCloseWorkspaceEditorTab(request.tabID, in: request.projectPath)
+        let resolvedProjectPath = normalizePathForCompare(request.projectPath)
+        forceCloseWorkspaceEditorTab(request.tabID, in: resolvedProjectPath)
         guard let batchCloseState = workspacePendingEditorBatchCloseState,
-              batchCloseState.projectPath == request.projectPath
+              normalizePathForCompare(batchCloseState.projectPath) == resolvedProjectPath
         else {
             workspacePendingEditorBatchCloseState = nil
             return
         }
         workspacePendingEditorBatchCloseState = nil
-        closeWorkspaceEditorTabs(batchCloseState.remainingTabIDs, in: batchCloseState.projectPath)
+        closeWorkspaceEditorTabs(batchCloseState.remainingTabIDs, in: normalizePathForCompare(batchCloseState.projectPath))
     }
 
     public func dismissWorkspaceEditorCloseRequest() {
@@ -3091,6 +3114,7 @@ public final class NativeAppViewModel {
 
     private func closeWorkspaceEditorTabs(_ tabIDs: [String], in resolvedProjectPath: String) {
         workspacePendingEditorBatchCloseState = nil
+        let displayProjectPath = displayWorkspaceProjectPath(for: resolvedProjectPath)
 
         for (index, tabID) in tabIDs.enumerated() {
             guard let tab = workspaceEditorTabsByProjectPath[resolvedProjectPath]?.first(where: { $0.id == tabID }) else {
@@ -3099,7 +3123,7 @@ public final class NativeAppViewModel {
 
             guard !tab.isDirty else {
                 workspacePendingEditorCloseRequest = WorkspaceEditorCloseRequest(
-                    projectPath: resolvedProjectPath,
+                    projectPath: displayProjectPath,
                     tabID: tabID,
                     title: tab.title,
                     filePath: tab.filePath,
@@ -3110,7 +3134,7 @@ public final class NativeAppViewModel {
                 workspacePendingEditorBatchCloseState = remainingTabIDs.isEmpty
                     ? nil
                     : WorkspaceEditorBatchCloseState(
-                        projectPath: resolvedProjectPath,
+                        projectPath: displayProjectPath,
                         remainingTabIDs: remainingTabIDs
                     )
                 return
@@ -3313,7 +3337,7 @@ public final class NativeAppViewModel {
     }
 
     public func selectWorkspacePresentedTab(_ selection: WorkspacePresentedTabSelection, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath else {
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
             return
         }
 
@@ -3346,7 +3370,7 @@ public final class NativeAppViewModel {
         axis: WorkspaceSplitAxis,
         in projectPath: String? = nil
     ) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               workspaceEditorTabsByProjectPath[resolvedProjectPath]?.isEmpty == false
         else {
             return
@@ -3391,7 +3415,7 @@ public final class NativeAppViewModel {
     }
 
     public func selectWorkspaceEditorGroup(_ groupID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               var presentation = resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
               let groupIndex = presentation.groups.firstIndex(where: { $0.id == groupID })
         else {
@@ -3414,7 +3438,7 @@ public final class NativeAppViewModel {
         toGroup groupID: String,
         in projectPath: String? = nil
     ) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               workspaceEditorTabsByProjectPath[resolvedProjectPath]?.contains(where: { $0.id == tabID }) == true,
               var presentation = resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
               let targetGroupIndex = presentation.groups.firstIndex(where: { $0.id == groupID })
@@ -3441,7 +3465,7 @@ public final class NativeAppViewModel {
     }
 
     public func closeWorkspaceEditorGroup(_ groupID: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = projectPath ?? activeWorkspaceProjectPath,
+        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
               var presentation = resolvedWorkspaceEditorPresentationState(for: resolvedProjectPath),
               presentation.groups.count > 1,
               let closingGroupIndex = presentation.groups.firstIndex(where: { $0.id == groupID })
@@ -3925,7 +3949,10 @@ public final class NativeAppViewModel {
         branch: String,
         autoOpen: Bool
     ) throws {
-        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard let projectIndex = snapshot.projects.firstIndex(where: {
+            normalizePathForCompare($0.path) == normalizedRootProjectPath
+        }) else {
             throw NativeWorktreeError.invalidProject("项目不存在或已移除")
         }
 
@@ -4027,12 +4054,15 @@ public final class NativeAppViewModel {
         guard worktreeInteractionState == nil else {
             throw NativeWorktreeError.operationInProgress("已有 worktree 创建任务正在进行中，请稍候")
         }
-        guard snapshot.projects.contains(where: { $0.path == rootProjectPath }) else {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard snapshot.projects.contains(where: {
+            normalizePathForCompare($0.path) == normalizedRootProjectPath
+        }) else {
             throw NativeWorktreeError.invalidProject("项目不存在或已移除")
         }
 
         let request = NativeWorktreeCreateRequest(
-            sourceProjectPath: rootProjectPath,
+            sourceProjectPath: normalizedRootProjectPath,
             branch: branch,
             createBranch: createBranch,
             baseBranch: baseBranch,
@@ -4051,7 +4081,10 @@ public final class NativeAppViewModel {
         guard worktreeInteractionState == nil else {
             throw NativeWorktreeError.operationInProgress("已有 worktree 创建任务正在进行中，请稍候")
         }
-        guard snapshot.projects.contains(where: { $0.path == context.rootProjectPath }) else {
+        let normalizedRootProjectPath = normalizePathForCompare(context.rootProjectPath)
+        guard snapshot.projects.contains(where: {
+            normalizePathForCompare($0.path) == normalizedRootProjectPath
+        }) else {
             throw NativeWorktreeError.invalidProject("项目不存在或已移除")
         }
 
@@ -4143,7 +4176,10 @@ public final class NativeAppViewModel {
             return
         }
 
-        guard let worktree = snapshot.projects.first(where: { $0.path == rootProjectPath })?.worktrees.first(where: {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard let worktree = snapshot.projects.first(where: {
+            normalizePathForCompare($0.path) == normalizedRootProjectPath
+        })?.worktrees.first(where: {
             normalizePathForCompare($0.path) == normalizedWorktreePath
         }) else {
             throw NativeWorktreeError.invalidPath("worktree 不存在或已移除")
@@ -4186,7 +4222,10 @@ public final class NativeAppViewModel {
             return
         }
 
-        guard let projectIndex = snapshot.projects.firstIndex(where: { $0.path == rootProjectPath }) else {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard let projectIndex = snapshot.projects.firstIndex(where: {
+            normalizePathForCompare($0.path) == normalizedRootProjectPath
+        }) else {
             throw NativeWorktreeError.invalidProject("项目不存在或已移除")
         }
         guard let worktree = snapshot.projects[projectIndex].worktrees.first(where: {
@@ -5110,9 +5149,18 @@ public final class NativeAppViewModel {
                     ?? context
             }
 
+            let displayProjectPath = resolveDisplayProject(
+                for: normalizedProjectPath,
+                rootProjectPath: normalizedRootProjectPath
+            )?.path ?? normalizedProjectPath
+            let displayRootProjectPath = resolveDisplayProject(
+                for: normalizedRootProjectPath,
+                rootProjectPath: normalizedRootProjectPath
+            )?.path ?? normalizedRootProjectPath
+
             return OpenWorkspaceSessionState(
-                projectPath: normalizedProjectPath,
-                rootProjectPath: normalizedRootProjectPath,
+                projectPath: displayProjectPath,
+                rootProjectPath: displayRootProjectPath,
                 controller: controller,
                 isQuickTerminal: sessionSnapshot.isQuickTerminal,
                 transientDisplayProject: normalizedTransientDisplayProject(
@@ -5232,7 +5280,7 @@ public final class NativeAppViewModel {
         else {
             return false
         }
-        return session.rootProjectPath == normalizePathForCompare(rootProjectPath)
+        return normalizedPathsMatch(session.rootProjectPath, rootProjectPath)
     }
 
     private func workspaceSessionIndex(for path: String) -> Int? {
@@ -5285,7 +5333,7 @@ public final class NativeAppViewModel {
         for session in openWorkspaceSessions where !session.isQuickTerminal {
             let normalizedRootProjectPath = normalizePathForCompare(session.rootProjectPath)
             if seen.insert(normalizedRootProjectPath).inserted {
-                paths.append(normalizedRootProjectPath)
+                paths.append(session.rootProjectPath)
             }
         }
 
@@ -5355,7 +5403,7 @@ public final class NativeAppViewModel {
         guard let index = workspaceSessionIndex(for: path) else {
             return
         }
-        openWorkspaceSessions[index].rootProjectPath = normalizePathForCompare(rootProjectPath)
+        openWorkspaceSessions[index].rootProjectPath = displayWorkspaceProjectPath(for: rootProjectPath)
         openWorkspaceSessions[index].workspaceAlignmentGroupID = nil
     }
 
@@ -5387,6 +5435,10 @@ public final class NativeAppViewModel {
                 workspaceName: group.definition.name
             )
         )
+        if let index = workspaceSessionIndex(for: rootURL.path) {
+            openWorkspaceSessions[index].projectPath = rootURL.path
+            openWorkspaceSessions[index].rootProjectPath = rootURL.path
+        }
         return rootURL.path
     }
 
@@ -6764,6 +6816,21 @@ public final class NativeAppViewModel {
         return openWorkspaceSessions.first(where: { $0.projectPath == path })
     }
 
+    private func resolvedWorkspaceProjectPathKey(_ projectPath: String?) -> String? {
+        guard let projectPath = projectPath ?? activeWorkspaceProjectPath else {
+            return nil
+        }
+        return normalizedOptionalPathForCompare(projectPath)
+    }
+
+    private func normalizedPathsMatch(_ lhs: String?, _ rhs: String?) -> Bool {
+        normalizedOptionalPathForCompare(lhs) == normalizedOptionalPathForCompare(rhs)
+    }
+
+    private func displayWorkspaceProjectPath(for projectPath: String) -> String {
+        resolveDisplayProject(for: projectPath, rootProjectPath: projectPath)?.path ?? projectPath
+    }
+
     private func makeProjectRunConfiguration(
         configuration: ProjectRunConfiguration,
         projectPath: String,
@@ -7406,23 +7473,23 @@ public final class NativeAppViewModel {
                     !$0.isQuickTerminal &&
                     normalizePathForCompare($0.rootProjectPath) == normalizePathForCompare(rootProjectPath)
             })
-            let attention = visibleSidebarSession.flatMap { attentionStateByProjectPath[$0.projectPath] }
+            let attention = visibleSidebarSession.flatMap { workspaceAttentionState(for: $0.projectPath) }
             return WorkspaceSidebarWorktreeItem(
                 rootProjectPath: rootProjectPath,
                 worktree: worktree,
                 isOpen: visibleSidebarSession != nil,
-                isActive: visibleSidebarSession != nil && activeWorkspaceProjectPath == worktree.path,
+                isActive: visibleSidebarSession != nil && normalizedPathsMatch(activeWorkspaceProjectPath, worktree.path),
                 notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
                 unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
                 taskStatus: attention.map(\.taskStatus),
                 agentState: attention?.resolvedAgentState(
-                    overridesByPaneID: agentDisplayOverridesByProjectPath[worktree.path] ?? [:]
+                    overridesByPaneID: agentDisplayOverridesByProjectPath[normalizePathForCompare(worktree.path)] ?? [:]
                 ),
                 agentSummary: attention?.resolvedAgentSummary(
-                    overridesByPaneID: agentDisplayOverridesByProjectPath[worktree.path] ?? [:]
+                    overridesByPaneID: agentDisplayOverridesByProjectPath[normalizePathForCompare(worktree.path)] ?? [:]
                 ),
                 agentKind: attention?.resolvedAgentKind(
-                    overridesByPaneID: agentDisplayOverridesByProjectPath[worktree.path] ?? [:]
+                    overridesByPaneID: agentDisplayOverridesByProjectPath[normalizePathForCompare(worktree.path)] ?? [:]
                 )
             )
         }
@@ -7507,7 +7574,7 @@ public final class NativeAppViewModel {
         if statuses.contains(.running) {
             return .running
         }
-        if attentionStateByProjectPath[rootProjectPath] != nil || worktrees.contains(where: { $0.taskStatus != nil }) {
+        if workspaceAttentionState(for: rootProjectPath) != nil || worktrees.contains(where: { $0.taskStatus != nil }) {
             return .idle
         }
         return nil
@@ -7700,13 +7767,12 @@ public final class NativeAppViewModel {
     private func normalizedAgentSignal(
         _ signal: WorkspaceAgentSessionSignal
     ) -> WorkspaceAgentSessionSignal {
-        guard let resolvedPaneID = currentPaneID(for: signal),
-              resolvedPaneID != signal.paneId
-        else {
-            return signal
-        }
         var normalized = signal
-        normalized.paneId = resolvedPaneID
+        normalized.projectPath = normalizePathForCompare(signal.projectPath)
+        if let resolvedPaneID = currentPaneID(for: signal),
+           resolvedPaneID != signal.paneId {
+            normalized.paneId = resolvedPaneID
+        }
         return normalized
     }
 

@@ -43,7 +43,7 @@ public struct WorkspaceFileSystemService: Sendable {
                     isDirectory: kind == .directory || resolvedKind == .directory
                 )
                 return WorkspaceProjectTreeNode(
-                    path: displayEntryURL.standardizedFileURL.path,
+                    path: normalizeWorkspaceFileSystemPath(displayEntryURL.path),
                     parentPath: normalizedPath,
                     name: entryURL.lastPathComponent,
                     kind: kind,
@@ -169,16 +169,19 @@ public struct WorkspaceFileSystemService: Sendable {
         let sourceURL = URL(fileURLWithPath: normalizedSourcePath)
         let destinationURL = sourceURL.deletingLastPathComponent()
             .appendingPathComponent(sanitizedName, isDirectory: false)
-        let normalizedDestinationPath = destinationURL.standardizedFileURL.path
+        let normalizedDestinationPath = normalizeWorkspaceFileSystemPath(destinationURL.path)
 
         guard normalizedSourcePath != normalizedDestinationPath else {
-            let parentPath = sourceURL.deletingLastPathComponent().path
+            let parentPath = normalizeWorkspaceFileSystemPath(sourceURL.deletingLastPathComponent().path)
             return try makeNode(at: sourceURL, parentPath: parentPath)
         }
 
         try ensureTargetDoesNotExist(normalizedDestinationPath)
         try FileManager.default.moveItem(at: sourceURL, to: destinationURL)
-        return try makeNode(at: destinationURL, parentPath: destinationURL.deletingLastPathComponent().path)
+        return try makeNode(
+            at: destinationURL,
+            parentPath: normalizeWorkspaceFileSystemPath(destinationURL.deletingLastPathComponent().path)
+        )
     }
 
     public func trashItem(at path: String) throws {
@@ -205,7 +208,7 @@ public struct WorkspaceFileSystemService: Sendable {
     }
 
     public func itemKind(at path: String) -> WorkspaceProjectTreeNodeKind? {
-        let url = URL(fileURLWithPath: normalizeWorkspaceFileSystemPath(path))
+        let url = URL(fileURLWithPath: normalizeWorkspaceFileSystemLexicalPath(path))
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
         guard let values = try? url.resourceValues(forKeys: keys) else {
             return nil
@@ -224,12 +227,14 @@ public struct WorkspaceFileSystemService: Sendable {
     }
 
     public func symlinkDestinationPath(at path: String) -> String? {
-        let normalizedPath = normalizeWorkspaceFileSystemPath(path)
-        guard itemKind(at: normalizedPath) == .symlink else {
+        let lexicalPath = normalizeWorkspaceFileSystemLexicalPath(path)
+        guard itemKind(at: lexicalPath) == .symlink else {
             return nil
         }
-        let resolvedPath = URL(fileURLWithPath: normalizedPath).resolvingSymlinksInPath().standardizedFileURL.path
-        guard resolvedPath != normalizedPath || FileManager.default.fileExists(atPath: resolvedPath) else {
+        let resolvedPath = normalizeWorkspaceFileSystemPath(
+            URL(fileURLWithPath: lexicalPath).resolvingSymlinksInPath().path
+        )
+        guard resolvedPath != lexicalPath || FileManager.default.fileExists(atPath: resolvedPath) else {
             return nil
         }
         return resolvedPath
@@ -317,8 +322,8 @@ public struct WorkspaceFileSystemService: Sendable {
         }
 
         return WorkspaceProjectTreeNode(
-            path: url.standardizedFileURL.path,
-            parentPath: parentPath,
+            path: normalizeWorkspaceFileSystemPath(url.path),
+            parentPath: parentPath.map(normalizeWorkspaceFileSystemPath),
             name: url.lastPathComponent,
             kind: kind,
             resolvedKind: resolvedKind,
@@ -353,5 +358,47 @@ private func workspaceProjectTreeNodeComparator(
 }
 
 private func normalizeWorkspaceFileSystemPath(_ path: String) -> String {
+    let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+    let fileManager = FileManager.default
+    var ancestorPath = standardizedPath
+    var trailingComponents = [String]()
+
+    while ancestorPath != "/", !fileManager.fileExists(atPath: ancestorPath) {
+        let lastComponent = (ancestorPath as NSString).lastPathComponent
+        guard !lastComponent.isEmpty else {
+            break
+        }
+        trailingComponents.insert(lastComponent, at: 0)
+        ancestorPath = (ancestorPath as NSString).deletingLastPathComponent
+        if ancestorPath.isEmpty {
+            ancestorPath = "/"
+            break
+        }
+    }
+
+    let canonicalAncestorPath = workspaceFileSystemRealpathString(ancestorPath) ?? ancestorPath
+    guard !trailingComponents.isEmpty else {
+        return canonicalAncestorPath
+    }
+
+    return trailingComponents.reduce(canonicalAncestorPath as NSString) { partial, component in
+        partial.appendingPathComponent(component) as NSString
+    } as String
+}
+
+private func normalizeWorkspaceFileSystemLexicalPath(_ path: String) -> String {
     URL(fileURLWithPath: path).standardizedFileURL.path
+}
+
+private func workspaceFileSystemRealpathString(_ path: String) -> String? {
+    guard !path.isEmpty else {
+        return nil
+    }
+    return path.withCString { pointer in
+        guard let resolvedPointer = realpath(pointer, nil) else {
+            return nil
+        }
+        defer { free(resolvedPointer) }
+        return String(cString: resolvedPointer)
+    }
 }
