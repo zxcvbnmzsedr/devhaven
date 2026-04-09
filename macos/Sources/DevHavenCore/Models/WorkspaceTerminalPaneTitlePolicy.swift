@@ -8,6 +8,26 @@ public enum WorkspaceTerminalPaneTitlePolicy {
         resolveRuntimeTitle(currentTitle: fallback, runtimeTitle: workingDirectory)
     }
 
+    public static func displayTitle(
+        runtimeTitle: String?,
+        workingDirectory: String?,
+        fallback: String
+    ) -> String {
+        let trimmedFallback = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedFallback = trimmedFallback.isEmpty ? fallback : trimmedFallback
+
+        if let trimmedTitle = runtimeTitle?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmedTitle.isEmpty {
+            return resolveRuntimeTitle(currentTitle: resolvedFallback, runtimeTitle: trimmedTitle)
+        }
+
+        if let workingDirectoryDisplay = displayPath(for: workingDirectory) {
+            return workingDirectoryDisplay
+        }
+
+        return resolvedFallback
+    }
+
     public static func resolveRuntimeTitle(
         currentTitle: String,
         runtimeTitle: String?

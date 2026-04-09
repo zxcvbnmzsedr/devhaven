@@ -612,6 +612,42 @@ final class GhosttySurfaceHostModel {
         return trimmed
     }
 
+    func applyWorkingDirectory(_ path: String) -> String? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+
+        let previousWorkingDirectory = surfaceWorkingDirectory
+        guard previousWorkingDirectory != trimmed else {
+            return nil
+        }
+
+        surfaceWorkingDirectory = trimmed
+
+        let followsWorkingDirectory = surfaceTitle?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty == nil
+            || WorkspaceTerminalPaneTitlePolicy.matchesWorkingDirectoryDisplay(
+                title: surfaceTitle,
+                workingDirectory: previousWorkingDirectory
+            )
+        guard followsWorkingDirectory,
+              let workingDirectoryDisplay = WorkspaceTerminalPaneTitlePolicy.displayPath(for: trimmed),
+              surfaceTitle != workingDirectoryDisplay else {
+            return nil
+        }
+
+        surfaceTitle = workingDirectoryDisplay
+        return workingDirectoryDisplay
+    }
+
+    func displayTitle(fallback: String) -> String {
+        WorkspaceTerminalPaneTitlePolicy.displayTitle(
+            runtimeTitle: surfaceTitle,
+            workingDirectory: surfaceWorkingDirectory,
+            fallback: fallback
+        )
+    }
+
     func acquireSurfaceView(preferredFocus: Bool = false) -> GhosttyTerminalSurfaceView {
         _ = preferredFocus
         if let ownedSurfaceView {
@@ -642,10 +678,7 @@ final class GhosttySurfaceHostModel {
             guard let self else {
                 return
             }
-            guard self.surfaceWorkingDirectory != path else {
-                return
-            }
-            self.surfaceWorkingDirectory = path
+            _ = self.applyWorkingDirectory(path)
             self.onWorkingDirectoryChange?(path)
         }
         bridge.onRendererHealthChange = { [weak self] healthy in

@@ -302,7 +302,7 @@ struct WorkspaceTerminalPaneView: View {
             HStack(spacing: 4) {
                 Image(systemName: item.isBrowser ? "globe" : "terminal")
                     .font(.system(size: 10, weight: .medium))
-                Text(item.title)
+                Text(displayTitle(for: item))
                     .lineLimit(1)
             }
             .font(.system(size: 11, weight: .semibold))
@@ -639,6 +639,15 @@ struct WorkspaceTerminalPaneView: View {
             onToggleZoom(pane.id)
             return true
         }
+    }
+
+    private func displayTitle(for item: WorkspacePaneItemState) -> String {
+        guard item.id == selectedItem.id,
+              item.isTerminal,
+              let terminalModel else {
+            return item.title
+        }
+        return terminalModel.displayTitle(fallback: item.title)
     }
 }
 

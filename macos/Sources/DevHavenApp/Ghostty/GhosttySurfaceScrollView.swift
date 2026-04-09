@@ -21,6 +21,8 @@ final class GhosttySurfaceScrollView: NSView {
     private var needsSurfaceAttachmentCallback = true
     private var pendingLiveScrollRow: Int?
     private var isLiveScrollFlushScheduled = false
+    private weak var lastAttachedSuperview: NSView?
+    private weak var lastAttachedWindow: NSWindow?
 
     init(
         surfaceView: NSView,
@@ -115,10 +117,20 @@ final class GhosttySurfaceScrollView: NSView {
         synchronizeScrollView()
         synchronizeSurfaceView()
         (surfaceView as? GhosttyTerminalSurfaceView)?.updateSurfaceSize()
-        if needsSurfaceAttachmentCallback {
+        if shouldFireSurfaceAttachmentCallback {
             needsSurfaceAttachmentCallback = false
             onSurfaceAttached?()
         }
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        rearmSurfaceAttachmentIfNeededAfterHierarchyChange()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        rearmSurfaceAttachmentIfNeededAfterHierarchyChange()
     }
 
     func setSurfaceView(_ newSurfaceView: NSView) {
@@ -158,6 +170,33 @@ final class GhosttySurfaceScrollView: NSView {
         scrollbar = nextScrollbar
         scrollView.hasVerticalScroller = true
         synchronizeScrollView()
+    }
+
+    private var shouldFireSurfaceAttachmentCallback: Bool {
+        needsSurfaceAttachmentCallback
+        && window != nil
+        && superview != nil
+        && bounds.width > 0
+        && bounds.height > 0
+    }
+
+    private func rearmSurfaceAttachmentIfNeededAfterHierarchyChange() {
+        guard let superview, let window else {
+            lastAttachedSuperview = nil
+            lastAttachedWindow = nil
+            return
+        }
+
+        let superviewChanged = lastAttachedSuperview !== superview
+        let windowChanged = lastAttachedWindow !== window
+        guard superviewChanged || windowChanged else {
+            return
+        }
+
+        lastAttachedSuperview = superview
+        lastAttachedWindow = window
+        needsSurfaceAttachmentCallback = true
+        needsLayout = true
     }
 
     private func bindScrollWrapperIfNeeded(to view: NSView) {

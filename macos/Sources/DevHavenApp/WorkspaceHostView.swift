@@ -544,26 +544,6 @@ struct WorkspaceHostView: View {
                 }
                 workspace.closePaneItem(inPane: context.pane.id, itemID: context.item.id)
             },
-            onTabTitleChange: { title in
-                guard let context = self.currentPaneItemContext(for: itemID) else {
-                    return
-                }
-                workspace.updatePaneItemTitle(
-                    inPane: context.pane.id,
-                    itemID: context.item.id,
-                    title: title
-                )
-            },
-            onWorkingDirectoryChange: { workingDirectory in
-                guard let context = self.currentPaneItemContext(for: itemID) else {
-                    return
-                }
-                workspace.updatePaneItemTitle(
-                    inPane: context.pane.id,
-                    itemID: context.item.id,
-                    title: workingDirectory
-                )
-            },
             onNotificationEvent: { title, body in
                 guard let context = self.currentPaneItemContext(for: itemID) else {
                     return
