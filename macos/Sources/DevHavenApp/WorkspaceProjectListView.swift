@@ -25,6 +25,8 @@ struct WorkspaceProjectListView: View {
     let onRequestApplyWorkspaceAlignment: (String) -> Void
     let onRequestDeleteWorkspaceAlignment: (String) -> Void
     let onMoveWorkspaceAlignmentGroup: (String, String, Bool) -> Void
+    let onSetWorkspaceAlignmentExpanded: (String, Bool) -> Void
+    let onSetAllWorkspaceAlignmentExpanded: (Bool) -> Void
     let onRequestApplyWorkspaceAlignmentProject: (String, String) -> Void
     let onRequestRemoveWorkspaceAlignmentProject: (String, String) -> Void
     let onAddProjectToWorkspaceAlignment: (String, String) -> Void
@@ -91,6 +93,10 @@ struct WorkspaceProjectListView: View {
                         onMoveGroup: { sourceID, targetID, insertAfter in
                             onMoveWorkspaceAlignmentGroup(sourceID, targetID, insertAfter)
                         },
+                        onSetExpanded: { groupID, isExpanded in
+                            onSetWorkspaceAlignmentExpanded(groupID, isExpanded)
+                        },
+                        onSetAllExpanded: onSetAllWorkspaceAlignmentExpanded,
                         onOpenProject: onOpenWorkspaceAlignmentProject,
                         onRequestApplyProject: onRequestApplyWorkspaceAlignmentProject,
                         onRequestRemoveProject: onRequestRemoveWorkspaceAlignmentProject,

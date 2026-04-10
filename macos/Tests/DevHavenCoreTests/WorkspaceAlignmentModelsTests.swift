@@ -94,5 +94,6 @@ final class WorkspaceAlignmentModelsTests: XCTestCase {
         XCTAssertEqual(decoded.projectPaths, ["/Users/example/A", "/Users/example/B"])
         XCTAssertNil(decoded.rootDirectoryName)
         XCTAssertEqual(decoded.memberAliases, [:])
+        XCTAssertTrue(decoded.isSidebarExpanded)
     }
 }

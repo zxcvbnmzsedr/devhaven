@@ -174,6 +174,12 @@ struct WorkspaceProjectSidebarHostView: View {
                     viewModel.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 }
             },
+            onSetWorkspaceAlignmentExpanded: { workspaceID, isExpanded in
+                viewModel.setWorkspaceAlignmentGroupSidebarExpanded(isExpanded, for: workspaceID)
+            },
+            onSetAllWorkspaceAlignmentExpanded: { isExpanded in
+                viewModel.setAllWorkspaceAlignmentGroupsSidebarExpanded(isExpanded)
+            },
             onRequestApplyWorkspaceAlignmentProject: { workspaceID, projectPath in
                 Task {
                     do {

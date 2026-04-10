@@ -11,13 +11,13 @@ struct WorkspaceAlignmentSectionView: View {
     let onRequestApply: (String) -> Void
     let onRequestDelete: (String) -> Void
     let onMoveGroup: (String, String, Bool) -> Void
+    let onSetExpanded: (String, Bool) -> Void
+    let onSetAllExpanded: (Bool) -> Void
     let onOpenProject: (WorkspaceAlignmentMemberProjection) -> Void
     let onRequestApplyProject: (String, String) -> Void
     let onRequestRemoveProject: (String, String) -> Void
     @Binding var dropTargetGroupID: String?
     @Binding var dropTargetInsertAfter: Bool?
-
-    @State private var expandedGroupIDs = Set<String>()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -29,10 +29,10 @@ struct WorkspaceAlignmentSectionView: View {
                 ForEach(groups) { group in
                     WorkspaceAlignmentGroupCard(
                         group: group,
-                        isExpanded: expandedGroupIDs.contains(group.id),
+                        isExpanded: group.definition.isSidebarExpanded,
                         onOpenWorkspace: { onOpenWorkspace(group.id) },
                         onToggleExpanded: {
-                            toggleExpanded(for: group.id)
+                            onSetExpanded(group.id, !group.definition.isSidebarExpanded)
                         },
                         onRequestEdit: { onRequestEditWorkspace(group.id) },
                         onRequestAddProjects: { onRequestAddProjects(group.id) },
@@ -69,15 +69,6 @@ struct WorkspaceAlignmentSectionView: View {
                 }
             }
         }
-        .onAppear {
-            if expandedGroupIDs.isEmpty {
-                expandedGroupIDs = Set(groups.map(\.id))
-            }
-        }
-        .onChange(of: groups.map(\.id)) { _, ids in
-            expandedGroupIDs.formUnion(ids)
-            expandedGroupIDs = expandedGroupIDs.intersection(Set(ids))
-        }
     }
 
     private var header: some View {
@@ -86,6 +77,21 @@ struct WorkspaceAlignmentSectionView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(NativeTheme.textSecondary)
             Spacer(minLength: 0)
+            if !groups.isEmpty {
+                Button {
+                    onSetAllExpanded(!allGroupsExpanded)
+                } label: {
+                    Image(systemName: allGroupsExpanded ? "chevron.compact.up" : "chevron.compact.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(NativeTheme.textSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(NativeTheme.surface)
+                        .clipShape(.rect(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help(allGroupsExpanded ? "折叠全部工作区" : "展开全部工作区")
+            }
             Button(action: onRequestCreateWorkspace) {
                 Image(systemName: "plus")
                     .font(.caption.weight(.bold))
@@ -133,12 +139,8 @@ struct WorkspaceAlignmentSectionView: View {
         }
     }
 
-    private func toggleExpanded(for groupID: String) {
-        if expandedGroupIDs.contains(groupID) {
-            expandedGroupIDs.remove(groupID)
-        } else {
-            expandedGroupIDs.insert(groupID)
-        }
+    private var allGroupsExpanded: Bool {
+        groups.allSatisfy { $0.definition.isSidebarExpanded }
     }
 }
 

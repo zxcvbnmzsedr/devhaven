@@ -3849,6 +3849,46 @@ public final class NativeAppViewModel {
         try persistWorkspaceAlignmentGroups(groups)
     }
 
+    public func setWorkspaceAlignmentGroupSidebarExpanded(
+        _ isExpanded: Bool,
+        for id: String
+    ) {
+        guard let index = snapshot.appState.workspaceAlignmentGroups.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        guard snapshot.appState.workspaceAlignmentGroups[index].isSidebarExpanded != isExpanded else {
+            return
+        }
+
+        do {
+            var groups = snapshot.appState.workspaceAlignmentGroups
+            groups[index].isSidebarExpanded = isExpanded
+            try persistWorkspaceAlignmentGroups(groups)
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    public func setAllWorkspaceAlignmentGroupsSidebarExpanded(_ isExpanded: Bool) {
+        guard !snapshot.appState.workspaceAlignmentGroups.isEmpty else {
+            return
+        }
+        let hasChange = snapshot.appState.workspaceAlignmentGroups.contains { $0.isSidebarExpanded != isExpanded }
+        guard hasChange else {
+            return
+        }
+
+        do {
+            var groups = snapshot.appState.workspaceAlignmentGroups
+            for index in groups.indices {
+                groups[index].isSidebarExpanded = isExpanded
+            }
+            try persistWorkspaceAlignmentGroups(groups)
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
     public func addWorkspaceAlignmentMembers(
         _ members: [WorkspaceAlignmentMemberDefinition],
         memberAliases: [String: String] = [:],

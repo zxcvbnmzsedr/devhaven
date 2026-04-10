@@ -45,6 +45,7 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
     public var members: [WorkspaceAlignmentMemberDefinition]
     public var rootDirectoryName: String?
     public var memberAliases: [String: String]
+    public var isSidebarExpanded: Bool
     public var createdAt: SwiftDate
     public var updatedAt: SwiftDate
 
@@ -58,6 +59,7 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         members: [WorkspaceAlignmentMemberDefinition] = [],
         rootDirectoryName: String? = nil,
         memberAliases: [String: String] = [:],
+        isSidebarExpanded: Bool = true,
         createdAt: SwiftDate = Date().timeIntervalSince1970,
         updatedAt: SwiftDate = Date().timeIntervalSince1970
     ) {
@@ -70,6 +72,7 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         self.members = members
         self.rootDirectoryName = rootDirectoryName
         self.memberAliases = memberAliases
+        self.isSidebarExpanded = isSidebarExpanded
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -84,6 +87,7 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         case members
         case rootDirectoryName
         case memberAliases
+        case isSidebarExpanded
         case createdAt
         case updatedAt
     }
@@ -99,6 +103,7 @@ public struct WorkspaceAlignmentGroupDefinition: Codable, Equatable, Sendable, I
         self.members = try container.decodeIfPresent([WorkspaceAlignmentMemberDefinition].self, forKey: .members) ?? []
         self.rootDirectoryName = try container.decodeIfPresent(String.self, forKey: .rootDirectoryName)
         self.memberAliases = try container.decodeIfPresent([String: String].self, forKey: .memberAliases) ?? [:]
+        self.isSidebarExpanded = try container.decodeIfPresent(Bool.self, forKey: .isSidebarExpanded) ?? true
         self.createdAt = try container.decodeIfPresent(SwiftDate.self, forKey: .createdAt) ?? Date().timeIntervalSince1970
         self.updatedAt = try container.decodeIfPresent(SwiftDate.self, forKey: .updatedAt) ?? self.createdAt
     }
