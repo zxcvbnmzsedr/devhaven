@@ -82,6 +82,9 @@ struct WorkspaceProjectSidebarHostView: View {
             workspaceAlignmentGroups: sidebarProjectionStore.projection.workspaceAlignmentGroups,
             workspaceAlignmentProjectOptions: sidebarProjectionStore.projection.workspaceAlignmentProjectOptions,
             onSelectProject: viewModel.activateWorkspaceSidebarProject,
+            onSetProjectExpanded: { projectPath, isExpanded in
+                viewModel.setWorkspaceSidebarProjectExpanded(isExpanded, for: projectPath)
+            },
             onOpenWorkspaceAlignmentProject: openOrActivateProject,
             onOpenProjectPicker: { isProjectPickerPresented = true },
             onRequestCreateWorktree: { projectPath in

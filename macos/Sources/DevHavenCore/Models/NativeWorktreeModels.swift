@@ -320,6 +320,7 @@ public enum WorkspaceSidebarWorktreeDisplayState: Equatable, Sendable {
 public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     public var rootProject: Project
     public var worktrees: [WorkspaceSidebarWorktreeItem]
+    public var isWorktreeListExpanded: Bool
     public var isActive: Bool
     public var currentBranch: String?
     public var notifications: [WorkspaceTerminalNotification]
@@ -332,6 +333,7 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     public init(
         rootProject: Project,
         worktrees: [WorkspaceSidebarWorktreeItem],
+        isWorktreeListExpanded: Bool = true,
         isActive: Bool,
         currentBranch: String? = nil,
         notifications: [WorkspaceTerminalNotification] = [],
@@ -343,6 +345,7 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     ) {
         self.rootProject = rootProject
         self.worktrees = worktrees
+        self.isWorktreeListExpanded = isWorktreeListExpanded
         self.isActive = isActive
         self.currentBranch = currentBranch
         self.notifications = notifications
@@ -359,6 +362,7 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     public static func == (lhs: WorkspaceSidebarProjectGroup, rhs: WorkspaceSidebarProjectGroup) -> Bool {
         lhs.rootProject == rhs.rootProject &&
             lhs.worktrees == rhs.worktrees &&
+            lhs.isWorktreeListExpanded == rhs.isWorktreeListExpanded &&
             lhs.isActive == rhs.isActive &&
             lhs.currentBranch == rhs.currentBranch &&
             lhs.notifications == rhs.notifications &&

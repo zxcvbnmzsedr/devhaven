@@ -512,6 +512,9 @@ public final class NativeAppViewModel {
     public var workspaceSidebarGroups: [WorkspaceSidebarProjectGroup] {
         let showsInAppNotifications = snapshot.appState.settings.workspaceInAppNotificationsEnabled
         let moveNotifiedWorktreeToTop = snapshot.appState.settings.moveNotifiedWorktreeToTop
+        let collapsedProjectPaths = Set(
+            snapshot.appState.settings.collapsedWorkspaceSidebarProjectPaths.map(normalizePathForCompare)
+        )
         let projectsByNormalizedPath = self.projectsByNormalizedPath
 
         return orderedWorkspaceSidebarGroupIdentities().compactMap { identity in
@@ -537,6 +540,7 @@ public final class NativeAppViewModel {
                 return WorkspaceSidebarProjectGroup(
                     rootProject: transientProject,
                     worktrees: [],
+                    isWorktreeListExpanded: true,
                     isActive: normalizedPathsMatch(activeWorkspaceProjectPath, session.projectPath),
                     notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
                     unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
@@ -577,6 +581,7 @@ public final class NativeAppViewModel {
             return WorkspaceSidebarProjectGroup(
                 rootProject: rootProject,
                 worktrees: worktrees,
+                isWorktreeListExpanded: !collapsedProjectPaths.contains(rootPath),
                 isActive: isGroupActive,
                 currentBranch: currentBranchByProjectPath[rootPath],
                 notifications: notifications,
@@ -4563,6 +4568,36 @@ public final class NativeAppViewModel {
         }
         var nextSettings = snapshot.appState.settings
         nextSettings.workspaceSidebarWidth = width
+        saveSettings(nextSettings)
+    }
+
+    public func setWorkspaceSidebarProjectExpanded(
+        _ isExpanded: Bool,
+        for rootProjectPath: String
+    ) {
+        let normalizedProjectPath = normalizePathForCompare(rootProjectPath)
+        guard !normalizedProjectPath.isEmpty else {
+            return
+        }
+
+        let collapsedPaths = Set(
+            snapshot.appState.settings.collapsedWorkspaceSidebarProjectPaths.map(normalizePathForCompare)
+        )
+        let shouldBeCollapsed = !isExpanded
+        guard collapsedPaths.contains(normalizedProjectPath) != shouldBeCollapsed else {
+            return
+        }
+
+        var nextSettings = snapshot.appState.settings
+        if shouldBeCollapsed {
+            nextSettings.collapsedWorkspaceSidebarProjectPaths = normalizePathList(
+                nextSettings.collapsedWorkspaceSidebarProjectPaths + [normalizedProjectPath]
+            )
+        } else {
+            nextSettings.collapsedWorkspaceSidebarProjectPaths = nextSettings.collapsedWorkspaceSidebarProjectPaths.filter {
+                normalizePathForCompare($0) != normalizedProjectPath
+            }
+        }
         saveSettings(nextSettings)
     }
 

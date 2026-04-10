@@ -250,6 +250,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var projectListViewMode: ProjectListViewMode
     public var projectListSortOrder: ProjectListSortOrder
     public var workspaceSidebarWidth: Double
+    public var collapsedWorkspaceSidebarProjectPaths: [String]
     public var workspaceInAppNotificationsEnabled: Bool
     public var workspaceNotificationSoundEnabled: Bool
     public var workspaceSystemNotificationsEnabled: Bool
@@ -273,6 +274,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         projectListViewMode: ProjectListViewMode = .card,
         projectListSortOrder: ProjectListSortOrder = .defaultOrder,
         workspaceSidebarWidth: Double = 280,
+        collapsedWorkspaceSidebarProjectPaths: [String] = [],
         workspaceInAppNotificationsEnabled: Bool = true,
         workspaceNotificationSoundEnabled: Bool = true,
         workspaceSystemNotificationsEnabled: Bool = false,
@@ -295,6 +297,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.projectListViewMode = projectListViewMode
         self.projectListSortOrder = projectListSortOrder
         self.workspaceSidebarWidth = workspaceSidebarWidth
+        self.collapsedWorkspaceSidebarProjectPaths = collapsedWorkspaceSidebarProjectPaths
         self.workspaceInAppNotificationsEnabled = workspaceInAppNotificationsEnabled
         self.workspaceNotificationSoundEnabled = workspaceNotificationSoundEnabled
         self.workspaceSystemNotificationsEnabled = workspaceSystemNotificationsEnabled
@@ -319,6 +322,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         case projectListViewMode
         case projectListSortOrder
         case workspaceSidebarWidth
+        case collapsedWorkspaceSidebarProjectPaths
         case workspaceInAppNotificationsEnabled
         case workspaceNotificationSoundEnabled
         case workspaceSystemNotificationsEnabled
@@ -344,6 +348,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.projectListViewMode = try container.decodeIfPresent(ProjectListViewMode.self, forKey: .projectListViewMode) ?? .card
         self.projectListSortOrder = try container.decodeIfPresent(ProjectListSortOrder.self, forKey: .projectListSortOrder) ?? .defaultOrder
         self.workspaceSidebarWidth = try container.decodeIfPresent(Double.self, forKey: .workspaceSidebarWidth) ?? 280
+        self.collapsedWorkspaceSidebarProjectPaths = try container.decodeIfPresent([String].self, forKey: .collapsedWorkspaceSidebarProjectPaths) ?? []
         self.workspaceInAppNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceInAppNotificationsEnabled) ?? true
         self.workspaceNotificationSoundEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceNotificationSoundEnabled) ?? true
         self.workspaceSystemNotificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .workspaceSystemNotificationsEnabled) ?? false

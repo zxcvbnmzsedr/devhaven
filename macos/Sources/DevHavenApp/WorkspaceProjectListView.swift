@@ -7,6 +7,7 @@ struct WorkspaceProjectListView: View {
     let workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection]
     let workspaceAlignmentProjectOptions: [Project]
     let onSelectProject: (String) -> Void
+    let onSetProjectExpanded: (String, Bool) -> Void
     let onOpenWorkspaceAlignmentProject: (WorkspaceAlignmentMemberProjection) -> Void
     let onOpenProjectPicker: () -> Void
     let onRequestCreateWorktree: (String) -> Void
@@ -47,6 +48,7 @@ struct WorkspaceProjectListView: View {
                             group: group,
                             workspaceAlignmentGroups: workspaceAlignmentGroups,
                             onSelectProject: onSelectProject,
+                            onSetProjectExpanded: onSetProjectExpanded,
                             onRefreshWorktrees: onRefreshWorktrees,
                             onRequestCreateWorktree: onRequestCreateWorktree,
                             onCloseProject: onCloseProject,
@@ -154,6 +156,7 @@ private struct ProjectGroupView: View {
     let group: WorkspaceSidebarProjectGroup
     let workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection]
     let onSelectProject: (String) -> Void
+    let onSetProjectExpanded: (String, Bool) -> Void
     let onRefreshWorktrees: (String) -> Void
     let onRequestCreateWorktree: (String) -> Void
     let onCloseProject: (String) -> Void
@@ -183,6 +186,10 @@ private struct ProjectGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
+                if !group.worktrees.isEmpty {
+                    disclosureButton
+                }
+
                 Button {
                     onSelectProject(group.rootProject.path)
                 } label: {
@@ -256,7 +263,7 @@ private struct ProjectGroupView: View {
                 }
             }
 
-            if !group.worktrees.isEmpty {
+            if !group.worktrees.isEmpty, group.isWorktreeListExpanded {
                 VStack(spacing: 4) {
                     ForEach(group.worktrees) { worktree in
                         WorktreeRowView(
@@ -271,6 +278,25 @@ private struct ProjectGroupView: View {
                 .padding(.leading, 12)
             }
         }
+    }
+
+    private var disclosureButton: some View {
+        Button {
+            onSetProjectExpanded(group.rootProject.path, !group.isWorktreeListExpanded)
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: group.isWorktreeListExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("\(group.worktrees.count)")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(NativeTheme.textSecondary.opacity(0.88))
+            .frame(width: 26, height: 26)
+            .background(NativeTheme.surface.opacity(0.82))
+            .clipShape(.rect(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .help(group.isWorktreeListExpanded ? "折叠 worktree 列表" : "展开 worktree 列表")
     }
 
     private var dropHotspots: some View {
