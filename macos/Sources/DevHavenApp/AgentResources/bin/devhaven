@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+resolve_candidate() {
+  local candidate="$1"
+  if [[ -x "$candidate" ]]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+if [[ -n "${DEVHAVEN_CLI_HELPER:-}" ]]; then
+  if helper="$(resolve_candidate "$DEVHAVEN_CLI_HELPER")"; then
+    exec "$helper" "$@"
+  fi
+fi
+
+if [[ -n "${DEVHAVEN_AGENT_RESOURCES_DIR:-}" ]]; then
+  if helper="$(resolve_candidate "${DEVHAVEN_AGENT_RESOURCES_DIR}/../../DevHavenCLI")"; then
+    exec "$helper" "$@"
+  fi
+  if helper="$(resolve_candidate "${DEVHAVEN_AGENT_RESOURCES_DIR}/../../../MacOS/DevHavenCLI")"; then
+    exec "$helper" "$@"
+  fi
+fi
+
+printf 'devhaven: 未找到 DevHavenCLI helper，请确认当前 DevHaven 构建包含 CLI 支持。\n' >&2
+exit 127

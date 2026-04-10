@@ -40,6 +40,31 @@ final class GhosttyRuntimeEnvironmentBuilderTests: XCTestCase {
         XCTAssertNil(environment["DEVHAVEN_WORKSPACE_ID"])
         XCTAssertNil(environment["DEVHAVEN_WORKSPACE_NAME"])
     }
+
+    func testBuildInjectsCLIHelperAndControlDirectory() throws {
+        let homeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("devhaven-cli-home-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: homeURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: homeURL) }
+
+        let helperURL = homeURL.appendingPathComponent("DevHavenCLI")
+        try "".write(to: helperURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: helperURL.path
+        )
+
+        let store = LegacyCompatStore(homeDirectoryURL: homeURL)
+        let environment = GhosttyRuntimeEnvironmentBuilder.build(
+            baseEnvironment: [:],
+            store: store,
+            agentResourcesURL: nil,
+            cliHelperURL: helperURL
+        )
+
+        XCTAssertEqual(environment["DEVHAVEN_CLI_HELPER"], helperURL.path)
+        XCTAssertEqual(environment["DEVHAVEN_CLI_CONTROL_DIR"], store.cliControlV1DirectoryURL.path)
+    }
 }
 
 private struct WorkspaceRootFixture {

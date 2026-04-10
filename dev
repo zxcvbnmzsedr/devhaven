@@ -103,6 +103,7 @@ VENDOR_COMMANDS=(
   "bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor"
   "bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor"
 )
+CLI_BUILD_COMMAND=(swift build --package-path macos --product DevHavenCLI)
 RUN_COMMAND=(swift run --package-path macos DevHavenApp)
 LOG_PREDICATE="$(build_predicate)"
 LOG_COMMAND=(log stream --style compact --level debug --predicate "$LOG_PREDICATE")
@@ -112,6 +113,7 @@ if (( DRY_RUN )); then
     read -r -a parsed_command <<< "$command"
     print_command "vendor命令" "${parsed_command[@]}"
   done
+  print_command "CLI构建命令" "${CLI_BUILD_COMMAND[@]}"
   if (( ENABLE_LOG )); then
     print_command "日志命令" "${LOG_COMMAND[@]}"
   fi
@@ -128,6 +130,9 @@ printf '==> 确保 Ghostty / Sparkle vendor 可用\n'
 for command in "${VENDOR_COMMANDS[@]}"; do
   eval "$command"
 done
+
+printf '==> 构建 DevHavenCLI helper\n'
+"${CLI_BUILD_COMMAND[@]}"
 
 if (( ENABLE_LOG )); then
   printf '==> 启动 unified log 观察（logs=%s）\n' "$LOG_MODE"

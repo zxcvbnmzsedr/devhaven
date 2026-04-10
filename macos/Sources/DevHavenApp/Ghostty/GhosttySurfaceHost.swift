@@ -154,11 +154,17 @@ enum GhosttyRuntimeEnvironmentBuilder {
         baseEnvironment: [String: String],
         store: LegacyCompatStore = LegacyCompatStore(),
         agentResourcesURL: URL? = DevHavenAppResourceLocator.resolveAgentResourcesURL(),
+        cliHelperURL: URL? = resolveCLIHelperURL(),
         processEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [String: String] {
         var environment = baseEnvironment
         let signalDirectory = store.agentStatusSessionsDirectoryURL
         environment["DEVHAVEN_AGENT_SIGNAL_DIR"] = signalDirectory.path
+        environment["DEVHAVEN_CLI_CONTROL_DIR"] = store.cliControlV1DirectoryURL.path
+
+        if let cliHelperURL {
+            environment["DEVHAVEN_CLI_HELPER"] = cliHelperURL.path
+        }
 
         guard let agentResourcesURL else {
             injectWorkspaceContextIfPresent(into: &environment)
@@ -179,6 +185,31 @@ enum GhosttyRuntimeEnvironmentBuilder {
 
         injectWorkspaceContextIfPresent(into: &environment)
         return environment
+    }
+
+    private static func resolveCLIHelperURL(
+        mainBundle: Bundle = .main,
+        processEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL? {
+        if let explicitPath = processEnvironment["DEVHAVEN_CLI_HELPER"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !explicitPath.isEmpty {
+            let explicitURL = URL(fileURLWithPath: explicitPath)
+            if FileManager.default.isExecutableFile(atPath: explicitURL.path) {
+                return explicitURL
+            }
+        }
+
+        let candidateURLs = [
+            mainBundle.executableURL?.deletingLastPathComponent().appending(path: "DevHavenCLI", directoryHint: .notDirectory),
+            Bundle.main.bundleURL
+                .appending(path: "Contents", directoryHint: .isDirectory)
+                .appending(path: "MacOS", directoryHint: .isDirectory)
+                .appending(path: "DevHavenCLI", directoryHint: .notDirectory)
+        ]
+
+        return candidateURLs.compactMap { $0 }.first {
+            FileManager.default.isExecutableFile(atPath: $0.path)
+        }
     }
 
     private static func injectWorkspaceContextIfPresent(

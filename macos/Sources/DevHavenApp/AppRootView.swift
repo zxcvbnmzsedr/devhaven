@@ -8,6 +8,7 @@ struct AppRootView: View {
     @ObservedObject var updateController: DevHavenUpdateController
     @ObservedObject var quitGuard: AppQuitGuard
     @Environment(\.scenePhase) private var scenePhase
+    @State private var cliCoordinator: WorkspaceCLICommandCoordinator?
 
     init(
         viewModel: NativeAppViewModel,
@@ -159,14 +160,17 @@ struct AppRootView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+            cliCoordinator?.stop()
             viewModel.flushWorkspaceRestoreSnapshotNow()
         }
         .task {
             guard !viewModel.hasLoadedInitialData else {
+                ensureCLICommandCoordinator()
                 updateController.apply(settings: viewModel.snapshot.appState.settings)
                 return
             }
             viewModel.load()
+            ensureCLICommandCoordinator()
             updateController.apply(settings: viewModel.snapshot.appState.settings)
         }
     }
@@ -256,6 +260,19 @@ struct AppRootView: View {
             selectedTabPaneCount: selectedTab?.leaves.count ?? 0,
             tabCount: workspace.tabCount
         )
+    }
+
+    private func ensureCLICommandCoordinator() {
+        guard cliCoordinator == nil else {
+            return
+        }
+        let coordinator = WorkspaceCLICommandCoordinator(viewModel: viewModel)
+        do {
+            try coordinator.start()
+            cliCoordinator = coordinator
+        } catch {
+            viewModel.errorMessage = error.localizedDescription
+        }
     }
 }
 

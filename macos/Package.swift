@@ -9,6 +9,7 @@ let package = Package(
     products: [
         .library(name: "DevHavenCore", targets: ["DevHavenCore"]),
         .executable(name: "DevHavenApp", targets: ["DevHavenApp"]),
+        .executable(name: "DevHavenCLI", targets: ["DevHavenCLI"]),
     ],
     targets: [
         .binaryTarget(
@@ -21,6 +22,10 @@ let package = Package(
         ),
         .target(
             name: "DevHavenCore"
+        ),
+        .executableTarget(
+            name: "DevHavenCLI",
+            dependencies: ["DevHavenCore"]
         ),
         .executableTarget(
             name: "DevHavenApp",

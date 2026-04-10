@@ -233,12 +233,15 @@ bash "$SCRIPT_DIR/setup-sparkle-framework.sh" --ensure-worktree-vendor
 
 log "开始构建 Swift 原生版（configuration=${CONFIGURATION}${SWIFT_TRIPLE:+, triple=$SWIFT_TRIPLE}）"
 swift build "${SWIFT_BUILD_ARGS[@]}"
+swift build "${SWIFT_BUILD_ARGS[@]}" --product DevHavenCLI
 
 BIN_DIR="$(swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
 EXECUTABLE_PATH="$BIN_DIR/DevHavenApp"
+CLI_HELPER_PATH="$BIN_DIR/DevHavenCLI"
 RESOURCE_BUNDLE_PATH="$BIN_DIR/DevHavenNative_DevHavenApp.bundle"
 
 [[ -f "$EXECUTABLE_PATH" ]] || fail "未找到原生可执行文件：$EXECUTABLE_PATH"
+[[ -f "$CLI_HELPER_PATH" ]] || fail "未找到 CLI helper：$CLI_HELPER_PATH"
 [[ -d "$RESOURCE_BUNDLE_PATH" ]] || fail "未找到 SwiftPM 资源 bundle：$RESOURCE_BUNDLE_PATH"
 [[ -d "$SPARKLE_FRAMEWORK_SRC" ]] || fail "未找到 Sparkle.framework：$SPARKLE_FRAMEWORK_SRC"
 
@@ -251,6 +254,7 @@ fi
 log "组装本地 .app bundle"
 mkdir -p "$APP_STAGE_PATH/Contents/MacOS" "$APP_STAGE_PATH/Contents/Resources" "$FRAMEWORKS_PATH"
 cp "$EXECUTABLE_PATH" "$APP_STAGE_PATH/Contents/MacOS/DevHavenApp"
+cp "$CLI_HELPER_PATH" "$APP_STAGE_PATH/Contents/MacOS/DevHavenCLI"
 ditto "$RESOURCE_BUNDLE_PATH" "$APP_STAGE_PATH/Contents/Resources/$(basename "$RESOURCE_BUNDLE_PATH")"
 ditto "$SPARKLE_FRAMEWORK_SRC" "$FRAMEWORKS_PATH/Sparkle.framework"
 ensure_binary_rpath "$APP_STAGE_PATH/Contents/MacOS/DevHavenApp" "@executable_path/../Frameworks"
@@ -328,6 +332,7 @@ cat >> "$INFO_PLIST_PATH" <<'PLIST'
 PLIST
 
 chmod +x "$APP_STAGE_PATH/Contents/MacOS/DevHavenApp"
+chmod +x "$APP_STAGE_PATH/Contents/MacOS/DevHavenCLI"
 plutil -lint "$INFO_PLIST_PATH" >/dev/null
 
 mkdir -p "$OUTPUT_DIR"

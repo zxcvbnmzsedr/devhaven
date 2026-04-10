@@ -1,0 +1,7 @@
+interface:
+  display_name: "DevHaven CLI"
+  short_description: "Control DevHaven workspaces via CLI"
+  default_prompt: "Use $devhaven-cli to inspect DevHaven capabilities and control the current workspace through the devhaven command."
+
+policy:
+  allow_implicit_invocation: true

@@ -48,6 +48,16 @@ public final class LegacyCompatStore {
             .appending(path: "workspaces", directoryHint: .isDirectory)
     }
 
+    public var cliControlDirectoryURL: URL {
+        appDataDirectoryURL
+            .appending(path: "cli-control", directoryHint: .isDirectory)
+    }
+
+    public var cliControlV1DirectoryURL: URL {
+        cliControlDirectoryURL
+            .appending(path: "v1", directoryHint: .isDirectory)
+    }
+
     public func loadSnapshot() throws -> NativeAppSnapshot {
         let appStateDocument = try loadAppStateDocument()
         let projects = try loadProjects()
