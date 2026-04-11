@@ -66,6 +66,11 @@ enum CodexAgentDisplayStateRefresher {
                 continue
             }
 
+            if candidate.signalAttention?.requiresUserAction == true,
+               !hasPostSignalActivity(snapshot: snapshot, candidate: candidate) {
+                continue
+            }
+
             if let signalUpdatedAt = candidate.signalUpdatedAt {
                 let signalPriorityDeadline = signalUpdatedAt.addingTimeInterval(minimumSignalPriorityWindow)
                 if now < signalPriorityDeadline {
@@ -96,10 +101,10 @@ enum CodexAgentDisplayStateRefresher {
             case .waiting:
                 if displayState == .running {
                     overridesByProjectPath[candidate.projectPath, default: [:]][candidate.paneID] =
-                        WorkspaceAgentPresentationOverride(state: .running, summary: nil)
+                        runningOverride(for: candidate)
                 } else if displayState != .waiting, isRecentlyActive {
                     overridesByProjectPath[candidate.projectPath, default: [:]][candidate.paneID] =
-                        WorkspaceAgentPresentationOverride(state: .running, summary: nil)
+                        runningOverride(for: candidate)
                     nextRefreshDeadline = earliestDeadline(nextRefreshDeadline, refreshDeadline)
                 }
             case .running:
@@ -110,7 +115,7 @@ enum CodexAgentDisplayStateRefresher {
                     nextRefreshDeadline = earliestDeadline(nextRefreshDeadline, refreshDeadline)
                 } else {
                     overridesByProjectPath[candidate.projectPath, default: [:]][candidate.paneID] =
-                        WorkspaceAgentPresentationOverride(state: .waiting, summary: nil)
+                        waitingOverride()
                 }
             default:
                 continue
@@ -156,5 +161,43 @@ enum CodexAgentDisplayStateRefresher {
             return rhs
         }
         return min(lhs, rhs)
+    }
+
+    private static func hasPostSignalActivity(
+        snapshot: CodexAgentDisplaySnapshot,
+        candidate: WorkspaceAgentDisplayCandidate
+    ) -> Bool {
+        guard let signalUpdatedAt = candidate.signalUpdatedAt else {
+            return true
+        }
+        return snapshot.lastActivityAt > signalUpdatedAt
+    }
+
+    private static func runningOverride(
+        for candidate: WorkspaceAgentDisplayCandidate
+    ) -> WorkspaceAgentPresentationOverride {
+        let phase: WorkspaceAgentPhase
+        switch candidate.signalPhase {
+        case .launching?, .thinking?, .runningTool?:
+            phase = candidate.signalPhase ?? .thinking
+        default:
+            phase = .thinking
+        }
+
+        return WorkspaceAgentPresentationOverride(
+            state: .running,
+            phase: phase,
+            attention: WorkspaceAgentAttentionRequirement.none,
+            summary: nil
+        )
+    }
+
+    private static func waitingOverride() -> WorkspaceAgentPresentationOverride {
+        WorkspaceAgentPresentationOverride(
+            state: .waiting,
+            phase: .awaitingInput,
+            attention: .input,
+            summary: nil
+        )
     }
 }

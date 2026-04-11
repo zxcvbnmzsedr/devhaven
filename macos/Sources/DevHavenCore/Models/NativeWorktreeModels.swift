@@ -248,8 +248,11 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
     public var unreadNotificationCount: Int
     public var taskStatus: WorkspaceTaskStatus?
     public var agentState: WorkspaceAgentState?
+    public var agentPhase: WorkspaceAgentPhase?
+    public var agentAttention: WorkspaceAgentAttentionRequirement?
     public var agentSummary: String?
     public var agentKind: WorkspaceAgentKind?
+    public var agentUpdatedAt: Date?
     public var displayStateOverride: WorkspaceSidebarWorktreeDisplayState?
     public var displayInitStepOverride: NativeWorktreeInitStep?
     public var displayInitErrorOverride: String?
@@ -264,8 +267,11 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
         unreadNotificationCount: Int = 0,
         taskStatus: WorkspaceTaskStatus? = nil,
         agentState: WorkspaceAgentState? = nil,
+        agentPhase: WorkspaceAgentPhase? = nil,
+        agentAttention: WorkspaceAgentAttentionRequirement? = nil,
         agentSummary: String? = nil,
         agentKind: WorkspaceAgentKind? = nil,
+        agentUpdatedAt: Date? = nil,
         displayStateOverride: WorkspaceSidebarWorktreeDisplayState? = nil,
         displayInitStepOverride: NativeWorktreeInitStep? = nil,
         displayInitErrorOverride: String? = nil,
@@ -279,8 +285,11 @@ public struct WorkspaceSidebarWorktreeItem: Equatable, Sendable, Identifiable {
         self.unreadNotificationCount = unreadNotificationCount
         self.taskStatus = taskStatus
         self.agentState = agentState
+        self.agentPhase = agentPhase
+        self.agentAttention = agentAttention
         self.agentSummary = agentSummary
         self.agentKind = agentKind
+        self.agentUpdatedAt = agentUpdatedAt
         self.displayStateOverride = displayStateOverride
         self.displayInitStepOverride = displayInitStepOverride
         self.displayInitErrorOverride = displayInitErrorOverride
@@ -327,8 +336,11 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
     public var unreadNotificationCount: Int
     public var taskStatus: WorkspaceTaskStatus?
     public var agentState: WorkspaceAgentState?
+    public var agentPhase: WorkspaceAgentPhase?
+    public var agentAttention: WorkspaceAgentAttentionRequirement?
     public var agentSummary: String?
     public var agentKind: WorkspaceAgentKind?
+    public var agentUpdatedAt: Date?
 
     public init(
         rootProject: Project,
@@ -340,8 +352,11 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
         unreadNotificationCount: Int = 0,
         taskStatus: WorkspaceTaskStatus? = nil,
         agentState: WorkspaceAgentState? = nil,
+        agentPhase: WorkspaceAgentPhase? = nil,
+        agentAttention: WorkspaceAgentAttentionRequirement? = nil,
         agentSummary: String? = nil,
-        agentKind: WorkspaceAgentKind? = nil
+        agentKind: WorkspaceAgentKind? = nil,
+        agentUpdatedAt: Date? = nil
     ) {
         self.rootProject = rootProject
         self.worktrees = worktrees
@@ -352,8 +367,11 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
         self.unreadNotificationCount = unreadNotificationCount
         self.taskStatus = taskStatus
         self.agentState = agentState
+        self.agentPhase = agentPhase
+        self.agentAttention = agentAttention
         self.agentSummary = agentSummary
         self.agentKind = agentKind
+        self.agentUpdatedAt = agentUpdatedAt
     }
 
     public var id: String { rootProject.id }
@@ -369,8 +387,11 @@ public struct WorkspaceSidebarProjectGroup: Equatable, Sendable, Identifiable {
             lhs.unreadNotificationCount == rhs.unreadNotificationCount &&
             lhs.taskStatus == rhs.taskStatus &&
             lhs.agentState == rhs.agentState &&
+            lhs.agentPhase == rhs.agentPhase &&
+            lhs.agentAttention == rhs.agentAttention &&
             lhs.agentSummary == rhs.agentSummary &&
-            lhs.agentKind == rhs.agentKind
+            lhs.agentKind == rhs.agentKind &&
+            lhs.agentUpdatedAt == rhs.agentUpdatedAt
     }
 }
 

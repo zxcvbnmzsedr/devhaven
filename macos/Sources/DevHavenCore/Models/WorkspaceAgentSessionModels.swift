@@ -66,6 +66,9 @@ public struct WorkspaceAgentSessionSignal: Codable, Equatable, Sendable {
     public var sessionId: String
     public var pid: Int32?
     public var state: WorkspaceAgentState
+    public var phase: WorkspaceAgentPhase?
+    public var attention: WorkspaceAgentAttentionRequirement?
+    public var toolName: String?
     public var summary: String?
     public var detail: String?
     public var updatedAt: Date
@@ -81,6 +84,9 @@ public struct WorkspaceAgentSessionSignal: Codable, Equatable, Sendable {
         sessionId: String,
         pid: Int32? = nil,
         state: WorkspaceAgentState,
+        phase: WorkspaceAgentPhase? = nil,
+        attention: WorkspaceAgentAttentionRequirement? = nil,
+        toolName: String? = nil,
         summary: String? = nil,
         detail: String? = nil,
         updatedAt: Date = Date()
@@ -95,6 +101,9 @@ public struct WorkspaceAgentSessionSignal: Codable, Equatable, Sendable {
         self.sessionId = sessionId
         self.pid = pid
         self.state = state
+        self.phase = phase
+        self.attention = attention
+        self.toolName = toolName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.detail = detail?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.updatedAt = updatedAt
@@ -111,6 +120,9 @@ public struct WorkspaceAgentSessionSignal: Codable, Equatable, Sendable {
         case sessionId
         case pid
         case state
+        case phase
+        case attention
+        case toolName
         case summary
         case detail
         case updatedAt
@@ -130,6 +142,9 @@ public struct WorkspaceAgentSessionSignal: Codable, Equatable, Sendable {
             sessionId: container.decode(String.self, forKey: .sessionId),
             pid: container.decodeIfPresent(Int32.self, forKey: .pid),
             state: container.decode(WorkspaceAgentState.self, forKey: .state),
+            phase: container.decodeIfPresent(WorkspaceAgentPhase.self, forKey: .phase),
+            attention: container.decodeIfPresent(WorkspaceAgentAttentionRequirement.self, forKey: .attention),
+            toolName: container.decodeIfPresent(String.self, forKey: .toolName),
             summary: container.decodeIfPresent(String.self, forKey: .summary),
             detail: container.decodeIfPresent(String.self, forKey: .detail),
             updatedAt: updatedAt
@@ -148,9 +163,27 @@ public struct WorkspaceAgentSessionSignal: Codable, Equatable, Sendable {
         try container.encode(sessionId, forKey: .sessionId)
         try container.encodeIfPresent(pid, forKey: .pid)
         try container.encode(state, forKey: .state)
+        try container.encodeIfPresent(phase, forKey: .phase)
+        try container.encodeIfPresent(attention, forKey: .attention)
+        try container.encodeIfPresent(toolName, forKey: .toolName)
         try container.encodeIfPresent(summary, forKey: .summary)
         try container.encodeIfPresent(detail, forKey: .detail)
         try container.encode(Self.encodeUpdatedAt(updatedAt), forKey: .updatedAt)
+    }
+
+    public var effectivePhase: WorkspaceAgentPhase {
+        phase ?? state.defaultPhase
+    }
+
+    public var effectiveAttention: WorkspaceAgentAttentionRequirement {
+        attention ?? effectivePhase.defaultAttention
+    }
+
+    public var effectiveState: WorkspaceAgentState {
+        if phase != nil {
+            return effectivePhase.fallbackState
+        }
+        return state
     }
 
     private static func decodeUpdatedAt(from container: KeyedDecodingContainer<CodingKeys>) throws -> Date {

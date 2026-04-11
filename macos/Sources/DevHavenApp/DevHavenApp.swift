@@ -18,6 +18,10 @@ func projectCatalogRefreshCommandState(isRefreshing: Bool) -> ProjectCatalogRefr
 final class DevHavenAppDelegate: NSObject, NSApplicationDelegate {
     private let mainWindowRestorer = MainWindowRestorer()
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         _ = mainWindowRestorer.showMainWindowIfNeeded(
             application: AppKitMainWindowRestoringApplicationProxy(application: NSApp)

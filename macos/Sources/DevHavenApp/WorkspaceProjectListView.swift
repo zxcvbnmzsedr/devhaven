@@ -355,7 +355,12 @@ private struct ProjectGroupView: View {
     private var projectMainContent: some View {
         let dirName = (group.rootProject.path as NSString).lastPathComponent
         let showSubtitle = dirName != group.rootProject.name
-        let agentAccessory = WorkspaceAgentStatusAccessory(agentState: group.agentState, agentKind: group.agentKind)
+        let agentAccessory = WorkspaceAgentStatusAccessory(
+            agentState: group.agentState,
+            agentKind: group.agentKind,
+            agentPhase: group.agentPhase,
+            agentAttention: group.agentAttention
+        )
 
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -409,7 +414,12 @@ private struct ProjectGroupView: View {
             ) {
                 badgeButton(systemName: "bell.fill", value: group.unreadNotificationCount)
             }
-        } else if let agentAccessory = WorkspaceAgentStatusAccessory(agentState: group.agentState, agentKind: group.agentKind) {
+        } else if let agentAccessory = WorkspaceAgentStatusAccessory(
+            agentState: group.agentState,
+            agentKind: group.agentKind,
+            agentPhase: group.agentPhase,
+            agentAttention: group.agentAttention
+        ) {
             Image(systemName: agentAccessory.symbolName)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(agentAccessoryColor(agentAccessory))
@@ -557,7 +567,12 @@ private struct WorktreeRowView: View {
     }
 
     private var rowMainContent: some View {
-        let agentAccessory = WorkspaceAgentStatusAccessory(agentState: item.agentState, agentKind: item.agentKind)
+        let agentAccessory = WorkspaceAgentStatusAccessory(
+            agentState: item.agentState,
+            agentKind: item.agentKind,
+            agentPhase: item.agentPhase,
+            agentAttention: item.agentAttention
+        )
         return HStack(spacing: 6) {
             Image(systemName: "arrow.turn.down.right")
                 .font(.system(size: 9, weight: .medium))

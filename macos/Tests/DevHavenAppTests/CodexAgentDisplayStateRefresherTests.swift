@@ -47,7 +47,12 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
 
         XCTAssertEqual(
             evaluation.overridesByProjectPath[projectPath]?[paneID],
-            WorkspaceAgentPresentationOverride(state: .waiting, summary: nil)
+            WorkspaceAgentPresentationOverride(
+                state: .waiting,
+                phase: .awaitingInput,
+                attention: .input,
+                summary: nil
+            )
         )
         XCTAssertNil(evaluation.nextRefreshDeadline)
     }
@@ -70,7 +75,12 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
 
         XCTAssertEqual(
             beforeDeadline.overridesByProjectPath[projectPath]?[paneID],
-            WorkspaceAgentPresentationOverride(state: .running, summary: nil)
+            WorkspaceAgentPresentationOverride(
+                state: .running,
+                phase: .thinking,
+                attention: WorkspaceAgentAttentionRequirement.none,
+                summary: nil
+            )
         )
         XCTAssertEqual(
             beforeDeadline.nextRefreshDeadline,
@@ -120,6 +130,111 @@ final class CodexAgentDisplayStateRefresherTests: XCTestCase {
         XCTAssertEqual(
             evaluation.nextRefreshDeadline,
             signalUpdatedAt.addingTimeInterval(CodexAgentDisplayStateRefresher.minimumSignalPriorityWindow)
+        )
+    }
+
+    func testUserActionAttentionDisablesVisibleTextFallback() {
+        let projectPath = "/tmp/project"
+        let paneID = "pane-1"
+        let signalTime = Date(timeIntervalSinceReferenceDate: 100)
+
+        let evaluation = CodexAgentDisplayStateRefresher.evaluate(
+            for: [
+                WorkspaceAgentDisplayCandidate(
+                    projectPath: projectPath,
+                    paneID: paneID,
+                    signalState: .waiting,
+                    signalPhase: .awaitingInput,
+                    signalAttention: .input,
+                    signalUpdatedAt: signalTime
+                )
+            ],
+            runtimeState: .init(),
+            now: signalTime.addingTimeInterval(5)
+        ) { _, _ in
+            CodexAgentDisplaySnapshot(
+                recentTextWindow: "transient output",
+                lastActivityAt: signalTime
+            )
+        }
+
+        XCTAssertTrue(evaluation.overridesByProjectPath.isEmpty)
+        XCTAssertNil(evaluation.nextRefreshDeadline)
+    }
+
+    func testUserActionAttentionAllowsFallbackAfterPostSignalActivity() {
+        let projectPath = "/tmp/project"
+        let paneID = "pane-1"
+        let signalTime = Date(timeIntervalSinceReferenceDate: 100)
+        let activityTime = signalTime.addingTimeInterval(3)
+
+        let evaluation = CodexAgentDisplayStateRefresher.evaluate(
+            for: [
+                WorkspaceAgentDisplayCandidate(
+                    projectPath: projectPath,
+                    paneID: paneID,
+                    signalState: .waiting,
+                    signalPhase: .awaitingInput,
+                    signalAttention: .input,
+                    signalUpdatedAt: signalTime
+                )
+            ],
+            runtimeState: .init(),
+            now: activityTime.addingTimeInterval(1)
+        ) { _, _ in
+            CodexAgentDisplaySnapshot(
+                recentTextWindow: "Called siyuan.siyuan_update_block",
+                lastActivityAt: activityTime
+            )
+        }
+
+        XCTAssertEqual(
+            evaluation.overridesByProjectPath[projectPath]?[paneID],
+            WorkspaceAgentPresentationOverride(
+                state: .running,
+                phase: .thinking,
+                attention: WorkspaceAgentAttentionRequirement.none,
+                summary: nil
+            )
+        )
+        XCTAssertEqual(
+            evaluation.nextRefreshDeadline,
+            activityTime.addingTimeInterval(CodexAgentDisplayStateRefresher.recentActivityWindow)
+        )
+    }
+
+    func testRunningToolPhaseIsPreservedWhenWaitingSignalFallsBackToRunning() {
+        let projectPath = "/tmp/project"
+        let paneID = "pane-1"
+        let activityTime = Date(timeIntervalSinceReferenceDate: 100)
+
+        let evaluation = CodexAgentDisplayStateRefresher.evaluate(
+            for: [
+                WorkspaceAgentDisplayCandidate(
+                    projectPath: projectPath,
+                    paneID: paneID,
+                    signalState: .waiting,
+                    signalPhase: .runningTool,
+                    signalAttention: WorkspaceAgentAttentionRequirement.none
+                )
+            ],
+            runtimeState: .init(),
+            now: activityTime.addingTimeInterval(1)
+        ) { _, _ in
+            CodexAgentDisplaySnapshot(
+                recentTextWindow: "Working (12s) esc to interrupt",
+                lastActivityAt: activityTime
+            )
+        }
+
+        XCTAssertEqual(
+            evaluation.overridesByProjectPath[projectPath]?[paneID],
+            WorkspaceAgentPresentationOverride(
+                state: .running,
+                phase: .runningTool,
+                attention: WorkspaceAgentAttentionRequirement.none,
+                summary: nil
+            )
         )
     }
 }

@@ -526,6 +526,7 @@ public final class NativeAppViewModel {
                 }
                 let attention = workspaceAttentionState(for: session.projectPath)
                 let agentOverrides = agentDisplayOverridesByProjectPath[normalizePathForCompare(session.projectPath)] ?? [:]
+                let preferredPaneIDs = preferredSidebarAgentPaneIDs(for: session)
                 let transientProject = switch transientKind {
                 case .workspaceRoot:
                     Project.workspaceRoot(
@@ -545,9 +546,31 @@ public final class NativeAppViewModel {
                     notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
                     unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
                     taskStatus: attention?.taskStatus,
-                    agentState: attention?.resolvedAgentState(overridesByPaneID: agentOverrides),
-                    agentSummary: attention?.resolvedAgentSummary(overridesByPaneID: agentOverrides),
-                    agentKind: attention?.resolvedAgentKind(overridesByPaneID: agentOverrides)
+                    agentState: resolvedSidebarAgentState(
+                        attention: attention,
+                        overridesByPaneID: agentOverrides,
+                        preferredPaneIDs: preferredPaneIDs
+                    ),
+                    agentPhase: resolvedSidebarAgentPhase(
+                        attention: attention,
+                        overridesByPaneID: agentOverrides,
+                        preferredPaneIDs: preferredPaneIDs
+                    ),
+                    agentAttention: resolvedSidebarAgentAttention(
+                        attention: attention,
+                        overridesByPaneID: agentOverrides,
+                        preferredPaneIDs: preferredPaneIDs
+                    ),
+                    agentSummary: resolvedSidebarAgentSummary(
+                        attention: attention,
+                        overridesByPaneID: agentOverrides,
+                        preferredPaneIDs: preferredPaneIDs
+                    ),
+                    agentKind: resolvedSidebarAgentKind(
+                        attention: attention,
+                        overridesByPaneID: agentOverrides,
+                        preferredPaneIDs: preferredPaneIDs
+                    )
                 )
             }
 
@@ -563,9 +586,36 @@ public final class NativeAppViewModel {
             )
             let rootAttention = workspaceAttentionState(for: rootPath)
             let rootAgentOverrides = agentDisplayOverridesByProjectPath[rootPath] ?? [:]
-            let rootAgentState = rootAttention?.resolvedAgentState(overridesByPaneID: rootAgentOverrides)
-            let rootAgentSummary = rootAttention?.resolvedAgentSummary(overridesByPaneID: rootAgentOverrides)
-            let rootAgentKind = rootAttention?.resolvedAgentKind(overridesByPaneID: rootAgentOverrides)
+            let rootSession = openWorkspaceSessions.first(where: {
+                normalizePathForCompare($0.projectPath) == rootPath &&
+                    normalizePathForCompare($0.rootProjectPath) == rootPath
+            })
+            let rootPreferredPaneIDs = preferredSidebarAgentPaneIDs(for: rootSession)
+            let rootAgentState = resolvedSidebarAgentState(
+                attention: rootAttention,
+                overridesByPaneID: rootAgentOverrides,
+                preferredPaneIDs: rootPreferredPaneIDs
+            )
+            let rootAgentPhase = resolvedSidebarAgentPhase(
+                attention: rootAttention,
+                overridesByPaneID: rootAgentOverrides,
+                preferredPaneIDs: rootPreferredPaneIDs
+            )
+            let rootAgentAttention = resolvedSidebarAgentAttention(
+                attention: rootAttention,
+                overridesByPaneID: rootAgentOverrides,
+                preferredPaneIDs: rootPreferredPaneIDs
+            )
+            let rootAgentSummary = resolvedSidebarAgentSummary(
+                attention: rootAttention,
+                overridesByPaneID: rootAgentOverrides,
+                preferredPaneIDs: rootPreferredPaneIDs
+            )
+            let rootAgentKind = resolvedSidebarAgentKind(
+                attention: rootAttention,
+                overridesByPaneID: rootAgentOverrides,
+                preferredPaneIDs: rootPreferredPaneIDs
+            )
             let notifications = showsInAppNotifications
                 ? ([rootAttention?.notifications ?? []] + worktrees.map(\.notifications))
                     .flatMap { $0 }
@@ -578,6 +628,20 @@ public final class NativeAppViewModel {
                     }
                 : 0
             let isGroupActive = normalizedPathsMatch(activeWorkspaceProjectPath, rootPath) || worktrees.contains(where: \.isActive)
+            let groupAgentProjection = makeGroupAgentProjection(
+                rootIsActive: normalizedPathsMatch(activeWorkspaceProjectPath, rootPath),
+                rootAgentState: rootAgentState,
+                rootAgentPhase: rootAgentPhase,
+                rootAgentAttention: rootAgentAttention,
+                rootAgentSummary: rootAgentSummary,
+                rootAgentKind: rootAgentKind,
+                rootAgentUpdatedAt: resolvedSidebarAgentUpdatedAt(
+                    attention: rootAttention,
+                    overridesByPaneID: rootAgentOverrides,
+                    preferredPaneIDs: rootPreferredPaneIDs
+                ),
+                worktrees: worktrees
+            )
             return WorkspaceSidebarProjectGroup(
                 rootProject: rootProject,
                 worktrees: worktrees,
@@ -591,17 +655,12 @@ public final class NativeAppViewModel {
                     rootAttention: rootAttention,
                     worktrees: worktrees
                 ),
-                agentState: makeGroupAgentState(
-                    rootAgentState: rootAgentState
-                ),
-                agentSummary: makeGroupAgentSummary(
-                    rootAgentState: rootAgentState,
-                    rootAgentSummary: rootAgentSummary
-                ),
-                agentKind: makeGroupAgentKind(
-                    rootAgentState: rootAgentState,
-                    rootAgentKind: rootAgentKind
-                )
+                agentState: groupAgentProjection?.state,
+                agentPhase: groupAgentProjection?.phase,
+                agentAttention: groupAgentProjection?.attention,
+                agentSummary: groupAgentProjection?.summary,
+                agentKind: groupAgentProjection?.kind,
+                agentUpdatedAt: groupAgentProjection?.updatedAt
             )
         }
     }
@@ -1121,7 +1180,10 @@ public final class NativeAppViewModel {
                 return WorkspaceAgentDisplayCandidate(
                     projectPath: activeWorkspaceProjectPath,
                     paneID: paneID,
+                    signalSessionID: attention.agentSessionIDByPaneID[paneID],
                     signalState: state,
+                    signalPhase: attention.agentPhaseByPaneID[paneID],
+                    signalAttention: attention.agentAttentionByPaneID[paneID],
                     signalUpdatedAt: attention.agentUpdatedAtByPaneID[paneID]
                 )
             }
@@ -7549,6 +7611,8 @@ public final class NativeAppViewModel {
                     normalizePathForCompare($0.rootProjectPath) == normalizePathForCompare(rootProjectPath)
             })
             let attention = visibleSidebarSession.flatMap { workspaceAttentionState(for: $0.projectPath) }
+            let paneOverrides = agentDisplayOverridesByPaneID(for: worktree.path)
+            let preferredPaneIDs = preferredSidebarAgentPaneIDs(for: visibleSidebarSession)
             return WorkspaceSidebarWorktreeItem(
                 rootProjectPath: rootProjectPath,
                 worktree: worktree,
@@ -7557,14 +7621,35 @@ public final class NativeAppViewModel {
                 notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
                 unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
                 taskStatus: attention.map(\.taskStatus),
-                agentState: attention?.resolvedAgentState(
-                    overridesByPaneID: agentDisplayOverridesByProjectPath[normalizePathForCompare(worktree.path)] ?? [:]
+                agentState: resolvedSidebarAgentState(
+                    attention: attention,
+                    overridesByPaneID: paneOverrides,
+                    preferredPaneIDs: preferredPaneIDs
                 ),
-                agentSummary: attention?.resolvedAgentSummary(
-                    overridesByPaneID: agentDisplayOverridesByProjectPath[normalizePathForCompare(worktree.path)] ?? [:]
+                agentPhase: resolvedSidebarAgentPhase(
+                    attention: attention,
+                    overridesByPaneID: paneOverrides,
+                    preferredPaneIDs: preferredPaneIDs
                 ),
-                agentKind: attention?.resolvedAgentKind(
-                    overridesByPaneID: agentDisplayOverridesByProjectPath[normalizePathForCompare(worktree.path)] ?? [:]
+                agentAttention: resolvedSidebarAgentAttention(
+                    attention: attention,
+                    overridesByPaneID: paneOverrides,
+                    preferredPaneIDs: preferredPaneIDs
+                ),
+                agentSummary: resolvedSidebarAgentSummary(
+                    attention: attention,
+                    overridesByPaneID: paneOverrides,
+                    preferredPaneIDs: preferredPaneIDs
+                ),
+                agentKind: resolvedSidebarAgentKind(
+                    attention: attention,
+                    overridesByPaneID: paneOverrides,
+                    preferredPaneIDs: preferredPaneIDs
+                ),
+                agentUpdatedAt: resolvedSidebarAgentUpdatedAt(
+                    attention: attention,
+                    overridesByPaneID: paneOverrides,
+                    preferredPaneIDs: preferredPaneIDs
                 )
             )
         }
@@ -7592,8 +7677,11 @@ public final class NativeAppViewModel {
                     unreadNotificationCount: 0,
                     taskStatus: nil,
                     agentState: nil,
+                    agentPhase: nil,
+                    agentAttention: nil,
                     agentSummary: nil,
                     agentKind: nil,
+                    agentUpdatedAt: nil,
                     displayStateOverride: pending.status == .creating
                         ? .creating(message: pending.message)
                         : .failed(message: pending.error ?? pending.message),
@@ -7616,6 +7704,126 @@ public final class NativeAppViewModel {
             }
             return (originalIndices[lhs.path] ?? 0) < (originalIndices[rhs.path] ?? 0)
         }
+    }
+
+    private func preferredSidebarAgentPaneIDs(
+        for session: OpenWorkspaceSessionState?
+    ) -> Set<String> {
+        guard let session else {
+            return []
+        }
+        let projectPath = normalizePathForCompare(session.projectPath)
+        let controller = session.controller
+
+        if case let .terminal(selectedTerminalTabID)? = resolvedWorkspacePresentedTabSelection(
+            for: projectPath,
+            controller: controller
+        ),
+           let selectedTab = controller.tabs.first(where: { $0.id == selectedTerminalTabID }) {
+            return Set(selectedTab.leaves.map(\.id))
+        }
+
+        if let selectedTab = controller.selectedTab {
+            return Set(selectedTab.leaves.map(\.id))
+        }
+
+        return []
+    }
+
+    private func resolvedSidebarAgentState(
+        attention: WorkspaceAttentionState?,
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
+        preferredPaneIDs: Set<String>
+    ) -> WorkspaceAgentState? {
+        guard let attention else {
+            return nil
+        }
+        return preferredPaneIDs.isEmpty
+            ? attention.resolvedAgentState(overridesByPaneID: overridesByPaneID)
+            : attention.resolvedAgentState(
+                overridesByPaneID: overridesByPaneID,
+                preferringPaneIDs: preferredPaneIDs
+            )
+    }
+
+    private func resolvedSidebarAgentPhase(
+        attention: WorkspaceAttentionState?,
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
+        preferredPaneIDs: Set<String>
+    ) -> WorkspaceAgentPhase? {
+        guard let attention else {
+            return nil
+        }
+        return preferredPaneIDs.isEmpty
+            ? attention.resolvedAgentPhase(overridesByPaneID: overridesByPaneID)
+            : attention.resolvedAgentPhase(
+                overridesByPaneID: overridesByPaneID,
+                preferringPaneIDs: preferredPaneIDs
+            )
+    }
+
+    private func resolvedSidebarAgentAttention(
+        attention: WorkspaceAttentionState?,
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
+        preferredPaneIDs: Set<String>
+    ) -> WorkspaceAgentAttentionRequirement? {
+        guard let attention else {
+            return nil
+        }
+        return preferredPaneIDs.isEmpty
+            ? attention.resolvedAgentAttention(overridesByPaneID: overridesByPaneID)
+            : attention.resolvedAgentAttention(
+                overridesByPaneID: overridesByPaneID,
+                preferringPaneIDs: preferredPaneIDs
+            )
+    }
+
+    private func resolvedSidebarAgentSummary(
+        attention: WorkspaceAttentionState?,
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
+        preferredPaneIDs: Set<String>
+    ) -> String? {
+        guard let attention else {
+            return nil
+        }
+        return preferredPaneIDs.isEmpty
+            ? attention.resolvedAgentSummary(overridesByPaneID: overridesByPaneID)
+            : attention.resolvedAgentSummary(
+                overridesByPaneID: overridesByPaneID,
+                preferringPaneIDs: preferredPaneIDs
+            )
+    }
+
+    private func resolvedSidebarAgentKind(
+        attention: WorkspaceAttentionState?,
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
+        preferredPaneIDs: Set<String>
+    ) -> WorkspaceAgentKind? {
+        guard let attention else {
+            return nil
+        }
+        return preferredPaneIDs.isEmpty
+            ? attention.resolvedAgentKind(overridesByPaneID: overridesByPaneID)
+            : attention.resolvedAgentKind(
+                overridesByPaneID: overridesByPaneID,
+                preferringPaneIDs: preferredPaneIDs
+            )
+    }
+
+    private func resolvedSidebarAgentUpdatedAt(
+        attention: WorkspaceAttentionState?,
+        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
+        preferredPaneIDs: Set<String>
+    ) -> Date? {
+        guard let attention else {
+            return nil
+        }
+        return preferredPaneIDs.isEmpty
+            ? attention.resolvedAgentUpdatedAt(overridesByPaneID: overridesByPaneID)
+            : attention.resolvedAgentUpdatedAt(
+                overridesByPaneID: overridesByPaneID,
+                preferringPaneIDs: preferredPaneIDs
+            )
     }
 
     private func compareSidebarWorktreeItems(
@@ -7655,33 +7863,138 @@ public final class NativeAppViewModel {
         return nil
     }
 
-    private func makeGroupAgentState(
-        rootAgentState: WorkspaceAgentState?
-    ) -> WorkspaceAgentState? {
-        rootAgentState
+    private struct SidebarGroupAgentProjection {
+        var state: WorkspaceAgentState
+        var phase: WorkspaceAgentPhase?
+        var attention: WorkspaceAgentAttentionRequirement?
+        var summary: String?
+        var kind: WorkspaceAgentKind?
+        var updatedAt: Date?
     }
 
-    private func makeGroupAgentSummary(
+    private func makeGroupAgentProjection(
+        rootIsActive: Bool,
         rootAgentState: WorkspaceAgentState?,
-        rootAgentSummary: String?
-    ) -> String? {
-        guard rootAgentState != nil,
-              let rootAgentSummary,
-              !rootAgentSummary.isEmpty
-        else {
+        rootAgentPhase: WorkspaceAgentPhase?,
+        rootAgentAttention: WorkspaceAgentAttentionRequirement?,
+        rootAgentSummary: String?,
+        rootAgentKind: WorkspaceAgentKind?,
+        rootAgentUpdatedAt: Date?,
+        worktrees: [WorkspaceSidebarWorktreeItem]
+    ) -> SidebarGroupAgentProjection? {
+        let activeWorktreeCandidates = worktrees.compactMap { worktree -> SidebarGroupAgentCandidate? in
+            guard worktree.isActive, let state = worktree.agentState else {
+                return nil
+            }
+            return SidebarGroupAgentCandidate(
+                state: state,
+                phase: worktree.agentPhase,
+                attention: worktree.agentAttention,
+                summary: worktree.agentSummary,
+                kind: worktree.agentKind,
+                updatedAt: worktree.agentUpdatedAt,
+                isActive: true,
+                isOpen: worktree.isOpen
+            )
+        }
+        if let prioritizedActiveWorktree = prioritizedSidebarAgentCandidate(from: activeWorktreeCandidates) {
+            return SidebarGroupAgentProjection(
+                state: prioritizedActiveWorktree.state,
+                phase: prioritizedActiveWorktree.phase,
+                attention: prioritizedActiveWorktree.attention,
+                summary: prioritizedActiveWorktree.summary,
+                kind: prioritizedActiveWorktree.kind,
+                updatedAt: prioritizedActiveWorktree.updatedAt
+            )
+        }
+
+        var fallbackCandidates = worktrees.compactMap { worktree -> SidebarGroupAgentCandidate? in
+            guard let state = worktree.agentState else {
+                return nil
+            }
+            return SidebarGroupAgentCandidate(
+                state: state,
+                phase: worktree.agentPhase,
+                attention: worktree.agentAttention,
+                summary: worktree.agentSummary,
+                kind: worktree.agentKind,
+                updatedAt: worktree.agentUpdatedAt,
+                isActive: worktree.isActive,
+                isOpen: worktree.isOpen
+            )
+        }
+        if let rootAgentState {
+            fallbackCandidates.append(
+                SidebarGroupAgentCandidate(
+                    state: rootAgentState,
+                    phase: rootAgentPhase,
+                    attention: rootAgentAttention,
+                    summary: rootAgentSummary,
+                    kind: rootAgentKind,
+                    updatedAt: rootAgentUpdatedAt,
+                    isActive: rootIsActive,
+                    isOpen: rootIsActive,
+                    isRoot: true
+                )
+            )
+        }
+
+        guard let prioritizedCandidate = prioritizedSidebarAgentCandidate(from: fallbackCandidates) else {
             return nil
         }
-        return rootAgentSummary
+        return SidebarGroupAgentProjection(
+            state: prioritizedCandidate.state,
+            phase: prioritizedCandidate.phase,
+            attention: prioritizedCandidate.attention,
+            summary: prioritizedCandidate.summary,
+            kind: prioritizedCandidate.kind,
+            updatedAt: prioritizedCandidate.updatedAt
+        )
     }
 
-    private func makeGroupAgentKind(
-        rootAgentState: WorkspaceAgentState?,
-        rootAgentKind: WorkspaceAgentKind?
-    ) -> WorkspaceAgentKind? {
-        guard rootAgentState != nil else {
-            return nil
+    private func prioritizedSidebarAgentCandidate(
+        from candidates: [SidebarGroupAgentCandidate]
+    ) -> SidebarGroupAgentCandidate? {
+        candidates.max { lhs, rhs in
+            if lhs.activityPriority != rhs.activityPriority {
+                return lhs.activityPriority < rhs.activityPriority
+            }
+            if (lhs.attention?.priority ?? 0) != (rhs.attention?.priority ?? 0) {
+                return (lhs.attention?.priority ?? 0) < (rhs.attention?.priority ?? 0)
+            }
+            if lhs.state.priority != rhs.state.priority {
+                return lhs.state.priority < rhs.state.priority
+            }
+            if (lhs.updatedAt ?? .distantPast) != (rhs.updatedAt ?? .distantPast) {
+                return (lhs.updatedAt ?? .distantPast) < (rhs.updatedAt ?? .distantPast)
+            }
+            if lhs.isRoot != rhs.isRoot {
+                return lhs.isRoot && !rhs.isRoot
+            }
+            return false
         }
-        return rootAgentKind
+    }
+
+    private struct SidebarGroupAgentCandidate {
+        var state: WorkspaceAgentState
+        var phase: WorkspaceAgentPhase?
+        var attention: WorkspaceAgentAttentionRequirement?
+        var summary: String?
+        var kind: WorkspaceAgentKind?
+        var updatedAt: Date?
+        var isActive: Bool
+        var isOpen: Bool
+        var isRoot: Bool = false
+
+        var activityPriority: Int {
+            if isActive {
+                return 2
+            }
+            if isOpen {
+                return 1
+            }
+            return 0
+        }
     }
 
     private func isWorkspacePaneCurrentlyFocused(
@@ -7823,12 +8136,19 @@ public final class NativeAppViewModel {
         to attention: inout WorkspaceAttentionState
     ) {
         attention.setAgentState(
-            signal.state,
+            signal.effectiveState,
             kind: signal.agentKind,
+            sessionID: signal.sessionId,
+            phase: signal.effectivePhase,
+            attention: signal.effectiveAttention,
             summary: signal.summary,
             updatedAt: signal.updatedAt,
             for: signal.paneId
         )
+    }
+
+    private func agentDisplayOverridesByPaneID(for projectPath: String) -> [String: WorkspaceAgentPresentationOverride] {
+        agentDisplayOverridesByProjectPath[normalizePathForCompare(projectPath)] ?? [:]
     }
 
     private func normalizedAgentSignalSnapshots(

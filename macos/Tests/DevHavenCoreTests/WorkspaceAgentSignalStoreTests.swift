@@ -119,6 +119,37 @@ final class WorkspaceAgentSignalStoreTests: XCTestCase {
         XCTAssertEqual(store.currentSnapshots["terminal-a"]?.summary, expectedSummary)
     }
 
+    func testCompletedSignalsNormalizeBackToIdleAndClearRicherMetadataAfterRetention() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let store = WorkspaceAgentSignalStore(
+            baseDirectoryURL: tempDirectoryURL,
+            completedSignalRetentionInterval: 0
+        )
+
+        var signal = makeSignal(
+            terminalSessionId: "terminal-finished",
+            state: .completed,
+            summary: "done"
+        )
+        signal.phase = .completed
+        signal.attention = .error
+        signal.toolName = "Bash"
+        signal.updatedAt = Date(timeIntervalSince1970: 1)
+        try writeSignal(signal, baseDirectoryURL: tempDirectoryURL)
+
+        let snapshots = try store.reloadForTesting()
+        XCTAssertEqual(snapshots["terminal-finished"]?.state, .idle)
+        XCTAssertEqual(snapshots["terminal-finished"]?.phase, .idle)
+        XCTAssertEqual(snapshots["terminal-finished"]?.attention, WorkspaceAgentAttentionRequirement.none)
+        XCTAssertNil(snapshots["terminal-finished"]?.toolName)
+        XCTAssertNil(snapshots["terminal-finished"]?.summary)
+        XCTAssertNil(snapshots["terminal-finished"]?.detail)
+    }
+
     private func writeSignal(
         _ signal: WorkspaceAgentSessionSignal,
         baseDirectoryURL: URL

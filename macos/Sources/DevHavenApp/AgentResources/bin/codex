@@ -55,9 +55,11 @@ NOTIFY_CONFIG="notify=[\"$(toml_escape_string "$NOTIFY_BIN")\"]"
 "$EMIT_BIN" \
   --agent codex \
   --state running \
+  --phase thinking \
+  --attention none \
   --session-id "$SESSION_ID" \
   --pid "$$" \
-  --summary "Codex 正在运行" >/dev/null
+  --summary "Codex 正在思考" >/dev/null
 
 set +e
 "$REAL_CODEX" \
@@ -71,12 +73,16 @@ if [[ $status -eq 0 ]]; then
   "$EMIT_BIN" \
     --agent codex \
     --state completed \
+    --phase completed \
+    --attention none \
     --session-id "$SESSION_ID" \
     --summary "Codex 已完成" >/dev/null || true
 else
   "$EMIT_BIN" \
     --agent codex \
     --state failed \
+    --phase failed \
+    --attention error \
     --session-id "$SESSION_ID" \
     --summary "Codex 失败" \
     --detail "exit status $status" >/dev/null || true

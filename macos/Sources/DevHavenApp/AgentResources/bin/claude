@@ -58,7 +58,7 @@ else
 fi
 
 HOOKS_JSON=$(cat <<JSON
-{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' SessionStart","timeout":10}]}],"Stop":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' Stop","timeout":10}]}],"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' SessionEnd","timeout":5}]}],"Notification":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' Notification","timeout":10}]}],"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' UserPromptSubmit","timeout":10}]}],"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' PreToolUse","timeout":5,"async":true}]}]}}
+{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' SessionStart","timeout":10}]}],"Stop":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' Stop","timeout":10}]}],"SessionEnd":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' SessionEnd","timeout":5}]}],"Notification":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' Notification","timeout":10}]}],"PermissionRequest":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' PermissionRequest","timeout":10}]}],"UserPromptSubmit":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' UserPromptSubmit","timeout":10}]}],"PreToolUse":[{"matcher":"","hooks":[{"type":"command","command":"'$HOOK_PATH' PreToolUse","timeout":5,"async":true}]}]}}
 JSON
 )
 

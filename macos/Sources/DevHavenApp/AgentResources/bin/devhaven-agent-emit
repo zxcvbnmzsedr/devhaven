@@ -38,6 +38,9 @@ agent_kind=""
 state=""
 session_id=""
 pid_value="null"
+phase=""
+attention=""
+tool_name=""
 summary=""
 detail=""
 
@@ -57,6 +60,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --pid)
       pid_value="${2-}"
+      shift 2
+      ;;
+    --phase)
+      phase="${2-}"
+      shift 2
+      ;;
+    --attention)
+      attention="${2-}"
+      shift 2
+      ;;
+    --tool-name)
+      tool_name="${2-}"
       shift 2
       ;;
     --summary)
@@ -106,6 +121,9 @@ cat > "$temp_file" <<JSON
   "sessionId": $(json_string_or_null "$session_id"),
   "pid": $pid_json,
   "state": $(json_string_or_null "$state"),
+  "phase": $(json_string_or_null "$phase"),
+  "attention": $(json_string_or_null "$attention"),
+  "toolName": $(json_string_or_null "$tool_name"),
   "summary": $(json_string_or_null "$summary"),
   "detail": $(json_string_or_null "$detail"),
   "updatedAt": $(json_string_or_null "$iso_now")

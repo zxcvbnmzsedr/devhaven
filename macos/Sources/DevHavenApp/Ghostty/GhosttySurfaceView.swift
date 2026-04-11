@@ -871,12 +871,22 @@ final class GhosttyTerminalSurfaceView: NSView {
     }
 
     var ownsWindowFirstResponder: Bool {
-        guard let window,
-              let firstResponder = window.firstResponder as? NSView
-        else {
+        guard let window else {
             return false
         }
-        return firstResponder === self || firstResponder.isDescendant(of: self)
+        if let firstResponder = window.firstResponder as? NSView,
+           (firstResponder === self || firstResponder.isDescendant(of: self)) {
+            return true
+        }
+
+        var responder = window.firstResponder
+        while let currentResponder = responder {
+            if currentResponder === self {
+                return true
+            }
+            responder = currentResponder.nextResponder
+        }
+        return false
     }
 
     func debugVisibleText() -> String {

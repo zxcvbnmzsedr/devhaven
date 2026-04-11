@@ -48,3 +48,4 @@ macos/Vendor/GhosttyKit.xcframework/
 .swiftpm/
 macos/Vendor/Sparkle.xcframework/
 macos/Vendor/SparkleTools/
+.omx/

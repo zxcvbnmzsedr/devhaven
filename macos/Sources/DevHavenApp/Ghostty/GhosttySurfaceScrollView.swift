@@ -136,8 +136,10 @@ final class GhosttySurfaceScrollView: NSView {
     func setSurfaceView(_ newSurfaceView: NSView) {
         guard newSurfaceView !== surfaceView else { return }
         if let current = surfaceView as? GhosttyTerminalSurfaceView {
+            current.prepareForContainerReuse()
             current.scrollWrapper = nil
         }
+        (newSurfaceView as? GhosttyTerminalSurfaceView)?.prepareForContainerReuse()
         surfaceView.removeFromSuperview()
         surfaceView = newSurfaceView
         configureAccessibilityTreeExclusion(for: newSurfaceView)

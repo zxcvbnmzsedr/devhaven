@@ -6,6 +6,18 @@ struct WindowActivityState: Equatable {
     let isVisible: Bool
 
     static let inactive = Self(isKeyWindow: false, isVisible: false)
+
+    static func resolvedVisibility(
+        isKeyWindow: Bool,
+        isWindowVisible: Bool,
+        isOccludedVisible: Bool
+    ) -> Bool {
+        // 新窗口首帧里，AppKit 可能已经把 window 设成 key/visible，
+        // 但 `occlusionState` 还没来得及刷新；若此时误判成不可见，
+        // Ghostty surface 会先吃到一次 false occlusion，直到后续额外 UI
+        // 事件才恢复渲染。
+        isWindowVisible && (isKeyWindow || isOccludedVisible)
+    }
 }
 
 struct WindowFocusObserverView: NSViewRepresentable {
@@ -41,7 +53,11 @@ final class WindowFocusObserverNSView: NSView {
         }
         return WindowActivityState(
             isKeyWindow: window.isKeyWindow,
-            isVisible: window.occlusionState.contains(.visible)
+            isVisible: WindowActivityState.resolvedVisibility(
+                isKeyWindow: window.isKeyWindow,
+                isWindowVisible: window.isVisible,
+                isOccludedVisible: window.occlusionState.contains(.visible)
+            )
         )
     }
 

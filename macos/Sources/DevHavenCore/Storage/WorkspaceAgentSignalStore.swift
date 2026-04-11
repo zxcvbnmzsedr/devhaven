@@ -268,6 +268,9 @@ public final class WorkspaceAgentSignalStore {
             if age >= completedSignalRetentionInterval,
                snapshot.state == .completed || snapshot.state == .failed {
                 snapshot.state = .idle
+                snapshot.phase = .idle
+                snapshot.attention = WorkspaceAgentAttentionRequirement.none
+                snapshot.toolName = nil
                 snapshot.summary = nil
                 snapshot.detail = nil
                 snapshot.pid = nil

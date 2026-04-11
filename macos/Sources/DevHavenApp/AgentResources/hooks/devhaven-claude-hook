@@ -60,20 +60,26 @@ if [[ -n "${DEVHAVEN_AGENT_SIGNAL_DIR:-}" && -f "$signal_file" ]]; then
 fi
 
 state="idle"
+phase=""
+attention="none"
+tool_name=""
 summary=""
 detail=""
 
 case "$hook_event" in
   SessionStart)
     state="idle"
+    phase="idle"
     summary="Claude 会话已开始"
     ;;
   UserPromptSubmit)
     state="running"
-    summary="Claude 正在运行"
+    phase="thinking"
+    summary="Claude 正在思考"
     ;;
   PreToolUse)
     tool_name="$(extract_json_string tool_name)"
+    phase="runningTool"
     if [[ -n "$tool_name" ]]; then
       summary="Claude 正在使用 ${tool_name}"
     else
@@ -81,13 +87,23 @@ case "$hook_event" in
     fi
     state="running"
     ;;
+  PermissionRequest)
+    state="waiting"
+    phase="awaitingApproval"
+    attention="approval"
+    summary="Claude 等待审批"
+    detail="${message:-Claude 正在等待你的审批}"
+    ;;
   Notification)
     state="waiting"
-    summary="Claude 需要处理"
+    phase="notifying"
+    attention="notification"
+    summary="Claude 有新通知"
     detail="${message:-Claude 需要你的注意}"
     ;;
   Stop)
     state="completed"
+    phase="completed"
     summary="Claude 已完成"
     detail="$message"
     ;;
@@ -109,7 +125,10 @@ esac
 "$emit_bin" \
   --agent claude \
   --state "$state" \
+  --phase "$phase" \
+  --attention "$attention" \
   --session-id "$session_id" \
   --pid "${DEVHAVEN_AGENT_PID:-$$}" \
+  --tool-name "$tool_name" \
   --summary "$summary" \
   --detail "$detail"
