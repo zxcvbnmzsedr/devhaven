@@ -393,6 +393,13 @@ final class GhosttySurfaceHostModel {
     static let codexDisplayVisibleTextCacheInterval: TimeInterval = 1
     static let restoreVisibleTextCacheInterval: TimeInterval = 5
 
+    static func resolvedAttachedSurfaceFocus(
+        desiredFocus: Bool,
+        ownsWindowFirstResponder: Bool
+    ) -> Bool {
+        desiredFocus && ownsWindowFirstResponder
+    }
+
     enum VisibleTextSamplingMode: Sendable {
         case preferCache
         case forceRefresh
@@ -476,6 +483,13 @@ final class GhosttySurfaceHostModel {
 
     var currentSurfaceView: GhosttyTerminalSurfaceView? {
         ownedSurfaceView
+    }
+
+    var debugCurrentSurfaceActivity: WorkspaceSurfaceActivity {
+        WorkspaceSurfaceActivity(
+            isVisible: lastSurfaceIsVisible,
+            isFocused: lastSurfaceIsFocused
+        )
     }
 
     func codexDisplaySnapshot() -> CodexAgentDisplaySnapshot? {
@@ -988,7 +1002,12 @@ final class GhosttySurfaceHostModel {
 
     private func applyCachedSurfaceActivity(to view: GhosttyTerminalSurfaceView) {
         view.setOcclusion(lastSurfaceIsVisible)
-        view.focusDidChange(lastSurfaceIsFocused)
+        view.focusDidChange(
+            Self.resolvedAttachedSurfaceFocus(
+                desiredFocus: lastSurfaceIsFocused,
+                ownsWindowFirstResponder: view.ownsWindowFirstResponder
+            )
+        )
     }
 
     private func cancelPendingWindowResponderRestore() {

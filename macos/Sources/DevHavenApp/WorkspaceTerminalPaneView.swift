@@ -3,6 +3,11 @@ import GhosttyKit
 import DevHavenCore
 
 struct WorkspaceTerminalPaneView: View {
+    private enum PaneTabChipLayout {
+        static let selectedTitleMaxWidth: CGFloat = 220
+        static let unselectedTitleMaxWidth: CGFloat = 150
+    }
+
     let pane: WorkspacePaneState
     let selectedItem: WorkspacePaneItemState
     let terminalModel: GhosttySurfaceHostModel?
@@ -126,9 +131,13 @@ struct WorkspaceTerminalPaneView: View {
                 }
 
             surfaceHost
+                .id(selectedItem.id)
                 .padding(.horizontal, 3)
                 .padding(.top, 3)
                 .padding(.bottom, 3)
+                .onAppear {
+                    syncSurfaceActivity()
+                }
         }
         .background(NativeTheme.surface)
         .clipShape(.rect(cornerRadius: 6))
@@ -168,6 +177,9 @@ struct WorkspaceTerminalPaneView: View {
             syncSurfaceActivity()
         }
         .onChange(of: surfaceActivity) { _, _ in
+            syncSurfaceActivity()
+        }
+        .onChange(of: selectedItem.id) { _, _ in
             syncSurfaceActivity()
         }
         .onDisappear {
@@ -304,7 +316,15 @@ struct WorkspaceTerminalPaneView: View {
                     .font(.system(size: 10, weight: .medium))
                 Text(displayTitle(for: item))
                     .lineLimit(1)
+                    .truncationMode(.middle)
             }
+            .frame(
+                minWidth: 0,
+                maxWidth: isSelected
+                    ? PaneTabChipLayout.selectedTitleMaxWidth
+                    : PaneTabChipLayout.unselectedTitleMaxWidth,
+                alignment: .leading
+            )
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(isSelected ? NativeTheme.textPrimary : NativeTheme.textSecondary)
             .contentShape(.rect)
@@ -338,6 +358,7 @@ struct WorkspaceTerminalPaneView: View {
         .padding(.trailing, 6)
         .padding(.vertical, 4)
         .background(isSelected ? NativeTheme.elevated.opacity(0.92) : NativeTheme.window.opacity(0.4))
+        .help(displayTitle(for: item))
         .overlay {
             if draggedItemID != nil,
                itemDropTarget?.itemID == item.id {
