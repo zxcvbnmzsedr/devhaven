@@ -4547,6 +4547,15 @@ public final class NativeAppViewModel {
             rebuiltProjects,
             existingProjects: existingProjects
         )
+        let nextDirectProjectPaths = survivingDirectProjectPaths(
+            from: directProjectPaths,
+            rebuiltProjects: rebuiltProjects
+        )
+
+        if nextDirectProjectPaths != snapshot.appState.directProjectPaths {
+            try store.updateDirectProjectPaths(nextDirectProjectPaths)
+            snapshot.appState.directProjectPaths = nextDirectProjectPaths
+        }
         if mergedProjects != rebuiltProjects {
             try store.updateProjects(mergedProjects)
         }
@@ -5341,6 +5350,9 @@ public final class NativeAppViewModel {
     }
 
     private func canRestoreWorkspaceSession(_ sessionSnapshot: ProjectWorkspaceRestoreSnapshot) -> Bool {
+        let normalizedProjectPath = normalizePathForCompare(sessionSnapshot.projectPath)
+        let normalizedRootProjectPath = normalizePathForCompare(sessionSnapshot.rootProjectPath)
+
         if let workspaceAlignmentGroupID = sessionSnapshot.workspaceAlignmentGroupID {
             guard snapshot.appState.workspaceAlignmentGroups.contains(where: { $0.id == workspaceAlignmentGroupID }) else {
                 return false
@@ -5356,14 +5368,19 @@ public final class NativeAppViewModel {
             return (try? syncWorkspaceAlignmentRootIfPossible(workspaceRootContext.workspaceID)) != nil
         }
         if sessionSnapshot.isQuickTerminal {
-            return !sessionSnapshot.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !normalizedProjectPath.isEmpty
         }
         if sessionSnapshot.transientDisplayProject?.isDirectoryWorkspace == true {
-            return !sessionSnapshot.projectPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return workspaceFileSystemService.itemExists(at: normalizedProjectPath)
+        }
+        guard workspaceFileSystemService.itemExists(at: normalizedProjectPath),
+              workspaceFileSystemService.itemExists(at: normalizedRootProjectPath)
+        else {
+            return false
         }
         return resolveDisplayProject(
-            for: sessionSnapshot.projectPath,
-            rootProjectPath: sessionSnapshot.rootProjectPath
+            for: normalizedProjectPath,
+            rootProjectPath: normalizedRootProjectPath
         ) != nil
     }
 
@@ -8659,6 +8676,16 @@ private func rebuildProjectCatalogSnapshot(_ request: ProjectCatalogRefreshReque
     let rebuiltProjects = buildProjects(paths: nextPaths, existing: request.existingProjects)
     try LegacyCompatStore(homeDirectoryURL: request.storeHomeDirectoryURL).updateProjects(rebuiltProjects)
     return rebuiltProjects
+}
+
+private func survivingDirectProjectPaths(
+    from directProjectPaths: [String],
+    rebuiltProjects: [Project]
+) -> [String] {
+    let rebuiltProjectPaths = Set(rebuiltProjects.map { normalizePathForCompare($0.path) })
+    return normalizePathList(
+        directProjectPaths.filter { rebuiltProjectPaths.contains(normalizePathForCompare($0)) }
+    )
 }
 
 private func discoverProjects(in directories: [String]) -> [String] {
