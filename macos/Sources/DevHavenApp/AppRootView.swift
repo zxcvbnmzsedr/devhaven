@@ -26,6 +26,9 @@ struct AppRootView: View {
         let contentVisibilityPolicy = AppRootContentVisibilityPolicy.resolve(
             isWorkspacePresented: viewModel.isWorkspacePresented
         )
+        let preferredColorScheme = NativeTheme.preferredColorScheme(
+            for: viewModel.snapshot.appState.settings.appAppearanceMode
+        )
         let projectDetailPresentation = AppRootProjectDetailPresentationPolicy.resolve(
             isWorkspacePresented: viewModel.isWorkspacePresented,
             selectedProjectExists: viewModel.selectedProject != nil,
@@ -133,13 +136,13 @@ struct AppRootView: View {
             InitialWindowActivationBridge()
                 .allowsHitTesting(false)
         )
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(preferredColorScheme)
         .animation(.easeInOut(duration: 0.18), value: projectDetailPresentation)
         .animation(.easeInOut(duration: 0.16), value: quitGuard.toastMessage != nil)
         .animation(.easeInOut(duration: 0.16), value: viewModel.workspaceToastMessage != nil)
         .sheet(isPresented: $viewModel.isDashboardPresented) {
             GitDashboardView(viewModel: viewModel)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
         }
         .sheet(isPresented: $viewModel.isSettingsPresented) {
             SettingsView(
@@ -159,7 +162,7 @@ struct AppRootView: View {
                 onOpenUpdateDownloadPage: { updateController.openDownloadPage() },
                 onCopyUpdateDiagnostics: { updateController.copyDiagnosticsToPasteboard() }
             )
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(preferredColorScheme)
         }
         .sheet(isPresented: $viewModel.isRecycleBinPresented) {
             RecycleBinSheetView(
@@ -167,7 +170,7 @@ struct AppRootView: View {
                 onRestore: { item in viewModel.restoreProjectFromRecycleBin(item.path) },
                 onClose: { viewModel.hideRecycleBin() }
             )
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(preferredColorScheme)
         }
         .alert("操作失败", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
