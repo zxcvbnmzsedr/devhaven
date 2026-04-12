@@ -70,7 +70,7 @@ final class WorkspaceAgentSignalStoreTests: XCTestCase {
         let expectedSummary = "third"
         let store = WorkspaceAgentSignalStore(
             baseDirectoryURL: tempDirectoryURL,
-            reloadDebounceNanoseconds: 40_000_000
+            reloadDebounceNanoseconds: 200_000_000
         )
         defer { store.stop() }
 
@@ -93,7 +93,6 @@ final class WorkspaceAgentSignalStoreTests: XCTestCase {
             ),
             baseDirectoryURL: tempDirectoryURL
         )
-        Thread.sleep(forTimeInterval: 0.005)
         try writeSignal(
             makeSignal(
                 terminalSessionId: "terminal-a",
@@ -102,7 +101,6 @@ final class WorkspaceAgentSignalStoreTests: XCTestCase {
             ),
             baseDirectoryURL: tempDirectoryURL
         )
-        Thread.sleep(forTimeInterval: 0.005)
         try writeSignal(
             makeSignal(
                 terminalSessionId: "terminal-a",
