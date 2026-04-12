@@ -64,6 +64,10 @@ struct WorkspaceProjectSidebarHostView: View {
         return viewModel.snapshot.projects.first(where: { $0.path == worktreeDialogProjectPath })
     }
 
+    private var preferredColorScheme: ColorScheme? {
+        NativeTheme.preferredColorScheme(for: viewModel.snapshot.appState.settings.appAppearanceMode)
+    }
+
     private func openOrActivateProject(_ member: WorkspaceAlignmentMemberProjection) {
         if member.openTarget.path.isEmpty {
             return
@@ -223,7 +227,7 @@ struct WorkspaceProjectSidebarHostView: View {
                 },
                 onClose: { isProjectPickerPresented = false }
             )
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(preferredColorScheme)
         }
         .sheet(item: Binding(
             get: {
@@ -264,7 +268,7 @@ struct WorkspaceProjectSidebarHostView: View {
                 },
                 onClose: { worktreeDialogProjectPath = nil }
             )
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(preferredColorScheme)
         }
         .onChange(of: worktreeDialogProjectPath) { _, newValue in
             guard newValue == nil, let request = deferredWorktreeCreateRequest else {
@@ -300,7 +304,7 @@ struct WorkspaceProjectSidebarHostView: View {
                 },
                 onClose: dismissAlignmentEditor
             )
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(preferredColorScheme)
         }
         .sheet(item: $alignmentAddProjectsContext) { context in
             WorkspaceAlignmentAddProjectsSheet(
@@ -318,7 +322,7 @@ struct WorkspaceProjectSidebarHostView: View {
                 },
                 onClose: dismissAlignmentAddProjects
             )
-            .preferredColorScheme(.dark)
+            .preferredColorScheme(preferredColorScheme)
         }
     }
 

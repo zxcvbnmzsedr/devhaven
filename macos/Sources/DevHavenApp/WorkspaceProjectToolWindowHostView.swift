@@ -46,6 +46,10 @@ struct WorkspaceProjectToolWindowHostView: View {
     @State private var renameContext: WorkspaceProjectRenameContext?
     @State private var deleteRequest: WorkspaceProjectDeleteRequest?
 
+    private var preferredColorScheme: ColorScheme? {
+        NativeTheme.preferredColorScheme(for: viewModel.snapshot.appState.settings.appAppearanceMode)
+    }
+
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -72,7 +76,7 @@ struct WorkspaceProjectToolWindowHostView: View {
                     },
                     onClose: { creationContext = nil }
                 )
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
             }
             .sheet(item: $renameContext) { context in
                 WorkspaceProjectNameEditorSheet(
@@ -85,7 +89,7 @@ struct WorkspaceProjectToolWindowHostView: View {
                     },
                     onClose: { renameContext = nil }
                 )
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(preferredColorScheme)
             }
             .alert(item: $deleteRequest) { request in
                 Alert(

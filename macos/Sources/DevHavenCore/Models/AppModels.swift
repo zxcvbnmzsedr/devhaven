@@ -236,7 +236,27 @@ public enum SettingsNavigationSection: String, Codable, Sendable, CaseIterable, 
     public var id: String { rawValue }
 }
 
+public enum AppAppearanceMode: String, Codable, Sendable, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .system:
+            return "跟随系统"
+        case .light:
+            return "浅色"
+        case .dark:
+            return "深色"
+        }
+    }
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
+    public var appAppearanceMode: AppAppearanceMode
     public var editorOpenTool: OpenToolSettings
     public var workspaceEditorDisplayOptions: WorkspaceEditorDisplayOptions
     public var terminalOpenTool: OpenToolSettings
@@ -261,6 +281,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var webBindPort: Int
 
     public init(
+        appAppearanceMode: AppAppearanceMode = .system,
         editorOpenTool: OpenToolSettings = .init(commandPath: "", arguments: []),
         workspaceEditorDisplayOptions: WorkspaceEditorDisplayOptions = .init(),
         terminalOpenTool: OpenToolSettings = .init(commandPath: "", arguments: []),
@@ -284,6 +305,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         webBindHost: String = "0.0.0.0",
         webBindPort: Int = 3210
     ) {
+        self.appAppearanceMode = appAppearanceMode
         self.editorOpenTool = editorOpenTool
         self.workspaceEditorDisplayOptions = workspaceEditorDisplayOptions
         self.terminalOpenTool = terminalOpenTool
@@ -309,6 +331,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
+        case appAppearanceMode
         case editorOpenTool
         case workspaceEditorDisplayOptions
         case terminalOpenTool
@@ -335,6 +358,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.appAppearanceMode = try container.decodeIfPresent(AppAppearanceMode.self, forKey: .appAppearanceMode) ?? .system
         self.editorOpenTool = try container.decodeIfPresent(OpenToolSettings.self, forKey: .editorOpenTool) ?? .init(commandPath: "", arguments: [])
         self.workspaceEditorDisplayOptions = try container.decodeIfPresent(WorkspaceEditorDisplayOptions.self, forKey: .workspaceEditorDisplayOptions) ?? .init()
         self.terminalOpenTool = try container.decodeIfPresent(OpenToolSettings.self, forKey: .terminalOpenTool) ?? .init(commandPath: "", arguments: [])

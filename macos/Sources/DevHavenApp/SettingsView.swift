@@ -52,6 +52,7 @@ struct SettingsView: View {
     private let onCopyUpdateDiagnostics: () -> Void
 
     @State private var gitIdentities: [GitIdentity]
+    @State private var appAppearanceMode: AppAppearanceMode
     @State private var workspaceOpenProjectShortcut: AppMenuShortcut
     @State private var workspaceEditorDisplayOptions: WorkspaceEditorDisplayOptions
     @State private var updateChannel: UpdateChannel
@@ -91,6 +92,7 @@ struct SettingsView: View {
         self.onOpenUpdateDownloadPage = onOpenUpdateDownloadPage
         self.onCopyUpdateDiagnostics = onCopyUpdateDiagnostics
         _gitIdentities = State(initialValue: settings.gitIdentities)
+        _appAppearanceMode = State(initialValue: settings.appAppearanceMode)
         _workspaceOpenProjectShortcut = State(initialValue: settings.workspaceOpenProjectShortcut)
         _workspaceEditorDisplayOptions = State(initialValue: settings.workspaceEditorDisplayOptions)
         _updateChannel = State(initialValue: settings.updateChannel)
@@ -117,6 +119,7 @@ struct SettingsView: View {
         }
         .frame(minWidth: 980, minHeight: 720)
         .background(NativeTheme.window)
+        .preferredColorScheme(NativeTheme.preferredColorScheme(for: appAppearanceMode))
     }
 
     private var header: some View {
@@ -226,6 +229,21 @@ struct SettingsView: View {
                 HStack(spacing: 10) {
                     infoBadge(title: "当前版本", value: versionLabel)
                     infoBadge(title: "运行范围", value: "仅 macOS")
+                }
+            }
+
+            settingsCard(title: "外观", description: "为 DevHaven App 壳选择主题模式，行为类似 IDEA 的 Appearance 设置。") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Picker("主题模式", selection: $appAppearanceMode) {
+                        ForEach(AppAppearanceMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text("仅影响 DevHaven 的窗口、面板和内置编辑器外观；Ghostty 终端主题仍由其配置文件独立决定。")
+                        .font(.caption)
+                        .foregroundStyle(NativeTheme.textSecondary)
                 }
             }
 
@@ -532,6 +550,7 @@ struct SettingsView: View {
 
     private var nextSettings: AppSettings {
         AppSettings(
+            appAppearanceMode: appAppearanceMode,
             editorOpenTool: originalSettings.editorOpenTool,
             workspaceEditorDisplayOptions: workspaceEditorDisplayOptions,
             terminalOpenTool: originalSettings.terminalOpenTool,
@@ -565,6 +584,7 @@ struct SettingsView: View {
             !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !$0.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
+            || appAppearanceMode != originalSettings.appAppearanceMode
             || workspaceOpenProjectShortcut != originalSettings.workspaceOpenProjectShortcut
             || workspaceEditorDisplayOptions != originalSettings.workspaceEditorDisplayOptions
             || updateChannel != originalSettings.updateChannel
