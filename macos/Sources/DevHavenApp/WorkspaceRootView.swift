@@ -29,6 +29,8 @@ struct WorkspaceRootView: View {
                     sidebarWidth = committedWidth
                     persistSidebarWidth(committedWidth)
                 },
+                minLeadingSize: WorkspaceSidebarLayoutPolicy.minimumSidebarWidth,
+                minTrailingSize: WorkspaceSidebarLayoutPolicy.minimumWorkspaceContentWidth,
                 onEqualize: {
                     sidebarWidth = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
                     persistSidebarWidth(WorkspaceSidebarLayoutPolicy.defaultSidebarWidth)

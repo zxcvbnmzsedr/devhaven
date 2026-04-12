@@ -434,6 +434,9 @@ enum WorkspaceSidebarLayoutPolicy {
     private static let maxSidebarWidth: CGFloat = 420
     private static let minWorkspaceContentWidth: CGFloat = 520
 
+    static var minimumSidebarWidth: CGFloat { minSidebarWidth }
+    static var minimumWorkspaceContentWidth: CGFloat { minWorkspaceContentWidth }
+
     static func sidebarRatio(for width: CGFloat, totalWidth: CGFloat) -> Double {
         guard totalWidth > 0 else {
             return 0.5

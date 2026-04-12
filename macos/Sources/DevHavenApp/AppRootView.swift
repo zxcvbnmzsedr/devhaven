@@ -9,6 +9,7 @@ struct AppRootView: View {
     @ObservedObject var quitGuard: AppQuitGuard
     @Environment(\.scenePhase) private var scenePhase
     @State private var cliCoordinator: WorkspaceCLICommandCoordinator?
+    @State private var projectDetailPanelWidth: CGFloat = AppRootProjectDetailLayoutPolicy.defaultPanelWidth
 
     init(
         viewModel: NativeAppViewModel,
@@ -39,18 +40,48 @@ struct AppRootView: View {
                         .background(NativeTheme.sidebar)
                 }
 
-                primaryContent(contentVisibilityPolicy: contentVisibilityPolicy)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(NativeTheme.window)
-
-                if projectDetailPresentation.showsPersistentSidebar {
-                    ProjectDetailRootView(
-                        viewModel: viewModel,
-                        showsCloseButton: false,
-                        onClose: {}
-                    )
-                        .frame(width: 360)
+                GeometryReader { geometry in
+                    if projectDetailPresentation.showsPersistentSidebar {
+                        WorkspaceSplitView(
+                            direction: .horizontal,
+                            ratio: AppRootProjectDetailLayoutPolicy.leadingContentRatio(
+                                for: projectDetailPanelWidth,
+                                totalWidth: geometry.size.width
+                            ),
+                            onRatioChange: { ratio in
+                                projectDetailPanelWidth = AppRootProjectDetailLayoutPolicy.panelWidth(
+                                    forLeadingContentRatio: ratio,
+                                    totalWidth: geometry.size.width
+                                )
+                            },
+                            onRatioChangeEnded: { ratio in
+                                projectDetailPanelWidth = AppRootProjectDetailLayoutPolicy.panelWidth(
+                                    forLeadingContentRatio: ratio,
+                                    totalWidth: geometry.size.width
+                                )
+                            },
+                            minLeadingSize: AppRootProjectDetailLayoutPolicy.minimumContentWidth,
+                            minTrailingSize: AppRootProjectDetailLayoutPolicy.minimumPanelWidth
+                        ) {
+                            primaryContent(contentVisibilityPolicy: contentVisibilityPolicy)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                .background(NativeTheme.window)
+                        } trailing: {
+                            ProjectDetailRootView(
+                                viewModel: viewModel,
+                                showsCloseButton: false,
+                                onClose: {}
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(NativeTheme.panel)
+                        }
+                    } else {
+                        primaryContent(contentVisibilityPolicy: contentVisibilityPolicy)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(NativeTheme.window)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if projectDetailPresentation.showsDismissableOverlay {
@@ -162,6 +193,11 @@ struct AppRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             cliCoordinator?.stop()
             viewModel.flushWorkspaceRestoreSnapshotNow()
+        }
+        .onChange(of: projectDetailPresentation.showsPersistentSidebar) { _, isPersistent in
+            if isPersistent {
+                projectDetailPanelWidth = AppRootProjectDetailLayoutPolicy.clampPanelWidth(projectDetailPanelWidth)
+            }
         }
         .task {
             guard !viewModel.hasLoadedInitialData else {
@@ -507,6 +543,42 @@ struct AppRootProjectDetailPresentationPolicy: Equatable {
             showsPersistentSidebar: false,
             showsDismissableOverlay: isDetailPanelRequested
         )
+    }
+}
+
+enum AppRootProjectDetailLayoutPolicy {
+    static let defaultPanelWidth: CGFloat = 360
+    private static let minPanelWidth: CGFloat = 280
+    private static let maxPanelWidth: CGFloat = 520
+    private static let minContentWidth: CGFloat = 520
+
+    static var minimumPanelWidth: CGFloat { minPanelWidth }
+    static var minimumContentWidth: CGFloat { minContentWidth }
+
+    static func leadingContentRatio(for panelWidth: CGFloat, totalWidth: CGFloat) -> Double {
+        guard totalWidth > 0 else {
+            return 0.5
+        }
+        let clampedPanelWidth = clampPanelWidth(panelWidth, totalWidth: totalWidth)
+        return Double((totalWidth - clampedPanelWidth) / totalWidth)
+    }
+
+    static func panelWidth(forLeadingContentRatio ratio: Double, totalWidth: CGFloat) -> CGFloat {
+        guard totalWidth > 0 else {
+            return defaultPanelWidth
+        }
+        let proposedPanelWidth = totalWidth * (1 - CGFloat(ratio))
+        return clampPanelWidth(proposedPanelWidth, totalWidth: totalWidth)
+    }
+
+    static func clampPanelWidth(_ width: CGFloat, totalWidth: CGFloat? = nil) -> CGFloat {
+        let upperBound: CGFloat
+        if let totalWidth {
+            upperBound = min(maxPanelWidth, max(minPanelWidth, totalWidth - minContentWidth))
+        } else {
+            upperBound = maxPanelWidth
+        }
+        return min(max(width, minPanelWidth), upperBound)
     }
 }
 

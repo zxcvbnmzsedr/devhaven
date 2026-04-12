@@ -23,12 +23,15 @@ struct MainContentView: View {
     @State private var pendingDroppedDirectoryURLs: [URL] = []
     @FocusState private var focusedField: FocusableField?
 
-    private let listColumns = [
-        GridItem(.flexible(minimum: 220), spacing: 14),
-        GridItem(.flexible(minimum: 220), spacing: 14),
-        GridItem(.flexible(minimum: 220), spacing: 14),
-        GridItem(.flexible(minimum: 220), spacing: 14),
-    ]
+    private var listColumns: [GridItem] {
+        [
+            GridItem(
+                .adaptive(minimum: 220, maximum: 320),
+                spacing: 14,
+                alignment: .top
+            )
+        ]
+    }
 
     var body: some View {
         VStack(spacing: 0) {
