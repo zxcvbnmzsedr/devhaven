@@ -151,6 +151,13 @@ final class NativeAppViewModelWorktreeCreationTests: XCTestCase {
         let restoreStore = WorkspaceRestoreStore(homeDirectoryURL: fixture.homeURL)
         let rawTmpPath = "/tmp/devhaven-restore-canonical-\(UUID().uuidString)"
         let canonicalTmpPath = "/private\(rawTmpPath)"
+        try FileManager.default.createDirectory(
+            atPath: rawTmpPath,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(atPath: rawTmpPath)
+        }
 
         var rootProject = fixture.makeProject()
         rootProject.worktrees = [
