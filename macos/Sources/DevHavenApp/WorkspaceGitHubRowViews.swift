@@ -15,6 +15,18 @@ func gitHubAbsoluteDateText(_ date: Date) -> String {
     return formatter.string(from: date)
 }
 
+func gitHubActorSummaryText(_ actor: WorkspaceGitHubActor?) -> String? {
+    guard let actor else {
+        return nil
+    }
+    if let login = actor.login?.trimmingCharacters(in: .whitespacesAndNewlines),
+       !login.isEmpty {
+        return "@\(login)"
+    }
+    let displayName = actor.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    return displayName.isEmpty ? nil : displayName
+}
+
 func gitHubLabelColor(_ hex: String) -> Color {
     let sanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
     guard sanitized.count == 6, let value = Int(sanitized, radix: 16) else {
@@ -193,6 +205,22 @@ func gitHubPullStateColor(_ state: WorkspaceGitHubPullState, isDraft: Bool) -> C
     }
 }
 
+func gitHubPullStateSymbolName(_ state: WorkspaceGitHubPullState, isDraft: Bool) -> String {
+    if isDraft {
+        return "pencil.circle.fill"
+    }
+    switch state {
+    case .open:
+        return "arrow.triangle.pull"
+    case .closed:
+        return "xmark.circle.fill"
+    case .merged:
+        return "arrow.triangle.branch"
+    case .unknown:
+        return "circle.fill"
+    }
+}
+
 func gitHubIssueStateColor(_ state: WorkspaceGitHubIssueState) -> Color {
     switch state {
     case .open:
@@ -201,6 +229,17 @@ func gitHubIssueStateColor(_ state: WorkspaceGitHubIssueState) -> Color {
         return .purple
     case .unknown:
         return NativeTheme.textSecondary
+    }
+}
+
+func gitHubIssueStateSymbolName(_ state: WorkspaceGitHubIssueState) -> String {
+    switch state {
+    case .open:
+        return "exclamationmark.circle.fill"
+    case .closed:
+        return "checkmark.circle.fill"
+    case .unknown:
+        return "circle.fill"
     }
 }
 
@@ -264,58 +303,79 @@ struct WorkspaceGitHubPullRowView: View {
 
     var body: some View {
         Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    Circle()
-                        .fill(gitHubPullStateColor(pull.state, isDraft: pull.isDraft))
-                        .frame(width: 9, height: 9)
-                        .padding(.top, 5)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: gitHubPullStateSymbolName(pull.state, isDraft: pull.isDraft))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(gitHubPullStateColor(pull.state, isDraft: pull.isDraft))
+                    .padding(.top, 2)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(pull.title)
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(NativeTheme.textPrimary)
                             .lineLimit(2)
 
-                        Text("#\(pull.number) · \(pull.headRefName) -> \(pull.baseRefName)")
+                        Text("#\(pull.number)")
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
                             .lineLimit(1)
                     }
-                    Spacer(minLength: 0)
-                }
 
-                HStack(spacing: 8) {
-                    if let author = pull.author {
-                        Text(author.login ?? author.displayName)
-                            .font(.caption)
-                            .foregroundStyle(NativeTheme.textSecondary)
-                    }
-                    Text(gitHubPullStateTitle(pull.state, isDraft: pull.isDraft))
+                    Text("\(pull.headRefName) -> \(pull.baseRefName)")
                         .font(.caption)
                         .foregroundStyle(NativeTheme.textSecondary)
-                    Text(gitHubRelativeDateText(pull.updatedAt))
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    Spacer(minLength: 0)
-                    if pull.commentsCount > 0 {
-                        Text("\(pull.commentsCount) 评论")
+                        .lineLimit(1)
+
+                    WorkspaceGitHubLabelStripView(labels: pull.labels, limit: 4)
+
+                    HStack(spacing: 8) {
+                        if let authorText = gitHubActorSummaryText(pull.author) {
+                            Text(authorText)
+                                .font(.caption)
+                                .foregroundStyle(NativeTheme.textSecondary)
+                        }
+
+                        Text(gitHubPullStateTitle(pull.state, isDraft: pull.isDraft))
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
+
+                        Text("updated \(gitHubRelativeDateText(pull.updatedAt))")
+                            .font(.caption)
+                            .foregroundStyle(NativeTheme.textSecondary)
+
+                        if pull.commentsCount > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "text.bubble")
+                                    .font(.system(size: 11, weight: .medium))
+                                Text("\(pull.commentsCount)")
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(NativeTheme.textSecondary)
+                        }
+
+                        Spacer(minLength: 0)
                     }
                 }
 
-                WorkspaceGitHubLabelStripView(labels: pull.labels)
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? NativeTheme.accent.opacity(0.14) : NativeTheme.surface)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(isSelected ? NativeTheme.accent.opacity(0.75) : NativeTheme.border, lineWidth: 1)
-            )
-            .clipShape(.rect(cornerRadius: 10))
+            .background(isSelected ? NativeTheme.accent.opacity(0.08) : NativeTheme.surface)
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Rectangle()
+                        .fill(NativeTheme.accent)
+                        .frame(width: 3)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(NativeTheme.border)
+                    .frame(height: 1)
+            }
         }
         .buttonStyle(.plain)
     }
@@ -328,14 +388,14 @@ struct WorkspaceGitHubIssueRowView: View {
 
     var body: some View {
         Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    Circle()
-                        .fill(gitHubIssueStateColor(issue.state))
-                        .frame(width: 9, height: 9)
-                        .padding(.top, 5)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: gitHubIssueStateSymbolName(issue.state))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(gitHubIssueStateColor(issue.state))
+                    .padding(.top, 2)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(issue.title)
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(NativeTheme.textPrimary)
@@ -344,41 +404,58 @@ struct WorkspaceGitHubIssueRowView: View {
                         Text("#\(issue.number)")
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
+                            .lineLimit(1)
                     }
-                    Spacer(minLength: 0)
-                }
 
-                HStack(spacing: 8) {
-                    if let author = issue.author {
-                        Text(author.login ?? author.displayName)
+                    WorkspaceGitHubLabelStripView(labels: issue.labels, limit: 4)
+
+                    HStack(spacing: 8) {
+                        if let authorText = gitHubActorSummaryText(issue.author) {
+                            Text(authorText)
+                                .font(.caption)
+                                .foregroundStyle(NativeTheme.textSecondary)
+                        }
+
+                        Text(gitHubIssueStateTitle(issue.state, reason: issue.stateReason))
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
-                    }
-                    Text(gitHubIssueStateTitle(issue.state, reason: issue.stateReason))
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    Text(gitHubRelativeDateText(issue.updatedAt))
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    Spacer(minLength: 0)
-                    if issue.commentsCount > 0 {
-                        Text("\(issue.commentsCount) 评论")
+
+                        Text("updated \(gitHubRelativeDateText(issue.updatedAt))")
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
+
+                        if issue.commentsCount > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "text.bubble")
+                                    .font(.system(size: 11, weight: .medium))
+                                Text("\(issue.commentsCount)")
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(NativeTheme.textSecondary)
+                        }
+
+                        Spacer(minLength: 0)
                     }
                 }
 
-                WorkspaceGitHubLabelStripView(labels: issue.labels)
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? NativeTheme.accent.opacity(0.14) : NativeTheme.surface)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(isSelected ? NativeTheme.accent.opacity(0.75) : NativeTheme.border, lineWidth: 1)
-            )
-            .clipShape(.rect(cornerRadius: 10))
+            .background(isSelected ? NativeTheme.accent.opacity(0.08) : NativeTheme.surface)
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Rectangle()
+                        .fill(NativeTheme.accent)
+                        .frame(width: 3)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(NativeTheme.border)
+                    .frame(height: 1)
+            }
         }
         .buttonStyle(.plain)
     }
@@ -391,14 +468,14 @@ struct WorkspaceGitHubReviewRowView: View {
 
     var body: some View {
         Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    Circle()
-                        .fill(gitHubPullStateColor(review.state, isDraft: review.isDraft))
-                        .frame(width: 9, height: 9)
-                        .padding(.top, 5)
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: gitHubPullStateSymbolName(review.state, isDraft: review.isDraft))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(gitHubPullStateColor(review.state, isDraft: review.isDraft))
+                    .padding(.top, 2)
 
-                    VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(review.title)
                             .font(.callout.weight(.semibold))
                             .foregroundStyle(NativeTheme.textPrimary)
@@ -407,41 +484,58 @@ struct WorkspaceGitHubReviewRowView: View {
                         Text("#\(review.number)")
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
+                            .lineLimit(1)
                     }
-                    Spacer(minLength: 0)
-                }
 
-                HStack(spacing: 8) {
-                    if let author = review.author {
-                        Text(author.login ?? author.displayName)
+                    WorkspaceGitHubLabelStripView(labels: review.labels, limit: 4)
+
+                    HStack(spacing: 8) {
+                        if let authorText = gitHubActorSummaryText(review.author) {
+                            Text(authorText)
+                                .font(.caption)
+                                .foregroundStyle(NativeTheme.textSecondary)
+                        }
+
+                        Text("Review requested")
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
-                    }
-                    Text(gitHubPullStateTitle(review.state, isDraft: review.isDraft))
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    Text(gitHubRelativeDateText(review.updatedAt))
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    Spacer(minLength: 0)
-                    if review.commentsCount > 0 {
-                        Text("\(review.commentsCount) 评论")
+
+                        Text("updated \(gitHubRelativeDateText(review.updatedAt))")
                             .font(.caption)
                             .foregroundStyle(NativeTheme.textSecondary)
+
+                        if review.commentsCount > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "text.bubble")
+                                    .font(.system(size: 11, weight: .medium))
+                                Text("\(review.commentsCount)")
+                                    .font(.caption)
+                            }
+                            .foregroundStyle(NativeTheme.textSecondary)
+                        }
+
+                        Spacer(minLength: 0)
                     }
                 }
 
-                WorkspaceGitHubLabelStripView(labels: review.labels)
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? NativeTheme.accent.opacity(0.14) : NativeTheme.surface)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(isSelected ? NativeTheme.accent.opacity(0.75) : NativeTheme.border, lineWidth: 1)
-            )
-            .clipShape(.rect(cornerRadius: 10))
+            .background(isSelected ? NativeTheme.accent.opacity(0.08) : NativeTheme.surface)
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Rectangle()
+                        .fill(NativeTheme.accent)
+                        .frame(width: 3)
+                }
+            }
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(NativeTheme.border)
+                    .frame(height: 1)
+            }
         }
         .buttonStyle(.plain)
     }

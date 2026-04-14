@@ -23,39 +23,80 @@ struct WorkspaceGitHubReviewsView: View {
     }
 
     private var listPane: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if viewModel.reviewRequests.isEmpty, !viewModel.isLoading {
-                    ContentUnavailableView(
-                        "暂无 Reviews",
-                        systemImage: "person.badge.key",
-                        description: Text("当前仓库没有请求你评审的 Pull Request。")
-                    )
-                    .foregroundStyle(NativeTheme.textSecondary)
-                    .frame(maxWidth: .infinity, minHeight: 240)
-                } else {
-                    ForEach(viewModel.reviewRequests) { review in
-                        WorkspaceGitHubReviewRowView(
-                            review: review,
-                            isSelected: viewModel.selectedPullNumber == review.number,
-                            onSelect: { viewModel.selectPull(number: review.number) }
+        VStack(spacing: 0) {
+            reviewListHeader
+
+            Rectangle()
+                .fill(NativeTheme.border)
+                .frame(height: 1)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if viewModel.reviewRequests.isEmpty, !viewModel.isLoading {
+                        ContentUnavailableView(
+                            "暂无 Reviews",
+                            systemImage: "person.badge.key",
+                            description: Text("当前仓库没有请求你评审的 Pull Request。")
                         )
-                        .contextMenu {
-                            Button("在 GitHub 中打开") {
-                                openURL(review.url)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                        .frame(maxWidth: .infinity, minHeight: 240)
+                    } else {
+                        ForEach(viewModel.reviewRequests) { review in
+                            WorkspaceGitHubReviewRowView(
+                                review: review,
+                                isSelected: viewModel.selectedPullNumber == review.number,
+                                onSelect: { viewModel.selectPull(number: review.number) }
+                            )
+                            .contextMenu {
+                                Button("在 GitHub 中打开") {
+                                    openURL(review.url)
+                                }
                             }
                         }
                     }
                 }
             }
-            .padding(12)
         }
-        .background(NativeTheme.sidebar)
+        .background(NativeTheme.surface)
         .overlay {
             if viewModel.isLoading {
                 WorkspaceGitHubListLoadingOverlay(title: "正在刷新 Reviews…")
             }
         }
+    }
+
+    private var reviewListHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Text("Reviews")
+                    .font(.headline)
+                    .foregroundStyle(NativeTheme.textPrimary)
+
+                Text("\(viewModel.reviewRequests.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NativeTheme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(NativeTheme.elevated)
+                    .clipShape(.capsule)
+
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                filterBadge(title: viewModel.reviewFilter.state.title, tint: reviewFilterTint)
+                filterBadge(title: viewModel.reviewFilter.scope.title, tint: NativeTheme.textSecondary)
+
+                if let searchText = trimmedReviewSearchText {
+                    filterBadge(title: "搜索: \(searchText)", tint: NativeTheme.textSecondary)
+                }
+
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(NativeTheme.sidebar)
     }
 
     @ViewBuilder
@@ -96,5 +137,33 @@ struct WorkspaceGitHubReviewsView: View {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    private var reviewFilterTint: Color {
+        switch viewModel.reviewFilter.state {
+        case .open:
+            return .green
+        case .closed:
+            return .purple
+        }
+    }
+
+    private var trimmedReviewSearchText: String? {
+        let trimmed = viewModel.reviewFilter.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func filterBadge(title: String, tint: Color) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.12))
+            .overlay(
+                Capsule()
+                    .stroke(tint.opacity(0.28), lineWidth: 1)
+            )
+            .clipShape(.capsule)
     }
 }

@@ -23,39 +23,79 @@ struct WorkspaceGitHubPullsView: View {
     }
 
     private var listPane: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if viewModel.pulls.isEmpty, !viewModel.isLoading {
-                    ContentUnavailableView(
-                        "暂无 Pull Requests",
-                        systemImage: "arrow.triangle.pull",
-                        description: Text("当前仓库没有符合条件的 Pull Request。")
-                    )
-                    .foregroundStyle(NativeTheme.textSecondary)
-                    .frame(maxWidth: .infinity, minHeight: 240)
-                } else {
-                    ForEach(viewModel.pulls) { pull in
-                        WorkspaceGitHubPullRowView(
-                            pull: pull,
-                            isSelected: viewModel.selectedPullNumber == pull.number,
-                            onSelect: { viewModel.selectPull(number: pull.number) }
+        VStack(spacing: 0) {
+            pullListHeader
+
+            Rectangle()
+                .fill(NativeTheme.border)
+                .frame(height: 1)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if viewModel.pulls.isEmpty, !viewModel.isLoading {
+                        ContentUnavailableView(
+                            "暂无 Pull Requests",
+                            systemImage: "arrow.triangle.pull",
+                            description: Text("当前仓库没有符合条件的 Pull Request。")
                         )
-                        .contextMenu {
-                            Button("在 GitHub 中打开") {
-                                openURL(pull.url)
+                        .foregroundStyle(NativeTheme.textSecondary)
+                        .frame(maxWidth: .infinity, minHeight: 240)
+                    } else {
+                        ForEach(viewModel.pulls) { pull in
+                            WorkspaceGitHubPullRowView(
+                                pull: pull,
+                                isSelected: viewModel.selectedPullNumber == pull.number,
+                                onSelect: { viewModel.selectPull(number: pull.number) }
+                            )
+                            .contextMenu {
+                                Button("在 GitHub 中打开") {
+                                    openURL(pull.url)
+                                }
                             }
                         }
                     }
                 }
             }
-            .padding(12)
         }
-        .background(NativeTheme.sidebar)
+        .background(NativeTheme.surface)
         .overlay {
             if viewModel.isLoading {
                 WorkspaceGitHubListLoadingOverlay(title: "正在刷新 Pull Requests…")
             }
         }
+    }
+
+    private var pullListHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Text("Pull requests")
+                    .font(.headline)
+                    .foregroundStyle(NativeTheme.textPrimary)
+
+                Text("\(viewModel.pulls.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(NativeTheme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(NativeTheme.elevated)
+                    .clipShape(.capsule)
+
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                filterBadge(title: viewModel.pullFilter.state.title, tint: pullFilterTint)
+
+                if let searchText = trimmedPullSearchText {
+                    filterBadge(title: "搜索: \(searchText)", tint: NativeTheme.textSecondary)
+                }
+
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(NativeTheme.sidebar)
     }
 
     @ViewBuilder
@@ -96,5 +136,37 @@ struct WorkspaceGitHubPullsView: View {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    private var pullFilterTint: Color {
+        switch viewModel.pullFilter.state {
+        case .open:
+            return .green
+        case .closed:
+            return .red
+        case .merged:
+            return .purple
+        case .all:
+            return NativeTheme.textSecondary
+        }
+    }
+
+    private var trimmedPullSearchText: String? {
+        let trimmed = viewModel.pullFilter.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func filterBadge(title: String, tint: Color) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(tint.opacity(0.12))
+            .overlay(
+                Capsule()
+                    .stroke(tint.opacity(0.28), lineWidth: 1)
+            )
+            .clipShape(.capsule)
     }
 }
