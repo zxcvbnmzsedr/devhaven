@@ -145,6 +145,25 @@ struct WorkspaceShellView: View {
     }
 
     @ViewBuilder
+    private var gitHubToolWindowContent: some View {
+        if isActiveQuickTerminalSession {
+            gitModeEmptyState(
+                title: "快速终端暂不支持 GitHub 模式",
+                systemImage: "bolt.horizontal.circle",
+                description: "请切换到一个真实项目工作区后再查看 GitHub 协作信息。"
+            )
+        } else if let gitHubViewModel = viewModel.activeWorkspaceGitHubViewModel {
+            WorkspaceGitHubRootView(viewModel: gitHubViewModel)
+        } else {
+            gitModeEmptyState(
+                title: "GitHub 面板尚未就绪",
+                systemImage: "tray",
+                description: "请确认当前项目是 GitHub 仓库，并且本机 gh 已完成登录。"
+            )
+        }
+    }
+
+    @ViewBuilder
     private func topWorkspaceContent(totalWidth: CGFloat) -> some View {
         if viewModel.workspaceSideToolWindowState.isVisible,
            viewModel.workspaceSideToolWindowState.activeKind != nil {
@@ -165,7 +184,7 @@ struct WorkspaceShellView: View {
                         WorkspaceProjectToolWindowHostView(viewModel: viewModel)
                     case .commit:
                         WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)
-                    case .git, .none:
+                    case .git, .github, .none:
                         EmptyView()
                     }
                 }
@@ -200,17 +219,25 @@ struct WorkspaceShellView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } trailing: {
                 Group {
-                    if viewModel.workspaceBottomToolWindowState.activeKind == .git {
+                    switch viewModel.workspaceBottomToolWindowState.activeKind {
+                    case .git:
                         gitToolWindowContent
-                    } else {
+                    case .github:
+                        gitHubToolWindowContent
+                    default:
                         EmptyView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if viewModel.workspaceBottomToolWindowState.activeKind == .git {
+                    switch viewModel.workspaceBottomToolWindowState.activeKind {
+                    case .git:
                         viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.git))
+                    case .github:
+                        viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.github))
+                    default:
+                        break
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

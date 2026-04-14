@@ -148,6 +148,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let worktreeService: any NativeWorktreeServicing
     @ObservationIgnored private let worktreeEnvironmentService: any NativeWorktreeEnvironmentServicing
     @ObservationIgnored private let gitRepositoryService: NativeGitRepositoryService
+    @ObservationIgnored private let gitHubRepositoryService: NativeGitHubRepositoryService
     @ObservationIgnored private let workspaceFileSystemService: WorkspaceFileSystemService
     @ObservationIgnored private let agentSignalStore: WorkspaceAgentSignalStore
     @ObservationIgnored private let runManager: any WorkspaceRunManaging
@@ -311,6 +312,7 @@ public final class NativeAppViewModel {
     }
     private var workspaceCommitViewModels: [String: WorkspaceCommitViewModel]
     private var workspaceGitViewModels: [String: WorkspaceGitViewModel]
+    private var workspaceGitHubViewModels: [String: WorkspaceGitHubViewModel]
     private var workspaceDiffTabViewModels: [String: WorkspaceDiffTabViewModel]
     public private(set) var workspaceSidebarProjectionRevision: Int
     public private(set) var codexDisplayCandidatesRevision: Int
@@ -353,6 +355,7 @@ public final class NativeAppViewModel {
         worktreeService: (any NativeWorktreeServicing)? = nil,
         worktreeEnvironmentService: (any NativeWorktreeEnvironmentServicing)? = nil,
         gitRepositoryService: NativeGitRepositoryService = NativeGitRepositoryService(),
+        gitHubRepositoryService: NativeGitHubRepositoryService = NativeGitHubRepositoryService(),
         workspaceFileSystemService: WorkspaceFileSystemService = WorkspaceFileSystemService(),
         agentSignalStore: WorkspaceAgentSignalStore? = nil,
         runManager: (any WorkspaceRunManaging)? = nil,
@@ -372,6 +375,7 @@ public final class NativeAppViewModel {
         self.worktreeService = worktreeService ?? NativeGitWorktreeService()
         self.worktreeEnvironmentService = worktreeEnvironmentService ?? NativeWorktreeEnvironmentService()
         self.gitRepositoryService = gitRepositoryService
+        self.gitHubRepositoryService = gitHubRepositoryService
         self.workspaceFileSystemService = workspaceFileSystemService
         self.agentSignalStore = agentSignalStore ?? WorkspaceAgentSignalStore(
             baseDirectoryURL: store.agentStatusSessionsDirectoryURL
@@ -412,6 +416,7 @@ public final class NativeAppViewModel {
         self.workspaceAlignmentStatusByKey = [:]
         self.workspaceCommitViewModels = [:]
         self.workspaceGitViewModels = [:]
+        self.workspaceGitHubViewModels = [:]
         self.workspaceDiffTabViewModels = [:]
         self.workspaceSidebarProjectionRevision = 0
         self.codexDisplayCandidatesRevision = 0
@@ -1401,6 +1406,13 @@ public final class NativeAppViewModel {
         return workspaceGitViewModels[rootProjectPath]
     }
 
+    public var activeWorkspaceGitHubViewModel: WorkspaceGitHubViewModel? {
+        guard let rootProjectPath = activeWorkspaceRootProjectPath else {
+            return nil
+        }
+        return workspaceGitHubViewModels[rootProjectPath]
+    }
+
     public var activeWorkspaceState: WorkspaceSessionState? {
         activeWorkspaceController?.sessionState
     }
@@ -2327,6 +2339,25 @@ public final class NativeAppViewModel {
         workspaceCommitViewModels[rootProject.path] = WorkspaceCommitViewModel(
             repositoryContext: repositoryContext,
             client: .live(service: gitRepositoryService)
+        )
+    }
+
+    public func prepareActiveWorkspaceGitHubViewModel() {
+        guard let rootProject = activeWorkspaceRootProject,
+              rootProject.isGitRepository,
+              let repositoryContext = activeWorkspaceGitRepositoryContext
+        else {
+            return
+        }
+
+        if let existing = workspaceGitHubViewModels[rootProject.path] {
+            existing.updateRepositoryContext(repositoryContext)
+            return
+        }
+
+        workspaceGitHubViewModels[rootProject.path] = WorkspaceGitHubViewModel(
+            repositoryContext: repositoryContext,
+            client: .live(service: gitHubRepositoryService)
         )
     }
 
@@ -3665,6 +3696,8 @@ public final class NativeAppViewModel {
                 prepareActiveWorkspaceCommitViewModel()
             case .git:
                 prepareActiveWorkspaceGitViewModel()
+            case .github:
+                prepareActiveWorkspaceGitHubViewModel()
             }
         }
     }
