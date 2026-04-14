@@ -34,6 +34,7 @@ public/wasm/
 src/terminal/
 macos/Vendor/GhosttyResources/
 macos/Vendor/GhosttyKit.xcframework/
+macos/Vendor/CodeEditPackages/
 
 # Serena local cache
 .serena/

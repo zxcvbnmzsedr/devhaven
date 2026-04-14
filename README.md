@@ -93,10 +93,13 @@ bash macos/scripts/setup-ghostty-framework.sh --source /path/to/ghostty --skip-b
 # 3. Prepare Sparkle vendor
 bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor
 
-# 4. Run tests
+# 4. Prepare CodeEdit package vendor
+bash macos/scripts/setup-codeedit-packages.sh --ensure-worktree-vendor
+
+# 5. Run tests
 swift test --package-path macos
 
-# 5. Build release app
+# 6. Build release app
 ./release
 ```
 
@@ -116,7 +119,7 @@ swift test --package-path macos
 ./dev --dry-run
 ```
 
-> `./dev` auto-syncs the vendor directory from a sibling worktree if available, then starts `swift run --package-path macos DevHavenApp`.
+> `./dev` auto-syncs or prepares the required vendor content (Ghostty / Sparkle / CodeEditPackages) before starting `swift run --package-path macos DevHavenApp`.
 
 ### Terminal Config
 

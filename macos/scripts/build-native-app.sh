@@ -231,6 +231,9 @@ bash "$SCRIPT_DIR/setup-ghostty-framework.sh" --ensure-worktree-vendor
 log "确保 Sparkle vendor 可用"
 bash "$SCRIPT_DIR/setup-sparkle-framework.sh" --ensure-worktree-vendor
 
+log "确保 CodeEditPackages vendor 可用"
+bash "$SCRIPT_DIR/setup-codeedit-packages.sh" --ensure-worktree-vendor
+
 log "开始构建 Swift 原生版（configuration=${CONFIGURATION}${SWIFT_TRIPLE:+, triple=$SWIFT_TRIPLE}）"
 swift build "${SWIFT_BUILD_ARGS[@]}"
 swift build "${SWIFT_BUILD_ARGS[@]}" --product DevHavenCLI

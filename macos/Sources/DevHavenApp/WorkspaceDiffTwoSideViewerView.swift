@@ -6,10 +6,13 @@ struct WorkspaceDiffTwoSideViewerView: View {
     let document: WorkspaceDiffCompareDocument
     let paneDescriptors: [WorkspaceDiffPaneDescriptor]
     let selectedDifference: WorkspaceDiffDifferenceAnchor?
+    let displayOptions: WorkspaceEditorDisplayOptions
 
     @State private var selectedCompareBlockID: String?
     @State private var scrollSyncState = WorkspaceTextEditorScrollSyncState()
     @State private var scrollRequestState = WorkspaceTextEditorScrollRequestState()
+    @State private var leftPaneBridge = WorkspaceCodeEditEditorBridge()
+    @State private var rightPaneBridge = WorkspaceCodeEditEditorBridge()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -92,17 +95,18 @@ struct WorkspaceDiffTwoSideViewerView: View {
         VStack(spacing: 0) {
             WorkspaceDiffPaneHeaderView(descriptor: paneDescriptor(for: role, fallbackTitle: pane.title, fallbackPath: pane.path))
 
-            WorkspaceTextEditorView(
-                editorID: editorID,
+            WorkspaceCodeEditEditorView(
+                filePath: pane.path ?? pane.title,
                 text: text,
                 isEditable: pane.isEditable,
+                shouldRequestFocus: false,
+                displayOptions: displayOptions,
+                bridge: bridge(for: role),
+                editorID: editorID,
                 highlights: pane.highlights,
                 inlineHighlights: pane.inlineHighlights,
                 scrollSyncState: $scrollSyncState,
-                scrollRequestState: $scrollRequestState,
-                decorationRefreshPolicy: pane.isEditable
-                    ? .debounced(nanoseconds: 180_000_000)
-                    : .immediate
+                scrollRequestState: $scrollRequestState
             )
         }
         .overlay {
@@ -132,6 +136,17 @@ struct WorkspaceDiffTwoSideViewerView: View {
             role: role,
             metadata: WorkspaceDiffPaneMetadata(title: fallbackTitle, path: fallbackPath)
         )
+    }
+
+    private func bridge(for role: WorkspaceDiffPaneHeaderRole) -> WorkspaceCodeEditEditorBridge {
+        switch role {
+        case .left:
+            return leftPaneBridge
+        case .right:
+            return rightPaneBridge
+        default:
+            return rightPaneBridge
+        }
     }
 
     private func syncSelection(with selectedDifference: WorkspaceDiffDifferenceAnchor?) {

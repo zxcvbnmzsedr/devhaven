@@ -3,6 +3,7 @@ import DevHavenCore
 
 struct WorkspaceDiffTabView: View {
     @Bindable var viewModel: WorkspaceDiffTabViewModel
+    let displayOptions: WorkspaceEditorDisplayOptions
 
     var body: some View {
         VStack(spacing: 0) {
@@ -112,7 +113,8 @@ struct WorkspaceDiffTabView: View {
                         viewModel: viewModel,
                         document: compareDocument,
                         paneDescriptors: viewModel.viewerDescriptor?.paneDescriptors ?? [],
-                        selectedDifference: viewModel.viewerDescriptor?.selectedDifference
+                        selectedDifference: viewModel.viewerDescriptor?.selectedDifference,
+                        displayOptions: displayOptions
                     )
                 }
             case let .merge(mergeDocument):
@@ -120,7 +122,8 @@ struct WorkspaceDiffTabView: View {
                     viewModel: viewModel,
                     document: mergeDocument,
                     paneDescriptors: viewModel.viewerDescriptor?.paneDescriptors ?? [],
-                    selectedDifference: viewModel.viewerDescriptor?.selectedDifference
+                    selectedDifference: viewModel.viewerDescriptor?.selectedDifference,
+                    displayOptions: displayOptions
                 )
             }
         }

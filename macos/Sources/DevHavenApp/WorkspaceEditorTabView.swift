@@ -1,79 +1,20 @@
 import SwiftUI
 import DevHavenCore
 
-struct WorkspaceEditorSearchBarState: Equatable {
-    var query = ""
-    var replacement = ""
-    var isPresented = false
-    var showsReplace = false
-    var isCaseSensitive = false
-    var matchesWholeWords = false
-    var usesRegularExpression = false
-    var preservesReplacementCase = false
-
-    var effectiveQuery: String {
-        isPresented ? query : ""
-    }
-}
-
-private extension WorkspaceEditorSearchBarState {
-    init(runtimeState: WorkspaceEditorSearchPresentationState) {
-        self.init(
-            query: runtimeState.query,
-            replacement: runtimeState.replacement,
-            isPresented: runtimeState.isPresented,
-            showsReplace: runtimeState.showsReplace,
-            isCaseSensitive: runtimeState.isCaseSensitive,
-            matchesWholeWords: runtimeState.matchesWholeWords,
-            usesRegularExpression: runtimeState.usesRegularExpression,
-            preservesReplacementCase: runtimeState.preservesReplacementCase
-        )
-    }
-
-    var runtimeState: WorkspaceEditorSearchPresentationState {
-        WorkspaceEditorSearchPresentationState(
-            query: query,
-            replacement: replacement,
-            isPresented: isPresented,
-            showsReplace: showsReplace,
-            isCaseSensitive: isCaseSensitive,
-            matchesWholeWords: matchesWholeWords,
-            usesRegularExpression: usesRegularExpression,
-            preservesReplacementCase: preservesReplacementCase
-        )
-    }
-}
-
 struct WorkspaceEditorTabView: View {
     @Bindable var viewModel: NativeAppViewModel
     let projectPath: String
     let tabID: String
 
     @State private var editorCommandRouter = WorkspaceEditorCommandRouter()
-    @State private var searchBarState = WorkspaceEditorSearchBarState()
-    @State private var searchRequestState = WorkspaceTextEditorSearchRequestState()
-    @State private var searchSessionState = WorkspaceTextEditorSearchSessionState()
-    @State private var selectedSearchSeed: String?
+    @State private var codeEditBridge = WorkspaceCodeEditEditorBridge()
     @State private var goToLineDraft = ""
     @State private var isGoToLinePresented = false
-
-    init(viewModel: NativeAppViewModel, projectPath: String, tabID: String) {
-        self.viewModel = viewModel
-        self.projectPath = projectPath
-        self.tabID = tabID
-
-        let session = viewModel.workspaceEditorRuntimeSession(for: projectPath, tabID: tabID)
-        _searchBarState = State(initialValue: WorkspaceEditorSearchBarState(runtimeState: session.searchPresentation))
-    }
 
     var body: some View {
         if let tab = viewModel.workspaceEditorTabState(for: projectPath, tabID: tabID) {
             VStack(spacing: 0) {
                 header(for: tab)
-                if tab.kind == .text, searchBarState.isPresented {
-                    Divider()
-                    searchBar(for: tab)
-                }
                 Divider()
                 content(for: tab)
             }
@@ -86,16 +27,8 @@ struct WorkspaceEditorTabView: View {
             )
             .task(id: tabID) {
                 syncEditorCommandRouter()
-                restoreEditorSessionIfNeeded()
             }
             .onChange(of: tab.kind) { _, _ in
-                syncEditorCommandRouter()
-            }
-            .onChange(of: searchBarState) { _, nextValue in
-                persistEditorSession(searchBarState: nextValue)
-                syncEditorCommandRouter()
-            }
-            .onChange(of: selectedSearchSeed) { _, _ in
                 syncEditorCommandRouter()
             }
             .sheet(isPresented: $isGoToLinePresented) {
@@ -121,8 +54,8 @@ struct WorkspaceEditorTabView: View {
         } else {
             switch tab.kind {
             case .text:
-                WorkspaceTextEditorView(
-                    editorID: "workspace-editor-\(tab.id)",
+                WorkspaceCodeEditEditorView(
+                    filePath: tab.filePath,
                     text: Binding(
                         get: {
                             viewModel.workspaceEditorTabState(for: projectPath, tabID: tabID)?.text ?? tab.text
@@ -134,14 +67,7 @@ struct WorkspaceEditorTabView: View {
                     isEditable: tab.isEditable,
                     shouldRequestFocus: viewModel.workspaceFocusedArea == .editorTab(tabID),
                     displayOptions: viewModel.workspaceEditorDisplayOptions,
-                    syntaxStyle: WorkspaceEditorSyntaxStyle.infer(fromFilePath: tab.filePath),
-                    searchQuery: searchBarState.effectiveQuery,
-                    isSearchCaseSensitive: searchBarState.isCaseSensitive,
-                    matchesSearchWholeWords: searchBarState.matchesWholeWords,
-                    usesRegularExpressionInSearch: searchBarState.usesRegularExpression,
-                    searchRequestState: $searchRequestState,
-                    searchSessionState: $searchSessionState,
-                    selectionText: $selectedSearchSeed
+                    bridge: codeEditBridge
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .binary:
@@ -208,13 +134,13 @@ struct WorkspaceEditorTabView: View {
             Spacer(minLength: 0)
 
             Button("查找") {
-                presentSearch(replace: false)
+                codeEditBridge.showFindPanel()
             }
             .buttonStyle(.borderless)
             .disabled(tab.kind != .text)
 
             Button("替换") {
-                presentSearch(replace: true)
+                codeEditBridge.showReplacePanel()
             }
             .buttonStyle(.borderless)
             .disabled(tab.kind != .text || !tab.isEditable)
@@ -242,118 +168,6 @@ struct WorkspaceEditorTabView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(NativeTheme.window)
-    }
-
-    private func searchBar(for tab: WorkspaceEditorTabState) -> some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(NativeTheme.textSecondary)
-                TextField("查找", text: $searchBarState.query)
-                    .textFieldStyle(.plain)
-                    .font(.callout.monospaced())
-                    .onSubmit {
-                        issueSearchRequest(.findNext)
-                    }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(NativeTheme.surface)
-            .clipShape(.rect(cornerRadius: 10))
-
-            if searchBarState.showsReplace {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.left.arrow.right")
-                        .foregroundStyle(NativeTheme.textSecondary)
-                    TextField("替换", text: $searchBarState.replacement)
-                        .textFieldStyle(.plain)
-                        .font(.callout.monospaced())
-                        .onSubmit {
-                            issueSearchRequest(.replaceCurrent)
-                        }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(NativeTheme.surface)
-                .clipShape(.rect(cornerRadius: 10))
-            }
-
-            Toggle(isOn: $searchBarState.isCaseSensitive) {
-                Text("区分大小写")
-                    .font(.caption)
-                    .foregroundStyle(NativeTheme.textSecondary)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .fixedSize()
-
-            Toggle(isOn: $searchBarState.matchesWholeWords) {
-                Text("全词")
-                    .font(.caption)
-                    .foregroundStyle(NativeTheme.textSecondary)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .fixedSize()
-
-            Toggle(isOn: $searchBarState.usesRegularExpression) {
-                Text("正则")
-                    .font(.caption)
-                    .foregroundStyle(NativeTheme.textSecondary)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .fixedSize()
-
-            if searchBarState.showsReplace {
-                Toggle(isOn: $searchBarState.preservesReplacementCase) {
-                    Text("保留大小写")
-                        .font(.caption)
-                        .foregroundStyle(NativeTheme.textSecondary)
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .fixedSize()
-            }
-
-            Spacer(minLength: 0)
-
-            searchStatusView
-
-            searchBarButton("chevron.up", title: "上一处") {
-                issueSearchRequest(.findPrevious)
-            }
-            .disabled(searchBarState.query.isEmpty)
-
-            searchBarButton("chevron.down", title: "下一处") {
-                issueSearchRequest(.findNext)
-            }
-            .disabled(searchBarState.query.isEmpty)
-
-            if searchBarState.showsReplace {
-                searchBarButton("arrow.triangle.2.circlepath", title: "替换当前") {
-                    issueSearchRequest(.replaceCurrent)
-                }
-                .disabled(searchBarState.query.isEmpty || !tab.isEditable)
-
-                searchBarButton("text.badge.checkmark", title: "全部替换") {
-                    issueSearchRequest(.replaceAll)
-                }
-                .disabled(searchBarState.query.isEmpty || !tab.isEditable)
-            }
-
-            searchBarButton(searchBarState.showsReplace ? "text.magnifyingglass" : "arrow.left.arrow.right", title: searchBarState.showsReplace ? "仅查找" : "切换替换") {
-                searchBarState.showsReplace.toggle()
-            }
-            .disabled(tab.kind != .text || (!tab.isEditable && !searchBarState.showsReplace))
-
-            searchBarButton("xmark", title: "关闭") {
-                closeSearch()
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
         .background(NativeTheme.window)
     }
 
@@ -404,19 +218,6 @@ struct WorkspaceEditorTabView: View {
             .padding(.vertical, 4)
             .background(background)
             .clipShape(.rect(cornerRadius: 999))
-    }
-
-    private func searchBarButton(_ systemImage: String, title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(NativeTheme.textPrimary)
-                .frame(width: 30, height: 30)
-                .background(NativeTheme.surface)
-                .clipShape(.rect(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
-        .help(title)
     }
 
     private var editorDisplayOptionsMenu: some View {
@@ -483,75 +284,32 @@ struct WorkspaceEditorTabView: View {
         .help("编辑器显示选项")
     }
 
-    private func presentSearch(replace: Bool) {
-        searchBarState.isPresented = true
-        searchBarState.showsReplace = replace || searchBarState.showsReplace
-        syncEditorCommandRouter()
-        issueSearchRequest(.revealSearch)
-    }
-
-    private func closeSearch() {
-        searchBarState.isPresented = false
-        searchBarState.showsReplace = false
-        searchSessionState = WorkspaceTextEditorSearchSessionState()
-        syncEditorCommandRouter()
-    }
-
-    private func issueSearchRequest(_ kind: WorkspaceTextEditorSearchRequestKind) {
-        searchRequestState = WorkspaceTextEditorSearchRequestState(
-            query: searchBarState.query,
-            replacement: searchBarState.replacement,
-            revision: searchRequestState.revision + 1,
-            kind: kind,
-            targetLine: searchRequestState.targetLine,
-            isCaseSensitive: searchBarState.isCaseSensitive,
-            matchesWholeWords: searchBarState.matchesWholeWords,
-            usesRegularExpression: searchBarState.usesRegularExpression,
-            preservesReplacementCase: searchBarState.preservesReplacementCase
-        )
-    }
-
     private func confirmGoToLine() {
         guard let lineNumber = Int(goToLineDraft), lineNumber > 0 else {
             return
         }
-        searchRequestState = WorkspaceTextEditorSearchRequestState(
-            query: searchBarState.query,
-            replacement: searchBarState.replacement,
-            revision: searchRequestState.revision + 1,
-            kind: .goToLine,
-            targetLine: lineNumber - 1,
-            isCaseSensitive: searchBarState.isCaseSensitive,
-            matchesWholeWords: searchBarState.matchesWholeWords,
-            usesRegularExpression: searchBarState.usesRegularExpression,
-            preservesReplacementCase: searchBarState.preservesReplacementCase
-        )
+        codeEditBridge.goToLine(lineNumber)
         isGoToLinePresented = false
     }
 
     private func syncEditorCommandRouter() {
         editorCommandRouter.startSearchAction = {
-            presentSearch(replace: false)
+            codeEditBridge.showFindPanel()
         }
         editorCommandRouter.showReplaceAction = {
-            presentSearch(replace: true)
+            codeEditBridge.showReplacePanel()
         }
         editorCommandRouter.navigateSearchNextAction = {
-            presentSearch(replace: searchBarState.showsReplace)
-            issueSearchRequest(.findNext)
+            codeEditBridge.findNext()
         }
         editorCommandRouter.navigateSearchPreviousAction = {
-            presentSearch(replace: searchBarState.showsReplace)
-            issueSearchRequest(.findPrevious)
+            codeEditBridge.findPrevious()
         }
         editorCommandRouter.useSelectionForSearchAction = {
-            if let selectedSearchSeed, !selectedSearchSeed.isEmpty {
-                searchBarState.query = selectedSearchSeed
-            }
-            presentSearch(replace: false)
+            codeEditBridge.useSelectionForFind()
         }
         editorCommandRouter.closeSearchAction = {
-            closeSearch()
+            codeEditBridge.hideFindPanel()
         }
         editorCommandRouter.goToLineAction = {
             isGoToLinePresented = true
@@ -570,38 +328,4 @@ struct WorkspaceEditorTabView: View {
         viewModel.updateWorkspaceEditorDisplayOptions(nextOptions)
     }
 
-    private func persistEditorSession(searchBarState: WorkspaceEditorSearchBarState) {
-        var session = viewModel.workspaceEditorRuntimeSession(for: projectPath, tabID: tabID)
-        session.searchPresentation = searchBarState.runtimeState
-        viewModel.updateWorkspaceEditorRuntimeSession(session, tabID: tabID, in: projectPath)
-    }
-
-    private func restoreEditorSessionIfNeeded() {
-        guard searchBarState.isPresented else {
-            return
-        }
-        issueSearchRequest(.revealSearch)
-    }
-
-    @ViewBuilder
-    private var searchStatusView: some View {
-        if let errorMessage = searchSessionState.errorMessage {
-            Text(errorMessage)
-                .font(.caption.monospaced())
-                .foregroundStyle(.red)
-                .lineLimit(1)
-        } else if !searchBarState.query.isEmpty {
-            Text(searchStatusText)
-                .font(.caption.monospaced())
-                .foregroundStyle(NativeTheme.textSecondary)
-        }
-    }
-
-    private var searchStatusText: String {
-        if let currentMatchIndex = searchSessionState.currentMatchIndex,
-           searchSessionState.matchCount > 0 {
-            return "\(currentMatchIndex) / \(searchSessionState.matchCount)"
-        }
-        return "\(searchSessionState.matchCount) 处匹配"
-    }
 }
