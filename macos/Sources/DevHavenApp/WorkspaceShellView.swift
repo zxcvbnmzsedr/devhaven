@@ -145,6 +145,28 @@ struct WorkspaceShellView: View {
     }
 
     @ViewBuilder
+    private var gitHubToolWindowContent: some View {
+        if isActiveQuickTerminalSession {
+            gitModeEmptyState(
+                title: "快速终端暂不支持 GitHub 模式",
+                systemImage: "bolt.horizontal.circle",
+                description: "请切换到一个真实项目工作区后再查看 GitHub 协作信息。"
+            )
+        } else if let gitHubViewModel = viewModel.activeWorkspaceGitHubViewModel {
+            WorkspaceGitHubRootView(
+                viewModel: gitHubViewModel,
+                onCreateIssueWorktree: createIssueWorktree
+            )
+        } else {
+            gitModeEmptyState(
+                title: "GitHub 面板尚未就绪",
+                systemImage: "tray",
+                description: "请确认当前项目是 GitHub 仓库，并且本机 gh 已完成登录。"
+            )
+        }
+    }
+
+    @ViewBuilder
     private func topWorkspaceContent(totalWidth: CGFloat) -> some View {
         if viewModel.workspaceSideToolWindowState.isVisible,
            viewModel.workspaceSideToolWindowState.activeKind != nil {
@@ -165,7 +187,7 @@ struct WorkspaceShellView: View {
                         WorkspaceProjectToolWindowHostView(viewModel: viewModel)
                     case .commit:
                         WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)
-                    case .git, .none:
+                    case .git, .github, .none:
                         EmptyView()
                     }
                 }
@@ -200,17 +222,25 @@ struct WorkspaceShellView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } trailing: {
                 Group {
-                    if viewModel.workspaceBottomToolWindowState.activeKind == .git {
+                    switch viewModel.workspaceBottomToolWindowState.activeKind {
+                    case .git:
                         gitToolWindowContent
-                    } else {
+                    case .github:
+                        gitHubToolWindowContent
+                    default:
                         EmptyView()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if viewModel.workspaceBottomToolWindowState.activeKind == .git {
+                    switch viewModel.workspaceBottomToolWindowState.activeKind {
+                    case .git:
                         viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.git))
+                    case .github:
+                        viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.github))
+                    default:
+                        break
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -294,6 +324,37 @@ struct WorkspaceShellView: View {
     private func gitLogDiffTitle(for file: WorkspaceGitCommitFileChange) -> String {
         let fileName = (file.path as NSString).lastPathComponent
         return fileName.isEmpty ? file.path : fileName
+    }
+
+    private func createIssueWorktree(from detail: WorkspaceGitHubIssueDetail) throws {
+        guard let rootProject = viewModel.activeWorkspaceRootProject else {
+            throw WorkspaceGitHubCommandError.operationRejected("当前未找到可用的 root project")
+        }
+        guard let baseBranch = activeWorkspaceBaseBranchCandidate() else {
+            throw WorkspaceGitHubCommandError.operationRejected(
+                "当前 root project 未检测到基线分支，暂时无法从 Issue 创建 worktree。"
+            )
+        }
+        try viewModel.startCreateWorkspaceWorktree(
+            from: rootProject.path,
+            branch: detail.suggestedBranchName,
+            createBranch: true,
+            baseBranch: baseBranch,
+            autoOpen: true
+        )
+    }
+
+    private func activeWorkspaceBaseBranchCandidate() -> String? {
+        guard let rootProject = viewModel.activeWorkspaceRootProject,
+              let activeProject = viewModel.activeWorkspaceProject
+        else {
+            return nil
+        }
+        if activeProject.path != rootProject.path,
+           let worktree = rootProject.worktrees.first(where: { $0.path == activeProject.path }) {
+            return worktree.branch
+        }
+        return viewModel.activeWorkspaceRootCurrentBranchName
     }
 
     private func syncTerminalStores() {
