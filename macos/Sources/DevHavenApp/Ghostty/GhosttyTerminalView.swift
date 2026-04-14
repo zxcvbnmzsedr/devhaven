@@ -16,8 +16,8 @@ private struct GhosttySurfaceRepresentable: NSViewRepresentable {
                 preferredFocus: isFocused,
                 prepareForAttachment: true
             ),
-            onSurfaceAttached: {
-                model.surfaceViewDidAttach(preferredFocus: isFocused)
+            onSurfaceAttached: { attachedView in
+                model.surfaceViewDidAttach(attachedView: attachedView, preferredFocus: isFocused)
             },
             onLiveScrollChange: { isLiveScrolling in
                 model.setCodexDisplaySamplingSuspended(isLiveScrolling)
@@ -26,8 +26,8 @@ private struct GhosttySurfaceRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: GhosttySurfaceScrollView, context: Context) {
-        nsView.setSurfaceAttachmentHandler {
-            model.surfaceViewDidAttach(preferredFocus: isFocused)
+        nsView.setSurfaceAttachmentHandler { attachedView in
+            model.surfaceViewDidAttach(attachedView: attachedView, preferredFocus: isFocused)
         }
         nsView.setLiveScrollChangeHandler { isLiveScrolling in
             model.setCodexDisplaySamplingSuspended(isLiveScrolling)

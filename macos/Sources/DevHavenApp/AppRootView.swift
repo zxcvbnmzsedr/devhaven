@@ -8,6 +8,7 @@ struct AppRootView: View {
     @ObservedObject var updateController: DevHavenUpdateController
     @ObservedObject var quitGuard: AppQuitGuard
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var workspaceTerminalStoreRegistry = WorkspaceTerminalStoreRegistry()
     @State private var cliCoordinator: WorkspaceCLICommandCoordinator?
     @State private var projectDetailPanelWidth: CGFloat = AppRootProjectDetailLayoutPolicy.defaultPanelWidth
 
@@ -217,15 +218,22 @@ struct AppRootView: View {
     @ViewBuilder
     private func primaryContent(contentVisibilityPolicy: AppRootContentVisibilityPolicy) -> some View {
         ZStack {
-            MainContentView(viewModel: viewModel)
-                .opacity(contentVisibilityPolicy.mainContentOpacity)
-                .allowsHitTesting(contentVisibilityPolicy.mainContentAllowsHitTesting)
-                .accessibilityHidden(contentVisibilityPolicy.mainContentOpacity == 0)
+            if contentVisibilityPolicy.keepsMainContentMounted {
+                MainContentView(viewModel: viewModel)
+                    .opacity(contentVisibilityPolicy.mainContentOpacity)
+                    .allowsHitTesting(contentVisibilityPolicy.mainContentAllowsHitTesting)
+                    .accessibilityHidden(contentVisibilityPolicy.mainContentOpacity == 0)
+            }
 
-            WorkspaceRootView(viewModel: viewModel)
-                .opacity(contentVisibilityPolicy.workspaceContentOpacity)
-                .allowsHitTesting(contentVisibilityPolicy.workspaceContentAllowsHitTesting)
-                .accessibilityHidden(contentVisibilityPolicy.workspaceContentOpacity == 0)
+            if contentVisibilityPolicy.keepsWorkspaceMounted {
+                WorkspaceRootView(
+                    viewModel: viewModel,
+                    terminalStoreRegistry: workspaceTerminalStoreRegistry
+                )
+                    .opacity(contentVisibilityPolicy.workspaceContentOpacity)
+                    .allowsHitTesting(contentVisibilityPolicy.workspaceContentAllowsHitTesting)
+                    .accessibilityHidden(contentVisibilityPolicy.workspaceContentOpacity == 0)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(NativeTheme.window)

@@ -385,7 +385,7 @@ struct WorkspaceHostView: View {
     @ViewBuilder
     private var terminalTabContent: some View {
         if let selectedTab = workspace.selectedTab {
-            let isSelectedTab = viewModel.activeWorkspaceProjectPath == nil || isWorkspaceVisible
+            let isSelectedTab = isWorkspaceVisible
             // 只挂载当前选中的 terminal tab，避免隐藏 tab 继续参与
             // SwiftUI/AppKit 布局与 Ghostty surface 更新，造成主线程持续高负载。
             WorkspaceSplitTreeView(

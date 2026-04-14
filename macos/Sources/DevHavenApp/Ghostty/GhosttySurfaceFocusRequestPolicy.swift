@@ -7,10 +7,8 @@ enum GhosttySurfaceFocusRequestPolicy {
         isSurfaceFocused: Bool,
         currentEventType: NSEvent.EventType?
     ) -> Bool {
+        _ = wasPreferredFocus
         guard preferredFocus else {
-            return false
-        }
-        guard !wasPreferredFocus else {
             return false
         }
         guard !isSurfaceFocused else {

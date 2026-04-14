@@ -10,8 +10,8 @@ struct AppRootContentVisibilityPolicy: Equatable {
 
     static func resolve(isWorkspacePresented: Bool) -> AppRootContentVisibilityPolicy {
         AppRootContentVisibilityPolicy(
-            keepsMainContentMounted: true,
-            keepsWorkspaceMounted: true,
+            keepsMainContentMounted: !isWorkspacePresented,
+            keepsWorkspaceMounted: isWorkspacePresented,
             mainContentOpacity: isWorkspacePresented ? 0 : 1,
             mainContentAllowsHitTesting: !isWorkspacePresented,
             workspaceContentOpacity: isWorkspacePresented ? 1 : 0,

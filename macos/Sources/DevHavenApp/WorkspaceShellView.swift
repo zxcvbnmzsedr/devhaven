@@ -3,8 +3,9 @@ import DevHavenCore
 
 struct WorkspaceShellView: View {
     @Bindable var viewModel: NativeAppViewModel
+    let terminalStoreRegistry: WorkspaceTerminalStoreRegistry
     @State private var terminalCommandRouter = WorkspaceTerminalCommandRouter()
-    @StateObject private var terminalStoreRegistry = WorkspaceTerminalStoreRegistry()
+    @State private var surfaceReactivationTask: Task<Void, Never>?
 
     /// Combined hash of all tool-window properties that require a sync call,
     /// so we can observe them with a single `.onChange` instead of five.
@@ -34,6 +35,7 @@ struct WorkspaceShellView: View {
                 syncTerminalStores()
                 syncTerminalCommandRouter()
                 warmActiveWorkspace()
+                scheduleVisibleSurfaceReactivation()
                 viewModel.syncActiveWorkspaceToolWindowContext()
                 WorkspaceLaunchDiagnostics.shared.recordShellMounted(
                     activeProjectPath: viewModel.activeWorkspaceProjectPath,
@@ -41,6 +43,8 @@ struct WorkspaceShellView: View {
                 )
             }
             .onDisappear {
+                surfaceReactivationTask?.cancel()
+                surfaceReactivationTask = nil
                 viewModel.stopWorkspaceAgentSignalObservation()
                 viewModel.setWorkspacePaneSnapshotProvider(nil)
             }
@@ -49,11 +53,13 @@ struct WorkspaceShellView: View {
                 syncTerminalCommandRouter()
                 viewModel.refreshWorkspaceAgentSignals()
                 warmActiveWorkspace()
+                scheduleVisibleSurfaceReactivation()
                 viewModel.syncActiveWorkspaceToolWindowContext()
             }
             .onChange(of: viewModel.activeWorkspaceProjectPath) { _, _ in
                 syncTerminalCommandRouter()
                 warmActiveWorkspace()
+                scheduleVisibleSurfaceReactivation()
                 viewModel.syncActiveWorkspaceToolWindowContext()
             }
             .onChange(of: toolWindowSyncToken) { _, _ in
@@ -62,6 +68,7 @@ struct WorkspaceShellView: View {
             .onChange(of: viewModel.activeWorkspaceLaunchRequest?.surfaceId) { _, _ in
                 syncTerminalCommandRouter()
                 warmActiveWorkspace()
+                scheduleVisibleSurfaceReactivation()
             }
     }
 
@@ -307,6 +314,47 @@ struct WorkspaceShellView: View {
         )
     }
 
+    private func scheduleVisibleSurfaceReactivation() {
+        surfaceReactivationTask?.cancel()
+        surfaceReactivationTask = Task { @MainActor in
+            await Task.yield()
+            reactivateVisibleTerminalSurfaces()
+            try? await Task.sleep(nanoseconds: 120_000_000)
+            guard !Task.isCancelled else {
+                return
+            }
+            reactivateVisibleTerminalSurfaces()
+            surfaceReactivationTask = nil
+        }
+    }
+
+    private func reactivateVisibleTerminalSurfaces() {
+        guard viewModel.isWorkspacePresented,
+              let activeProjectPath = viewModel.activeWorkspaceProjectPath,
+              let session = viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activeProjectPath }),
+              let selectedTab = session.controller.selectedTab
+        else {
+            return
+        }
+
+        let focusedPaneID = session.controller.selectedPane?.id
+        let store = terminalStoreRegistry.store(for: activeProjectPath)
+        for pane in selectedTab.leaves {
+            guard let selectedItem = pane.selectedItem,
+                  selectedItem.isTerminal
+            else {
+                continue
+            }
+            let model = store.model(for: selectedItem, in: pane)
+            let isFocusedPane = focusedPaneID == pane.id
+            model.syncSurfaceActivity(isVisible: true, isFocused: isFocusedPane)
+            model.applyLatestModelState(preferredFocus: isFocusedPane)
+            if isFocusedPane {
+                model.restoreWindowResponderIfNeeded(preferredFocus: true)
+            }
+        }
+    }
+
     private var workspacePaneSnapshotProvider: WorkspacePaneSnapshotProvider {
         { projectPath, paneID, freshness in
             terminalStoreRegistry
@@ -324,9 +372,9 @@ struct WorkspaceShellView: View {
     }
 
     private var displayedWorkspaceSession: OpenWorkspaceSessionState? {
-        if let activeProjectPath = viewModel.activeWorkspaceProjectPath,
-           let activeSession = viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activeProjectPath }) {
-            return activeSession
+        if let mountedProjectPath = viewModel.mountedWorkspaceProjectPath,
+           let mountedSession = viewModel.openWorkspaceSessions.first(where: { $0.projectPath == mountedProjectPath }) {
+            return mountedSession
         }
         return viewModel.openWorkspaceSessions.first
     }

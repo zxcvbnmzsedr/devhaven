@@ -3,6 +3,7 @@ import DevHavenCore
 
 struct WorkspaceRootView: View {
     @Bindable var viewModel: NativeAppViewModel
+    let terminalStoreRegistry: WorkspaceTerminalStoreRegistry
     @State private var sidebarWidth: CGFloat = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
 
     var body: some View {
@@ -40,7 +41,10 @@ struct WorkspaceRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } trailing: {
                 WorkspaceChromeContainerView(viewModel: viewModel) {
-                    WorkspaceShellView(viewModel: viewModel)
+                    WorkspaceShellView(
+                        viewModel: viewModel,
+                        terminalStoreRegistry: terminalStoreRegistry
+                    )
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

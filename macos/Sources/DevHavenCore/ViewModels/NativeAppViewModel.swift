@@ -253,15 +253,21 @@ public final class NativeAppViewModel {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: openWorkspaceSessions)
             displayProjectCacheByLookupKey.removeAll()
             rebuildWorkspaceSessionIndex()
+            syncMountedWorkspaceProjectPathAfterSessionMutation()
             refreshCodexDisplayCandidates()
         }
     }
     public var activeWorkspaceProjectPath: String? {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: activeWorkspaceProjectPath)
+            syncMountedWorkspaceProjectPath(
+                afterChangingActiveWorkspaceFrom: oldValue,
+                to: activeWorkspaceProjectPath
+            )
             refreshCodexDisplayCandidates()
         }
     }
+    private var hiddenMountedWorkspaceProjectPath: String?
     public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
     public var workspaceBottomToolWindowState: WorkspaceBottomToolWindowState
     public var workspaceFocusedArea: WorkspaceFocusedArea
@@ -386,6 +392,7 @@ public final class NativeAppViewModel {
         self.selectedProjectPath = nil
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
+        self.hiddenMountedWorkspaceProjectPath = nil
         self.workspaceSideToolWindowState = WorkspaceSideToolWindowState()
         self.workspaceBottomToolWindowState = WorkspaceBottomToolWindowState()
         self.workspaceFocusedArea = .terminal
@@ -474,6 +481,16 @@ public final class NativeAppViewModel {
             return nil
         }
         return resolveDisplayProject(for: activeWorkspaceProjectPath)
+    }
+
+    public var mountedWorkspaceProjectPath: String? {
+        if let activeWorkspaceProjectPath {
+            return canonicalWorkspaceSessionPath(for: activeWorkspaceProjectPath)
+        }
+        if let hiddenMountedWorkspaceProjectPath {
+            return canonicalWorkspaceSessionPath(for: hiddenMountedWorkspaceProjectPath)
+        }
+        return nil
     }
 
     public var activeWorkspaceProjectTreeProject: Project? {
@@ -1834,6 +1851,7 @@ public final class NativeAppViewModel {
         openWorkspaceSessionIfNeeded(for: normalizedPath, rootProjectPath: normalizedPath)
         scheduleWorkspaceRootWorktreeRefreshIfNeeded(normalizedPath)
         activeWorkspaceProjectPath = canonicalWorkspaceSessionPath(for: normalizedPath) ?? normalizedPath
+        selectedProjectPath = normalizedPath
         isDetailPanelPresented = false
         if let controller = activeWorkspaceController {
             workspaceLaunchDiagnostics.recordEntryRequested(
@@ -1861,6 +1879,7 @@ public final class NativeAppViewModel {
         }
         scheduleWorkspaceRootWorktreeRefreshIfNeeded(normalizedPath)
         activeWorkspaceProjectPath = canonicalWorkspaceSessionPath(for: normalizedPath) ?? normalizedPath
+        selectedProjectPath = normalizedPath
         isDetailPanelPresented = false
         scheduleSelectedProjectDocumentRefresh()
         scheduleWorkspaceRestoreAutosave()
@@ -1870,6 +1889,11 @@ public final class NativeAppViewModel {
         if let activeWorkspaceProjectPath,
            workspaceSession(for: activeWorkspaceProjectPath) != nil {
             activateWorkspaceProject(activeWorkspaceProjectPath)
+            return
+        }
+        if let mountedWorkspaceProjectPath,
+           workspaceSession(for: mountedWorkspaceProjectPath) != nil {
+            activateWorkspaceProject(mountedWorkspaceProjectPath)
             return
         }
         if let selectedProjectPath,
@@ -6947,6 +6971,41 @@ public final class NativeAppViewModel {
         let resolvedPath = projectPath ?? activeWorkspaceProjectPath
         return workspaceSessionWithoutNormalizing(for: resolvedPath)?.controller
             ?? workspaceSession(for: resolvedPath)?.controller
+    }
+
+    private func syncMountedWorkspaceProjectPath(
+        afterChangingActiveWorkspaceFrom oldValue: String?,
+        to newValue: String?
+    ) {
+        if let newValue,
+           let canonicalPath = canonicalWorkspaceSessionPath(for: newValue) {
+            hiddenMountedWorkspaceProjectPath = canonicalPath
+            return
+        }
+
+        if let oldValue,
+           let canonicalPath = canonicalWorkspaceSessionPath(for: oldValue) {
+            hiddenMountedWorkspaceProjectPath = canonicalPath
+            return
+        }
+
+        syncMountedWorkspaceProjectPathAfterSessionMutation()
+    }
+
+    private func syncMountedWorkspaceProjectPathAfterSessionMutation() {
+        if let activeWorkspaceProjectPath,
+           let canonicalPath = canonicalWorkspaceSessionPath(for: activeWorkspaceProjectPath) {
+            hiddenMountedWorkspaceProjectPath = canonicalPath
+            return
+        }
+
+        if let hiddenMountedWorkspaceProjectPath,
+           let canonicalPath = canonicalWorkspaceSessionPath(for: hiddenMountedWorkspaceProjectPath) {
+            self.hiddenMountedWorkspaceProjectPath = canonicalPath
+            return
+        }
+
+        hiddenMountedWorkspaceProjectPath = nil
     }
 
     private func workspacePaneItemContext(

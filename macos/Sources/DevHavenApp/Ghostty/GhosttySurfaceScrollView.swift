@@ -13,10 +13,11 @@ final class GhosttySurfaceScrollView: NSView {
     private let documentView: NSView
     private(set) var surfaceView: NSView
     private var observers: [NSObjectProtocol] = []
+    private var windowObservers: [NSObjectProtocol] = []
     private var isLiveScrolling = false
     private var lastSentRow: Int?
     private var scrollbar: ScrollbarState?
-    private var onSurfaceAttached: (() -> Void)?
+    private var onSurfaceAttached: ((NSView) -> Void)?
     private var onLiveScrollChange: ((Bool) -> Void)?
     private var needsSurfaceAttachmentCallback = true
     private var pendingLiveScrollRow: Int?
@@ -26,7 +27,7 @@ final class GhosttySurfaceScrollView: NSView {
 
     init(
         surfaceView: NSView,
-        onSurfaceAttached: (() -> Void)? = nil,
+        onSurfaceAttached: ((NSView) -> Void)? = nil,
         onLiveScrollChange: ((Bool) -> Void)? = nil
     ) {
         self.surfaceView = surfaceView
@@ -106,7 +107,9 @@ final class GhosttySurfaceScrollView: NSView {
     }
 
     isolated deinit {
-        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        let center = NotificationCenter.default
+        observers.forEach { center.removeObserver($0) }
+        windowObservers.forEach { center.removeObserver($0) }
     }
 
     override func layout() {
@@ -119,7 +122,7 @@ final class GhosttySurfaceScrollView: NSView {
         (surfaceView as? GhosttyTerminalSurfaceView)?.updateSurfaceSize()
         if shouldFireSurfaceAttachmentCallback {
             needsSurfaceAttachmentCallback = false
-            onSurfaceAttached?()
+            onSurfaceAttached?(surfaceView)
         }
     }
 
@@ -130,6 +133,7 @@ final class GhosttySurfaceScrollView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        updateWindowObservers()
         rearmSurfaceAttachmentIfNeededAfterHierarchyChange()
     }
 
@@ -150,7 +154,7 @@ final class GhosttySurfaceScrollView: NSView {
         layoutSubtreeIfNeeded()
     }
 
-    func setSurfaceAttachmentHandler(_ handler: (() -> Void)?) {
+    func setSurfaceAttachmentHandler(_ handler: ((NSView) -> Void)?) {
         onSurfaceAttached = handler
     }
 
@@ -178,6 +182,8 @@ final class GhosttySurfaceScrollView: NSView {
         needsSurfaceAttachmentCallback
         && window != nil
         && superview != nil
+        && surfaceView.isDescendant(of: documentView)
+        && surfaceView.window === window
         && bounds.width > 0
         && bounds.height > 0
     }
@@ -186,6 +192,7 @@ final class GhosttySurfaceScrollView: NSView {
         guard let superview, let window else {
             lastAttachedSuperview = nil
             lastAttachedWindow = nil
+            clearWindowObservers()
             return
         }
 
@@ -199,6 +206,76 @@ final class GhosttySurfaceScrollView: NSView {
         lastAttachedWindow = window
         needsSurfaceAttachmentCallback = true
         needsLayout = true
+    }
+
+    private func updateWindowObservers() {
+        clearWindowObservers()
+        guard let window else {
+            return
+        }
+        let center = NotificationCenter.default
+        windowObservers.append(
+            center.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: window,
+                queue: .main,
+                using: { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.replaySurfaceAttachmentAfterWindowActivity()
+                    }
+                }
+            )
+        )
+        windowObservers.append(
+            center.addObserver(
+                forName: NSWindow.didBecomeMainNotification,
+                object: window,
+                queue: .main,
+                using: { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.replaySurfaceAttachmentAfterWindowActivity()
+                    }
+                }
+            )
+        )
+        windowObservers.append(
+            center.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: window,
+                queue: .main,
+                using: { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        self?.replaySurfaceAttachmentAfterWindowActivity()
+                    }
+                }
+            )
+        )
+    }
+
+    private func clearWindowObservers() {
+        let center = NotificationCenter.default
+        for observer in windowObservers {
+            center.removeObserver(observer)
+        }
+        windowObservers.removeAll()
+    }
+
+    func replaySurfaceAttachmentAfterWindowActivity() {
+        guard let window else {
+            return
+        }
+        guard window.isKeyWindow || window.occlusionState.contains(.visible) else {
+            return
+        }
+        needsSurfaceAttachmentCallback = true
+        if shouldFireSurfaceAttachmentCallback {
+            needsSurfaceAttachmentCallback = false
+            onSurfaceAttached?(surfaceView)
+        } else {
+            needsLayout = true
+            layoutSubtreeIfNeeded()
+        }
+        window.displayIfNeeded()
     }
 
     private func bindScrollWrapperIfNeeded(to view: NSView) {

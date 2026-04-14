@@ -9,7 +9,7 @@ final class GhosttySurfaceScrollViewTests: XCTestCase {
         var attachmentCount = 0
         let scrollView = GhosttySurfaceScrollView(
             surfaceView: surfaceView,
-            onSurfaceAttached: {
+            onSurfaceAttached: { _ in
                 attachmentCount += 1
             }
         )
@@ -45,7 +45,7 @@ final class GhosttySurfaceScrollViewTests: XCTestCase {
         var attachmentCount = 0
         let scrollView = GhosttySurfaceScrollView(
             surfaceView: surfaceView,
-            onSurfaceAttached: {
+            onSurfaceAttached: { _ in
                 attachmentCount += 1
             }
         )
@@ -77,6 +77,61 @@ final class GhosttySurfaceScrollViewTests: XCTestCase {
         pumpMainRunLoop(ticks: 10)
 
         XCTAssertEqual(attachmentCount, 2, "同一窗口内重挂到新容器后，应重新触发 attach，避免 pane 重排后内容卡空白。")
+    }
+
+    func testStaleScrollViewDoesNotFireAttachmentForSurfaceItNoLongerOwns() {
+        let surfaceView = NSView(frame: .zero)
+        var staleAttachmentCount = 0
+        var activeAttachmentCount = 0
+        let staleScrollView = GhosttySurfaceScrollView(
+            surfaceView: surfaceView,
+            onSurfaceAttached: { _ in
+                staleAttachmentCount += 1
+            }
+        )
+
+        let window = makeWindow()
+        defer {
+            window.orderOut(nil)
+        }
+
+        let root = NSView(frame: window.contentView?.bounds ?? .zero)
+        root.autoresizingMask = [.width, .height]
+        let leftContainer = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 320))
+        let rightContainer = NSView(frame: NSRect(x: 300, y: 0, width: 300, height: 320))
+        root.addSubview(leftContainer)
+        root.addSubview(rightContainer)
+        window.contentView = root
+
+        leftContainer.addSubview(staleScrollView)
+        staleScrollView.frame = leftContainer.bounds
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop(ticks: 10)
+
+        XCTAssertEqual(staleAttachmentCount, 1, "旧 scroll view 初次挂载时，应正常触发一次 attach。")
+
+        let activeScrollView = GhosttySurfaceScrollView(
+            surfaceView: surfaceView,
+            onSurfaceAttached: { _ in
+                activeAttachmentCount += 1
+            }
+        )
+        rightContainer.addSubview(activeScrollView)
+        activeScrollView.frame = rightContainer.bounds
+        activeScrollView.layoutSubtreeIfNeeded()
+        pumpMainRunLoop(ticks: 10)
+
+        XCTAssertEqual(activeAttachmentCount, 1, "surface 被新的 scroll view 接管后，新的宿主应成为唯一有效 attach 来源。")
+
+        staleScrollView.replaySurfaceAttachmentAfterWindowActivity()
+        staleScrollView.layoutSubtreeIfNeeded()
+        pumpMainRunLoop(ticks: 10)
+
+        XCTAssertEqual(
+            staleAttachmentCount,
+            1,
+            "旧 scroll view 如果已经不再持有当前 surface，不应继续发 attach 回调污染当前 host。"
+        )
     }
 
     private func makeWindow() -> NSWindow {

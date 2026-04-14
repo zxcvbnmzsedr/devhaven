@@ -62,25 +62,6 @@ final class GhosttyTerminalSurfaceView: NSView {
         super.init(frame: NSRect(x: 0, y: 0, width: 960, height: 640))
         setAccessibilityElement(false)
         setAccessibilityHidden(true)
-
-        do {
-            let callbackContext = GhosttySurfaceCallbackContext(bridge: bridge)
-            let surface = try runtime.createSurface(
-                for: self,
-                bridge: bridge,
-                callbackContext: callbackContext,
-                request: request,
-                extraEnvironment: extraEnvironment
-            )
-            self.surface = surface
-            self.callbackContext = callbackContext
-            self.surfaceRef = runtime.registerSurface(
-                surface,
-                callbackContext: callbackContext
-            )
-        } catch {
-            initializationError = error
-        }
         wantsLayer = true
         registerForDraggedTypes(Self.readableDraggedTypes)
     }
@@ -121,6 +102,38 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     func applyLatestModelState() {
         updateSurfaceMetrics()
+    }
+
+    @discardableResult
+    func initializeSurfaceIfNeeded() -> Error? {
+        guard surface == nil else {
+            initializationError = nil
+            return nil
+        }
+
+        let callbackContext = GhosttySurfaceCallbackContext(bridge: bridge)
+        do {
+            let surface = try runtime.createSurface(
+                for: self,
+                bridge: bridge,
+                callbackContext: callbackContext,
+                request: request,
+                extraEnvironment: extraEnvironment
+            )
+            self.surface = surface
+            self.callbackContext = callbackContext
+            self.surfaceRef = runtime.registerSurface(
+                surface,
+                callbackContext: callbackContext
+            )
+            initializationError = nil
+            updateSurfaceMetrics()
+            return nil
+        } catch {
+            callbackContext.invalidate()
+            initializationError = error
+            return error
+        }
     }
 
     func prepareForContainerReuse() {
@@ -207,8 +220,15 @@ final class GhosttyTerminalSurfaceView: NSView {
         ghostty_surface_set_focus(surface, focused)
     }
 
-    func requestFocus() {
-        scheduleFocusRequest(delay: 0.05)
+    func requestFocus(
+        forceResponderRefresh: Bool = false,
+        activateWindowIfNeeded: Bool = false
+    ) {
+        scheduleFocusRequest(
+            delay: 0.05,
+            forceResponderRefresh: forceResponderRefresh,
+            activateWindowIfNeeded: activateWindowIfNeeded
+        )
     }
 
     func setOcclusion(_ visible: Bool) {
@@ -225,7 +245,9 @@ final class GhosttyTerminalSurfaceView: NSView {
 
     private func scheduleFocusRequest(
         from previous: GhosttyTerminalSurfaceView? = nil,
-        delay: TimeInterval
+        delay: TimeInterval,
+        forceResponderRefresh: Bool = false,
+        activateWindowIfNeeded: Bool = false
     ) {
         let maxDelay: TimeInterval = 0.5
         guard delay <= maxDelay else { return }
@@ -248,6 +270,19 @@ final class GhosttyTerminalSurfaceView: NSView {
                 _ = previous.resignFirstResponder()
             }
             guard !Task.isCancelled else { return }
+            if activateWindowIfNeeded, !window.isKeyWindow {
+                window.makeKey()
+            }
+            guard !Task.isCancelled else { return }
+            if window.firstResponder === self {
+                if forceResponderRefresh {
+                    _ = window.makeFirstResponder(nil)
+                } else {
+                    self.focusRequestTask = nil
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
             if window.firstResponder === self {
                 self.focusRequestTask = nil
                 return
@@ -261,8 +296,21 @@ final class GhosttyTerminalSurfaceView: NSView {
                 self.focusRequestTask = nil
                 return
             }
-            self.scheduleFocusRequest(from: previous, delay: nextDelay)
+            self.scheduleFocusRequest(
+                from: previous,
+                delay: nextDelay,
+                forceResponderRefresh: forceResponderRefresh,
+                activateWindowIfNeeded: activateWindowIfNeeded
+            )
         }
+    }
+
+    func refreshSurfaceMetricsForReuse() {
+        attachmentState.lastBackingSize = .zero
+        attachmentState.lastContentScale = nil
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        updateSurfaceMetrics()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -862,8 +910,16 @@ final class GhosttyTerminalSurfaceView: NSView {
         _ = window.makeFirstResponder(nil)
     }
 
+    func resignWindowResponderIfNeeded() {
+        resignOwnedFirstResponderIfNeeded()
+    }
+
     var hasAttachedWindow: Bool {
         window != nil
+    }
+
+    var hasLiveSurface: Bool {
+        surface != nil
     }
 
     var windowIsKeyWindowForDiagnostics: Bool {
