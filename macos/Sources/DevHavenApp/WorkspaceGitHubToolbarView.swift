@@ -37,6 +37,24 @@ struct WorkspaceGitHubToolbarView: View {
                     )
                 }
 
+                if viewModel.isMutating {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(viewModel.activeMutation.map(gitHubMutationStatusText) ?? "正在执行 GitHub 操作…")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(NativeTheme.textPrimary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(NativeTheme.elevated)
+                    .clipShape(.capsule)
+                    .overlay(
+                        Capsule()
+                            .stroke(NativeTheme.border, lineWidth: 1)
+                    )
+                }
+
                 Button("刷新") {
                     viewModel.refresh()
                 }

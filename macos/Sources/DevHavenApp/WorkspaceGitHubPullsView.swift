@@ -74,7 +74,11 @@ struct WorkspaceGitHubPullsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(NativeTheme.window)
         } else if let detail = viewModel.selectedPullDetail {
-            WorkspaceGitHubPullDetailView(detail: detail)
+            WorkspaceGitHubPullDetailView(
+                viewModel: viewModel,
+                detail: detail,
+                actionMode: .pull
+            )
         } else {
             ContentUnavailableView(
                 "选择一个 Pull Request",

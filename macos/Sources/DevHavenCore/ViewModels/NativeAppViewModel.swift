@@ -1367,6 +1367,14 @@ public final class NativeAppViewModel {
         return projectsByNormalizedPath[normalizedRootProjectPath]
     }
 
+    public var activeWorkspaceRootCurrentBranchName: String? {
+        guard let rootProject = activeWorkspaceRootProject else {
+            return nil
+        }
+        return currentBranchByProjectPath[rootProject.path]
+            ?? currentBranchByProjectPath[normalizePathForCompare(rootProject.path)]
+    }
+
     public var activeWorkspaceGitRepositoryContext: WorkspaceGitRepositoryContext? {
         guard let rootProject = activeWorkspaceRootProject,
               rootProject.isGitRepository
@@ -2349,15 +2357,20 @@ public final class NativeAppViewModel {
         else {
             return
         }
+        let executionPath = preferredWorkspaceGitExecutionPath(for: rootProject.path)
 
         if let existing = workspaceGitHubViewModels[rootProject.path] {
-            existing.updateRepositoryContext(repositoryContext)
+            existing.updateRepositoryContext(repositoryContext, executionPath: executionPath)
             return
         }
 
         workspaceGitHubViewModels[rootProject.path] = WorkspaceGitHubViewModel(
             repositoryContext: repositoryContext,
-            client: .live(service: gitHubRepositoryService)
+            executionPath: executionPath,
+            client: .live(
+                githubService: gitHubRepositoryService,
+                gitService: gitRepositoryService
+            )
         )
     }
 

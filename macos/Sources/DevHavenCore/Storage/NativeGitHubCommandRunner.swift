@@ -1,6 +1,8 @@
 import Foundation
 
 public struct NativeGitHubCommandRunner: Sendable {
+    typealias Execution = @Sendable (_ arguments: [String], _ repositoryPath: String, _ timeout: TimeInterval?, _ environment: [String: String]) throws -> Result
+
     private final class PipeBuffer: @unchecked Sendable {
         private let lock = NSLock()
         private var storage = Data()
@@ -46,9 +48,19 @@ public struct NativeGitHubCommandRunner: Sendable {
     }
 
     public var defaultTimeout: TimeInterval
+    private let executeOverride: Execution?
 
     public init(defaultTimeout: TimeInterval = 30) {
         self.defaultTimeout = defaultTimeout
+        self.executeOverride = nil
+    }
+
+    init(
+        defaultTimeout: TimeInterval = 30,
+        executeOverride: Execution?
+    ) {
+        self.defaultTimeout = defaultTimeout
+        self.executeOverride = executeOverride
     }
 
     public func run(
@@ -75,6 +87,10 @@ public struct NativeGitHubCommandRunner: Sendable {
         timeout: TimeInterval? = nil,
         environment: [String: String] = [:]
     ) throws -> Result {
+        if let executeOverride {
+            return try executeOverride(arguments, repositoryPath, timeout, environment)
+        }
+
         let repositoryURL = URL(fileURLWithPath: repositoryPath, isDirectory: true)
         guard FileManager.default.fileExists(atPath: repositoryURL.path) else {
             throw WorkspaceGitHubCommandError.invalidRepository("仓库路径不存在：\(repositoryPath)")

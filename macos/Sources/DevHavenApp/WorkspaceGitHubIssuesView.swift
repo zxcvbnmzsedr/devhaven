@@ -4,6 +4,7 @@ import DevHavenCore
 
 struct WorkspaceGitHubIssuesView: View {
     @Bindable var viewModel: WorkspaceGitHubViewModel
+    let onCreateIssueWorktree: ((WorkspaceGitHubIssueDetail) throws -> Void)?
     @State private var splitRatio = 0.36
 
     var body: some View {
@@ -74,7 +75,11 @@ struct WorkspaceGitHubIssuesView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(NativeTheme.window)
         } else if let detail = viewModel.selectedIssueDetail {
-            WorkspaceGitHubIssueDetailView(detail: detail)
+            WorkspaceGitHubIssueDetailView(
+                viewModel: viewModel,
+                detail: detail,
+                onCreateIssueWorktree: onCreateIssueWorktree
+            )
         } else {
             ContentUnavailableView(
                 "选择一个 Issue",

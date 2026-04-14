@@ -153,7 +153,10 @@ struct WorkspaceShellView: View {
                 description: "请切换到一个真实项目工作区后再查看 GitHub 协作信息。"
             )
         } else if let gitHubViewModel = viewModel.activeWorkspaceGitHubViewModel {
-            WorkspaceGitHubRootView(viewModel: gitHubViewModel)
+            WorkspaceGitHubRootView(
+                viewModel: gitHubViewModel,
+                onCreateIssueWorktree: createIssueWorktree
+            )
         } else {
             gitModeEmptyState(
                 title: "GitHub 面板尚未就绪",
@@ -321,6 +324,37 @@ struct WorkspaceShellView: View {
     private func gitLogDiffTitle(for file: WorkspaceGitCommitFileChange) -> String {
         let fileName = (file.path as NSString).lastPathComponent
         return fileName.isEmpty ? file.path : fileName
+    }
+
+    private func createIssueWorktree(from detail: WorkspaceGitHubIssueDetail) throws {
+        guard let rootProject = viewModel.activeWorkspaceRootProject else {
+            throw WorkspaceGitHubCommandError.operationRejected("当前未找到可用的 root project")
+        }
+        guard let baseBranch = activeWorkspaceBaseBranchCandidate() else {
+            throw WorkspaceGitHubCommandError.operationRejected(
+                "当前 root project 未检测到基线分支，暂时无法从 Issue 创建 worktree。"
+            )
+        }
+        try viewModel.startCreateWorkspaceWorktree(
+            from: rootProject.path,
+            branch: detail.suggestedBranchName,
+            createBranch: true,
+            baseBranch: baseBranch,
+            autoOpen: true
+        )
+    }
+
+    private func activeWorkspaceBaseBranchCandidate() -> String? {
+        guard let rootProject = viewModel.activeWorkspaceRootProject,
+              let activeProject = viewModel.activeWorkspaceProject
+        else {
+            return nil
+        }
+        if activeProject.path != rootProject.path,
+           let worktree = rootProject.worktrees.first(where: { $0.path == activeProject.path }) {
+            return worktree.branch
+        }
+        return viewModel.activeWorkspaceRootCurrentBranchName
     }
 
     private func syncTerminalStores() {

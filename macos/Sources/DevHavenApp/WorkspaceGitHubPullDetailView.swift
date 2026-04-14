@@ -2,8 +2,15 @@ import AppKit
 import SwiftUI
 import DevHavenCore
 
+enum WorkspaceGitHubPullDetailActionMode: Equatable {
+    case pull
+    case review
+}
+
 struct WorkspaceGitHubPullDetailView: View {
+    @Bindable var viewModel: WorkspaceGitHubViewModel
     let detail: WorkspaceGitHubPullDetail
+    let actionMode: WorkspaceGitHubPullDetailActionMode
     @State private var splitRatio = 0.68
 
     var body: some View {
@@ -17,6 +24,18 @@ struct WorkspaceGitHubPullDetailView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         header
+                        if let actionBanner {
+                            feedbackBanner(
+                                message: actionBanner.message,
+                                tint: actionBanner.tint
+                            )
+                        }
+                        if actionMode == .review {
+                            reviewActionsSection
+                        } else {
+                            pullCommentSection
+                        }
+                        pullActionsSection
                         metrics
                         bodySection
                         commentsSection
@@ -96,6 +115,111 @@ struct WorkspaceGitHubPullDetailView: View {
         .clipShape(.rect(cornerRadius: 14))
     }
 
+    private var pullActionsSection: some View {
+        sectionCard(title: "Pull Request Actions") {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    Button("Checkout 分支") {
+                        viewModel.checkoutSelectedPullBranch()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.isMutating)
+
+                    if canMergePull {
+                        Button("Merge") {
+                            viewModel.mergeSelectedPull()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.isMutating)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    switch detail.state {
+                    case .open:
+                        Button("关闭 PR", role: .destructive) {
+                            viewModel.closeSelectedPull()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.isMutating)
+                    case .closed:
+                        Button("重新打开 PR") {
+                            viewModel.reopenSelectedPull()
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.isMutating)
+                    case .merged, .unknown:
+                        EmptyView()
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    private var pullCommentSection: some View {
+        sectionCard(title: "新增评论") {
+            VStack(alignment: .leading, spacing: 8) {
+                TextEditor(text: $viewModel.pullCommentDraft)
+                    .font(.callout)
+                    .frame(minHeight: 108)
+                    .padding(8)
+                    .background(NativeTheme.elevated)
+                    .clipShape(.rect(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(NativeTheme.border, lineWidth: 1)
+                    )
+
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    Button("提交评论") {
+                        viewModel.addCommentToSelectedPull()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.isMutating || viewModel.pullCommentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private var reviewActionsSection: some View {
+        sectionCard(title: "Review Actions") {
+            VStack(alignment: .leading, spacing: 12) {
+                TextEditor(text: $viewModel.reviewCommentDraft)
+                    .font(.callout)
+                    .frame(minHeight: 108)
+                    .padding(8)
+                    .background(NativeTheme.elevated)
+                    .clipShape(.rect(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(NativeTheme.border, lineWidth: 1)
+                    )
+
+                HStack(spacing: 8) {
+                    Button("评论") {
+                        viewModel.submitReviewForSelectedPull(event: .comment)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(viewModel.isMutating || !canSubmitReviewComment)
+
+                    Button("通过") {
+                        viewModel.submitReviewForSelectedPull(event: .approve)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(viewModel.isMutating || !canSubmitReview)
+
+                    Button("请求修改") {
+                        viewModel.submitReviewForSelectedPull(event: .requestChanges)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(viewModel.isMutating || !canSubmitReviewComment)
+                }
+            }
+        }
+    }
+
     private var metrics: some View {
         HStack(spacing: 10) {
             metricCard("Files", value: "\(detail.changedFiles)")
@@ -125,10 +249,7 @@ struct WorkspaceGitHubPullDetailView: View {
     }
 
     private var bodySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Description")
-                .font(.headline)
-                .foregroundStyle(NativeTheme.textPrimary)
+        sectionCard(title: "Description") {
             if (detail.body ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("暂无描述")
                     .font(.callout)
@@ -141,50 +262,99 @@ struct WorkspaceGitHubPullDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(14)
-        .background(NativeTheme.surface)
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(NativeTheme.border, lineWidth: 1)
-        )
-        .clipShape(.rect(cornerRadius: 14))
     }
 
     private var commentsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Comments")
-                .font(.headline)
-                .foregroundStyle(NativeTheme.textPrimary)
+        sectionCard(title: "Comments") {
             if detail.comments.isEmpty {
                 Text("暂无评论")
                     .font(.callout)
                     .foregroundStyle(NativeTheme.textSecondary)
             } else {
-                ForEach(detail.comments) { comment in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Text(comment.author?.displayName ?? "Unknown")
-                                .font(.caption.weight(.semibold))
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(detail.comments) { comment in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text(comment.author?.displayName ?? "Unknown")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(NativeTheme.textPrimary)
+                                Text(gitHubRelativeDateText(comment.createdAt))
+                                    .font(.caption)
+                                    .foregroundStyle(NativeTheme.textSecondary)
+                            }
+                            Text(comment.body)
+                                .font(.callout)
                                 .foregroundStyle(NativeTheme.textPrimary)
-                            Text(gitHubRelativeDateText(comment.createdAt))
-                                .font(.caption)
-                                .foregroundStyle(NativeTheme.textSecondary)
+                                .textSelection(.enabled)
                         }
-                        Text(comment.body)
-                            .font(.callout)
-                            .foregroundStyle(NativeTheme.textPrimary)
-                            .textSelection(.enabled)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(NativeTheme.elevated)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(NativeTheme.border, lineWidth: 1)
+                        )
+                        .clipShape(.rect(cornerRadius: 12))
                     }
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(NativeTheme.elevated)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(NativeTheme.border, lineWidth: 1)
-                    )
-                    .clipShape(.rect(cornerRadius: 12))
                 }
             }
+        }
+    }
+
+    private var canMergePull: Bool {
+        detail.state == .open && !detail.isDraft
+    }
+
+    private var canSubmitReview: Bool {
+        detail.state == .open && !detail.isDraft
+    }
+
+    private var canSubmitReviewComment: Bool {
+        canSubmitReview && !viewModel.reviewCommentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var actionBanner: (message: String, tint: Color)? {
+        if let mutationErrorMessage = viewModel.mutationErrorMessage,
+           !mutationErrorMessage.isEmpty {
+            return (mutationErrorMessage, NativeTheme.warning)
+        }
+        if let activeMutation = viewModel.activeMutation,
+           viewModel.isMutating,
+           isPullMutation(activeMutation) {
+            return (gitHubMutationStatusText(activeMutation), NativeTheme.accent)
+        }
+        if let lastSuccessfulMutation = viewModel.lastSuccessfulMutation,
+           isPullMutation(lastSuccessfulMutation) {
+            return (gitHubMutationSuccessText(lastSuccessfulMutation), .green)
+        }
+        return nil
+    }
+
+    private func isPullMutation(_ kind: WorkspaceGitHubMutationKind) -> Bool {
+        switch kind {
+        case .addPullComment, .closePull, .reopenPull, .mergePull, .checkoutPullBranch, .submitReview:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func feedbackBanner(message: String, tint: Color) -> some View {
+        Text(message)
+            .font(.callout)
+            .foregroundStyle(tint)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(tint.opacity(0.12))
+            .clipShape(.rect(cornerRadius: 12))
+    }
+
+    private func sectionCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(NativeTheme.textPrimary)
+            content()
         }
         .padding(14)
         .background(NativeTheme.surface)

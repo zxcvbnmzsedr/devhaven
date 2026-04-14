@@ -3,6 +3,7 @@ import DevHavenCore
 
 struct WorkspaceGitHubRootView: View {
     @Bindable var viewModel: WorkspaceGitHubViewModel
+    let onCreateIssueWorktree: ((WorkspaceGitHubIssueDetail) throws -> Void)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,7 +69,10 @@ struct WorkspaceGitHubRootView: View {
             case .pulls:
                 WorkspaceGitHubPullsView(viewModel: viewModel)
             case .issues:
-                WorkspaceGitHubIssuesView(viewModel: viewModel)
+                WorkspaceGitHubIssuesView(
+                    viewModel: viewModel,
+                    onCreateIssueWorktree: onCreateIssueWorktree
+                )
             case .reviews:
                 WorkspaceGitHubReviewsView(viewModel: viewModel)
             }

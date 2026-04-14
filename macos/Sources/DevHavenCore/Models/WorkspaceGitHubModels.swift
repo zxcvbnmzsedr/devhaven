@@ -221,6 +221,59 @@ public struct WorkspaceGitHubComment: Codable, Equatable, Sendable, Identifiable
     }
 }
 
+public enum WorkspaceGitHubPullMergeMethod: String, CaseIterable, Identifiable, Sendable {
+    case merge
+
+    public var id: String { rawValue }
+
+    public var ghArgument: String {
+        switch self {
+        case .merge:
+            return "--merge"
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .merge:
+            return "Merge"
+        }
+    }
+}
+
+public enum WorkspaceGitHubReviewSubmissionEvent: String, CaseIterable, Identifiable, Sendable {
+    case comment
+    case approve
+    case requestChanges
+
+    public var id: String { rawValue }
+
+    public var ghArgument: String {
+        switch self {
+        case .comment:
+            return "--comment"
+        case .approve:
+            return "--approve"
+        case .requestChanges:
+            return "--request-changes"
+        }
+    }
+}
+
+public enum WorkspaceGitHubMutationKind: Equatable, Sendable {
+    case addIssueComment
+    case closeIssue
+    case reopenIssue
+    case createIssueBranch
+    case createIssueWorktree
+    case addPullComment
+    case closePull
+    case reopenPull
+    case mergePull(WorkspaceGitHubPullMergeMethod)
+    case checkoutPullBranch
+    case submitReview(WorkspaceGitHubReviewSubmissionEvent)
+}
+
 public struct WorkspaceGitHubCommitAuthor: Codable, Equatable, Sendable {
     public var nodeID: String?
     public var login: String?
@@ -669,6 +722,10 @@ public struct WorkspaceGitHubIssueSummary: Equatable, Sendable, Identifiable {
         self.updatedAt = updatedAt
         self.url = url
     }
+
+    public var suggestedBranchName: String {
+        GitHubIssueBranchNameBuilder.suggestedBranchName(number: number, title: title)
+    }
 }
 
 public struct WorkspaceGitHubIssueDetail: Equatable, Sendable, Identifiable {
@@ -690,6 +747,10 @@ public struct WorkspaceGitHubIssueDetail: Equatable, Sendable, Identifiable {
 
     public var commentsCount: Int {
         comments.count
+    }
+
+    public var suggestedBranchName: String {
+        GitHubIssueBranchNameBuilder.suggestedBranchName(number: number, title: title)
     }
 
     public init(
@@ -724,6 +785,27 @@ public struct WorkspaceGitHubIssueDetail: Equatable, Sendable, Identifiable {
         self.closedAt = closedAt
         self.url = url
         self.comments = comments
+    }
+}
+
+public enum GitHubIssueBranchNameBuilder {
+    public static func suggestedBranchName(number: Int, title: String) -> String {
+        let foldedTitle = title
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+        let slug = foldedTitle
+            .replacingOccurrences(
+                of: #"[^a-z0-9]+"#,
+                with: "-",
+                options: .regularExpression
+            )
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        let trimmedSlug = slug
+            .split(separator: "-")
+            .prefix(6)
+            .joined(separator: "-")
+        let fallbackSlug = trimmedSlug.isEmpty ? "issue" : trimmedSlug
+        return "issue/\(number)-\(fallbackSlug)"
     }
 }
 
@@ -772,6 +854,7 @@ public enum WorkspaceGitHubCommandError: LocalizedError, Equatable, Sendable {
     case unsupportedRemote(String)
     case authRequired(String)
     case parseFailure(String)
+    case operationRejected(String)
     case commandFailed(command: String, message: String)
     case timedOut(command: String, timeout: TimeInterval)
 
@@ -784,6 +867,8 @@ public enum WorkspaceGitHubCommandError: LocalizedError, Equatable, Sendable {
         case let .authRequired(message):
             return message
         case let .parseFailure(message):
+            return message
+        case let .operationRejected(message):
             return message
         case let .commandFailed(command, message):
             return "GitHub 命令执行失败（\(command)）：\(message)"

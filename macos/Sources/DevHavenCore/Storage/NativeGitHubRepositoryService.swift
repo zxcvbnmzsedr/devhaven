@@ -305,6 +305,174 @@ public struct NativeGitHubRepositoryService: Sendable {
         )
     }
 
+    public func addIssueComment(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int,
+        body: String
+    ) throws {
+        try runVoid(
+            arguments: [
+                "issue",
+                "comment",
+                String(number),
+                "-R",
+                context.repoSelector,
+                "--body",
+                try normalizedCommentBody(body, emptyMessage: "评论内容不能为空"),
+            ],
+            at: context.repositoryPath
+        )
+    }
+
+    public func closeIssue(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int
+    ) throws {
+        try runVoid(
+            arguments: [
+                "issue",
+                "close",
+                String(number),
+                "-R",
+                context.repoSelector,
+            ],
+            at: context.repositoryPath
+        )
+    }
+
+    public func reopenIssue(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int
+    ) throws {
+        try runVoid(
+            arguments: [
+                "issue",
+                "reopen",
+                String(number),
+                "-R",
+                context.repoSelector,
+            ],
+            at: context.repositoryPath
+        )
+    }
+
+    public func addPullComment(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int,
+        body: String
+    ) throws {
+        try runVoid(
+            arguments: [
+                "pr",
+                "comment",
+                String(number),
+                "-R",
+                context.repoSelector,
+                "--body",
+                try normalizedCommentBody(body, emptyMessage: "评论内容不能为空"),
+            ],
+            at: context.repositoryPath
+        )
+    }
+
+    public func closePull(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int
+    ) throws {
+        try runVoid(
+            arguments: [
+                "pr",
+                "close",
+                String(number),
+                "-R",
+                context.repoSelector,
+            ],
+            at: context.repositoryPath
+        )
+    }
+
+    public func reopenPull(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int
+    ) throws {
+        try runVoid(
+            arguments: [
+                "pr",
+                "reopen",
+                String(number),
+                "-R",
+                context.repoSelector,
+            ],
+            at: context.repositoryPath
+        )
+    }
+
+    public func mergePull(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int,
+        method: WorkspaceGitHubPullMergeMethod = .merge
+    ) throws {
+        try runVoid(
+            arguments: [
+                "pr",
+                "merge",
+                String(number),
+                "-R",
+                context.repoSelector,
+                method.ghArgument,
+            ],
+            at: context.repositoryPath,
+            timeout: 90
+        )
+    }
+
+    public func checkoutPullBranch(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int,
+        at executionPath: String
+    ) throws {
+        try runVoid(
+            arguments: [
+                "pr",
+                "checkout",
+                String(number),
+                "-R",
+                context.repoSelector,
+            ],
+            at: executionPath,
+            timeout: 90
+        )
+    }
+
+    public func submitReview(
+        in context: WorkspaceGitHubRepositoryContext,
+        number: Int,
+        event: WorkspaceGitHubReviewSubmissionEvent,
+        body: String?
+    ) throws {
+        let normalizedBody = body?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if (event == .comment || event == .requestChanges),
+           normalizedBody?.isEmpty != false {
+            throw WorkspaceGitHubCommandError.operationRejected(
+                event == .comment ? "Review 评论内容不能为空" : "请求修改时请填写说明"
+            )
+        }
+
+        var arguments = [
+            "pr",
+            "review",
+            String(number),
+            "-R",
+            context.repoSelector,
+            event.ghArgument,
+        ]
+        if let normalizedBody, !normalizedBody.isEmpty {
+            arguments += ["--body", normalizedBody]
+        }
+        try runVoid(arguments: arguments, at: context.repositoryPath, timeout: 90)
+    }
+
     private func runJSON<T: Decodable>(
         _ type: T.Type,
         arguments: [String],
@@ -324,6 +492,32 @@ public struct NativeGitHubRepositoryService: Sendable {
         } catch {
             throw WorkspaceGitHubCommandError.parseFailure("GitHub 数据解析失败：\(error.localizedDescription)")
         }
+    }
+
+    private func runVoid(
+        arguments: [String],
+        at repositoryPath: String,
+        timeout: TimeInterval? = nil
+    ) throws {
+        let result = try runner.runAllowingFailure(
+            arguments: arguments,
+            at: repositoryPath,
+            timeout: timeout
+        )
+        guard result.isSuccess else {
+            throw mapFailure(result)
+        }
+    }
+
+    private func normalizedCommentBody(
+        _ body: String,
+        emptyMessage: String
+    ) throws -> String {
+        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedBody.isEmpty else {
+            throw WorkspaceGitHubCommandError.operationRejected(emptyMessage)
+        }
+        return normalizedBody
     }
 
     private func mapFailure(_ result: NativeGitHubCommandRunner.Result) -> WorkspaceGitHubCommandError {

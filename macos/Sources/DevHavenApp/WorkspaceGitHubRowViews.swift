@@ -112,6 +112,71 @@ func gitHubMergeStateTitle(_ status: WorkspaceGitHubMergeStateStatus) -> String 
     }
 }
 
+func gitHubReviewSubmissionTitle(_ event: WorkspaceGitHubReviewSubmissionEvent) -> String {
+    switch event {
+    case .comment:
+        return "评论"
+    case .approve:
+        return "通过"
+    case .requestChanges:
+        return "请求修改"
+    }
+}
+
+func gitHubMutationStatusText(_ kind: WorkspaceGitHubMutationKind) -> String {
+    switch kind {
+    case .addIssueComment:
+        return "正在提交 Issue 评论…"
+    case .closeIssue:
+        return "正在关闭 Issue…"
+    case .reopenIssue:
+        return "正在重新打开 Issue…"
+    case .createIssueBranch:
+        return "正在创建并切换 Issue 分支…"
+    case .createIssueWorktree:
+        return "已开始创建 Issue worktree…"
+    case .addPullComment:
+        return "正在提交 PR 评论…"
+    case .closePull:
+        return "正在关闭 Pull Request…"
+    case .reopenPull:
+        return "正在重新打开 Pull Request…"
+    case let .mergePull(method):
+        return "正在执行 \(method.title) …"
+    case .checkoutPullBranch:
+        return "正在 checkout PR 分支…"
+    case let .submitReview(event):
+        return "正在提交 Review\(gitHubReviewSubmissionTitle(event))…"
+    }
+}
+
+func gitHubMutationSuccessText(_ kind: WorkspaceGitHubMutationKind) -> String {
+    switch kind {
+    case .addIssueComment:
+        return "Issue 评论已提交"
+    case .closeIssue:
+        return "Issue 已关闭"
+    case .reopenIssue:
+        return "Issue 已重新打开"
+    case .createIssueBranch:
+        return "Issue 分支已创建并切换"
+    case .createIssueWorktree:
+        return "已开始创建并打开 Issue worktree"
+    case .addPullComment:
+        return "PR 评论已提交"
+    case .closePull:
+        return "Pull Request 已关闭"
+    case .reopenPull:
+        return "Pull Request 已重新打开"
+    case let .mergePull(method):
+        return "\(method.title) 已提交"
+    case .checkoutPullBranch:
+        return "PR 分支已 checkout"
+    case let .submitReview(event):
+        return "Review\(gitHubReviewSubmissionTitle(event))已提交"
+    }
+}
+
 func gitHubPullStateColor(_ state: WorkspaceGitHubPullState, isDraft: Bool) -> Color {
     if isDraft {
         return NativeTheme.textSecondary
