@@ -141,10 +141,10 @@ final class WorkspaceMonacoEditorBridge: NSObject, ObservableObject, WKScriptMes
     }
 
     private func loadShellIfNeeded() {
-        guard let htmlURL = Bundle.module.url(
-            forResource: "index",
-            withExtension: "html",
-            subdirectory: "MonacoEditorResources"
+        guard let htmlURL = DevHavenAppResourceLocator.resolveResourceURL(
+            subdirectory: "MonacoEditorResources",
+            resource: "index",
+            withExtension: "html"
         ) else {
             return
         }

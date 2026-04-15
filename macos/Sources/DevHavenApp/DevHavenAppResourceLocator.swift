@@ -29,6 +29,58 @@ enum DevHavenAppResourceBundleLocator {
 enum DevHavenAppResourceLocator {
     static let resourceBundleName = DevHavenAppResourceBundleLocator.resourceBundleName
 
+    static func resolveResourceBundle(
+        fileManager: FileManager = .default,
+        mainBundle: Bundle = .main,
+        allBundles: [Bundle] = Bundle.allBundles,
+        allFrameworks: [Bundle] = Bundle.allFrameworks
+    ) -> Bundle? {
+        guard let bundleURL = DevHavenAppResourceBundleLocator.resolveResourceBundleURL(
+            fileManager: fileManager,
+            mainBundle: mainBundle,
+            allBundles: allBundles,
+            allFrameworks: allFrameworks
+        ) else {
+            return nil
+        }
+        return Bundle(url: bundleURL)
+    }
+
+    static func resolveResourceURL(
+        subdirectory: String,
+        resource: String,
+        withExtension fileExtension: String,
+        fileManager: FileManager = .default,
+        mainBundle: Bundle = .main,
+        allBundles: [Bundle] = Bundle.allBundles,
+        allFrameworks: [Bundle] = Bundle.allFrameworks
+    ) -> URL? {
+        guard let resourceBundle = resolveResourceBundle(
+            fileManager: fileManager,
+            mainBundle: mainBundle,
+            allBundles: allBundles,
+            allFrameworks: allFrameworks
+        ) else {
+            return nil
+        }
+
+        if let resourceURL = resourceBundle.url(
+            forResource: resource,
+            withExtension: fileExtension,
+            subdirectory: subdirectory
+        ) {
+            return resourceURL
+        }
+
+        let directURL = resourceBundle.bundleURL
+            .appending(path: subdirectory, directoryHint: .isDirectory)
+            .appending(path: "\(resource).\(fileExtension)", directoryHint: .notDirectory)
+        guard fileManager.fileExists(atPath: directURL.path) else {
+            return nil
+        }
+        return directURL
+    }
+
     static func resolveAgentResourcesURL(
         fileManager: FileManager = .default,
         mainBundle: Bundle = .main,

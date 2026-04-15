@@ -6,7 +6,7 @@
 
 ### 纯 macOS 原生开发工作区：项目、终端、Git、Run、通知与 Agent 状态统一收口
 
-[![版本](https://img.shields.io/badge/version-3.2.0-blue)](https://github.com/zxcvbnmzsedr/DevHaven/releases)
+[![版本](https://img.shields.io/badge/version-3.2.1-blue)](https://github.com/zxcvbnmzsedr/DevHaven/releases)
 [![协议](https://img.shields.io/badge/license-GPL--3.0-green)](./LICENSE)
 [![平台](https://img.shields.io/badge/macOS-14.0%2B-black)](https://developer.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-6.0-orange)](https://www.swift.org/)

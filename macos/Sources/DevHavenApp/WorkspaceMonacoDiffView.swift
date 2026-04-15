@@ -113,10 +113,10 @@ final class WorkspaceMonacoDiffBridge: NSObject, ObservableObject, WKScriptMessa
     }
 
     private func loadShellIfNeeded() {
-        guard let htmlURL = Bundle.module.url(
-            forResource: "index",
-            withExtension: "html",
-            subdirectory: "MonacoDiffResources"
+        guard let htmlURL = DevHavenAppResourceLocator.resolveResourceURL(
+            subdirectory: "MonacoDiffResources",
+            resource: "index",
+            withExtension: "html"
         ) else {
             return
         }
