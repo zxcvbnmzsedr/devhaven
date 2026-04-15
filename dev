@@ -102,7 +102,6 @@ cd "$ROOT_DIR"
 VENDOR_COMMANDS=(
   "bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor"
   "bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor"
-  "bash macos/scripts/setup-codeedit-packages.sh --ensure-worktree-vendor"
 )
 CLI_BUILD_COMMAND=(swift build --package-path macos --product DevHavenCLI)
 RUN_COMMAND=(swift run --package-path macos DevHavenApp)

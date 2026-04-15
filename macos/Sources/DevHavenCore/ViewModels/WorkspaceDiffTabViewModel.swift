@@ -232,6 +232,24 @@ public final class WorkspaceDiffTabViewModel {
         scheduleEditableContentRebuild(for: rebuildRequest)
     }
 
+    public func selectDifferenceAnchor(_ anchor: WorkspaceDiffDifferenceAnchor?) {
+        if let anchor {
+            guard currentDifferenceAnchors.contains(anchor),
+                  selectedDifferenceAnchor != anchor
+            else {
+                return
+            }
+        } else if selectedDifferenceAnchor == nil {
+            return
+        }
+
+        selectedDifferenceAnchor = anchor
+        rebuildNavigatorState()
+    }
+    
+
+
+    
     private func applyEditableContentUpdate(_ text: String) -> EditableContentRebuildRequest? {
         switch documentState.loadState {
         case let .loaded(.compare(document)):

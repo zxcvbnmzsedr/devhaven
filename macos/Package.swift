@@ -11,11 +11,7 @@ let package = Package(
         .executable(name: "DevHavenApp", targets: ["DevHavenApp"]),
         .executable(name: "DevHavenCLI", targets: ["DevHavenCLI"]),
     ],
-    dependencies: [
-        .package(path: "Vendor/CodeEditPackages/CodeEditSourceEditor"),
-        .package(path: "Vendor/CodeEditPackages/CodeEditTextView"),
-        .package(path: "Vendor/CodeEditPackages/CodeEditLanguages"),
-    ],
+    dependencies: [],
     targets: [
         .binaryTarget(
             name: "GhosttyKit",
@@ -38,13 +34,12 @@ let package = Package(
                 "DevHavenCore",
                 "GhosttyKit",
                 "Sparkle",
-                .product(name: "CodeEditLanguages", package: "CodeEditLanguages"),
-                .product(name: "CodeEditSourceEditor", package: "CodeEditSourceEditor"),
-                .product(name: "CodeEditTextView", package: "CodeEditTextView"),
             ],
             resources: [
                 .copy("GhosttyResources"),
                 .copy("AgentResources"),
+                .copy("MonacoDiffResources"),
+                .copy("MonacoEditorResources"),
             ],
             linkerSettings: [
                 .linkedFramework("Carbon"),
@@ -53,7 +48,10 @@ let package = Package(
         ),
         .testTarget(
             name: "DevHavenAppTests",
-            dependencies: ["DevHavenApp", "DevHavenCore"]
+            dependencies: [
+                "DevHavenApp",
+                "DevHavenCore",
+            ]
         ),
         .testTarget(
             name: "DevHavenCoreTests",

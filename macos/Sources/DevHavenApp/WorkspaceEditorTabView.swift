@@ -7,7 +7,7 @@ struct WorkspaceEditorTabView: View {
     let tabID: String
 
     @State private var editorCommandRouter = WorkspaceEditorCommandRouter()
-    @State private var codeEditBridge = WorkspaceCodeEditEditorBridge()
+    @StateObject private var monacoBridge = WorkspaceMonacoEditorBridge()
     @State private var goToLineDraft = ""
     @State private var isGoToLinePresented = false
 
@@ -54,7 +54,7 @@ struct WorkspaceEditorTabView: View {
         } else {
             switch tab.kind {
             case .text:
-                WorkspaceCodeEditEditorView(
+                WorkspaceMonacoEditorView(
                     filePath: tab.filePath,
                     text: Binding(
                         get: {
@@ -67,7 +67,10 @@ struct WorkspaceEditorTabView: View {
                     isEditable: tab.isEditable,
                     shouldRequestFocus: viewModel.workspaceFocusedArea == .editorTab(tabID),
                     displayOptions: viewModel.workspaceEditorDisplayOptions,
-                    bridge: codeEditBridge
+                    bridge: monacoBridge,
+                    onSaveRequested: {
+                        viewModel.saveWorkspaceEditorTab(tabID, in: projectPath)
+                    }
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .binary:
@@ -134,13 +137,13 @@ struct WorkspaceEditorTabView: View {
             Spacer(minLength: 0)
 
             Button("查找") {
-                codeEditBridge.showFindPanel()
+                monacoBridge.startSearch()
             }
             .buttonStyle(.borderless)
             .disabled(tab.kind != .text)
 
             Button("替换") {
-                codeEditBridge.showReplacePanel()
+                monacoBridge.showReplace()
             }
             .buttonStyle(.borderless)
             .disabled(tab.kind != .text || !tab.isEditable)
@@ -288,28 +291,28 @@ struct WorkspaceEditorTabView: View {
         guard let lineNumber = Int(goToLineDraft), lineNumber > 0 else {
             return
         }
-        codeEditBridge.goToLine(lineNumber)
+        monacoBridge.goToLine(lineNumber)
         isGoToLinePresented = false
     }
 
     private func syncEditorCommandRouter() {
         editorCommandRouter.startSearchAction = {
-            codeEditBridge.showFindPanel()
+            monacoBridge.startSearch()
         }
         editorCommandRouter.showReplaceAction = {
-            codeEditBridge.showReplacePanel()
+            monacoBridge.showReplace()
         }
         editorCommandRouter.navigateSearchNextAction = {
-            codeEditBridge.findNext()
+            monacoBridge.findNext()
         }
         editorCommandRouter.navigateSearchPreviousAction = {
-            codeEditBridge.findPrevious()
+            monacoBridge.findPrevious()
         }
         editorCommandRouter.useSelectionForSearchAction = {
-            codeEditBridge.useSelectionForFind()
+            monacoBridge.useSelectionForFind()
         }
         editorCommandRouter.closeSearchAction = {
-            codeEditBridge.hideFindPanel()
+            monacoBridge.closeSearch()
         }
         editorCommandRouter.goToLineAction = {
             isGoToLinePresented = true

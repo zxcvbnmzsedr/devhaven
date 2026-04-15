@@ -92,13 +92,10 @@ bash macos/scripts/setup-ghostty-framework.sh --source /path/to/ghostty --skip-b
 # 3. 准备 Sparkle vendor
 bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor
 
-# 4. 准备 CodeEdit package vendor
-bash macos/scripts/setup-codeedit-packages.sh --ensure-worktree-vendor
-
-# 5. 运行测试
+# 4. 运行测试
 swift test --package-path macos
 
-# 6. 构建 Release App
+# 5. 构建 Release App
 ./release
 ```
 
@@ -111,7 +108,7 @@ swift test --package-path macos
 ./dev --dry-run  # 仅打印命令，不执行
 ```
 
-> `./dev` 会在启动前自动复用或准备所需 vendor 内容（Ghostty / Sparkle / CodeEditPackages），然后启动 `swift run --package-path macos DevHavenApp`。
+> `./dev` 会在启动前自动复用或准备所需 vendor 内容（Ghostty / Sparkle），然后启动 `swift run --package-path macos DevHavenApp`。
 
 ### 终端配置
 
