@@ -169,6 +169,25 @@ public struct NativeGitRepositoryService: Sendable {
         return result.stdout
     }
 
+    public func loadRevisionFileContent(
+        at repositoryPath: String,
+        revision: String?,
+        filePath: String?
+    ) throws -> String {
+        guard let revision = revision?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !revision.isEmpty,
+              let filePath = filePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !filePath.isEmpty
+        else {
+            return ""
+        }
+        return try loadGitObjectText(
+            arguments: ["show", "\(revision):\(filePath)"],
+            at: repositoryPath,
+            emptyOnMissing: true
+        )
+    }
+
     public func loadWorkingTreeDiff(at repositoryPath: String, filePath: String) throws -> String {
         let normalizedPath = filePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedPath.isEmpty else {

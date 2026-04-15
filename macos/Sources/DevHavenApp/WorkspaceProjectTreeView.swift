@@ -91,6 +91,7 @@ struct WorkspaceProjectTreeView: View {
         }
         .focusable()
         .focused($isTreeFocused)
+        .focusEffectDisabled()
         .onAppear {
             isTreeFocused = true
             syncSelectionToVisibleNodes(currentVisibleNodes())

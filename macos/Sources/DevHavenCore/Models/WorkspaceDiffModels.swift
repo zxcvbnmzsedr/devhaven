@@ -212,6 +212,7 @@ public struct WorkspaceDiffParsedDocument: Equatable, Sendable {
 }
 
 public enum WorkspaceDiffCompareMode: String, Equatable, Sendable {
+    case history
     case staged
     case unstaged
     case untracked

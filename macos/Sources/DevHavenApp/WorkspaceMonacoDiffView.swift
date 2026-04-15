@@ -365,6 +365,8 @@ struct WorkspaceMonacoDiffView: View {
 
     private var compareModeLabel: String {
         switch document.mode {
+        case .history:
+            return "Commit"
         case .staged:
             return "Staged"
         case .unstaged:
