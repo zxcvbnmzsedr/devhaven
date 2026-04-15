@@ -406,7 +406,11 @@ public struct NativeGitRepositoryService: Sendable {
         try runMutation(arguments: ["reset"], at: repositoryPath)
     }
 
-    public func discard(paths: [String], at repositoryPath: String) throws {
+    public func discard(
+        paths: [String],
+        at repositoryPath: String,
+        deleteLocallyAddedFiles: Bool = true
+    ) throws {
         let normalizedPaths = normalizePaths(paths)
         guard !normalizedPaths.isEmpty else {
             return
@@ -416,6 +420,7 @@ public struct NativeGitRepositoryService: Sendable {
             let snapshot = try loadChanges(at: repositoryPath)
             let stagedByPath = Dictionary(uniqueKeysWithValues: snapshot.staged.map { ($0.path, $0) })
             let unstagedByPath = Dictionary(uniqueKeysWithValues: snapshot.unstaged.map { ($0.path, $0) })
+            let conflictedByPath = Dictionary(uniqueKeysWithValues: snapshot.conflicted.map { ($0.path, $0) })
             let untrackedPaths = Set(snapshot.untracked.map(\.path))
 
             var trackedRestorePaths = Set<String>()
@@ -428,7 +433,9 @@ public struct NativeGitRepositoryService: Sendable {
                             arguments: ["rm", "--force", "--cached", "--", path],
                             at: repositoryPath
                         )
-                        cleanPaths.insert(path)
+                        if deleteLocallyAddedFiles {
+                            cleanPaths.insert(path)
+                        }
                     } else {
                         trackedRestorePaths.insert(path)
                         if let originalPath = stagedEntry.originalPath {
@@ -444,9 +451,20 @@ public struct NativeGitRepositoryService: Sendable {
                     }
                 }
 
-                if untrackedPaths.contains(path) {
+                if let conflictedEntry = conflictedByPath[path] {
+                    trackedRestorePaths.insert(path)
+                    if let originalPath = conflictedEntry.originalPath {
+                        trackedRestorePaths.insert(originalPath)
+                    }
+                }
+
+                if untrackedPaths.contains(path), deleteLocallyAddedFiles {
                     cleanPaths.insert(path)
                 }
+            }
+
+            guard !trackedRestorePaths.isEmpty || !cleanPaths.isEmpty else {
+                throw WorkspaceGitCommandError.operationRejected("当前选中的变更仅包含本地新增文件；如需删除它们，请勾选“删除本地新增文件”。")
             }
 
             if !trackedRestorePaths.isEmpty {

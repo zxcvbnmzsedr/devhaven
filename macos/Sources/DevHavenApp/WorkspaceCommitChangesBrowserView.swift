@@ -2,14 +2,27 @@ import SwiftUI
 import AppKit
 import DevHavenCore
 
+private struct WorkspaceCommitRollbackSheetContext: Identifiable {
+    let id = UUID()
+    let changes: [WorkspaceCommitChange]
+    let initialIncludedPaths: Set<String>
+}
+
 struct WorkspaceCommitChangesBrowserView: View {
     @Bindable var viewModel: WorkspaceCommitViewModel
     let onSyncDiffIfNeeded: (WorkspaceCommitChange) -> Void
     let onOpenDiff: (WorkspaceCommitChange) -> Void
+    @State private var rollbackSheetContext: WorkspaceCommitRollbackSheetContext?
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
+
+            if viewModel.isRevertingChanges {
+                progressBanner(text: "正在还原变更…")
+            } else if let message = browserErrorMessage {
+                errorBanner(message: message)
+            }
 
             Group {
                 if let snapshot = viewModel.changesSnapshot, !snapshot.changes.isEmpty {
@@ -39,6 +52,21 @@ struct WorkspaceCommitChangesBrowserView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(NativeTheme.window)
+        .sheet(item: $rollbackSheetContext) { context in
+            WorkspaceCommitRollbackSheet(
+                executionPath: viewModel.repositoryContext.executionPath,
+                changes: context.changes,
+                initialIncludedPaths: context.initialIncludedPaths,
+                onSubmit: { paths, deleteLocallyAddedFiles in
+                    rollbackSheetContext = nil
+                    viewModel.revertChanges(
+                        paths: paths,
+                        deleteLocallyAddedFiles: deleteLocallyAddedFiles
+                    )
+                },
+                onClose: { rollbackSheetContext = nil }
+            )
+        }
     }
 
     private var toolbar: some View {
@@ -46,6 +74,7 @@ struct WorkspaceCommitChangesBrowserView: View {
             toolbarButton(systemName: "arrow.clockwise", label: "刷新变更") {
                 viewModel.refreshChangesSnapshot()
             }
+            .disabled(isInteractionDisabled)
 
             toolbarButton(
                 systemName: viewModel.areAllChangesIncluded ? "checkmark.square.fill" : "checkmark.square",
@@ -53,6 +82,12 @@ struct WorkspaceCommitChangesBrowserView: View {
             ) {
                 viewModel.toggleAllInclusion()
             }
+            .disabled(isInteractionDisabled || viewModel.changesSnapshot?.changes.isEmpty != false)
+
+            toolbarButton(systemName: "arrow.uturn.backward", label: "还原…") {
+                presentRollbackSheet(initialPaths: defaultRollbackSeedPaths)
+            }
+            .disabled(!viewModel.canRevert(paths: allChangePaths))
 
             toolbarButton(systemName: "scope", label: "定位到当前选中") {
                 guard let path = viewModel.selectedChangePath ?? viewModel.changesSnapshot?.changes.first?.path else {
@@ -60,15 +95,18 @@ struct WorkspaceCommitChangesBrowserView: View {
                 }
                 viewModel.selectChange(path)
             }
+            .disabled(viewModel.changesSnapshot?.changes.isEmpty != false)
 
             Menu {
                 Button("清除选中") {
                     viewModel.selectChange(nil)
                 }
+                .disabled(viewModel.selectedChangePath == nil)
 
                 Button("刷新") {
                     viewModel.refreshChangesSnapshot()
                 }
+                .disabled(isInteractionDisabled)
             } label: {
                 toolbarIcon(systemName: "ellipsis.circle")
             }
@@ -107,6 +145,7 @@ struct WorkspaceCommitChangesBrowserView: View {
                     .foregroundStyle(masterInclusionColor(for: changes))
             }
             .buttonStyle(.plain)
+            .disabled(isInteractionDisabled)
 
             Text("\(title) \(changes.count) 个文件")
                 .font(.caption.weight(.semibold))
@@ -138,6 +177,7 @@ struct WorkspaceCommitChangesBrowserView: View {
                     .foregroundStyle(viewModel.includedPaths.contains(change.path) ? NativeTheme.accent : NativeTheme.textSecondary)
             }
             .buttonStyle(.plain)
+            .disabled(isInteractionDisabled)
 
             Image(nsImage: fileIcon(for: change))
                 .resizable()
@@ -165,6 +205,18 @@ struct WorkspaceCommitChangesBrowserView: View {
                 Button("打开差异") {
                     openChangeDiff(change)
                 }
+
+                Button(viewModel.includedPaths.contains(change.path) ? "从提交中移除" : "纳入提交") {
+                    viewModel.toggleInclusion(for: change.path)
+                }
+                .disabled(isInteractionDisabled)
+
+                Divider()
+
+                Button("还原…", role: .destructive) {
+                    presentRollbackSheet(initialPaths: [change.path])
+                }
+                .disabled(!viewModel.canRevert(paths: [change.path]))
             }
             .help("双击打开差异")
             .accessibilityAction(named: Text("打开差异")) {
@@ -216,6 +268,55 @@ struct WorkspaceCommitChangesBrowserView: View {
         return icon
     }
 
+    private var isInteractionDisabled: Bool {
+        viewModel.executionState.isRunning || viewModel.isRevertingChanges
+    }
+
+    private var allChangePaths: [String] {
+        (viewModel.changesSnapshot?.changes ?? []).map(\.path)
+    }
+
+    private var includedChangePaths: [String] {
+        (viewModel.changesSnapshot?.changes ?? [])
+            .filter { viewModel.includedPaths.contains($0.path) }
+            .map(\.path)
+    }
+
+    private var defaultRollbackSeedPaths: [String] {
+        if let selectedPath = viewModel.selectedChangePath {
+            return [selectedPath]
+        }
+        if !includedChangePaths.isEmpty {
+            return includedChangePaths
+        }
+        return allChangePaths
+    }
+
+    private var browserErrorMessage: String? {
+        let trimmed = viewModel.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func presentRollbackSheet(initialPaths: [String]) {
+        guard let changes = viewModel.changesSnapshot?.changes, !changes.isEmpty else {
+            return
+        }
+        let availablePaths = Set(changes.map(\.path))
+        let seededPaths = Set(
+            initialPaths
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        .intersection(availablePaths)
+        guard !seededPaths.isEmpty else {
+            return
+        }
+        rollbackSheetContext = WorkspaceCommitRollbackSheetContext(
+            changes: changes,
+            initialIncludedPaths: seededPaths
+        )
+    }
+
     private func toolbarButton(systemName: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             toolbarIcon(systemName: systemName)
@@ -235,6 +336,45 @@ struct WorkspaceCommitChangesBrowserView: View {
                 RoundedRectangle(cornerRadius: 5)
                     .stroke(NativeTheme.border, lineWidth: 1)
             }
+    }
+
+    private func progressBanner(text: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(NativeTheme.textPrimary)
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(NativeTheme.elevated)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(NativeTheme.border)
+                .frame(height: 1)
+        }
+    }
+
+    private func errorBanner(message: String) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.semibold))
+            Text(message)
+                .font(.caption)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+        }
+        .foregroundStyle(NativeTheme.warning)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(NativeTheme.warning.opacity(0.12))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(NativeTheme.border)
+                .frame(height: 1)
+        }
     }
 
     private func masterInclusionSystemImage(for changes: [WorkspaceCommitChange]) -> String {
@@ -302,19 +442,18 @@ struct WorkspaceCommitChangesBrowserView: View {
         switch change.status {
         case .renamed:
             if let oldPath = change.oldPath {
-                parts.append("Renamed from \((oldPath as NSString).lastPathComponent)")
+                parts.append("重命名自 \((oldPath as NSString).lastPathComponent)")
             }
         case .copied:
             if let oldPath = change.oldPath {
-                parts.append("Copied from \((oldPath as NSString).lastPathComponent)")
+                parts.append("复制自 \((oldPath as NSString).lastPathComponent)")
             }
         case .unmerged:
-            parts.append("Conflicted")
+            parts.append("冲突中")
         default:
             break
         }
 
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
-
 }

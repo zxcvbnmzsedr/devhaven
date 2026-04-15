@@ -115,6 +115,68 @@ final class WorkspaceCommitViewModelTests: XCTestCase {
         XCTAssertNil(viewModel.errorMessage)
     }
 
+    func testRevertChangesRunsOffMainActorAndRefreshesSnapshotAfterSuccess() async throws {
+        let repositoryPath = "/tmp/devhaven-commit-revert"
+        let revertStarted = expectation(description: "background revert started")
+        let revertGate = DispatchSemaphore(value: 0)
+        let snapshotBox = LockedBox(
+            Self.makeSnapshot(
+                branchName: "main",
+                changes: [
+                    WorkspaceCommitChange(
+                        path: "Sources/App.swift",
+                        status: .modified,
+                        group: .unstaged,
+                        isIncludedByDefault: false
+                    )
+                ]
+            )
+        )
+
+        let viewModel = WorkspaceCommitViewModel(
+            repositoryContext: Self.makeRepositoryContext(path: repositoryPath),
+            client: .init(
+                loadChangesSnapshot: { path in
+                    XCTAssertEqual(path, repositoryPath)
+                    return snapshotBox.value
+                },
+                loadDiffPreview: { _, _ in "" },
+                executeCommit: { _, _ in },
+                revertChanges: { path, paths, deleteLocallyAddedFiles in
+                    XCTAssertEqual(path, repositoryPath)
+                    XCTAssertEqual(paths, ["Sources/App.swift"])
+                    XCTAssertFalse(deleteLocallyAddedFiles)
+                    revertStarted.fulfill()
+                    revertGate.wait()
+                }
+            )
+        )
+
+        viewModel.changesSnapshot = snapshotBox.value
+        viewModel.selectChange("Sources/App.swift")
+
+        let startedAt = Date()
+        viewModel.revertChanges(paths: ["Sources/App.swift"], deleteLocallyAddedFiles: false)
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        XCTAssertLessThan(elapsed, 0.05)
+        XCTAssertTrue(viewModel.isRevertingChanges)
+        await fulfillment(of: [revertStarted], timeout: 1)
+
+        snapshotBox.value = Self.makeSnapshot(branchName: "main", changes: [])
+        revertGate.signal()
+
+        let finished = await waitUntil(timeout: 1.5) {
+            viewModel.isRevertingChanges == false &&
+                viewModel.changesSnapshot?.changes.isEmpty == true &&
+                viewModel.selectedChangePath == nil
+        }
+
+        XCTAssertTrue(finished)
+        XCTAssertEqual(viewModel.includedPaths, [])
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
     private func waitUntil(
         timeout: TimeInterval,
         condition: @escaping @MainActor () -> Bool

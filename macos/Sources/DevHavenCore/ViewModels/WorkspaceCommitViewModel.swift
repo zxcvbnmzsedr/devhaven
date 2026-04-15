@@ -8,15 +8,18 @@ public final class WorkspaceCommitViewModel {
         public var loadChangesSnapshot: @Sendable (String) throws -> WorkspaceCommitChangesSnapshot
         public var loadDiffPreview: @Sendable (String, String) throws -> String
         public var executeCommit: @Sendable (String, WorkspaceCommitExecutionRequest) throws -> Void
+        public var revertChanges: @Sendable (String, [String], Bool) throws -> Void
 
         public init(
             loadChangesSnapshot: @escaping @Sendable (String) throws -> WorkspaceCommitChangesSnapshot,
             loadDiffPreview: @escaping @Sendable (String, String) throws -> String,
-            executeCommit: @escaping @Sendable (String, WorkspaceCommitExecutionRequest) throws -> Void
+            executeCommit: @escaping @Sendable (String, WorkspaceCommitExecutionRequest) throws -> Void,
+            revertChanges: @escaping @Sendable (String, [String], Bool) throws -> Void = { _, _, _ in }
         ) {
             self.loadChangesSnapshot = loadChangesSnapshot
             self.loadDiffPreview = loadDiffPreview
             self.executeCommit = executeCommit
+            self.revertChanges = revertChanges
         }
 
         public static func live(service: NativeGitRepositoryService) -> Client {
@@ -30,6 +33,13 @@ public final class WorkspaceCommitViewModel {
                 },
                 executeCommit: { executionPath, request in
                     try workflowService.executeCommit(at: executionPath, request: request)
+                },
+                revertChanges: { executionPath, paths, deleteLocallyAddedFiles in
+                    try service.discard(
+                        paths: paths,
+                        at: executionPath,
+                        deleteLocallyAddedFiles: deleteLocallyAddedFiles
+                    )
                 }
             )
         }
@@ -40,6 +50,8 @@ public final class WorkspaceCommitViewModel {
     @ObservationIgnored private var diffPreviewRevision = 0
     @ObservationIgnored private var changesSnapshotRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var changesSnapshotRefreshRevision = 0
+    @ObservationIgnored private var revertTask: Task<Void, Never>?
+    @ObservationIgnored private var revertRevision = 0
     @ObservationIgnored private var commitExecutionTask: Task<Void, Never>?
     @ObservationIgnored private var commitExecutionRevision = 0
 
@@ -50,6 +62,7 @@ public final class WorkspaceCommitViewModel {
     public var diffPreview: WorkspaceCommitDiffPreviewState
     public var commitMessage: String
     public var options: WorkspaceCommitOptionsState
+    public var isRevertingChanges: Bool
     public var executionState: WorkspaceCommitExecutionState
     public var errorMessage: String?
     public var totalChangeCount: Int {
@@ -85,6 +98,7 @@ public final class WorkspaceCommitViewModel {
         self.diffPreview = .idle
         self.commitMessage = ""
         self.options = WorkspaceCommitOptionsState()
+        self.isRevertingChanges = false
         self.executionState = .idle
         self.errorMessage = nil
     }
@@ -92,6 +106,7 @@ public final class WorkspaceCommitViewModel {
     deinit {
         diffPreviewTask?.cancel()
         changesSnapshotRefreshTask?.cancel()
+        revertTask?.cancel()
         commitExecutionTask?.cancel()
     }
 
@@ -105,6 +120,9 @@ public final class WorkspaceCommitViewModel {
 
         diffPreviewTask?.cancel()
         diffPreviewRevision += 1
+        revertTask?.cancel()
+        revertTask = nil
+        revertRevision += 1
         commitExecutionTask?.cancel()
         commitExecutionTask = nil
         commitExecutionRevision += 1
@@ -112,6 +130,7 @@ public final class WorkspaceCommitViewModel {
         diffPreview = .idle
         changesSnapshot = nil
         includedPaths = []
+        isRevertingChanges = false
         executionState = .idle
         errorMessage = nil
         refreshChangesSnapshot(preservingUserState: false)
@@ -306,8 +325,64 @@ public final class WorkspaceCommitViewModel {
         clearExecutionFeedbackIfNeeded()
     }
 
+    public func canRevert(paths: [String]) -> Bool {
+        !normalizePaths(paths).isEmpty && !executionState.isRunning && !isRevertingChanges
+    }
+
+    public func revertChanges(paths: [String], deleteLocallyAddedFiles: Bool) {
+        let normalizedPaths = normalizePaths(paths)
+        guard canRevert(paths: normalizedPaths) else {
+            return
+        }
+
+        revertTask?.cancel()
+        revertRevision += 1
+        let currentRevision = revertRevision
+        let executionPath = repositoryContext.executionPath
+        clearExecutionFeedbackIfNeeded()
+        isRevertingChanges = true
+        errorMessage = nil
+
+        revertTask = Task { [client] in
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try client.revertChanges(executionPath, normalizedPaths, deleteLocallyAddedFiles)
+                }.value
+                guard !Task.isCancelled else {
+                    return
+                }
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.revertRevision == currentRevision,
+                          self.repositoryContext.executionPath == executionPath
+                    else {
+                        return
+                    }
+                    self.revertTask = nil
+                    self.isRevertingChanges = false
+                    self.errorMessage = nil
+                    self.refreshChangesSnapshot()
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self,
+                          self.revertRevision == currentRevision,
+                          self.repositoryContext.executionPath == executionPath
+                    else {
+                        return
+                    }
+                    self.revertTask = nil
+                    self.isRevertingChanges = false
+                    self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+            }
+        }
+    }
+
     public func canExecuteCommit(action: WorkspaceCommitAction) -> Bool {
-        guard !executionState.isRunning else {
+        guard !executionState.isRunning, !isRevertingChanges else {
             return false
         }
         guard !includedPaths.isEmpty else {
@@ -401,6 +476,17 @@ public final class WorkspaceCommitViewModel {
         }
         let trimmed = author.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func normalizePaths(_ paths: [String]) -> [String] {
+        Array(
+            Set(
+                paths
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+            )
+        )
+        .sorted()
     }
 
     private func mergedIncludedPaths(
