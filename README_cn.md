@@ -4,58 +4,94 @@
 
 # DevHaven
 
-### macOS 原生多项目管理与终端工作区
+### 纯 macOS 原生开发工作区：项目、终端、Git、Run、通知与 Agent 状态统一收口
 
-[![版本](https://img.shields.io/badge/version-3.1.10-blue)](https://github.com/zxcvbnmzsedr/DevHaven/releases)
+[![版本](https://img.shields.io/badge/version-3.2.0-blue)](https://github.com/zxcvbnmzsedr/DevHaven/releases)
 [![协议](https://img.shields.io/badge/license-GPL--3.0-green)](./LICENSE)
 [![平台](https://img.shields.io/badge/macOS-14.0%2B-black)](https://developer.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-6.0-orange)](https://www.swift.org/)
 
-DevHaven 是一款基于 **SwiftUI + AppKit** 的 macOS 原生桌面应用，将你的所有项目整合到一处 — 内置由 GhosttyKit 驱动的原生终端、Git 活跃度可视化与 Worktree 管理，全程无需离开应用。
+DevHaven 已经收口为一条 **纯 macOS 原生主线**：基于 **SwiftUI + AppKit + Swift Package Manager** 构建，把多项目导航、GhosttyKit 驱动的终端工作区、Git / Commit / Diff 工具窗、typed run configuration、通知系统，以及 Claude / Codex 会话感知能力收进同一个应用里。
 
-[功能特性](#-功能特性) · [截图预览](#-截图预览) · [快速开始](#-快速开始) · [使用指南](#-使用指南) · [技术栈](#-技术栈) · [English](./README.md)
+[亮点概览](#-亮点概览) · [功能特性](#-功能特性) · [快速开始](#-快速开始) · [仓库结构](#-仓库结构) · [技术栈](#-技术栈) · [English](./README.md)
 
 </div>
 
 ---
 
-## 🖼 截图预览
+## 🌟 亮点概览
 
-**主界面 — 项目列表**
+| 领域 | DevHaven 当前提供的能力 |
+|---|---|
+| 原生工作区壳 | 真正的 macOS 原生工作区，而不是浏览器壳或 WebView IDE |
+| 终端优先体验 | 基于 GhosttyKit 的终端标签、分屏、搜索与工作区恢复 |
+| Git 工具链 | Commit 侧边工具窗、IDEA 风格 Git Log、Branches / Operations、独立 Diff 标签页 |
+| 运行体验 | 项目级 typed 运行配置、可复用会话、底部 Run Console |
+| 通知与 Agent 状态 | 本地通知、Workspace 内未读状态，以及 Claude / Codex 会话状态展示 |
+| 发布链路 | 本地 `./dev` / `./release`、Sparkle 元数据、stable + nightly 交付流程 |
 
-![主界面.png](docs/pic/%E4%B8%BB%E7%95%8C%E9%9D%A2.png)
-
----
-
-**Git 活跃度仪表盘**
-
-![git活跃度.png](docs/pic/git%E6%B4%BB%E8%B7%83%E5%BA%A6.png)
-
----
-
-**终端工作区**
-
-![通知与项目.png](docs/pic/%E9%80%9A%E7%9F%A5%E4%B8%8E%E9%A1%B9%E7%9B%AE.png)
-![通知配置.png](docs/pic/%E9%80%9A%E7%9F%A5%E9%85%8D%E7%BD%AE.png)
 ---
 
 ## ✨ 功能特性
 
-### 🗂️ 智能项目管理
-- **批量扫描** — 指定工作目录后自动发现其中所有 Git 项目
-- **灵活导入** — 手动添加任意项目，刷新后依然保留
-- **多维筛选** — 按标签、目录、关键字、时间范围、Git 状态快速定位项目
+### 🗂 项目中心与多项目导航
 
-### 📊 Git 可视化分析
-- **提交热力图** — 类 GitHub 风格，直观展示每日代码活跃度
-- **统计仪表盘** — 提交次数、活跃度评分、时间分布
-- **分支 / Worktree 管理** — 查看分支状态，管理 Worktree 生命周期
+- 扫描工作目录，快速发现其中的 Git 仓库。
+- 直接导入指定仓库，并将其持续保留在项目列表中。
+- 在同一个 workspace 内打开多个项目，不会回收已经存在的终端会话。
+- 在项目导航流中统一承接 worktree 相关操作。
+- 将项目导航与 workspace chrome 解耦，让主内容区持续聚焦于终端与工具窗。
 
-### 💻 原生终端工作区
-- **多项目** — 同时打开多个项目，各自保留独立会话
-- **标签与分屏** — 完整的标签页管理、分屏、焦点切换与 Pane 生命周期控制
-- **GhosttyKit 内核** — 终端由 [Ghostty](https://ghostty.org/) 同款原生内核驱动，告别 Web 终端壳
-- **会话保持** — 切回项目列表后工作区继续挂载，不会意外回收终端
+<p align="center">
+  <img src="./docs/pic/runtime/readme-projects.png" alt="DevHaven 项目中心" width="100%" />
+</p>
+
+### 💻 终端优先的原生工作区
+
+- 基于 **GhosttyKit**，终端内核是真正的原生终端引擎，而不是 Web 终端封装。
+- 支持 workspace 标签页、分屏 pane、焦点路由与 pane 复用。
+- 终端搜索与 macOS 菜单命令联动，符合桌面应用的使用习惯。
+- 通过 restore snapshot 保留工作区上下文，返回应用时不需要“从零再开一遍”。
+- 内置 Claude / Codex wrapper，并处理 shell startup 可能改写 `PATH` 的问题，确保 wrapper 优先级稳定。
+
+<p align="center">
+  <img src="./docs/pic/runtime/readme-home.png" alt="DevHaven 终端工作区" width="100%" />
+</p>
+
+### 🧾 Git、Commit 与 Diff 工具窗
+
+- 独立的 **Commit** 侧边工具窗：覆盖 staged / unstaged / untracked 变更、inclusion toggle、提交草稿、amend / sign-off / author 选项与执行反馈。
+- 独立的 **Git** 底部工具窗：覆盖分支、远端操作，以及 IDEA 风格的 Git Log 主链。
+- Git Log 具备结构化 commit graph、filter toolbar、changes browser 与 commit details。
+- 从 Git Log 或 working tree 打开的 diff 会复用独立 diff 标签页，而不是散落的临时 preview。
+- 支持 patch viewer、two-side compare viewer、merge viewer，用于历史 diff、工作区对比和冲突解决。
+
+<p align="center">
+  <img src="./docs/pic/runtime/readme-git-log.png" alt="DevHaven Git Log 工具窗" width="100%" />
+</p>
+
+<p align="center">
+  <img src="./docs/pic/runtime/readme-commit.png" alt="DevHaven Commit 工具窗" width="100%" />
+</p>
+
+### ▶️ Run 配置、通知系统与 Agent 状态
+
+- 每个项目都可以挂载 typed run configuration，首批支持 `customShell` 与 `remoteLogViewer`。
+- Workspace 顶部有轻量 Run Toolbar，底部有可复用的 Run Console，用于承接实时输出。
+- 运行日志会落到 `~/.devhaven/run-logs/`，便于事后回看。
+- 提供本地通知 popover 与系统通知集成，用于承接 workspace 事件。
+- 通过 signal store、状态附件与运行期启发式，将 Claude / Codex 的 running / waiting 等状态直接展示在 workspace 中。
+
+<p align="center">
+  <img src="./docs/pic/runtime/readme-run-console.png" alt="DevHaven Run Console" width="100%" />
+</p>
+
+### 🔄 原生发布与更新链路
+
+- Release 包会写入 Sparkle 所需的更新元数据。
+- stable 与 nightly 两条更新通道都已经在应用元数据与 GitHub workflow 中建模。
+- 当前公开分发默认采用 **manual download** 模式：应用内可检查更新，并跳转下载页完成升级。
+- 仓库内已经包含本地打包、universal app 合成、appcast 生成与 staged alias promote 的脚本链路。
 
 ---
 
@@ -63,80 +99,114 @@ DevHaven 是一款基于 **SwiftUI + AppKit** 的 macOS 原生桌面应用，将
 
 ### 系统要求
 
-| 依赖 | 版本 |
+| 依赖 | 版本 / 说明 |
 |---|---|
 | macOS | 14.0+ |
-| Swift / Xcode | Swift 6 + Xcode 或 CLT |
+| Swift / Xcode | Swift 6 + Xcode 或 Command Line Tools |
 | Git | 任意近期版本 |
+| Ghostty 源码 | 仅在你需要从零准备 `macos/Vendor` 时才需要 |
 
-### 下载安装
+### 下载使用
 
-前往 [Releases 页面](https://github.com/zxcvbnmzsedr/DevHaven/releases) 下载最新版本。
+- **Stable 版本**：前往 [GitHub Releases](https://github.com/zxcvbnmzsedr/DevHaven/releases) 下载最新稳定版
+- **Nightly / 预览版本**：查看 nightly workflow 发布的 GitHub 预发布版本
 
-> **⚠️ macOS 安全提示**
-> DevHaven 暂未完成公证。如果首次启动时 macOS 提示"无法打开应用"，执行以下命令解除隔离：
+> **macOS 安全提示**
+>
+> DevHaven 目前还没有完成公证。如果首次启动被 macOS 拦截，可移除隔离属性：
+>
 > ```bash
 > sudo xattr -r -d com.apple.quarantine "/Applications/DevHaven.app"
 > ```
 
-### 源码构建
+### 从源码构建
+
+如果你机器上的另一个 DevHaven worktree 已经准备好了 `macos/Vendor`，那么 `./dev` 会优先自动复用。若是全新环境，请先准备 Ghostty 与 Sparkle vendor：
 
 ```bash
-# 1. 克隆项目
 git clone https://github.com/zxcvbnmzsedr/DevHaven.git
 cd DevHaven
 
-# 2. 准备 Ghostty vendor（替换为你本机的 ghostty 源码路径）
-bash macos/scripts/setup-ghostty-framework.sh --source /path/to/ghostty --skip-build
+# Ghostty vendor：从你本机的 Ghostty 源码目录构建或复用产物
+bash macos/scripts/setup-ghostty-framework.sh --source /path/to/ghostty
 
-# 3. 准备 Sparkle vendor
+# Sparkle vendor：优先复用其他 worktree；没有的话自动下载
 bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor
 
-# 4. 运行测试
+# 测试并启动
 swift test --package-path macos
-
-# 5. 构建 Release App
-./release
+./dev
 ```
 
 ### 开发态启动
 
 ```bash
-./dev            # 默认：校验 vendor + 实时日志 + 启动应用
-./dev --logs app # 只看 DevHaven 自身日志
-./dev --no-log   # 不接入日志
-./dev --dry-run  # 仅打印命令，不执行
+# 启动原生开发态应用
+./dev
+
+# 只看 DevHaven 自身日志
+./dev --logs app
+
+# 不接入 unified log
+./dev --no-log
+
+# 仅打印将要执行的命令
+./dev --dry-run
 ```
 
-> `./dev` 会在启动前自动复用或准备所需 vendor 内容（Ghostty / Sparkle），然后启动 `swift run --package-path macos DevHavenApp`。
+`./dev` 会依次完成：
 
-### 终端配置
+1. 确保 Ghostty / Sparkle vendor 可用
+2. 构建 `DevHavenCLI` helper
+3. 按需接入 unified log
+4. 启动 `swift run --package-path macos DevHavenApp`
 
-DevHaven 内嵌的 Ghostty 终端按以下顺序读取配置：
+### Release 打包
 
-1. `~/.devhaven/ghostty/config` 或 `~/.devhaven/ghostty/config.ghostty`
-2. 回退到全局 Ghostty 配置：`~/Library/Application Support/com.mitchellh.ghostty/config*`
+```bash
+# 标准本地 release 构建
+./release
+
+# 构建完成后不自动打开 Finder
+./release --no-open
+
+# 需要自定义通道或 build number 时，直接调用底层脚本
+bash macos/scripts/build-native-app.sh --release --update-channel nightly --build-number 3011001 --no-open
+```
+
+### 内嵌终端配置
+
+DevHaven 会按以下顺序读取 Ghostty 配置：
+
+1. `~/.devhaven/ghostty/config`
+2. `~/.devhaven/ghostty/config.ghostty`
+3. 回退到 `~/Library/Application Support/com.mitchellh.ghostty/` 下的全局 Ghostty 配置
 
 ---
 
-## 📖 使用指南
+## 📖 典型工作流
 
-### 第一步 — 添加项目
+1. **添加仓库**：扫描父目录或手动导入指定路径。
+2. **进入 workspace**：把一个或多个项目挂进同一个工作区。
+3. **在终端中工作**：使用 Ghostty 驱动的标签页、分屏、菜单搜索与恢复能力。
+4. **查看与整理变更**：通过 Commit 或 Git 工具窗浏览变更、提交与日志。
+5. **打开独立 Diff 标签页**：用于历史 diff、working tree compare 或 merge 冲突解决。
+6. **运行项目命令**：通过项目级 run configuration 启动任务，在底部 console 查看输出。
 
-**扫描目录**
-1. 在侧边栏添加工作目录
-2. DevHaven 自动扫描子目录中的 Git 项目并构建列表
-3. 点击项目查看详情或进入工作区
+---
 
-**手动导入**
-- 直接添加单个项目路径，刷新后持续保留
+## 🗃 仓库结构
 
-### 第二步 — 使用终端工作区
-
-- 双击项目进入终端工作区
-- 在同一工作区继续打开其它项目，不关闭已有终端
-- 使用标签页与分屏管理多个终端 Pane
-- 在工作区内管理 Worktree、查看 Git 状态、执行命令
+| 路径 | 说明 |
+|---|---|
+| `dev` | 本地开发入口：准备 vendor、接日志、启动应用 |
+| `release` | 本地 release 打包入口：委托 `macos/scripts/build-native-app.sh --release` |
+| `macos/Package.swift` | 原生 App、Core 模块与 CLI helper 的 Swift Package 入口 |
+| `macos/Sources/DevHavenApp/` | 原生 macOS UI、Ghostty 宿主、workspace 视图、更新集成、AgentResources |
+| `macos/Sources/DevHavenCore/` | 模型、存储、Git 服务、restore、run 管理与 ViewModel |
+| `macos/scripts/` | vendor 准备、App 打包、universal app、appcast 工具链 |
+| `docs/pic/` | README 所用截图 |
+| `.github/workflows/` | stable release 与 nightly 交付自动化 |
 
 ---
 
@@ -144,18 +214,18 @@ DevHaven 内嵌的 Ghostty 终端按以下顺序读取配置：
 
 | 层级 | 技术 |
 |---|---|
-| 桌面壳 | SwiftUI + AppKit |
-| 构建工具 | Swift Package Manager |
+| UI 壳层 | SwiftUI + AppKit |
+| 包管理 / 构建 | Swift Package Manager |
 | 终端内核 | [GhosttyKit](https://ghostty.org/) |
-| 自动升级 | [Sparkle](https://sparkle-project.org/) |
-| 数据兼容层 | LegacyCompatStore (`~/.devhaven/*`) |
-| Git / Worktree | 原生 Git CLI + `NativeGitWorktreeService` |
+| 更新能力 | [Sparkle](https://sparkle-project.org/) |
+| Git 集成 | 原生 Git CLI 服务链 |
+| 运行期存储 | `~/.devhaven/*` 兼容层与运行时存储 |
 
 ---
 
 ## 🤝 贡献
 
-欢迎提 Issue 和 PR。较大的改动请先开 Issue 讨论方案。
+欢迎提交 Issue 和 PR。若改动较大，建议先开 Issue 讨论实现方向，再进入代码修改。
 
 ---
 
