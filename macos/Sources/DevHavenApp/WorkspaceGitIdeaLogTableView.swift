@@ -149,6 +149,9 @@ struct WorkspaceGitIdeaLogTableView: View {
             .background(rowBackground(for: row))
             .padding(.vertical, -TableCellMetrics.verticalInsetCompensation)
             .contentShape(Rectangle())
+            .onTapGesture {
+                viewModel.selectCommit(row.commit.hash)
+            }
             .onHover { isHovered in
                 updateHoveredCommit(row.commit.hash, isHovered: isHovered)
             }
@@ -157,11 +160,7 @@ struct WorkspaceGitIdeaLogTableView: View {
                     onOpenCommitDiff(row.commit)
                 }
             }
-            .help("双击打开差异")
             .accessibilityAction(named: Text("打开差异")) {
-                onOpenCommitDiff(row.commit)
-            }
-            .onTapGesture(count: 2) {
                 onOpenCommitDiff(row.commit)
             }
     }
