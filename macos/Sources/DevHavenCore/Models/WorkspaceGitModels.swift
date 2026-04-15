@@ -4,6 +4,7 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
     case project
     case commit
     case git
+    case github
 
     public var id: String { rawValue }
 
@@ -14,6 +15,8 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
         case .commit:
             return .side
         case .git:
+            return .bottom
+        case .github:
             return .bottom
         }
     }
@@ -26,6 +29,8 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
             return "Commit"
         case .git:
             return "Git"
+        case .github:
+            return "GitHub"
         }
     }
 
@@ -37,6 +42,8 @@ public enum WorkspaceToolWindowKind: String, CaseIterable, Identifiable, Sendabl
             return "checkmark.circle"
         case .git:
             return "point.3.connected.trianglepath.dotted"
+        case .github:
+            return "chevron.left.forwardslash.chevron.right"
         }
     }
 }
