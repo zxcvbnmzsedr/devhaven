@@ -2,6 +2,20 @@ import Foundation
 
 public struct NativeGitHubCommandRunner: Sendable {
     typealias Execution = @Sendable (_ arguments: [String], _ repositoryPath: String, _ timeout: TimeInterval?, _ environment: [String: String]) throws -> Result
+    private static let defaultSearchPaths = [
+        "/usr/bin",
+        "/bin",
+        "/usr/sbin",
+        "/sbin",
+    ]
+    private static let fallbackSearchPaths = [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/opt/homebrew/opt/gh/bin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+        "/usr/local/opt/gh/bin",
+    ]
 
     private final class PipeBuffer: @unchecked Sendable {
         private let lock = NSLock()
@@ -97,9 +111,6 @@ public struct NativeGitHubCommandRunner: Sendable {
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["gh"] + arguments
-        process.currentDirectoryURL = repositoryURL
 
         var mergedEnvironment = ProcessInfo.processInfo.environment
         mergedEnvironment["GH_PAGER"] = "cat"
@@ -111,6 +122,20 @@ public struct NativeGitHubCommandRunner: Sendable {
         for (key, value) in environment {
             mergedEnvironment[key] = value
         }
+        mergedEnvironment["PATH"] = Self.normalizedSearchPath(environment: mergedEnvironment)
+
+        let executablePath = Self.resolveExecutablePath(searchPath: mergedEnvironment["PATH"] ?? "")
+        let commandPrefix: [String]
+        if let executablePath {
+            process.executableURL = URL(fileURLWithPath: executablePath)
+            process.arguments = arguments
+            commandPrefix = [executablePath]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["gh"] + arguments
+            commandPrefix = ["/usr/bin/env", "gh"]
+        }
+        process.currentDirectoryURL = repositoryURL
         process.environment = mergedEnvironment
 
         let stdoutPipe = Pipe()
@@ -122,7 +147,7 @@ public struct NativeGitHubCommandRunner: Sendable {
             try process.run()
         } catch {
             throw WorkspaceGitHubCommandError.commandFailed(
-                command: (["/usr/bin/env", "gh"] + arguments).joined(separator: " "),
+                command: (commandPrefix + arguments).joined(separator: " "),
                 message: error.localizedDescription
             )
         }
@@ -169,7 +194,7 @@ public struct NativeGitHubCommandRunner: Sendable {
 
         if didTimeout {
             throw WorkspaceGitHubCommandError.timedOut(
-                command: (["/usr/bin/env", "gh"] + arguments).joined(separator: " "),
+                command: (commandPrefix + arguments).joined(separator: " "),
                 timeout: effectiveTimeout
             )
         }
@@ -177,11 +202,48 @@ public struct NativeGitHubCommandRunner: Sendable {
         let stdout = String(data: stdoutBuffer.data(), encoding: .utf8) ?? ""
         let stderr = String(data: stderrBuffer.data(), encoding: .utf8) ?? ""
         return Result(
-            command: ["/usr/bin/env", "gh"] + arguments,
+            command: commandPrefix + arguments,
             stdout: stdout,
             stderr: stderr,
             exitCode: process.terminationStatus
         )
+    }
+
+    static func normalizedSearchPath(environment: [String: String]) -> String {
+        let rawEntries = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map(String.init)
+        let candidateEntries = rawEntries + defaultSearchPaths + fallbackSearchPaths
+        var seen = Set<String>()
+        var ordered = [String]()
+        for entry in candidateEntries {
+            let trimmed = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else {
+                continue
+            }
+            seen.insert(trimmed)
+            ordered.append(trimmed)
+        }
+        return ordered.joined(separator: ":")
+    }
+
+    static func resolveExecutablePath(
+        searchPath: String,
+        isExecutableFile: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> String? {
+        for directory in searchPath.split(separator: ":") {
+            let path = String(directory)
+            guard !path.isEmpty else {
+                continue
+            }
+            let candidate = URL(fileURLWithPath: path, isDirectory: true)
+                .appending(path: "gh", directoryHint: .notDirectory)
+                .path
+            if isExecutableFile(candidate) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     private func mapFailure(_ result: Result, timeout: TimeInterval) -> WorkspaceGitHubCommandError {
