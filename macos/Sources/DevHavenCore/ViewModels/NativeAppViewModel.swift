@@ -1367,36 +1367,56 @@ public final class NativeAppViewModel {
         return projectsByNormalizedPath[normalizedRootProjectPath]
     }
 
-    public var activeWorkspaceRootCurrentBranchName: String? {
-        guard let rootProject = activeWorkspaceRootProject else {
+    private var activeWorkspaceRootRepositoryPath: String? {
+        if let rootProject = activeWorkspaceRootProject,
+           rootProject.isGitRepository {
+            return rootProject.path
+        }
+        guard let normalizedRootProjectPath = normalizedOptionalPathForCompare(activeWorkspaceRootProjectPath) else {
             return nil
         }
-        return currentBranchByProjectPath[rootProject.path]
-            ?? currentBranchByProjectPath[normalizePathForCompare(rootProject.path)]
+        return liveWorkspaceRootRepositoryPath(for: normalizedRootProjectPath)
+    }
+
+    private var activeWorkspaceRootRepositoryDisplayName: String? {
+        if let rootProject = activeWorkspaceRootProject {
+            return rootProject.name
+        }
+        guard let repositoryPath = activeWorkspaceRootRepositoryPath else {
+            return nil
+        }
+        let lastComponent = pathLastComponent(repositoryPath)
+        return lastComponent.isEmpty ? repositoryPath : lastComponent
+    }
+
+    public var activeWorkspaceRootCurrentBranchName: String? {
+        guard let repositoryPath = activeWorkspaceRootRepositoryPath else {
+            return nil
+        }
+        return currentBranchByProjectPath[repositoryPath]
+            ?? currentBranchByProjectPath[normalizePathForCompare(repositoryPath)]
     }
 
     public var activeWorkspaceGitRepositoryContext: WorkspaceGitRepositoryContext? {
-        guard let rootProject = activeWorkspaceRootProject,
-              rootProject.isGitRepository
+        guard let repositoryPath = activeWorkspaceRootRepositoryPath
         else {
             return nil
         }
         return WorkspaceGitRepositoryContext(
-            rootProjectPath: rootProject.path,
-            repositoryPath: rootProject.path
+            rootProjectPath: repositoryPath,
+            repositoryPath: repositoryPath
         )
     }
 
     public var activeWorkspaceCommitRepositoryContext: WorkspaceCommitRepositoryContext? {
-        guard let rootProject = activeWorkspaceRootProject,
-              rootProject.isGitRepository
+        guard let repositoryPath = activeWorkspaceRootRepositoryPath
         else {
             return nil
         }
         return WorkspaceCommitRepositoryContext(
-            rootProjectPath: rootProject.path,
-            repositoryPath: rootProject.path,
-            executionPath: preferredWorkspaceGitExecutionPath(for: rootProject.path)
+            rootProjectPath: repositoryPath,
+            repositoryPath: repositoryPath,
+            executionPath: preferredWorkspaceGitExecutionPath(for: repositoryPath)
         )
     }
 
@@ -2304,17 +2324,19 @@ public final class NativeAppViewModel {
     }
 
     public func prepareActiveWorkspaceGitViewModel() {
-        guard let rootProject = activeWorkspaceRootProject,
-              rootProject.isGitRepository,
-              let repositoryContext = activeWorkspaceGitRepositoryContext
+        guard let repositoryContext = activeWorkspaceGitRepositoryContext
         else {
             return
         }
 
-        let executionWorktrees = workspaceGitExecutionContexts(for: rootProject)
-        let preferredExecutionPath = preferredWorkspaceGitExecutionPath(for: rootProject.path)
+        let executionWorktrees = workspaceGitExecutionContexts(
+            rootProjectPath: repositoryContext.rootProjectPath,
+            rootProjectName: activeWorkspaceRootRepositoryDisplayName,
+            persistedWorktrees: activeWorkspaceRootProject?.worktrees ?? []
+        )
+        let preferredExecutionPath = preferredWorkspaceGitExecutionPath(for: repositoryContext.rootProjectPath)
 
-        if let existing = workspaceGitViewModels[rootProject.path] {
+        if let existing = workspaceGitViewModels[repositoryContext.rootProjectPath] {
             existing.updateRepositoryContext(
                 repositoryContext,
                 executionWorktrees: executionWorktrees,
@@ -2323,7 +2345,7 @@ public final class NativeAppViewModel {
             return
         }
 
-        workspaceGitViewModels[rootProject.path] = WorkspaceGitViewModel(
+        workspaceGitViewModels[repositoryContext.rootProjectPath] = WorkspaceGitViewModel(
             repositoryContext: repositoryContext,
             executionWorktrees: executionWorktrees,
             preferredExecutionWorktreePath: preferredExecutionPath,
@@ -2332,39 +2354,35 @@ public final class NativeAppViewModel {
     }
 
     public func prepareActiveWorkspaceCommitViewModel() {
-        guard let rootProject = activeWorkspaceRootProject,
-              rootProject.isGitRepository,
-              let repositoryContext = activeWorkspaceCommitRepositoryContext
+        guard let repositoryContext = activeWorkspaceCommitRepositoryContext
         else {
             return
         }
 
-        if let existing = workspaceCommitViewModels[rootProject.path] {
+        if let existing = workspaceCommitViewModels[repositoryContext.rootProjectPath] {
             existing.updateRepositoryContext(repositoryContext)
             return
         }
 
-        workspaceCommitViewModels[rootProject.path] = WorkspaceCommitViewModel(
+        workspaceCommitViewModels[repositoryContext.rootProjectPath] = WorkspaceCommitViewModel(
             repositoryContext: repositoryContext,
             client: .live(service: gitRepositoryService)
         )
     }
 
     public func prepareActiveWorkspaceGitHubViewModel() {
-        guard let rootProject = activeWorkspaceRootProject,
-              rootProject.isGitRepository,
-              let repositoryContext = activeWorkspaceGitRepositoryContext
+        guard let repositoryContext = activeWorkspaceGitRepositoryContext
         else {
             return
         }
-        let executionPath = preferredWorkspaceGitExecutionPath(for: rootProject.path)
+        let executionPath = preferredWorkspaceGitExecutionPath(for: repositoryContext.rootProjectPath)
 
-        if let existing = workspaceGitHubViewModels[rootProject.path] {
+        if let existing = workspaceGitHubViewModels[repositoryContext.rootProjectPath] {
             existing.updateRepositoryContext(repositoryContext, executionPath: executionPath)
             return
         }
 
-        workspaceGitHubViewModels[rootProject.path] = WorkspaceGitHubViewModel(
+        workspaceGitHubViewModels[repositoryContext.rootProjectPath] = WorkspaceGitHubViewModel(
             repositoryContext: repositoryContext,
             executionPath: executionPath,
             client: .live(
@@ -7277,14 +7295,25 @@ public final class NativeAppViewModel {
         return rootProjectPath
     }
 
-    private func workspaceGitExecutionContexts(for rootProject: Project) -> [WorkspaceGitWorktreeContext] {
+    private func workspaceGitExecutionContexts(
+        rootProjectPath: String,
+        rootProjectName: String?,
+        persistedWorktrees: [ProjectWorktree]
+    ) -> [WorkspaceGitWorktreeContext] {
+        let displayName = {
+            if let rootProjectName, !rootProjectName.isEmpty {
+                return rootProjectName
+            }
+            let lastComponent = pathLastComponent(rootProjectPath)
+            return lastComponent.isEmpty ? rootProjectPath : lastComponent
+        }()
         let rootContext = WorkspaceGitWorktreeContext(
-            path: rootProject.path,
-            displayName: rootProject.name,
-            branchName: currentBranchByProjectPath[rootProject.path],
+            path: rootProjectPath,
+            displayName: displayName,
+            branchName: currentBranchByProjectPath[rootProjectPath],
             isRootProject: true
         )
-        let worktreeContexts = rootProject.worktrees.map { worktree in
+        let worktreeContexts = persistedWorktrees.map { worktree in
             WorkspaceGitWorktreeContext(
                 path: worktree.path,
                 displayName: worktree.name,
@@ -7305,8 +7334,8 @@ public final class NativeAppViewModel {
         let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
         guard !normalizedRootProjectPath.isEmpty,
               let project = projectsByNormalizedPath[normalizedRootProjectPath],
-              project.isGitRepository,
               !project.isTransientWorkspaceProject,
+              (project.isGitRepository || liveWorkspaceRootRepositoryPath(for: normalizedRootProjectPath) != nil),
               workspaceWorktreeRefreshTasksByRootProjectPath[normalizedRootProjectPath] == nil
         else {
             return
@@ -8996,6 +9025,18 @@ private func isGitRepo(_ url: URL) -> Bool {
     }
     return FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .notDirectory).path)
         || FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .isDirectory).path)
+}
+
+private func liveWorkspaceRootRepositoryPath(for path: String) -> String? {
+    let normalizedPath = normalizePathForCompare(path)
+    guard !normalizedPath.isEmpty else {
+        return nil
+    }
+    let repositoryURL = URL(fileURLWithPath: normalizedPath, isDirectory: true)
+    guard isGitRepo(repositoryURL), !isGitWorktree(repositoryURL) else {
+        return nil
+    }
+    return normalizedPath
 }
 
 private func isGitWorktree(_ url: URL) -> Bool {

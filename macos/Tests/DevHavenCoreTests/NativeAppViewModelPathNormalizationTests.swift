@@ -126,6 +126,47 @@ final class NativeAppViewModelPathNormalizationTests: XCTestCase {
         XCTAssertNil(viewModel.openWorkspaceSessions.first?.transientDisplayProject)
         XCTAssertEqual(viewModel.workspaceSidebarGroups.first?.rootProject.isDirectoryWorkspace, false)
     }
+
+    func testDirectoryWorkspaceGitContextsFallbackToLiveRepositoryDetection() throws {
+        let fixture = try PathNormalizationFixture.make()
+        defer { fixture.cleanup() }
+        try fixture.markRepositoryAsGitRepository()
+
+        let viewModel = fixture.makeViewModel()
+        viewModel.enterDirectoryWorkspace(fixture.repositoryURL.path)
+
+        XCTAssertEqual(viewModel.activeWorkspaceProject?.isDirectoryWorkspace, true)
+        XCTAssertEqual(viewModel.activeWorkspaceGitRepositoryContext?.repositoryPath, fixture.canonicalPath(fixture.repositoryURL.path))
+        XCTAssertEqual(viewModel.activeWorkspaceCommitRepositoryContext?.repositoryPath, fixture.canonicalPath(fixture.repositoryURL.path))
+
+        viewModel.prepareActiveWorkspaceGitViewModel()
+        viewModel.prepareActiveWorkspaceCommitViewModel()
+
+        XCTAssertNotNil(viewModel.activeWorkspaceGitViewModel)
+        XCTAssertNotNil(viewModel.activeWorkspaceCommitViewModel)
+    }
+
+    func testWorkspaceGitContextsFallbackWhenCatalogGitFlagIsStale() throws {
+        let fixture = try PathNormalizationFixture.make()
+        defer { fixture.cleanup() }
+        try fixture.markRepositoryAsGitRepository()
+
+        let viewModel = fixture.makeViewModel()
+        viewModel.snapshot = NativeAppSnapshot(projects: [fixture.makeProject(name: "Repo", isGitRepository: false)])
+
+        viewModel.enterWorkspace(fixture.repositoryURL.path)
+
+        XCTAssertEqual(viewModel.activeWorkspaceGitRepositoryContext?.repositoryPath, fixture.canonicalPath(fixture.repositoryURL.path))
+        XCTAssertEqual(viewModel.activeWorkspaceCommitRepositoryContext?.repositoryPath, fixture.canonicalPath(fixture.repositoryURL.path))
+
+        viewModel.prepareActiveWorkspaceGitViewModel()
+        viewModel.prepareActiveWorkspaceCommitViewModel()
+        viewModel.prepareActiveWorkspaceGitHubViewModel()
+
+        XCTAssertNotNil(viewModel.activeWorkspaceGitViewModel)
+        XCTAssertNotNil(viewModel.activeWorkspaceCommitViewModel)
+        XCTAssertNotNil(viewModel.activeWorkspaceGitHubViewModel)
+    }
 }
 
 private struct PathNormalizationFixture {
@@ -147,6 +188,13 @@ private struct PathNormalizationFixture {
         try? FileManager.default.removeItem(at: rootURL)
     }
 
+    func markRepositoryAsGitRepository() throws {
+        try FileManager.default.createDirectory(
+            at: repositoryURL.appendingPathComponent(".git", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+    }
+
     func canonicalPath(_ path: String) -> String {
         let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
         return standardizedPath.withCString { pointer in
@@ -166,7 +214,7 @@ private struct PathNormalizationFixture {
         )
     }
 
-    func makeProject(name: String) -> Project {
+    func makeProject(name: String, isGitRepository: Bool = true) -> Project {
         let now = Date().timeIntervalSinceReferenceDate
         return Project(
             id: UUID().uuidString,
@@ -178,7 +226,7 @@ private struct PathNormalizationFixture {
             mtime: now,
             size: 0,
             checksum: UUID().uuidString,
-            isGitRepository: true,
+            isGitRepository: isGitRepository,
             gitCommits: 1,
             gitLastCommit: now,
             created: now,
