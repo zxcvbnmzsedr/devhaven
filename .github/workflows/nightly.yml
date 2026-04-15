@@ -55,8 +55,71 @@ jobs:
             gh release create "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --title "$release_name" --prerelease --notes ""
           fi
 
+  prepare-ghostty-vendor:
+    runs-on: macos-26
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore Ghostty vendor cache
+        id: ghostty-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            macos/Vendor/GhosttyKit.xcframework
+            macos/Vendor/GhosttyResources
+          key: ${{ runner.os }}-ghostty-vendor-${{ env.GHOSTTY_SOURCE_REF }}-${{ hashFiles('macos/scripts/setup-ghostty-framework.sh') }}
+
+      - name: Validate cached Ghostty vendor
+        if: ${{ steps.ghostty-cache.outputs.cache-hit == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash macos/scripts/setup-ghostty-framework.sh --verify-only
+
+      - name: Install Zig
+        if: ${{ steps.ghostty-cache.outputs.cache-hit != 'true' }}
+        run: brew install zig
+
+      - name: Checkout Ghostty source
+        if: ${{ steps.ghostty-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ghostty_dir="$RUNNER_TEMP/ghostty"
+          rm -rf "$ghostty_dir"
+          git init "$ghostty_dir"
+          git -C "$ghostty_dir" remote add origin https://github.com/ghostty-org/ghostty.git
+          git -C "$ghostty_dir" fetch --depth 1 origin "$GHOSTTY_SOURCE_REF"
+          git -C "$ghostty_dir" checkout --detach FETCH_HEAD
+
+      - name: Bootstrap Ghostty vendor
+        if: ${{ steps.ghostty-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash macos/scripts/setup-ghostty-framework.sh --source "$RUNNER_TEMP/ghostty"
+
+      - name: Verify fresh Ghostty vendor
+        if: ${{ steps.ghostty-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash macos/scripts/setup-ghostty-framework.sh --verify-only
+
+      - name: Upload Ghostty vendor artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghostty-vendor
+          path: |
+            macos/Vendor/GhosttyKit.xcframework
+            macos/Vendor/GhosttyResources
+          if-no-files-found: error
+
   build-macos-native:
-    needs: prepare-nightly
+    needs:
+      - prepare-nightly
+      - prepare-ghostty-vendor
     strategy:
       fail-fast: false
       matrix:
@@ -87,25 +150,17 @@ jobs:
       - name: Print Xcode version
         run: xcodebuild -version
 
-      - name: Install Zig
-        run: brew install zig
+      - name: Download Ghostty vendor artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ghostty-vendor
+          path: macos/Vendor
 
-      - name: Checkout Ghostty source
+      - name: Verify Ghostty vendor
         shell: bash
         run: |
           set -euo pipefail
-          ghostty_dir="$RUNNER_TEMP/ghostty"
-          rm -rf "$ghostty_dir"
-          git init "$ghostty_dir"
-          git -C "$ghostty_dir" remote add origin https://github.com/ghostty-org/ghostty.git
-          git -C "$ghostty_dir" fetch --depth 1 origin "$GHOSTTY_SOURCE_REF"
-          git -C "$ghostty_dir" checkout --detach FETCH_HEAD
-
-      - name: Bootstrap Ghostty vendor
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash macos/scripts/setup-ghostty-framework.sh --source "$RUNNER_TEMP/ghostty"
+          bash macos/scripts/setup-ghostty-framework.sh --verify-only
 
       - name: Bootstrap Sparkle vendor/tooling
         shell: bash
