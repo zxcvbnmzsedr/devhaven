@@ -6,10 +6,13 @@ struct WorkspaceDiffMergeViewerView: View {
     let document: WorkspaceDiffMergeDocument
     let paneDescriptors: [WorkspaceDiffPaneDescriptor]
     let selectedDifference: WorkspaceDiffDifferenceAnchor?
+    let displayOptions: WorkspaceEditorDisplayOptions
 
     @State private var selectedMergeBlockID: String?
-    @State private var scrollSyncState = WorkspaceTextEditorScrollSyncState()
-    @State private var scrollRequestState = WorkspaceTextEditorScrollRequestState()
+    @StateObject private var oursPaneBridge = WorkspaceMonacoEditorBridge()
+    @StateObject private var basePaneBridge = WorkspaceMonacoEditorBridge()
+    @StateObject private var theirsPaneBridge = WorkspaceMonacoEditorBridge()
+    @StateObject private var resultPaneBridge = WorkspaceMonacoEditorBridge()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -159,17 +162,20 @@ struct WorkspaceDiffMergeViewerView: View {
         VStack(spacing: 0) {
             WorkspaceDiffPaneHeaderView(descriptor: paneDescriptor(for: role, fallbackTitle: pane.title, fallbackPath: pane.path))
 
-            WorkspaceTextEditorView(
-                editorID: editorID,
+            WorkspaceMonacoEditorView(
+                filePath: pane.path ?? pane.title,
                 text: text,
                 isEditable: pane.isEditable,
+                shouldRequestFocus: false,
+                displayOptions: displayOptions,
                 highlights: pane.highlights,
                 inlineHighlights: pane.inlineHighlights,
-                scrollSyncState: $scrollSyncState,
-                scrollRequestState: $scrollRequestState,
-                decorationRefreshPolicy: pane.isEditable
-                    ? .debounced(nanoseconds: 180_000_000)
-                    : .immediate
+                bridge: bridge(for: role),
+                onSaveRequested: {
+                    if pane.isEditable {
+                        try? viewModel.saveEditableContent()
+                    }
+                }
             )
         }
         .overlay {
@@ -201,6 +207,21 @@ struct WorkspaceDiffMergeViewerView: View {
         )
     }
 
+    private func bridge(for role: WorkspaceDiffPaneHeaderRole) -> WorkspaceMonacoEditorBridge {
+        switch role {
+        case .ours:
+            return oursPaneBridge
+        case .base:
+            return basePaneBridge
+        case .theirs:
+            return theirsPaneBridge
+        case .result:
+            return resultPaneBridge
+        default:
+            return resultPaneBridge
+        }
+    }
+
     private func syncSelection(with selectedDifference: WorkspaceDiffDifferenceAnchor?) {
         guard case let .mergeConflict(blockID)? = selectedDifference,
               let block = document.conflictBlocks.first(where: { $0.id == blockID })
@@ -215,29 +236,24 @@ struct WorkspaceDiffMergeViewerView: View {
         _ block: WorkspaceDiffMergeConflictBlock,
         kind: WorkspaceTextEditorScrollRequestKind
     ) {
-        var lineTargets: [String: Int] = [
-            "merge-result": block.resultLineRange.startLine
-        ]
         if let oursLineRange = block.oursLineRange {
-            lineTargets["merge-ours"] = oursLineRange.startLine
+            oursPaneBridge.revealLine(oursLineRange.startLine + 1)
         }
         if let theirsLineRange = block.theirsLineRange {
-            lineTargets["merge-theirs"] = theirsLineRange.startLine
+            theirsPaneBridge.revealLine(theirsLineRange.startLine + 1)
         }
         if let baseLine = [block.oursLineRange?.startLine, block.theirsLineRange?.startLine]
             .compactMap({ $0 })
             .min()
         {
-            lineTargets["merge-base"] = baseLine
+            basePaneBridge.revealLine(baseLine + 1)
         }
 
-        scrollRequestState = WorkspaceTextEditorScrollRequestState(
-            lineTargets: lineTargets,
-            revision: scrollRequestState.revision + 1,
-            kind: kind == .selectedDifference
-                ? WorkspaceTextEditorScrollRequestKind.selectedDifference
-                : WorkspaceTextEditorScrollRequestKind.manual
-        )
+        if kind == .selectedDifference {
+            resultPaneBridge.revealLine(block.resultLineRange.startLine + 1)
+        } else {
+            resultPaneBridge.goToLine(block.resultLineRange.startLine + 1)
+        }
     }
 
     private func blockOverviewMarker(

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DevHaven Monaco Diff</title>
+  <link rel="stylesheet" href="./host.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="toolbar">
+      <div class="toolbar-group toolbar-nav">
+        <button id="previous-difference" class="toolbar-button" type="button" aria-label="Previous Difference">
+          &#9650;
+        </button>
+        <button id="next-difference" class="toolbar-button" type="button" aria-label="Next Difference">
+          &#9660;
+        </button>
+        <div class="counter-stack">
+          <span id="difference-counter" class="counter-primary">0/0</span>
+          <span id="request-counter" class="counter-secondary">0/0</span>
+        </div>
+        <div class="toolbar-meta">
+          <span id="compare-mode-chip" class="toolbar-chip">Local</span>
+          <span id="language-chip" class="toolbar-chip">Swift</span>
+          <span id="editable-chip" class="toolbar-chip">只读</span>
+        </div>
+      </div>
+      <div class="toolbar-group toolbar-actions">
+        <span class="toolbar-label">查看模式</span>
+        <div id="viewer-mode-segment" class="viewer-mode-segment"></div>
+        <button id="save-button" class="toolbar-button toolbar-text-button" type="button">
+          保存
+        </button>
+        <button id="refresh-button" class="toolbar-button toolbar-text-button" type="button">
+          刷新
+        </button>
+      </div>
+    </div>
+    <div id="pane-header-row">
+      <div id="left-pane-header" class="pane-header"></div>
+      <div class="pane-divider"></div>
+      <div id="right-pane-header" class="pane-header"></div>
+    </div>
+    <div id="diff-root"></div>
+    <div id="status">Loading Monaco diff…</div>
+  </div>
+  <script src="./host.js"></script>
+</body>
+</html>

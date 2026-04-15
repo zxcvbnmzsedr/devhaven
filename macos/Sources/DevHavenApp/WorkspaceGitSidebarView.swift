@@ -29,7 +29,7 @@ struct WorkspaceGitSidebarView: View {
 
     private var executionWorktreeSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionHeader("执行工作树")
+            sectionHeader(viewModel.hasMultipleRepositoryFamilies ? "当前仓库族成员" : "执行工作树")
             VStack(spacing: 4) {
                 ForEach(viewModel.executionWorktrees) { worktree in
                     Button {

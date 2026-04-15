@@ -37,14 +37,17 @@ struct WorkspaceChromeContainerView<Content: View>: View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
                 toolWindowStripeButton(kind: .project)
-                toolWindowStripeButton(kind: .commit)
+                if viewModel.workspaceToolWindowKindIsSupported(.commit) {
+                    toolWindowStripeButton(kind: .commit)
+                }
             }
 
             Spacer(minLength: 0)
 
             VStack(spacing: 8) {
-                toolWindowStripeButton(kind: .git)
-                toolWindowStripeButton(kind: .github)
+                if viewModel.workspaceToolWindowKindIsSupported(.git) {
+                    toolWindowStripeButton(kind: .git)
+                }
             }
         }
         .padding(.vertical, 8)

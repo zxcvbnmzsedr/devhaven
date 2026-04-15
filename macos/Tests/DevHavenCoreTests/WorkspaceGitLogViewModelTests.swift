@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class WorkspaceGitLogViewModelTests: XCTestCase {
-    func testRefreshLoadsCommitSummaryWithoutAutoLoadingFileDiff() async throws {
+    func testRefreshLoadsLogWithoutAutoSelectingCommitOrLoadingFileDiff() async throws {
         let counter = CallCounter()
         let repositoryPath = "/tmp/repo"
         let commit = Self.makeCommitSummary(hash: "abc123")
@@ -76,18 +76,17 @@ final class WorkspaceGitLogViewModelTests: XCTestCase {
             !viewModel.isLoading &&
             !viewModel.isLoadingSelectedCommitDetail &&
             !viewModel.isLoadingSelectedFileDiff &&
-            viewModel.selectedCommitHash == commit.hash &&
-            viewModel.selectedCommitDetail?.hash == commit.hash &&
-            viewModel.selectedFilePath == "Sources/App.swift"
+            viewModel.tableRows.map(\.commit.hash) == [commit.hash] &&
+            viewModel.selectedCommitHash == nil &&
+            viewModel.selectedCommitDetail == nil &&
+            viewModel.selectedFilePath == nil
         }
 
         XCTAssertTrue(loaded)
         XCTAssertEqual(counter.value(for: "log"), 1)
-        XCTAssertEqual(counter.value(for: "summary"), 1)
+        XCTAssertEqual(counter.value(for: "summary"), 0)
         XCTAssertEqual(counter.value(for: "fileDiff"), 0)
         XCTAssertEqual(counter.value(for: "authors"), 1)
-        XCTAssertEqual(viewModel.selectedCommitDetail?.diff, "")
-        XCTAssertEqual(viewModel.selectedCommitDetail?.files.map(\.path), ["Sources/App.swift"])
         XCTAssertNil(viewModel.selectedFileDiffNotice)
         XCTAssertFalse(viewModel.isSelectedFileDiffTruncated)
         XCTAssertEqual(viewModel.selectedFileDiff, "")
@@ -97,6 +96,20 @@ final class WorkspaceGitLogViewModelTests: XCTestCase {
             Self.expectedFormattedDateText(for: commit.authorTimestamp)
         )
         XCTAssertEqual(viewModel.tableRows.first?.isHighlightedOnCurrentBranch, true)
+
+        viewModel.selectCommit(commit.hash)
+
+        let detailLoaded = await waitUntil(timeout: 1) {
+            !viewModel.isLoadingSelectedCommitDetail &&
+            viewModel.selectedCommitHash == commit.hash &&
+            viewModel.selectedCommitDetail?.hash == commit.hash &&
+            viewModel.selectedFilePath == "Sources/App.swift"
+        }
+
+        XCTAssertTrue(detailLoaded)
+        XCTAssertEqual(counter.value(for: "summary"), 1)
+        XCTAssertEqual(viewModel.selectedCommitDetail?.diff, "")
+        XCTAssertEqual(viewModel.selectedCommitDetail?.files.map(\.path), ["Sources/App.swift"])
 
         viewModel.selectCommitFile("Sources/App.swift")
 

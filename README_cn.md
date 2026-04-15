@@ -108,7 +108,7 @@ swift test --package-path macos
 ./dev --dry-run  # 仅打印命令，不执行
 ```
 
-> `./dev` 会自动从同仓库其他 worktree 同步 vendor 目录（如有），然后启动 `swift run --package-path macos DevHavenApp`。
+> `./dev` 会在启动前自动复用或准备所需 vendor 内容（Ghostty / Sparkle），然后启动 `swift run --package-path macos DevHavenApp`。
 
 ### 终端配置
 

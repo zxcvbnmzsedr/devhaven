@@ -3,17 +3,35 @@ import DevHavenCore
 
 struct WorkspaceGitHubToolbarView: View {
     @Bindable var viewModel: WorkspaceGitHubViewModel
+    let visibleSections: [WorkspaceGitHubSection]
+    let displayedSection: WorkspaceGitHubSection?
+
+    init(
+        viewModel: WorkspaceGitHubViewModel,
+        visibleSections: [WorkspaceGitHubSection] = WorkspaceGitHubSection.allCases,
+        displayedSection: WorkspaceGitHubSection? = nil
+    ) {
+        self.viewModel = viewModel
+        self.visibleSections = visibleSections.isEmpty ? WorkspaceGitHubSection.allCases : visibleSections
+        self.displayedSection = displayedSection
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
-                Picker("Section", selection: sectionBinding) {
-                    ForEach(WorkspaceGitHubSection.allCases) { section in
-                        Text(section.title).tag(section)
+                if visibleSections.count > 1 {
+                    Picker("Section", selection: sectionBinding) {
+                        ForEach(visibleSections) { section in
+                            Text(section.title).tag(section)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 360)
+                } else {
+                    Text(currentSection.title)
+                        .font(.headline)
+                        .foregroundStyle(NativeTheme.textPrimary)
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 360)
 
                 sectionStatePicker
 
@@ -82,7 +100,7 @@ struct WorkspaceGitHubToolbarView: View {
 
     @ViewBuilder
     private var sectionStatePicker: some View {
-        switch viewModel.section {
+        switch currentSection {
         case .pulls:
             Picker("状态", selection: pullStateBinding) {
                 ForEach(WorkspaceGitHubPullFilterState.allCases) { state in
@@ -121,7 +139,7 @@ struct WorkspaceGitHubToolbarView: View {
     }
 
     private var searchBinding: Binding<String> {
-        switch viewModel.section {
+        switch currentSection {
         case .pulls:
             Binding(
                 get: { viewModel.pullFilter.searchText },
@@ -213,7 +231,7 @@ struct WorkspaceGitHubToolbarView: View {
     }
 
     private var searchPrompt: String {
-        switch viewModel.section {
+        switch currentSection {
         case .pulls:
             return "按标题 / 作者 / 分支搜索 PR"
         case .issues:
@@ -225,9 +243,13 @@ struct WorkspaceGitHubToolbarView: View {
 
     private var sectionBinding: Binding<WorkspaceGitHubSection> {
         Binding(
-            get: { viewModel.section },
+            get: { currentSection },
             set: { viewModel.setSection($0) }
         )
+    }
+
+    private var currentSection: WorkspaceGitHubSection {
+        displayedSection ?? viewModel.section
     }
 
     private var statusBadge: some View {

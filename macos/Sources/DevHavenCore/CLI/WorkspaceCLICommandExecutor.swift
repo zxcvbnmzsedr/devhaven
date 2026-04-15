@@ -298,7 +298,12 @@ public final class WorkspaceCLICommandExecutor {
         guard let rawValue else {
             return nil
         }
-        return WorkspaceToolWindowKind(rawValue: rawValue)
+        switch rawValue {
+        case WorkspaceToolWindowKind.git.rawValue, "github":
+            return .git
+        default:
+            return WorkspaceToolWindowKind(rawValue: rawValue)
+        }
     }
 
     private func matchingSession(for path: String) -> OpenWorkspaceSessionState? {

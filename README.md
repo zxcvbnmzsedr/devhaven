@@ -116,7 +116,7 @@ swift test --package-path macos
 ./dev --dry-run
 ```
 
-> `./dev` auto-syncs the vendor directory from a sibling worktree if available, then starts `swift run --package-path macos DevHavenApp`.
+> `./dev` auto-syncs or prepares the required vendor content (Ghostty / Sparkle) before starting `swift run --package-path macos DevHavenApp`.
 
 ### Terminal Config
 

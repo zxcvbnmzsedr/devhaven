@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import AppKit
+import WebKit
 @testable import DevHavenApp
 @testable import DevHavenCore
 
@@ -30,7 +31,7 @@ final class WorkspaceEditorTabEditingPersistenceTests: XCTestCase {
     }
 
     @MainActor
-    func testTypingPersistsAcrossViewUpdates() throws {
+    func testTypingPersistsAcrossViewUpdates() async throws {
         let fileURL = projectURL.appendingPathComponent("Sample.swift")
         try "struct Sample {}".write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -61,21 +62,26 @@ final class WorkspaceEditorTabEditingPersistenceTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         pumpMainRunLoop(ticks: 12)
 
-        let textView = try XCTUnwrap(findDescendant(ofType: NSTextView.self, in: hostingView))
-        window.makeFirstResponder(textView)
-        pumpMainRunLoop(ticks: 8)
+        let webView = try XCTUnwrap(findDescendant(ofType: WKWebView.self, in: hostingView))
+        _ = try await waitForMonacoEditor(in: webView)
 
         let insertedText = "struct Sample {}\nlet value = 1"
-        textView.setSelectedRange(NSRange(location: (textView.string as NSString).length, length: 0))
-        textView.insertText("\nlet value = 1", replacementRange: textView.selectedRange())
-        pumpMainRunLoop(ticks: 20)
+        try await webView.evaluateJavaScript(
+            "window.__devHavenMonacoEditor?.debugSetText?.('struct Sample {}\\nlet value = 1')"
+        )
+        pumpMainRunLoop(ticks: 24)
+        try await waitUntil {
+            viewModel.workspaceEditorTabState(for: self.projectURL.path, tabID: tabID)?.text == insertedText
+        }
 
         XCTAssertEqual(viewModel.workspaceEditorTabState(for: projectURL.path, tabID: tabID)?.text, insertedText)
-        XCTAssertEqual(textView.string, insertedText)
+        var renderedText = try await monacoEditorText(in: webView)
+        XCTAssertEqual(renderedText, insertedText)
 
         pumpMainRunLoop(for: 0.8)
         XCTAssertEqual(viewModel.workspaceEditorTabState(for: projectURL.path, tabID: tabID)?.text, insertedText)
-        XCTAssertEqual(textView.string, insertedText)
+        renderedText = try await monacoEditorText(in: webView)
+        XCTAssertEqual(renderedText, insertedText)
 
         var options = viewModel.workspaceEditorDisplayOptions
         options.showsWhitespaceCharacters.toggle()
@@ -83,7 +89,8 @@ final class WorkspaceEditorTabEditingPersistenceTests: XCTestCase {
         pumpMainRunLoop(ticks: 12)
 
         XCTAssertEqual(viewModel.workspaceEditorTabState(for: projectURL.path, tabID: tabID)?.text, insertedText)
-        XCTAssertEqual(textView.string, insertedText)
+        renderedText = try await monacoEditorText(in: webView)
+        XCTAssertEqual(renderedText, insertedText)
     }
 
     @MainActor
@@ -147,6 +154,54 @@ final class WorkspaceEditorTabEditingPersistenceTests: XCTestCase {
         while Date() < endDate {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
+    }
+
+    @MainActor
+    private func waitUntil(
+        timeout: TimeInterval = 5.0,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return
+            }
+            pumpMainRunLoop(ticks: 4)
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTFail("Timed out waiting for editor runtime state")
+    }
+
+    @MainActor
+    private func waitForMonacoEditor(
+        in webView: WKWebView,
+        timeout: TimeInterval = 10.0
+    ) async throws -> [String: Any] {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let snapshot = try await monacoEditorSnapshot(in: webView),
+               snapshot["hasEditor"] as? Bool == true
+            {
+                return snapshot
+            }
+            pumpMainRunLoop(ticks: 4)
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTFail("Timed out waiting for Monaco editor web view to become ready")
+        return [:]
+    }
+
+    @MainActor
+    private func monacoEditorText(in webView: WKWebView) async throws -> String? {
+        try await monacoEditorSnapshot(in: webView)?["text"] as? String
+    }
+
+    @MainActor
+    private func monacoEditorSnapshot(in webView: WKWebView) async throws -> [String: Any]? {
+        try await webView.evaluateJavaScript(
+            "window.__devHavenMonacoEditor?.debugSnapshot?.()"
+        ) as? [String: Any]
     }
 
     @MainActor

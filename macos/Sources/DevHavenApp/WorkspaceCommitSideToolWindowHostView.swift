@@ -16,7 +16,7 @@ struct WorkspaceCommitSideToolWindowHostView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isActiveQuickTerminalSession {
+        if viewModel.activeWorkspaceIsStandaloneQuickTerminal {
             commitModeEmptyState(
                 title: "快速终端暂不支持 Commit 模式",
                 systemImage: "checkmark.circle",
@@ -24,9 +24,9 @@ struct WorkspaceCommitSideToolWindowHostView: View {
             )
         } else if viewModel.activeWorkspaceCommitRepositoryContext == nil {
             commitModeEmptyState(
-                title: "当前项目不是 Git 仓库",
+                title: "当前工作区未发现 Git 仓库",
                 systemImage: "checkmark.circle",
-                description: "Commit 工具窗只会对当前 active project 所属的 root repository 生效。"
+                description: "Commit 工具窗会复用 Git 面板当前选中的仓库族与执行仓库。"
             )
         } else if let commitViewModel = viewModel.activeWorkspaceCommitViewModel {
             WorkspaceCommitRootView(
@@ -45,13 +45,6 @@ struct WorkspaceCommitSideToolWindowHostView: View {
                 description: "请重新选择当前项目，或稍后再试。"
             )
         }
-    }
-
-    private var isActiveQuickTerminalSession: Bool {
-        guard let activePath = viewModel.activeWorkspaceProjectPath else {
-            return false
-        }
-        return viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activePath })?.isQuickTerminal ?? false
     }
 
     private func syncCommitDiffIfNeeded(

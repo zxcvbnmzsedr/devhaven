@@ -413,7 +413,7 @@ public final class WorkspaceGitLogViewModel {
                     )
                     self.isLoading = false
                     if !result.snapshot.commits.contains(where: { $0.hash == self.selectedCommitHash }) {
-                        self.selectCommit(result.snapshot.commits.first?.hash)
+                        self.selectCommit(nil)
                     }
                 }
             } catch is CancellationError {

@@ -11,6 +11,7 @@ HELP_OUTPUT="$($DEV_CMD --help)"
 
 DRY_RUN_OUTPUT="$($DEV_CMD --dry-run)"
 [[ "$DRY_RUN_OUTPUT" == *"bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor"* ]]
+[[ "$DRY_RUN_OUTPUT" == *"bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor"* ]]
 [[ "$DRY_RUN_OUTPUT" == *"log stream --style compact --level debug --predicate"* ]]
 [[ "$DRY_RUN_OUTPUT" == *'subsystem == "DevHavenNative"'* ]]
 [[ "$DRY_RUN_OUTPUT" == *'subsystem == "com.mitchellh.ghostty"'* ]]
@@ -37,7 +38,15 @@ mkdir -p "$TEST_REPO/macos/scripts" "$MOCK_BIN"
 
 cp "$DEV_CMD" "$TEST_REPO/dev"
 cp "$REPO_ROOT/macos/scripts/setup-ghostty-framework.sh" "$TEST_REPO/macos/scripts/setup-ghostty-framework.sh"
-chmod +x "$TEST_REPO/dev" "$TEST_REPO/macos/scripts/setup-ghostty-framework.sh"
+cat > "$TEST_REPO/macos/scripts/setup-sparkle-framework.sh" <<'EOF_SPARKLE'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '==> Sparkle mock ok\n'
+EOF_SPARKLE
+chmod +x \
+  "$TEST_REPO/dev" \
+  "$TEST_REPO/macos/scripts/setup-ghostty-framework.sh" \
+  "$TEST_REPO/macos/scripts/setup-sparkle-framework.sh"
 
 (
   cd "$TEST_REPO"
@@ -48,6 +57,10 @@ chmod +x "$TEST_REPO/dev" "$TEST_REPO/macos/scripts/setup-ghostty-framework.sh"
   git commit -m init >/dev/null
   git worktree add -b feature/demo "$TEST_WORKTREE" >/dev/null
 )
+
+mkdir -p "$TEST_WORKTREE/macos/scripts"
+cp "$TEST_REPO/macos/scripts/setup-sparkle-framework.sh" "$TEST_WORKTREE/macos/scripts/setup-sparkle-framework.sh"
+chmod +x "$TEST_WORKTREE/macos/scripts/setup-sparkle-framework.sh"
 
 mkdir -p \
   "$TEST_REPO/macos/Vendor/GhosttyKit.xcframework/macos-arm64/GhosttyKit.framework" \
@@ -81,6 +94,7 @@ WORKTREE_OUTPUT="$(
 )"
 
 [[ "$WORKTREE_OUTPUT" == *"复用"* || "$WORKTREE_OUTPUT" == *"同步"* ]]
+[[ "$WORKTREE_OUTPUT" == *"Sparkle mock ok"* ]]
 [[ -f "$TEST_WORKTREE/macos/Vendor/GhosttyKit.xcframework/Info.plist" ]]
 [[ -f "$TEST_WORKTREE/macos/Vendor/GhosttyResources/terminfo/78/xterm-ghostty" ]]
 [[ "$(cat "$SWIFT_LOG")" == "run --package-path macos DevHavenApp" ]]

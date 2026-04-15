@@ -5,6 +5,7 @@ private enum WorkspaceGitTopLevelTab: String, CaseIterable, Identifiable {
     case git
     case log
     case console
+    case githubTools
 
     var id: String { rawValue }
 
@@ -16,23 +17,31 @@ private enum WorkspaceGitTopLevelTab: String, CaseIterable, Identifiable {
             return "Log"
         case .console:
             return "Console"
+        case .githubTools:
+            return "GitHub Tools"
         }
     }
 }
 
 struct WorkspaceGitRootView: View {
     @Bindable var viewModel: WorkspaceGitViewModel
+    let gitHubViewModel: WorkspaceGitHubViewModel?
     let onOpenDiff: (WorkspaceGitCommitFileChange) -> Void
+    let onCreateIssueWorktree: ((WorkspaceGitHubIssueDetail) throws -> Void)?
     @State private var sidebarRatio = 0.22
     @State private var selectedTopLevelTab: WorkspaceGitTopLevelTab
     @State private var lastGitSection: WorkspaceGitSection
 
     init(
         viewModel: WorkspaceGitViewModel,
-        onOpenDiff: @escaping (WorkspaceGitCommitFileChange) -> Void
+        gitHubViewModel: WorkspaceGitHubViewModel? = nil,
+        onOpenDiff: @escaping (WorkspaceGitCommitFileChange) -> Void,
+        onCreateIssueWorktree: ((WorkspaceGitHubIssueDetail) throws -> Void)? = nil
     ) {
         self.viewModel = viewModel
+        self.gitHubViewModel = gitHubViewModel
         self.onOpenDiff = onOpenDiff
+        self.onCreateIssueWorktree = onCreateIssueWorktree
         let initialTopLevelTab: WorkspaceGitTopLevelTab = viewModel.section == .log ? .log : .git
         let initialGitSection: WorkspaceGitSection = viewModel.section == .log ? .branches : viewModel.section
         _selectedTopLevelTab = State(initialValue: initialTopLevelTab)
@@ -42,6 +51,9 @@ struct WorkspaceGitRootView: View {
     var body: some View {
         VStack(spacing: 0) {
             gitTopTabStrip
+            if shouldShowRepositorySelectionBar {
+                repositorySelectionBar
+            }
 
             Group {
                 switch selectedTopLevelTab {
@@ -51,6 +63,8 @@ struct WorkspaceGitRootView: View {
                     WorkspaceGitIdeaLogView(viewModel: viewModel.logViewModel, onOpenDiff: onOpenDiff)
                 case .console:
                     WorkspaceGitConsoleView(repositoryPath: viewModel.repositoryContext.repositoryPath)
+                case .githubTools:
+                    gitHubToolsTabContent
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -74,12 +88,75 @@ struct WorkspaceGitRootView: View {
             gitToolWindowTitle
             topTabButton(.log)
             topTabButton(.console)
+            topTabButton(.githubTools)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 6)
         .background(NativeTheme.surface)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(NativeTheme.border)
+                .frame(height: 1)
+        }
+    }
+
+    private var shouldShowRepositorySelectionBar: Bool {
+        viewModel.hasMultipleRepositoryFamilies || viewModel.executionWorktrees.count > 1
+    }
+
+    private var repositorySelectionBar: some View {
+        HStack(spacing: 10) {
+            if viewModel.hasMultipleRepositoryFamilies {
+                Menu {
+                    ForEach(viewModel.repositoryFamilies) { family in
+                        Button {
+                            viewModel.selectRepositoryFamily(family.id)
+                        } label: {
+                            if family.id == viewModel.repositoryContext.selectedRepositoryFamilyID {
+                                Label(family.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(family.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    selectionChip(
+                        title: "仓库族",
+                        value: viewModel.selectedRepositoryFamilyDisplayName
+                    )
+                }
+                .menuStyle(.borderlessButton)
+            }
+
+            if viewModel.executionWorktrees.count > 1 {
+                Menu {
+                    ForEach(viewModel.executionWorktrees) { worktree in
+                        Button {
+                            viewModel.selectExecutionWorktree(worktree.path)
+                        } label: {
+                            if worktree.path == viewModel.selectedExecutionWorktreePath {
+                                Label(worktree.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(worktree.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    selectionChip(
+                        title: "执行仓库",
+                        value: viewModel.selectedExecutionWorktree?.displayName ?? viewModel.selectedExecutionWorktreePath
+                    )
+                }
+                .menuStyle(.borderlessButton)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(NativeTheme.window)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(NativeTheme.border)
@@ -118,6 +195,44 @@ struct WorkspaceGitRootView: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+
+    private func selectionChip(title: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .foregroundStyle(NativeTheme.textSecondary)
+            Text(value)
+                .foregroundStyle(NativeTheme.textPrimary)
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(NativeTheme.textSecondary)
+        }
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(NativeTheme.elevated)
+        .clipShape(.capsule)
+    }
+
+    private var gitHubToolsTabContent: some View {
+        Group {
+            if let gitHubViewModel {
+                WorkspaceGitHubRootView(
+                    viewModel: gitHubViewModel,
+                    onCreateIssueWorktree: onCreateIssueWorktree
+                )
+            } else {
+                ContentUnavailableView(
+                    "GitHub Tools 不可用",
+                    systemImage: "chevron.left.forwardslash.chevron.right",
+                    description: Text("当前仓库未解析到可用的 GitHub 协作上下文。")
+                )
+                .foregroundStyle(NativeTheme.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var gitTabContent: some View {
@@ -200,6 +315,10 @@ struct WorkspaceGitRootView: View {
             }
         case .console:
             viewModel.cancelPendingReads()
+        case .githubTools:
+            if let gitHubViewModel {
+                gitHubViewModel.refreshIfNeeded()
+            }
         }
     }
 
@@ -211,11 +330,13 @@ struct WorkspaceGitRootView: View {
             viewModel.logViewModel.refresh()
         case .console:
             break
+        case .githubTools:
+            gitHubViewModel?.refreshIfNeeded()
         }
     }
 
     private func syncTopLevelTab(with section: WorkspaceGitSection) {
-        guard selectedTopLevelTab != .console else {
+        guard selectedTopLevelTab == .git || selectedTopLevelTab == .log else {
             if section != .log {
                 lastGitSection = section
             }

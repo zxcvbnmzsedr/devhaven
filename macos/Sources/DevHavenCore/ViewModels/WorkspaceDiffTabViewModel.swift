@@ -47,20 +47,26 @@ public final class WorkspaceDiffTabViewModel {
     }
 
     public struct Client: Sendable {
-        public var loadGitLogCommitFileDiff: @Sendable (String, String, String) throws -> String
+        public var loadGitLogCommitFileDocument: @Sendable (
+            WorkspaceDiffSource,
+            [WorkspaceDiffPaneMetadataSeed]
+        ) throws -> WorkspaceDiffLoadedDocument
         public var loadWorkingTreeDocument: @Sendable (WorkspaceDiffSource) throws -> WorkspaceDiffLoadedDocument
         public var saveWorkingTreeFile: @Sendable (String, String, String) throws -> Void
         public var stageWorkingTreePatch: @Sendable (String, String) throws -> Void
         public var unstageWorkingTreePatch: @Sendable (String, String) throws -> Void
 
         public init(
-            loadGitLogCommitFileDiff: @escaping @Sendable (String, String, String) throws -> String,
+            loadGitLogCommitFileDocument: @escaping @Sendable (
+                WorkspaceDiffSource,
+                [WorkspaceDiffPaneMetadataSeed]
+            ) throws -> WorkspaceDiffLoadedDocument,
             loadWorkingTreeDocument: @escaping @Sendable (WorkspaceDiffSource) throws -> WorkspaceDiffLoadedDocument,
             saveWorkingTreeFile: @escaping @Sendable (String, String, String) throws -> Void,
             stageWorkingTreePatch: @escaping @Sendable (String, String) throws -> Void = { _, _ in },
             unstageWorkingTreePatch: @escaping @Sendable (String, String) throws -> Void = { _, _ in }
         ) {
-            self.loadGitLogCommitFileDiff = loadGitLogCommitFileDiff
+            self.loadGitLogCommitFileDocument = loadGitLogCommitFileDocument
             self.loadWorkingTreeDocument = loadWorkingTreeDocument
             self.saveWorkingTreeFile = saveWorkingTreeFile
             self.stageWorkingTreePatch = stageWorkingTreePatch
@@ -73,8 +79,12 @@ public final class WorkspaceDiffTabViewModel {
         ) -> Client {
             _ = commitWorkflowService
             return Client(
-                loadGitLogCommitFileDiff: { repositoryPath, commitHash, filePath in
-                    try repositoryService.loadDiffForCommitFile(at: repositoryPath, commitHash: commitHash, filePath: filePath)
+                loadGitLogCommitFileDocument: { source, paneMetadataSeeds in
+                    try buildGitLogDocument(
+                        for: source,
+                        paneMetadataSeeds: paneMetadataSeeds,
+                        repositoryService: repositoryService
+                    )
                 },
                 loadWorkingTreeDocument: { source in
                     try buildWorkingTreeDocument(for: source, repositoryService: repositoryService)
@@ -93,7 +103,6 @@ public final class WorkspaceDiffTabViewModel {
     }
 
     @ObservationIgnored private let client: Client
-    @ObservationIgnored private let parser: @Sendable (String) -> WorkspaceDiffParsedDocument
     @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var loadRevision = 0
     @ObservationIgnored private let editableContentRebuildDelayNanoseconds: UInt64
@@ -110,12 +119,10 @@ public final class WorkspaceDiffTabViewModel {
     public init(
         tab: WorkspaceDiffTabState,
         client: Client,
-        parser: @escaping @Sendable (String) -> WorkspaceDiffParsedDocument = WorkspaceDiffPatchParser.parse,
         editableContentRebuildDelayNanoseconds: UInt64 = 180_000_000
     ) {
         self.tab = tab
         self.client = client
-        self.parser = parser
         self.editableContentRebuildDelayNanoseconds = editableContentRebuildDelayNanoseconds
         let initialRequestChain = tab.requestChain
             ?? WorkspaceDiffRequestChain(items: [makeRequestItem(from: tab)])
@@ -232,6 +239,24 @@ public final class WorkspaceDiffTabViewModel {
         scheduleEditableContentRebuild(for: rebuildRequest)
     }
 
+    public func selectDifferenceAnchor(_ anchor: WorkspaceDiffDifferenceAnchor?) {
+        if let anchor {
+            guard currentDifferenceAnchors.contains(anchor),
+                  selectedDifferenceAnchor != anchor
+            else {
+                return
+            }
+        } else if selectedDifferenceAnchor == nil {
+            return
+        }
+
+        selectedDifferenceAnchor = anchor
+        rebuildNavigatorState()
+    }
+    
+
+
+    
     private func applyEditableContentUpdate(_ text: String) -> EditableContentRebuildRequest? {
         switch documentState.loadState {
         case let .loaded(.compare(document)):
@@ -290,7 +315,6 @@ public final class WorkspaceDiffTabViewModel {
             return
         }
         try client.saveWorkingTreeFile(executionPath, filePath, editableText)
-        refresh()
     }
 
     public func applyMergeAction(_ action: WorkspaceDiffMergeAction, blockID: String? = nil) {
@@ -406,14 +430,15 @@ public final class WorkspaceDiffTabViewModel {
         rebuildNavigatorState()
 
         let source = tab.source
-        let parser = self.parser
+        let paneMetadataSeeds = sessionState.activeRequestItem?.paneMetadataSeeds ?? []
         loadTask = Task { [client] in
             do {
                 let document = try await Task.detached(priority: .userInitiated) {
                     switch source {
-                    case let .gitLogCommitFile(repositoryPath, commitHash, filePath):
-                        let diff = try client.loadGitLogCommitFileDiff(repositoryPath, commitHash, filePath)
-                        return WorkspaceDiffLoadedDocument.patch(parser(diff))
+                    case .gitLogCommitFile:
+                        return normalizeLoadedDocument(
+                            try client.loadGitLogCommitFileDocument(source, paneMetadataSeeds)
+                        )
                     case .workingTreeChange:
                         return normalizeLoadedDocument(try client.loadWorkingTreeDocument(source))
                     }
@@ -743,6 +768,58 @@ private func makeRequestItem(from tab: WorkspaceDiffTabState) -> WorkspaceDiffRe
     )
 }
 
+private func buildGitLogDocument(
+    for source: WorkspaceDiffSource,
+    paneMetadataSeeds: [WorkspaceDiffPaneMetadataSeed],
+    repositoryService: NativeGitRepositoryService
+) throws -> WorkspaceDiffLoadedDocument {
+    guard case let .gitLogCommitFile(repositoryPath, commitHash, filePath) = source else {
+        throw WorkspaceGitCommandError.parseFailure("git log source 类型不匹配")
+    }
+
+    guard let leftSeed = paneMetadataSeeds.first(where: { $0.role == .left }),
+          let rightSeed = paneMetadataSeeds.first(where: { $0.role == .right })
+    else {
+        let diff = try repositoryService.loadDiffForCommitFile(
+            at: repositoryPath,
+            commitHash: commitHash,
+            filePath: filePath
+        )
+        return .patch(WorkspaceDiffPatchParser.parse(diff))
+    }
+
+    let leftPath = firstNonEmptyString(leftSeed.path, leftSeed.oldPath, filePath)
+    let rightPath = firstNonEmptyString(rightSeed.path, filePath) ?? filePath
+    let leftRevision = firstNonEmptyString(leftSeed.hash, leftSeed.revision)
+    let rightRevision = firstNonEmptyString(rightSeed.hash, rightSeed.revision, commitHash) ?? commitHash
+
+    return .compare(
+        buildCompareDocument(
+            mode: .history,
+            leftPane: WorkspaceDiffEditorPane(
+                title: leftSeed.title ?? "Before",
+                path: leftPath,
+                text: try repositoryService.loadRevisionFileContent(
+                    at: repositoryPath,
+                    revision: leftRevision,
+                    filePath: leftPath
+                ),
+                isEditable: false
+            ),
+            rightPane: WorkspaceDiffEditorPane(
+                title: rightSeed.title ?? "After",
+                path: rightPath,
+                text: try repositoryService.loadRevisionFileContent(
+                    at: repositoryPath,
+                    revision: rightRevision,
+                    filePath: rightPath
+                ),
+                isEditable: false
+            )
+        )
+    )
+}
+
 private func buildWorkingTreeDocument(
     for source: WorkspaceDiffSource,
     repositoryService: NativeGitRepositoryService
@@ -812,6 +889,19 @@ private func buildWorkingTreeDocument(
             )
         )
     }
+}
+
+private func firstNonEmptyString(_ values: String?...) -> String? {
+    for value in values {
+        guard let value else {
+            continue
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+    }
+    return nil
 }
 
 private func normalizeLoadedDocument(_ document: WorkspaceDiffLoadedDocument) -> WorkspaceDiffLoadedDocument {

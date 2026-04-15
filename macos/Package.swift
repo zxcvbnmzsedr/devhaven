@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "DevHavenApp", targets: ["DevHavenApp"]),
         .executable(name: "DevHavenCLI", targets: ["DevHavenCLI"]),
     ],
+    dependencies: [],
     targets: [
         .binaryTarget(
             name: "GhosttyKit",
@@ -29,10 +30,16 @@ let package = Package(
         ),
         .executableTarget(
             name: "DevHavenApp",
-            dependencies: ["DevHavenCore", "GhosttyKit", "Sparkle"],
+            dependencies: [
+                "DevHavenCore",
+                "GhosttyKit",
+                "Sparkle",
+            ],
             resources: [
                 .copy("GhosttyResources"),
                 .copy("AgentResources"),
+                .copy("MonacoDiffResources"),
+                .copy("MonacoEditorResources"),
             ],
             linkerSettings: [
                 .linkedFramework("Carbon"),
@@ -41,7 +48,10 @@ let package = Package(
         ),
         .testTarget(
             name: "DevHavenAppTests",
-            dependencies: ["DevHavenApp", "DevHavenCore"]
+            dependencies: [
+                "DevHavenApp",
+                "DevHavenCore",
+            ]
         ),
         .testTarget(
             name: "DevHavenCoreTests",

@@ -116,7 +116,7 @@ struct WorkspaceShellView: View {
 
     @ViewBuilder
     private var gitToolWindowContent: some View {
-        if isActiveQuickTerminalSession {
+        if viewModel.activeWorkspaceIsStandaloneQuickTerminal {
             gitModeEmptyState(
                 title: "快速终端暂不支持 Git 模式",
                 systemImage: "bolt.horizontal.circle",
@@ -124,44 +124,24 @@ struct WorkspaceShellView: View {
             )
         } else if viewModel.activeWorkspaceGitRepositoryContext == nil {
             gitModeEmptyState(
-                title: "当前项目不是 Git 仓库",
+                title: "当前工作区未发现 Git 仓库",
                 systemImage: "point.3.connected.trianglepath.dotted",
-                description: "Git 面板只会对当前 active project 所属的 root repository 生效。"
+                description: "Git 面板会优先使用当前项目所属仓库；如果根目录不是 Git 仓库，也会尝试聚合工作区下的 Git 子项目。"
             )
         } else if let gitViewModel = viewModel.activeWorkspaceGitViewModel {
             WorkspaceGitRootView(
                 viewModel: gitViewModel,
+                gitHubViewModel: viewModel.activeWorkspaceGitHubViewModel,
                 onOpenDiff: { file in
                     openGitLogDiffTab(logViewModel: gitViewModel.logViewModel, file: file)
-                }
+                },
+                onCreateIssueWorktree: createIssueWorktree
             )
         } else {
             gitModeEmptyState(
                 title: "Git 面板尚未就绪",
                 systemImage: "tray",
                 description: "请重新选择当前项目，或稍后再试。"
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var gitHubToolWindowContent: some View {
-        if isActiveQuickTerminalSession {
-            gitModeEmptyState(
-                title: "快速终端暂不支持 GitHub 模式",
-                systemImage: "bolt.horizontal.circle",
-                description: "请切换到一个真实项目工作区后再查看 GitHub 协作信息。"
-            )
-        } else if let gitHubViewModel = viewModel.activeWorkspaceGitHubViewModel {
-            WorkspaceGitHubRootView(
-                viewModel: gitHubViewModel,
-                onCreateIssueWorktree: createIssueWorktree
-            )
-        } else {
-            gitModeEmptyState(
-                title: "GitHub 面板尚未就绪",
-                systemImage: "tray",
-                description: "请确认当前项目是 GitHub 仓库，并且本机 gh 已完成登录。"
             )
         }
     }
@@ -187,7 +167,7 @@ struct WorkspaceShellView: View {
                         WorkspaceProjectToolWindowHostView(viewModel: viewModel)
                     case .commit:
                         WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)
-                    case .git, .github, .none:
+                    case .git, .none:
                         EmptyView()
                     }
                 }
@@ -225,8 +205,6 @@ struct WorkspaceShellView: View {
                     switch viewModel.workspaceBottomToolWindowState.activeKind {
                     case .git:
                         gitToolWindowContent
-                    case .github:
-                        gitHubToolWindowContent
                     default:
                         EmptyView()
                     }
@@ -237,8 +215,6 @@ struct WorkspaceShellView: View {
                     switch viewModel.workspaceBottomToolWindowState.activeKind {
                     case .git:
                         viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.git))
-                    case .github:
-                        viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.github))
                     default:
                         break
                     }
@@ -359,13 +335,6 @@ struct WorkspaceShellView: View {
 
     private func syncTerminalStores() {
         terminalStoreRegistry.syncRetainedProjectPaths(Set(viewModel.openWorkspaceProjectPaths))
-    }
-
-    private var isActiveQuickTerminalSession: Bool {
-        guard let activePath = viewModel.activeWorkspaceProjectPath else {
-            return false
-        }
-        return viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activePath })?.isQuickTerminal ?? false
     }
 
     private func warmActiveWorkspace() {

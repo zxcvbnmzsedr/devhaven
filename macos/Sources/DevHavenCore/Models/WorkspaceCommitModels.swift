@@ -4,11 +4,54 @@ public struct WorkspaceCommitRepositoryContext: Equatable, Sendable {
     public var rootProjectPath: String
     public var repositoryPath: String
     public var executionPath: String
+    public var repositoryFamilies: [WorkspaceGitRepositoryFamilyContext]
+    public var selectedRepositoryFamilyID: String
 
-    public init(rootProjectPath: String, repositoryPath: String, executionPath: String) {
+    public init(
+        rootProjectPath: String,
+        repositoryPath: String,
+        executionPath: String,
+        repositoryFamilies: [WorkspaceGitRepositoryFamilyContext] = [],
+        selectedRepositoryFamilyID: String? = nil
+    ) {
         self.rootProjectPath = rootProjectPath
         self.repositoryPath = repositoryPath
         self.executionPath = executionPath
+        self.repositoryFamilies = repositoryFamilies
+        self.selectedRepositoryFamilyID = selectedRepositoryFamilyID ?? repositoryFamilies.first(where: {
+            $0.repositoryPath == repositoryPath
+        })?.id ?? repositoryPath
+    }
+}
+
+public extension WorkspaceCommitRepositoryContext {
+    var availableRepositoryFamilies: [WorkspaceGitRepositoryFamilyContext] {
+        if !repositoryFamilies.isEmpty {
+            return repositoryFamilies
+        }
+
+        return [
+            WorkspaceGitRepositoryFamilyContext(
+                id: repositoryPath,
+                displayName: repositoryPath,
+                repositoryPath: repositoryPath,
+                preferredExecutionPath: executionPath,
+                members: [
+                    WorkspaceGitWorktreeContext(
+                        path: executionPath,
+                        displayName: executionPath,
+                        branchName: nil,
+                        isRootProject: repositoryPath == executionPath
+                    )
+                ]
+            )
+        ]
+    }
+
+    var selectedRepositoryFamily: WorkspaceGitRepositoryFamilyContext? {
+        availableRepositoryFamilies.first(where: { $0.id == selectedRepositoryFamilyID })
+            ?? availableRepositoryFamilies.first(where: { $0.repositoryPath == repositoryPath })
+            ?? availableRepositoryFamilies.first
     }
 }
 
@@ -112,6 +155,34 @@ public struct WorkspaceCommitChangesSnapshot: Equatable, Sendable {
             return .modified
         }
         return .unknown
+    }
+}
+
+public struct WorkspaceCommitRepositoryGroupSummary: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var displayName: String
+    public var branchName: String?
+    public var changeCount: Int
+    public var executionPath: String
+    public var repositoryPath: String
+    public var isSelected: Bool
+
+    public init(
+        id: String,
+        displayName: String,
+        branchName: String?,
+        changeCount: Int,
+        executionPath: String,
+        repositoryPath: String,
+        isSelected: Bool
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.branchName = branchName
+        self.changeCount = changeCount
+        self.executionPath = executionPath
+        self.repositoryPath = repositoryPath
+        self.isSelected = isSelected
     }
 }
 

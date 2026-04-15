@@ -1,0 +1,50 @@
+:root {
+  color-scheme: dark light;
+  --window-bg: #17191d;
+  --border-color: rgba(255, 255, 255, 0.07);
+  --text-secondary: rgba(255, 255, 255, 0.62);
+  --status-bg: rgba(23, 25, 29, 0.9);
+}
+
+html[data-theme="light"] {
+  --window-bg: #fbfcff;
+  --border-color: rgba(31, 36, 48, 0.10);
+  --text-secondary: rgba(54, 62, 76, 0.72);
+  --status-bg: rgba(251, 252, 255, 0.92);
+}
+
+html,
+body,
+#app,
+#editor-root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--window-bg);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+
+#app {
+  position: relative;
+}
+
+#status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--status-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+#status.hidden {
+  display: none;
+}
