@@ -5,6 +5,7 @@ private enum WorkspaceGitTopLevelTab: String, CaseIterable, Identifiable {
     case git
     case log
     case console
+    case githubTools
 
     var id: String { rawValue }
 
@@ -16,23 +17,31 @@ private enum WorkspaceGitTopLevelTab: String, CaseIterable, Identifiable {
             return "Log"
         case .console:
             return "Console"
+        case .githubTools:
+            return "GitHub Tools"
         }
     }
 }
 
 struct WorkspaceGitRootView: View {
     @Bindable var viewModel: WorkspaceGitViewModel
+    let gitHubViewModel: WorkspaceGitHubViewModel?
     let onOpenDiff: (WorkspaceGitCommitFileChange) -> Void
+    let onCreateIssueWorktree: ((WorkspaceGitHubIssueDetail) throws -> Void)?
     @State private var sidebarRatio = 0.22
     @State private var selectedTopLevelTab: WorkspaceGitTopLevelTab
     @State private var lastGitSection: WorkspaceGitSection
 
     init(
         viewModel: WorkspaceGitViewModel,
-        onOpenDiff: @escaping (WorkspaceGitCommitFileChange) -> Void
+        gitHubViewModel: WorkspaceGitHubViewModel? = nil,
+        onOpenDiff: @escaping (WorkspaceGitCommitFileChange) -> Void,
+        onCreateIssueWorktree: ((WorkspaceGitHubIssueDetail) throws -> Void)? = nil
     ) {
         self.viewModel = viewModel
+        self.gitHubViewModel = gitHubViewModel
         self.onOpenDiff = onOpenDiff
+        self.onCreateIssueWorktree = onCreateIssueWorktree
         let initialTopLevelTab: WorkspaceGitTopLevelTab = viewModel.section == .log ? .log : .git
         let initialGitSection: WorkspaceGitSection = viewModel.section == .log ? .branches : viewModel.section
         _selectedTopLevelTab = State(initialValue: initialTopLevelTab)
@@ -51,6 +60,8 @@ struct WorkspaceGitRootView: View {
                     WorkspaceGitIdeaLogView(viewModel: viewModel.logViewModel, onOpenDiff: onOpenDiff)
                 case .console:
                     WorkspaceGitConsoleView(repositoryPath: viewModel.repositoryContext.repositoryPath)
+                case .githubTools:
+                    gitHubToolsTabContent
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -74,6 +85,7 @@ struct WorkspaceGitRootView: View {
             gitToolWindowTitle
             topTabButton(.log)
             topTabButton(.console)
+            topTabButton(.githubTools)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
@@ -118,6 +130,26 @@ struct WorkspaceGitRootView: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+
+    private var gitHubToolsTabContent: some View {
+        Group {
+            if let gitHubViewModel {
+                WorkspaceGitHubRootView(
+                    viewModel: gitHubViewModel,
+                    onCreateIssueWorktree: onCreateIssueWorktree
+                )
+            } else {
+                ContentUnavailableView(
+                    "GitHub Tools 不可用",
+                    systemImage: "chevron.left.forwardslash.chevron.right",
+                    description: Text("当前仓库未解析到可用的 GitHub 协作上下文。")
+                )
+                .foregroundStyle(NativeTheme.textSecondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var gitTabContent: some View {
@@ -200,6 +232,10 @@ struct WorkspaceGitRootView: View {
             }
         case .console:
             viewModel.cancelPendingReads()
+        case .githubTools:
+            if let gitHubViewModel {
+                gitHubViewModel.refreshIfNeeded()
+            }
         }
     }
 
@@ -211,11 +247,13 @@ struct WorkspaceGitRootView: View {
             viewModel.logViewModel.refresh()
         case .console:
             break
+        case .githubTools:
+            gitHubViewModel?.refreshIfNeeded()
         }
     }
 
     private func syncTopLevelTab(with section: WorkspaceGitSection) {
-        guard selectedTopLevelTab != .console else {
+        guard selectedTopLevelTab == .git || selectedTopLevelTab == .log else {
             if section != .log {
                 lastGitSection = section
             }

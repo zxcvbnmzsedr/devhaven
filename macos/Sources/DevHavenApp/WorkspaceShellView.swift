@@ -131,37 +131,17 @@ struct WorkspaceShellView: View {
         } else if let gitViewModel = viewModel.activeWorkspaceGitViewModel {
             WorkspaceGitRootView(
                 viewModel: gitViewModel,
+                gitHubViewModel: viewModel.activeWorkspaceGitHubViewModel,
                 onOpenDiff: { file in
                     openGitLogDiffTab(logViewModel: gitViewModel.logViewModel, file: file)
-                }
+                },
+                onCreateIssueWorktree: createIssueWorktree
             )
         } else {
             gitModeEmptyState(
                 title: "Git 面板尚未就绪",
                 systemImage: "tray",
                 description: "请重新选择当前项目，或稍后再试。"
-            )
-        }
-    }
-
-    @ViewBuilder
-    private var gitHubToolWindowContent: some View {
-        if isActiveQuickTerminalSession {
-            gitModeEmptyState(
-                title: "快速终端暂不支持 GitHub 模式",
-                systemImage: "bolt.horizontal.circle",
-                description: "请切换到一个真实项目工作区后再查看 GitHub 协作信息。"
-            )
-        } else if let gitHubViewModel = viewModel.activeWorkspaceGitHubViewModel {
-            WorkspaceGitHubRootView(
-                viewModel: gitHubViewModel,
-                onCreateIssueWorktree: createIssueWorktree
-            )
-        } else {
-            gitModeEmptyState(
-                title: "GitHub 面板尚未就绪",
-                systemImage: "tray",
-                description: "请确认当前项目是 GitHub 仓库，并且本机 gh 已完成登录。"
             )
         }
     }
@@ -187,7 +167,7 @@ struct WorkspaceShellView: View {
                         WorkspaceProjectToolWindowHostView(viewModel: viewModel)
                     case .commit:
                         WorkspaceCommitSideToolWindowHostView(viewModel: viewModel)
-                    case .git, .github, .none:
+                    case .git, .none:
                         EmptyView()
                     }
                 }
@@ -225,8 +205,6 @@ struct WorkspaceShellView: View {
                     switch viewModel.workspaceBottomToolWindowState.activeKind {
                     case .git:
                         gitToolWindowContent
-                    case .github:
-                        gitHubToolWindowContent
                     default:
                         EmptyView()
                     }
@@ -237,8 +215,6 @@ struct WorkspaceShellView: View {
                     switch viewModel.workspaceBottomToolWindowState.activeKind {
                     case .git:
                         viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.git))
-                    case .github:
-                        viewModel.setWorkspaceFocusedArea(.bottomToolWindow(.github))
                     default:
                         break
                     }

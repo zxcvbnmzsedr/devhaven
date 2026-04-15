@@ -3708,9 +3708,9 @@ public final class NativeAppViewModel {
             case .commit:
                 prepareActiveWorkspaceCommitViewModel()
             case .git:
-                prepareActiveWorkspaceGitViewModel()
-            case .github:
+                // Git 顶层包含 GitHub Tools，需要同步预热 Git 与 GitHub 上下文。
                 prepareActiveWorkspaceGitHubViewModel()
+                prepareActiveWorkspaceGitViewModel()
             }
         }
     }

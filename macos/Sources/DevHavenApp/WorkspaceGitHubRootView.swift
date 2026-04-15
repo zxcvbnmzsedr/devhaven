@@ -4,10 +4,28 @@ import DevHavenCore
 struct WorkspaceGitHubRootView: View {
     @Bindable var viewModel: WorkspaceGitHubViewModel
     let onCreateIssueWorktree: ((WorkspaceGitHubIssueDetail) throws -> Void)?
+    let visibleSections: [WorkspaceGitHubSection]
+    let preferredSection: WorkspaceGitHubSection?
+
+    init(
+        viewModel: WorkspaceGitHubViewModel,
+        onCreateIssueWorktree: ((WorkspaceGitHubIssueDetail) throws -> Void)?,
+        visibleSections: [WorkspaceGitHubSection] = WorkspaceGitHubSection.allCases,
+        preferredSection: WorkspaceGitHubSection? = nil
+    ) {
+        self.viewModel = viewModel
+        self.onCreateIssueWorktree = onCreateIssueWorktree
+        self.visibleSections = visibleSections.isEmpty ? WorkspaceGitHubSection.allCases : visibleSections
+        self.preferredSection = preferredSection
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            WorkspaceGitHubToolbarView(viewModel: viewModel)
+            WorkspaceGitHubToolbarView(
+                viewModel: viewModel,
+                visibleSections: visibleSections,
+                displayedSection: resolvedSection
+            )
                 .padding(.horizontal, 18)
                 .padding(.vertical, 14)
                 .background(NativeTheme.surface)
@@ -32,10 +50,16 @@ struct WorkspaceGitHubRootView: View {
         }
         .background(NativeTheme.window)
         .onAppear {
-            viewModel.refreshIfNeeded()
+            ensureVisibleSectionLoaded()
         }
         .onChange(of: viewModel.repositoryContext) { _, _ in
-            viewModel.refresh()
+            refreshVisibleSection()
+        }
+        .onChange(of: viewModel.section) { _, newSection in
+            guard !visibleSections.contains(newSection) else {
+                return
+            }
+            viewModel.setSection(resolvedSection)
         }
     }
 
@@ -65,7 +89,7 @@ struct WorkspaceGitHubRootView: View {
             .foregroundStyle(NativeTheme.textSecondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            switch viewModel.section {
+            switch resolvedSection {
             case .pulls:
                 WorkspaceGitHubPullsView(viewModel: viewModel)
             case .issues:
@@ -81,5 +105,31 @@ struct WorkspaceGitHubRootView: View {
 
     private var hasAnyLoadedItems: Bool {
         !viewModel.pulls.isEmpty || !viewModel.issues.isEmpty || !viewModel.reviewRequests.isEmpty
+    }
+
+    private var resolvedSection: WorkspaceGitHubSection {
+        if visibleSections.contains(viewModel.section) {
+            return viewModel.section
+        }
+        if let preferredSection, visibleSections.contains(preferredSection) {
+            return preferredSection
+        }
+        return visibleSections.first ?? .pulls
+    }
+
+    private func ensureVisibleSectionLoaded() {
+        if viewModel.section != resolvedSection {
+            viewModel.setSection(resolvedSection)
+        } else {
+            viewModel.refreshIfNeeded()
+        }
+    }
+
+    private func refreshVisibleSection() {
+        if viewModel.section != resolvedSection {
+            viewModel.setSection(resolvedSection)
+        } else {
+            viewModel.refresh()
+        }
     }
 }

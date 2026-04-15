@@ -44,7 +44,6 @@ struct WorkspaceChromeContainerView<Content: View>: View {
 
             VStack(spacing: 8) {
                 toolWindowStripeButton(kind: .git)
-                toolWindowStripeButton(kind: .github)
             }
         }
         .padding(.vertical, 8)
