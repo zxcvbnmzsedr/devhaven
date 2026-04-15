@@ -138,6 +138,7 @@ public final class WorkspaceGitViewModel {
     @ObservationIgnored private var commitDetailTask: Task<Void, Never>?
     @ObservationIgnored private var commitDetailRevision = 0
     @ObservationIgnored private var mutationRevision = 0
+    @ObservationIgnored public var onRepositorySelectionChange: (@MainActor (WorkspaceGitRepositoryContext, String) -> Void)?
 
     private nonisolated static let diffPreviewMaxBytes = 256 * 1024
     private nonisolated static let diffPreviewMaxLines = 2_000
@@ -230,6 +231,22 @@ public final class WorkspaceGitViewModel {
         executionWorktrees.first(where: { $0.path == selectedExecutionWorktreePath })
     }
 
+    public var repositoryFamilies: [WorkspaceGitRepositoryFamilyContext] {
+        repositoryContext.availableRepositoryFamilies
+    }
+
+    public var selectedRepositoryFamily: WorkspaceGitRepositoryFamilyContext? {
+        repositoryContext.selectedRepositoryFamily
+    }
+
+    public var hasMultipleRepositoryFamilies: Bool {
+        repositoryFamilies.count > 1
+    }
+
+    public var selectedRepositoryFamilyDisplayName: String {
+        selectedRepositoryFamily?.displayName ?? repositoryContext.repositoryPath
+    }
+
     public func updateRepositoryContext(
         _ repositoryContext: WorkspaceGitRepositoryContext,
         executionWorktrees: [WorkspaceGitWorktreeContext],
@@ -245,13 +262,15 @@ public final class WorkspaceGitViewModel {
             executionWorktrees: executionWorktrees,
             fallbackRootProjectPath: repositoryContext.rootProjectPath
         )
-        if previousRepositoryPath != repositoryContext.repositoryPath
-            || previousExecutionWorktreePath != selectedExecutionWorktreePath
-        {
+        let repositoryPathChanged = previousRepositoryPath != repositoryContext.repositoryPath
+        let executionPathChanged = previousExecutionWorktreePath != selectedExecutionWorktreePath
+        if repositoryPathChanged || executionPathChanged {
             mutationRevision += 1
         }
-        if previousExecutionWorktreePath != selectedExecutionWorktreePath,
-           section == .operations {
+        if repositoryPathChanged {
+            clearExecutionScopedState()
+        }
+        if repositoryPathChanged || (executionPathChanged && section == .operations) {
             clearExecutionScopedState()
             refreshForCurrentSection()
         }
@@ -310,10 +329,34 @@ public final class WorkspaceGitViewModel {
         }
         mutationRevision += 1
         selectedExecutionWorktreePath = path
+        updateSelectedFamilyPreferredExecutionPath(path)
+        onRepositorySelectionChange?(repositoryContext, path)
         if section == .operations {
             clearExecutionScopedState()
             refreshForCurrentSection()
         }
+    }
+
+    public func selectRepositoryFamily(_ id: String) {
+        guard let family = repositoryFamilies.first(where: { $0.id == id }) else {
+            return
+        }
+        let nextExecutionWorktrees = family.members
+        let nextExecutionPath = Self.resolveExecutionWorktreePath(
+            family.preferredExecutionPath,
+            executionWorktrees: nextExecutionWorktrees,
+            fallbackRootProjectPath: family.repositoryPath
+        )
+        var nextContext = repositoryContext
+        nextContext.repositoryPath = family.repositoryPath
+        nextContext.selectedRepositoryFamilyID = family.id
+        updateRepositoryContext(
+            nextContext,
+            executionWorktrees: nextExecutionWorktrees,
+            preferredExecutionWorktreePath: nextExecutionPath
+        )
+        updateSelectedFamilyPreferredExecutionPath(nextExecutionPath)
+        onRepositorySelectionChange?(repositoryContext, selectedExecutionWorktreePath)
     }
 
     public func refreshForCurrentSection() {
@@ -655,6 +698,15 @@ public final class WorkspaceGitViewModel {
         remotes = []
         aheadBehindSnapshot = WorkspaceGitAheadBehindSnapshot(upstream: nil, ahead: 0, behind: 0)
         operationState = .idle
+    }
+
+    private func updateSelectedFamilyPreferredExecutionPath(_ path: String) {
+        guard let familyIndex = repositoryContext.repositoryFamilies.firstIndex(where: {
+            $0.id == repositoryContext.selectedRepositoryFamilyID
+        }) else {
+            return
+        }
+        repositoryContext.repositoryFamilies[familyIndex].preferredExecutionPath = path
     }
 
     public var isMutatingOperations: Bool {

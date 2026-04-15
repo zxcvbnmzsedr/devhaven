@@ -121,10 +121,21 @@ public enum WorkspaceGitSection: String, CaseIterable, Identifiable, Sendable {
 public struct WorkspaceGitRepositoryContext: Equatable, Sendable {
     public var rootProjectPath: String
     public var repositoryPath: String
+    public var repositoryFamilies: [WorkspaceGitRepositoryFamilyContext]
+    public var selectedRepositoryFamilyID: String
 
-    public init(rootProjectPath: String, repositoryPath: String) {
+    public init(
+        rootProjectPath: String,
+        repositoryPath: String,
+        repositoryFamilies: [WorkspaceGitRepositoryFamilyContext] = [],
+        selectedRepositoryFamilyID: String? = nil
+    ) {
         self.rootProjectPath = rootProjectPath
         self.repositoryPath = repositoryPath
+        self.repositoryFamilies = repositoryFamilies
+        self.selectedRepositoryFamilyID = selectedRepositoryFamilyID ?? repositoryFamilies.first(where: {
+            $0.repositoryPath == repositoryPath
+        })?.id ?? repositoryPath
     }
 }
 
@@ -140,6 +151,59 @@ public struct WorkspaceGitWorktreeContext: Equatable, Sendable, Identifiable {
         self.displayName = displayName
         self.branchName = branchName
         self.isRootProject = isRootProject
+    }
+}
+
+public struct WorkspaceGitRepositoryFamilyContext: Equatable, Sendable, Identifiable {
+    public var id: String
+    public var displayName: String
+    public var repositoryPath: String
+    public var preferredExecutionPath: String
+    public var members: [WorkspaceGitWorktreeContext]
+
+    public init(
+        id: String,
+        displayName: String,
+        repositoryPath: String,
+        preferredExecutionPath: String,
+        members: [WorkspaceGitWorktreeContext]
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.repositoryPath = repositoryPath
+        self.preferredExecutionPath = preferredExecutionPath
+        self.members = members
+    }
+}
+
+public extension WorkspaceGitRepositoryContext {
+    var availableRepositoryFamilies: [WorkspaceGitRepositoryFamilyContext] {
+        if !repositoryFamilies.isEmpty {
+            return repositoryFamilies
+        }
+
+        return [
+            WorkspaceGitRepositoryFamilyContext(
+                id: repositoryPath,
+                displayName: repositoryPath,
+                repositoryPath: repositoryPath,
+                preferredExecutionPath: repositoryPath,
+                members: [
+                    WorkspaceGitWorktreeContext(
+                        path: repositoryPath,
+                        displayName: repositoryPath,
+                        branchName: nil,
+                        isRootProject: true
+                    )
+                ]
+            )
+        ]
+    }
+
+    var selectedRepositoryFamily: WorkspaceGitRepositoryFamilyContext? {
+        availableRepositoryFamilies.first(where: { $0.id == selectedRepositoryFamilyID })
+            ?? availableRepositoryFamilies.first(where: { $0.repositoryPath == repositoryPath })
+            ?? availableRepositoryFamilies.first
     }
 }
 

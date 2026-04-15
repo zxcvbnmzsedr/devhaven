@@ -246,6 +246,7 @@ public final class NativeAppViewModel {
                 displayProjectCacheByLookupKey.removeAll()
                 rebuildProjectLookupIndex()
             }
+            refreshActiveWorkspaceGitSelectionState()
         }
     }
     public var selectedProjectPath: String?
@@ -256,6 +257,7 @@ public final class NativeAppViewModel {
             rebuildWorkspaceSessionIndex()
             syncMountedWorkspaceProjectPathAfterSessionMutation()
             refreshCodexDisplayCandidates()
+            refreshActiveWorkspaceGitSelectionState()
         }
     }
     public var activeWorkspaceProjectPath: String? {
@@ -266,9 +268,13 @@ public final class NativeAppViewModel {
                 to: activeWorkspaceProjectPath
             )
             refreshCodexDisplayCandidates()
+            refreshActiveWorkspaceGitSelectionState()
         }
     }
     private var hiddenMountedWorkspaceProjectPath: String?
+    public private(set) var activeWorkspaceSupportsGitToolWindows: Bool
+    // Keep SwiftUI render/getter paths on stored state instead of rediscovering repositories inline.
+    private var activeWorkspaceGitSelectionSnapshotCache: WorkspaceGitSelectionSnapshot?
     public var workspaceSideToolWindowState: WorkspaceSideToolWindowState
     public var workspaceBottomToolWindowState: WorkspaceBottomToolWindowState
     public var workspaceFocusedArea: WorkspaceFocusedArea
@@ -298,6 +304,17 @@ public final class NativeAppViewModel {
     private var currentBranchByProjectPath: [String: String] {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: currentBranchByProjectPath)
+            refreshActiveWorkspaceGitSelectionState()
+        }
+    }
+    private var workspaceSelectedGitRepositoryFamilyIDByRootProjectPath: [String: String] {
+        didSet {
+            refreshActiveWorkspaceGitSelectionState()
+        }
+    }
+    private var workspaceSelectedGitExecutionPathByRootProjectPath: [String: String] {
+        didSet {
+            refreshActiveWorkspaceGitSelectionState()
         }
     }
     private var pendingWorkspaceWorktreeCreatesByPath: [String: PendingWorkspaceWorktreeCreateState] {
@@ -397,6 +414,8 @@ public final class NativeAppViewModel {
         self.openWorkspaceSessions = []
         self.activeWorkspaceProjectPath = nil
         self.hiddenMountedWorkspaceProjectPath = nil
+        self.activeWorkspaceSupportsGitToolWindows = false
+        self.activeWorkspaceGitSelectionSnapshotCache = nil
         self.workspaceSideToolWindowState = WorkspaceSideToolWindowState()
         self.workspaceBottomToolWindowState = WorkspaceBottomToolWindowState()
         self.workspaceFocusedArea = .terminal
@@ -412,6 +431,8 @@ public final class NativeAppViewModel {
         self.agentDisplayOverridesByProjectPath = [:]
         self.workspaceRunConsoleStateByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
+        self.workspaceSelectedGitRepositoryFamilyIDByRootProjectPath = [:]
+        self.workspaceSelectedGitExecutionPathByRootProjectPath = [:]
         self.pendingWorkspaceWorktreeCreatesByPath = [:]
         self.workspaceAlignmentStatusByKey = [:]
         self.workspaceCommitViewModels = [:]
@@ -1368,29 +1389,15 @@ public final class NativeAppViewModel {
     }
 
     private var activeWorkspaceRootRepositoryPath: String? {
-        if let rootProject = activeWorkspaceRootProject,
-           rootProject.isGitRepository {
-            return rootProject.path
-        }
-        guard let normalizedRootProjectPath = normalizedOptionalPathForCompare(activeWorkspaceRootProjectPath) else {
-            return nil
-        }
-        return liveWorkspaceRootRepositoryPath(for: normalizedRootProjectPath)
+        activeWorkspaceGitSelectionSnapshotCache?.gitContext.repositoryPath
     }
 
     private var activeWorkspaceRootRepositoryDisplayName: String? {
-        if let rootProject = activeWorkspaceRootProject {
-            return rootProject.name
-        }
-        guard let repositoryPath = activeWorkspaceRootRepositoryPath else {
-            return nil
-        }
-        let lastComponent = pathLastComponent(repositoryPath)
-        return lastComponent.isEmpty ? repositoryPath : lastComponent
+        activeWorkspaceGitSelectionSnapshotCache?.gitContext.selectedRepositoryFamily?.displayName
     }
 
     public var activeWorkspaceRootCurrentBranchName: String? {
-        guard let repositoryPath = activeWorkspaceRootRepositoryPath else {
+        guard let repositoryPath = activeWorkspaceGitSelectionSnapshotCache?.gitContext.repositoryPath else {
             return nil
         }
         return currentBranchByProjectPath[repositoryPath]
@@ -1398,26 +1405,11 @@ public final class NativeAppViewModel {
     }
 
     public var activeWorkspaceGitRepositoryContext: WorkspaceGitRepositoryContext? {
-        guard let repositoryPath = activeWorkspaceRootRepositoryPath
-        else {
-            return nil
-        }
-        return WorkspaceGitRepositoryContext(
-            rootProjectPath: repositoryPath,
-            repositoryPath: repositoryPath
-        )
+        activeWorkspaceGitSelectionSnapshotCache?.gitContext
     }
 
     public var activeWorkspaceCommitRepositoryContext: WorkspaceCommitRepositoryContext? {
-        guard let repositoryPath = activeWorkspaceRootRepositoryPath
-        else {
-            return nil
-        }
-        return WorkspaceCommitRepositoryContext(
-            rootProjectPath: repositoryPath,
-            repositoryPath: repositoryPath,
-            executionPath: preferredWorkspaceGitExecutionPath(for: repositoryPath)
-        )
+        activeWorkspaceGitSelectionSnapshotCache?.commitContext
     }
 
     public var activeWorkspaceCommitViewModel: WorkspaceCommitViewModel? {
@@ -1443,6 +1435,43 @@ public final class NativeAppViewModel {
 
     public var activeWorkspaceState: WorkspaceSessionState? {
         activeWorkspaceController?.sessionState
+    }
+
+    public var activeWorkspaceIsStandaloneQuickTerminal: Bool {
+        guard let session = activeWorkspaceSession else {
+            return false
+        }
+        return session.isQuickTerminal && session.workspaceRootContext == nil
+    }
+
+    private func refreshActiveWorkspaceGitSelectionState() {
+        let selectionSnapshot = computeActiveWorkspaceGitSelectionSnapshot()
+        activeWorkspaceGitSelectionSnapshotCache = selectionSnapshot
+
+        let nextValue = computeActiveWorkspaceGitToolWindowSupport(selectionSnapshot: selectionSnapshot)
+        guard activeWorkspaceSupportsGitToolWindows != nextValue else {
+            return
+        }
+        activeWorkspaceSupportsGitToolWindows = nextValue
+    }
+
+    private func computeActiveWorkspaceGitSelectionSnapshot() -> WorkspaceGitSelectionSnapshot? {
+        guard let normalizedRootProjectPath = normalizedOptionalPathForCompare(activeWorkspaceRootProjectPath) else {
+            return nil
+        }
+        return gitSelectionSnapshot(for: normalizedRootProjectPath)
+    }
+
+    private func computeActiveWorkspaceGitToolWindowSupport(
+        selectionSnapshot: WorkspaceGitSelectionSnapshot?
+    ) -> Bool {
+        guard let session = activeWorkspaceSession else {
+            return false
+        }
+        if session.isQuickTerminal && session.workspaceRootContext == nil {
+            return false
+        }
+        return selectionSnapshot != nil
     }
 
     public var activeWorkspaceLaunchRequest: WorkspaceTerminalLaunchRequest? {
@@ -2324,17 +2353,13 @@ public final class NativeAppViewModel {
     }
 
     public func prepareActiveWorkspaceGitViewModel() {
-        guard let repositoryContext = activeWorkspaceGitRepositoryContext
+        guard let selectionSnapshot = activeWorkspaceGitSelectionSnapshot()
         else {
             return
         }
-
-        let executionWorktrees = workspaceGitExecutionContexts(
-            rootProjectPath: repositoryContext.rootProjectPath,
-            rootProjectName: activeWorkspaceRootRepositoryDisplayName,
-            persistedWorktrees: activeWorkspaceRootProject?.worktrees ?? []
-        )
-        let preferredExecutionPath = preferredWorkspaceGitExecutionPath(for: repositoryContext.rootProjectPath)
+        let repositoryContext = selectionSnapshot.gitContext
+        let preferredExecutionPath = selectionSnapshot.commitContext.executionPath
+        let executionWorktrees = repositoryContext.selectedRepositoryFamily?.members ?? []
 
         if let existing = workspaceGitViewModels[repositoryContext.rootProjectPath] {
             existing.updateRepositoryContext(
@@ -2342,15 +2367,28 @@ public final class NativeAppViewModel {
                 executionWorktrees: executionWorktrees,
                 preferredExecutionWorktreePath: preferredExecutionPath
             )
+            existing.onRepositorySelectionChange = { [weak self] context, executionPath in
+                self?.handleWorkspaceGitRepositorySelectionChange(
+                    repositoryContext: context,
+                    executionPath: executionPath
+                )
+            }
             return
         }
 
-        workspaceGitViewModels[repositoryContext.rootProjectPath] = WorkspaceGitViewModel(
+        let viewModel = WorkspaceGitViewModel(
             repositoryContext: repositoryContext,
             executionWorktrees: executionWorktrees,
             preferredExecutionWorktreePath: preferredExecutionPath,
             client: .live(service: gitRepositoryService)
         )
+        viewModel.onRepositorySelectionChange = { [weak self] context, executionPath in
+            self?.handleWorkspaceGitRepositorySelectionChange(
+                repositoryContext: context,
+                executionPath: executionPath
+            )
+        }
+        workspaceGitViewModels[repositoryContext.rootProjectPath] = viewModel
     }
 
     public func prepareActiveWorkspaceCommitViewModel() {
@@ -2361,21 +2399,29 @@ public final class NativeAppViewModel {
 
         if let existing = workspaceCommitViewModels[repositoryContext.rootProjectPath] {
             existing.updateRepositoryContext(repositoryContext)
+            existing.onRepositorySelectionChange = { [weak self] context in
+                self?.handleWorkspaceCommitRepositorySelectionChange(context)
+            }
             return
         }
 
-        workspaceCommitViewModels[repositoryContext.rootProjectPath] = WorkspaceCommitViewModel(
+        let viewModel = WorkspaceCommitViewModel(
             repositoryContext: repositoryContext,
             client: .live(service: gitRepositoryService)
         )
+        viewModel.onRepositorySelectionChange = { [weak self] context in
+            self?.handleWorkspaceCommitRepositorySelectionChange(context)
+        }
+        workspaceCommitViewModels[repositoryContext.rootProjectPath] = viewModel
     }
 
     public func prepareActiveWorkspaceGitHubViewModel() {
-        guard let repositoryContext = activeWorkspaceGitRepositoryContext
+        guard let selectionSnapshot = activeWorkspaceGitSelectionSnapshot()
         else {
             return
         }
-        let executionPath = preferredWorkspaceGitExecutionPath(for: repositoryContext.rootProjectPath)
+        let repositoryContext = selectionSnapshot.gitContext
+        let executionPath = selectionSnapshot.commitContext.executionPath
 
         if let existing = workspaceGitHubViewModels[repositoryContext.rootProjectPath] {
             existing.updateRepositoryContext(repositoryContext, executionPath: executionPath)
@@ -2433,6 +2479,10 @@ public final class NativeAppViewModel {
         }
         state.selectedPath = state.canonicalDisplayPath(for: path)
         workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
+        syncWorkspaceGitSelectionFromProjectTreeSelectionIfNeeded(
+            rootProjectPath: resolvedProjectPath,
+            selectedPath: state.selectedPath
+        )
     }
 
     public func toggleWorkspaceProjectTreeDirectory(_ directoryPath: String, in projectPath: String? = nil) {
@@ -2703,6 +2753,10 @@ public final class NativeAppViewModel {
         finalState = finalState.canonicalizedForDisplay()
         finalState.errorMessage = nil
         workspaceProjectTreeStatesByProjectPath[projectPath] = finalState
+        syncWorkspaceGitSelectionFromProjectTreeSelectionIfNeeded(
+            rootProjectPath: projectPath,
+            selectedPath: finalState.selectedPath
+        )
         workspaceProjectTreeRefreshingProjectPaths.remove(projectPath)
         workspaceProjectTreeRefreshTasksByProjectPath[projectPath] = nil
         errorMessage = nil
@@ -3298,6 +3352,9 @@ public final class NativeAppViewModel {
     }
 
     public func toggleWorkspaceToolWindow(_ kind: WorkspaceToolWindowKind) {
+        guard workspaceToolWindowKindIsSupported(kind) else {
+            return
+        }
         switch kind.placement {
         case .side:
             if workspaceSideToolWindowState.activeKind == kind, workspaceSideToolWindowState.isVisible {
@@ -3315,7 +3372,8 @@ public final class NativeAppViewModel {
     }
 
     public func showWorkspaceSideToolWindow(_ kind: WorkspaceToolWindowKind) {
-        guard kind.placement == .side else {
+        guard kind.placement == .side,
+              workspaceToolWindowKindIsSupported(kind) else {
             return
         }
         workspaceSideToolWindowState.activeKind = kind
@@ -3342,7 +3400,8 @@ public final class NativeAppViewModel {
     }
 
     public func showWorkspaceBottomToolWindow(_ kind: WorkspaceToolWindowKind) {
-        guard kind.placement == .bottom else {
+        guard kind.placement == .bottom,
+              workspaceToolWindowKindIsSupported(kind) else {
             return
         }
         workspaceBottomToolWindowState.activeKind = kind
@@ -3710,6 +3769,15 @@ public final class NativeAppViewModel {
     }
 
     public func syncActiveWorkspaceToolWindowContext() {
+        if !workspaceToolWindowKindIsSupported(.commit),
+           workspaceSideToolWindowState.activeKind == .commit {
+            hideWorkspaceSideToolWindow()
+        }
+        if !workspaceToolWindowKindIsSupported(.git),
+           workspaceBottomToolWindowState.activeKind == .git {
+            hideWorkspaceBottomToolWindow()
+        }
+
         var neededKinds = Set<WorkspaceToolWindowKind>()
         if workspaceSideToolWindowState.isVisible,
            let kind = workspaceSideToolWindowState.activeKind {
@@ -3730,6 +3798,15 @@ public final class NativeAppViewModel {
                 prepareActiveWorkspaceGitHubViewModel()
                 prepareActiveWorkspaceGitViewModel()
             }
+        }
+    }
+
+    public func workspaceToolWindowKindIsSupported(_ kind: WorkspaceToolWindowKind) -> Bool {
+        switch kind {
+        case .project:
+            return true
+        case .commit, .git:
+            return activeWorkspaceSupportsGitToolWindows
         }
     }
 
@@ -5507,7 +5584,9 @@ public final class NativeAppViewModel {
                 workspaceAlignmentGroupID: workspaceAlignmentGroupID
             )
         )
-        if normalizedPath == normalizedRootProjectPath, !isQuickTerminal {
+        if normalizedPath == normalizedRootProjectPath,
+           !isQuickTerminal,
+           transientDisplayProject?.isDirectoryWorkspace != true {
             refreshCurrentBranch(for: normalizedPath)
         }
     }
@@ -7284,11 +7363,121 @@ public final class NativeAppViewModel {
         workspaceRunConsoleStateByProjectPath[projectPath] = state
     }
 
-    private func preferredWorkspaceGitExecutionPath(for rootProjectPath: String) -> String {
+    private func activeWorkspaceGitSelectionSnapshot() -> WorkspaceGitSelectionSnapshot? {
+        activeWorkspaceGitSelectionSnapshotCache
+    }
+
+    private func gitSelectionSnapshot(for rootProjectPath: String) -> WorkspaceGitSelectionSnapshot? {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard !normalizedRootProjectPath.isEmpty else {
+            return nil
+        }
+
+        if let repositoryPath = rootWorkspaceRepositoryPath(for: normalizedRootProjectPath) {
+            let rootProject = projectsByNormalizedPath[normalizedRootProjectPath]
+            let executionContexts = workspaceGitExecutionContexts(
+                rootProjectPath: repositoryPath,
+                rootProjectName: rootProject?.name,
+                persistedWorktrees: rootProject?.worktrees ?? []
+            )
+            let preferredExecutionPath = preferredWorkspaceGitExecutionPath(
+                for: repositoryPath,
+                allowedPaths: Set(executionContexts.map(\.path))
+            )
+            let repositoryDisplayName = {
+                if let name = rootProject?.name, !name.isEmpty {
+                    return name
+                }
+                let lastComponent = pathLastComponent(repositoryPath)
+                return lastComponent.isEmpty ? repositoryPath : lastComponent
+            }()
+            let family = WorkspaceGitRepositoryFamilyContext(
+                id: repositoryPath,
+                displayName: repositoryDisplayName,
+                repositoryPath: repositoryPath,
+                preferredExecutionPath: preferredExecutionPath,
+                members: executionContexts
+            )
+            let gitContext = WorkspaceGitRepositoryContext(
+                rootProjectPath: repositoryPath,
+                repositoryPath: repositoryPath,
+                repositoryFamilies: [family],
+                selectedRepositoryFamilyID: family.id
+            )
+            let commitContext = WorkspaceCommitRepositoryContext(
+                rootProjectPath: repositoryPath,
+                repositoryPath: repositoryPath,
+                executionPath: preferredExecutionPath,
+                repositoryFamilies: [family],
+                selectedRepositoryFamilyID: family.id
+            )
+            return WorkspaceGitSelectionSnapshot(
+                gitContext: gitContext,
+                commitContext: commitContext
+            )
+        }
+
+        let repositoryFamilies = discoverWorkspaceGitRepositoryFamilies(in: normalizedRootProjectPath)
+        guard !repositoryFamilies.isEmpty else {
+            return nil
+        }
+
+        let selectedFamilyID = resolveSelectedWorkspaceGitRepositoryFamilyID(
+            rootProjectPath: normalizedRootProjectPath,
+            families: repositoryFamilies
+        )
+        guard let selectedFamily = repositoryFamilies.first(where: { $0.id == selectedFamilyID }) ?? repositoryFamilies.first else {
+            return nil
+        }
+        let selectedExecutionPath = resolveSelectedWorkspaceGitExecutionPath(
+            rootProjectPath: normalizedRootProjectPath,
+            family: selectedFamily
+        )
+        let gitContext = WorkspaceGitRepositoryContext(
+            rootProjectPath: normalizedRootProjectPath,
+            repositoryPath: selectedFamily.repositoryPath,
+            repositoryFamilies: repositoryFamilies,
+            selectedRepositoryFamilyID: selectedFamily.id
+        )
+        let commitContext = WorkspaceCommitRepositoryContext(
+            rootProjectPath: normalizedRootProjectPath,
+            repositoryPath: selectedFamily.repositoryPath,
+            executionPath: selectedExecutionPath,
+            repositoryFamilies: repositoryFamilies,
+            selectedRepositoryFamilyID: selectedFamily.id
+        )
+        return WorkspaceGitSelectionSnapshot(
+            gitContext: gitContext,
+            commitContext: commitContext
+        )
+    }
+
+    private func rootWorkspaceRepositoryPath(for rootProjectPath: String) -> String? {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard !normalizedRootProjectPath.isEmpty else {
+            return nil
+        }
+        if let rootProject = projectsByNormalizedPath[normalizedRootProjectPath],
+           rootProject.isGitRepository {
+            return rootProject.path
+        }
+        return liveWorkspaceRootRepositoryPath(for: normalizedRootProjectPath)
+    }
+
+    private func preferredWorkspaceGitExecutionPath(
+        for rootProjectPath: String,
+        allowedPaths: Set<String>? = nil
+    ) -> String {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        if let storedExecutionPath = workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath],
+           allowedPaths?.contains(storedExecutionPath) != false {
+            return storedExecutionPath
+        }
         if let activeWorkspaceProjectPath,
            openWorkspaceSessions.contains(where: {
                $0.projectPath == activeWorkspaceProjectPath && $0.rootProjectPath == rootProjectPath
-           })
+           }),
+           allowedPaths?.contains(activeWorkspaceProjectPath) != false
         {
             return activeWorkspaceProjectPath
         }
@@ -7322,6 +7511,397 @@ public final class NativeAppViewModel {
             )
         }
         return [rootContext] + worktreeContexts
+    }
+
+    private func discoverWorkspaceGitRepositoryFamilies(in rootProjectPath: String) -> [WorkspaceGitRepositoryFamilyContext] {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard !normalizedRootProjectPath.isEmpty else {
+            return []
+        }
+
+        let candidates = workspaceGitRepositoryCandidates(in: normalizedRootProjectPath)
+        var discoveredRepositories: [DiscoveredWorkspaceGitRepository] = []
+        discoveredRepositories.reserveCapacity(candidates.count)
+
+        for candidate in candidates {
+            let normalizedCandidatePath = normalizePathForCompare(candidate.path)
+            guard !normalizedCandidatePath.isEmpty,
+                  normalizedCandidatePath != normalizedRootProjectPath,
+                  directoryExists(at: normalizedCandidatePath)
+            else {
+                continue
+            }
+            guard let gitDirectories = workspaceGitDirectoriesForCandidate(at: normalizedCandidatePath) else {
+                continue
+            }
+
+            let branchName = currentBranchByProjectPath[normalizedCandidatePath]
+
+            discoveredRepositories.append(
+                DiscoveredWorkspaceGitRepository(
+                    path: normalizedCandidatePath,
+                    displayName: candidate.displayName,
+                    branchName: branchName,
+                    gitDirectory: gitDirectories.gitDirectory,
+                    commonGitDirectory: gitDirectories.commonGitDirectory,
+                    isRootRepository: gitDirectories.gitDirectory == gitDirectories.commonGitDirectory
+                )
+            )
+        }
+
+        let groupedRepositories = Dictionary(grouping: discoveredRepositories, by: \.commonGitDirectory)
+        let activeProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath)
+        let storedExecutionPath = workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath]
+
+        return groupedRepositories.values.compactMap { repositories in
+            let members = repositories
+                .sorted { discoveredWorkspaceRepositoryOrder(lhs: $0, rhs: $1) }
+                .map { repository in
+                    WorkspaceGitWorktreeContext(
+                        path: repository.path,
+                        displayName: repository.displayName,
+                        branchName: repository.branchName,
+                        isRootProject: repository.isRootRepository
+                    )
+                }
+            guard !members.isEmpty else {
+                return nil
+            }
+
+            let repositoryPath = members.first(where: \.isRootProject)?.path ?? members[0].path
+            let familyDisplayName = members.first(where: \.isRootProject)?.displayName ?? members[0].displayName
+            let preferredExecutionPath = resolvePreferredWorkspaceGitExecutionPath(
+                members: members,
+                storedExecutionPath: storedExecutionPath,
+                activeProjectPath: activeProjectPath,
+                fallbackPath: repositoryPath
+            )
+
+            return WorkspaceGitRepositoryFamilyContext(
+                id: repositories[0].commonGitDirectory,
+                displayName: familyDisplayName,
+                repositoryPath: repositoryPath,
+                preferredExecutionPath: preferredExecutionPath,
+                members: members
+            )
+        }
+        .sorted {
+            $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+        }
+    }
+
+    private func workspaceGitRepositoryCandidates(in rootProjectPath: String) -> [WorkspaceGitRepositoryCandidate] {
+        let rootURL = URL(fileURLWithPath: rootProjectPath, isDirectory: true)
+        let fileManager = FileManager.default
+        var candidates = [WorkspaceGitRepositoryCandidate]()
+        var seenPaths = Set<String>()
+
+        if let childURLs = try? fileManager.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for childURL in childURLs {
+                let normalizedPath = normalizePathForCompare(childURL.path)
+                guard !normalizedPath.isEmpty,
+                      seenPaths.insert(normalizedPath).inserted,
+                      directoryExists(at: normalizedPath)
+                else {
+                    continue
+                }
+                candidates.append(
+                    WorkspaceGitRepositoryCandidate(
+                        path: childURL.path,
+                        displayName: childURL.lastPathComponent
+                    )
+                )
+            }
+        }
+
+        for session in openWorkspaceSessions where
+            !session.isQuickTerminal &&
+            normalizePathForCompare(session.rootProjectPath) == rootProjectPath
+        {
+            let normalizedPath = normalizePathForCompare(session.projectPath)
+            guard normalizedPath != rootProjectPath,
+                  seenPaths.insert(normalizedPath).inserted
+            else {
+                continue
+            }
+            let displayName = resolveDisplayProject(
+                for: session.projectPath,
+                rootProjectPath: session.rootProjectPath
+            )?.name ?? pathLastComponent(session.projectPath)
+            candidates.append(
+                WorkspaceGitRepositoryCandidate(
+                    path: session.projectPath,
+                    displayName: displayName
+                )
+            )
+        }
+
+        return candidates
+    }
+
+    private func workspaceGitDirectoriesForCandidate(
+        at path: String
+    ) -> (gitDirectory: String, commonGitDirectory: String)? {
+        let repositoryURL = URL(fileURLWithPath: path, isDirectory: true)
+        let markerURL = repositoryURL.appending(path: ".git")
+        var isDirectory: ObjCBool = false
+        let gitDirectory: String
+
+        if FileManager.default.fileExists(atPath: markerURL.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            gitDirectory = normalizePathForCompare(markerURL.standardizedFileURL.path)
+        } else if FileManager.default.fileExists(atPath: markerURL.path),
+                  let content = try? String(contentsOf: markerURL, encoding: .utf8),
+                  let parsedGitDirectory = workspaceGitDirectoryFromDotGitFile(
+                    content,
+                    repositoryPath: path
+                  ) {
+            gitDirectory = normalizePathForCompare(parsedGitDirectory)
+        } else {
+            return nil
+        }
+
+        guard directoryExists(at: gitDirectory) else {
+            return nil
+        }
+        return (
+            gitDirectory: gitDirectory,
+            commonGitDirectory: workspaceCommonGitDirectory(forGitDirectory: gitDirectory)
+        )
+    }
+
+    private func workspaceCommonGitDirectory(forGitDirectory gitDirectory: String) -> String {
+        let gitDirectoryURL = URL(fileURLWithPath: gitDirectory, isDirectory: true)
+        let commonDirURL = gitDirectoryURL.appending(path: "commondir")
+
+        if let content = try? String(contentsOf: commonDirURL, encoding: .utf8),
+           let firstLine = content.split(whereSeparator: \.isNewline).first {
+            let rawPath = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rawPath.isEmpty {
+                let resolvedURL = rawPath.hasPrefix("/")
+                    ? URL(fileURLWithPath: rawPath)
+                    : gitDirectoryURL.appending(path: rawPath)
+                return normalizePathForCompare(resolvedURL.standardizedFileURL.path)
+            }
+        }
+
+        let components = gitDirectoryURL.standardizedFileURL.pathComponents
+        if let worktreesIndex = components.lastIndex(of: "worktrees"),
+           worktreesIndex > 0 {
+            return normalizePathForCompare(
+                NSString.path(withComponents: Array(components.prefix(upTo: worktreesIndex)))
+            )
+        }
+
+        return normalizePathForCompare(gitDirectory)
+    }
+
+    private func workspaceGitDirectoryFromDotGitFile(
+        _ content: String,
+        repositoryPath: String
+    ) -> String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let markerRange = trimmed.range(of: "gitdir:") else {
+            return nil
+        }
+
+        let rawPath = trimmed[markerRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawPath.isEmpty else {
+            return nil
+        }
+        if rawPath.hasPrefix("/") {
+            return URL(fileURLWithPath: rawPath).standardizedFileURL.path
+        }
+        return URL(fileURLWithPath: repositoryPath, isDirectory: true)
+            .appending(path: rawPath)
+            .standardizedFileURL
+            .path
+    }
+
+    private func resolveSelectedWorkspaceGitRepositoryFamilyID(
+        rootProjectPath: String,
+        families: [WorkspaceGitRepositoryFamilyContext]
+    ) -> String {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        if let storedFamilyID = workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath],
+           families.contains(where: { $0.id == storedFamilyID }) {
+            return storedFamilyID
+        }
+
+        if let activeProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath),
+           let activeFamily = families.first(where: { family in
+               family.members.contains(where: { $0.path == activeProjectPath })
+           }) {
+            return activeFamily.id
+        }
+
+        return families[0].id
+    }
+
+    private func resolveSelectedWorkspaceGitExecutionPath(
+        rootProjectPath: String,
+        family: WorkspaceGitRepositoryFamilyContext
+    ) -> String {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        let storedExecutionPath = workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath]
+        let activeProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath)
+        return resolvePreferredWorkspaceGitExecutionPath(
+            members: family.members,
+            storedExecutionPath: storedExecutionPath,
+            activeProjectPath: activeProjectPath,
+            fallbackPath: family.preferredExecutionPath
+        )
+    }
+
+    private func resolvePreferredWorkspaceGitExecutionPath(
+        members: [WorkspaceGitWorktreeContext],
+        storedExecutionPath: String?,
+        activeProjectPath: String?,
+        fallbackPath: String
+    ) -> String {
+        if let storedExecutionPath,
+           members.contains(where: { $0.path == storedExecutionPath }) {
+            return storedExecutionPath
+        }
+        if let activeProjectPath,
+           members.contains(where: { $0.path == activeProjectPath }) {
+            return activeProjectPath
+        }
+        if members.contains(where: { $0.path == fallbackPath }) {
+            return fallbackPath
+        }
+        return members[0].path
+    }
+
+    private func handleWorkspaceGitRepositorySelectionChange(
+        repositoryContext: WorkspaceGitRepositoryContext,
+        executionPath: String
+    ) {
+        let normalizedRootProjectPath = normalizePathForCompare(repositoryContext.rootProjectPath)
+        workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath] = repositoryContext.selectedRepositoryFamilyID
+        workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath] = executionPath
+
+        guard let selectionSnapshot = gitSelectionSnapshot(for: normalizedRootProjectPath) else {
+            return
+        }
+
+        if let commitViewModel = workspaceCommitViewModels[normalizedRootProjectPath] {
+            commitViewModel.updateRepositoryContext(selectionSnapshot.commitContext)
+        }
+        if let gitHubViewModel = workspaceGitHubViewModels[normalizedRootProjectPath] {
+            gitHubViewModel.updateRepositoryContext(
+                selectionSnapshot.gitContext,
+                executionPath: selectionSnapshot.commitContext.executionPath
+            )
+        }
+    }
+
+    private func handleWorkspaceCommitRepositorySelectionChange(
+        _ repositoryContext: WorkspaceCommitRepositoryContext
+    ) {
+        let normalizedRootProjectPath = normalizePathForCompare(repositoryContext.rootProjectPath)
+        workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath] = repositoryContext.selectedRepositoryFamilyID
+        workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath] = repositoryContext.executionPath
+
+        guard let selectionSnapshot = gitSelectionSnapshot(for: normalizedRootProjectPath) else {
+            return
+        }
+
+        if let gitViewModel = workspaceGitViewModels[normalizedRootProjectPath] {
+            let executionWorktrees = selectionSnapshot.gitContext.selectedRepositoryFamily?.members ?? []
+            gitViewModel.updateRepositoryContext(
+                selectionSnapshot.gitContext,
+                executionWorktrees: executionWorktrees,
+                preferredExecutionWorktreePath: selectionSnapshot.commitContext.executionPath
+            )
+        }
+        if let gitHubViewModel = workspaceGitHubViewModels[normalizedRootProjectPath] {
+            gitHubViewModel.updateRepositoryContext(
+                selectionSnapshot.gitContext,
+                executionPath: selectionSnapshot.commitContext.executionPath
+            )
+        }
+        if let commitViewModel = workspaceCommitViewModels[normalizedRootProjectPath],
+           commitViewModel.repositoryContext != selectionSnapshot.commitContext {
+            commitViewModel.updateRepositoryContext(selectionSnapshot.commitContext)
+        }
+    }
+
+    private func syncWorkspaceGitSelectionFromProjectTreeSelectionIfNeeded(
+        rootProjectPath: String,
+        selectedPath: String?
+    ) {
+        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
+        guard normalizedRootProjectPath == normalizePathForCompare(activeWorkspaceRootProjectPath ?? ""),
+              let selectedPath = normalizedOptionalPathForCompare(selectedPath)
+        else {
+            return
+        }
+
+        let repositoryFamilies = discoverWorkspaceGitRepositoryFamilies(in: normalizedRootProjectPath)
+        guard !repositoryFamilies.isEmpty,
+              let selection = matchingWorkspaceGitFamilySelection(
+                for: selectedPath,
+                in: repositoryFamilies
+              )
+        else {
+            return
+        }
+
+        let previousFamilyID = workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath]
+        let previousExecutionPath = workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath]
+        guard previousFamilyID != selection.family.id || previousExecutionPath != selection.executionPath else {
+            return
+        }
+
+        workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath] = selection.family.id
+        workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath] = selection.executionPath
+        syncActiveWorkspaceToolWindowContext()
+    }
+
+    private func matchingWorkspaceGitFamilySelection(
+        for selectedPath: String,
+        in families: [WorkspaceGitRepositoryFamilyContext]
+    ) -> (family: WorkspaceGitRepositoryFamilyContext, executionPath: String)? {
+        let normalizedSelectedPath = normalizePathForCompare(selectedPath)
+        var bestMatch: (family: WorkspaceGitRepositoryFamilyContext, executionPath: String, score: Int)?
+
+        for family in families {
+            for member in family.members {
+                let normalizedMemberPath = normalizePathForCompare(member.path)
+                guard normalizedSelectedPath == normalizedMemberPath
+                    || normalizedSelectedPath.hasPrefix(normalizedMemberPath + "/")
+                else {
+                    continue
+                }
+                let score = normalizedMemberPath.count
+                if let bestMatch, bestMatch.score >= score {
+                    continue
+                }
+                bestMatch = (family, member.path, score)
+            }
+        }
+
+        return bestMatch.map { ($0.family, $0.executionPath) }
+    }
+
+    private func discoveredWorkspaceRepositoryOrder(
+        lhs: DiscoveredWorkspaceGitRepository,
+        rhs: DiscoveredWorkspaceGitRepository
+    ) -> Bool {
+        if lhs.isRootRepository != rhs.isRootRepository {
+            return lhs.isRootRepository && !rhs.isRootRepository
+        }
+        return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+    }
+
+    private func directoryExists(at path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     private func refreshCurrentBranch(for projectPath: String) {
@@ -8632,6 +9212,25 @@ enum WorkspaceTerminalCommandError: LocalizedError {
 private enum ProjectDocumentLoadOutcome: Sendable {
     case success(ProjectDocumentSnapshot)
     case failure(String)
+}
+
+private struct WorkspaceGitSelectionSnapshot {
+    let gitContext: WorkspaceGitRepositoryContext
+    let commitContext: WorkspaceCommitRepositoryContext
+}
+
+private struct WorkspaceGitRepositoryCandidate {
+    let path: String
+    let displayName: String
+}
+
+private struct DiscoveredWorkspaceGitRepository {
+    let path: String
+    let displayName: String
+    let branchName: String?
+    let gitDirectory: String
+    let commonGitDirectory: String
+    let isRootRepository: Bool
 }
 
 private func loadProjectDocumentFromDisk(_ projectPath: String) throws -> ProjectDocumentSnapshot {

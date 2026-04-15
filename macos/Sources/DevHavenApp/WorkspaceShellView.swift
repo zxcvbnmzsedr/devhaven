@@ -116,7 +116,7 @@ struct WorkspaceShellView: View {
 
     @ViewBuilder
     private var gitToolWindowContent: some View {
-        if isActiveQuickTerminalSession {
+        if viewModel.activeWorkspaceIsStandaloneQuickTerminal {
             gitModeEmptyState(
                 title: "快速终端暂不支持 Git 模式",
                 systemImage: "bolt.horizontal.circle",
@@ -124,9 +124,9 @@ struct WorkspaceShellView: View {
             )
         } else if viewModel.activeWorkspaceGitRepositoryContext == nil {
             gitModeEmptyState(
-                title: "当前项目不是 Git 仓库",
+                title: "当前工作区未发现 Git 仓库",
                 systemImage: "point.3.connected.trianglepath.dotted",
-                description: "Git 面板只会对当前 active project 所属的 root repository 生效。"
+                description: "Git 面板会优先使用当前项目所属仓库；如果根目录不是 Git 仓库，也会尝试聚合工作区下的 Git 子项目。"
             )
         } else if let gitViewModel = viewModel.activeWorkspaceGitViewModel {
             WorkspaceGitRootView(
@@ -335,13 +335,6 @@ struct WorkspaceShellView: View {
 
     private func syncTerminalStores() {
         terminalStoreRegistry.syncRetainedProjectPaths(Set(viewModel.openWorkspaceProjectPaths))
-    }
-
-    private var isActiveQuickTerminalSession: Bool {
-        guard let activePath = viewModel.activeWorkspaceProjectPath else {
-            return false
-        }
-        return viewModel.openWorkspaceSessions.first(where: { $0.projectPath == activePath })?.isQuickTerminal ?? false
     }
 
     private func warmActiveWorkspace() {

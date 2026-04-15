@@ -22,8 +22,13 @@ struct WorkspaceGitOperationsView: View {
     }
 
     private var worktreeCard: some View {
-        card(title: "当前执行工作树") {
+        card(title: viewModel.hasMultipleRepositoryFamilies ? "当前仓库族 / 执行仓库" : "当前执行工作树") {
             VStack(alignment: .leading, spacing: 6) {
+                if viewModel.hasMultipleRepositoryFamilies {
+                    Text(viewModel.selectedRepositoryFamilyDisplayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NativeTheme.textSecondary)
+                }
                 Text(viewModel.selectedExecutionWorktree?.displayName ?? "未选择")
                     .font(.headline)
                     .foregroundStyle(NativeTheme.textPrimary)
@@ -129,9 +134,9 @@ struct WorkspaceGitOperationsView: View {
         case .fetch:
             return "正在抓取远端最新引用…"
         case .pull:
-            return "正在拉取当前 worktree 的最新提交…"
+            return "正在拉取当前执行仓库的最新提交…"
         case .push:
-            return "正在推送当前 worktree 的本地提交…"
+            return "正在推送当前执行仓库的本地提交…"
         case .abortOperation:
             return "正在终止当前 Git 操作…"
         default:

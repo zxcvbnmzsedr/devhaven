@@ -51,6 +51,9 @@ struct WorkspaceGitRootView: View {
     var body: some View {
         VStack(spacing: 0) {
             gitTopTabStrip
+            if shouldShowRepositorySelectionBar {
+                repositorySelectionBar
+            }
 
             Group {
                 switch selectedTopLevelTab {
@@ -99,6 +102,68 @@ struct WorkspaceGitRootView: View {
         }
     }
 
+    private var shouldShowRepositorySelectionBar: Bool {
+        viewModel.hasMultipleRepositoryFamilies || viewModel.executionWorktrees.count > 1
+    }
+
+    private var repositorySelectionBar: some View {
+        HStack(spacing: 10) {
+            if viewModel.hasMultipleRepositoryFamilies {
+                Menu {
+                    ForEach(viewModel.repositoryFamilies) { family in
+                        Button {
+                            viewModel.selectRepositoryFamily(family.id)
+                        } label: {
+                            if family.id == viewModel.repositoryContext.selectedRepositoryFamilyID {
+                                Label(family.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(family.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    selectionChip(
+                        title: "仓库族",
+                        value: viewModel.selectedRepositoryFamilyDisplayName
+                    )
+                }
+                .menuStyle(.borderlessButton)
+            }
+
+            if viewModel.executionWorktrees.count > 1 {
+                Menu {
+                    ForEach(viewModel.executionWorktrees) { worktree in
+                        Button {
+                            viewModel.selectExecutionWorktree(worktree.path)
+                        } label: {
+                            if worktree.path == viewModel.selectedExecutionWorktreePath {
+                                Label(worktree.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(worktree.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    selectionChip(
+                        title: "执行仓库",
+                        value: viewModel.selectedExecutionWorktree?.displayName ?? viewModel.selectedExecutionWorktreePath
+                    )
+                }
+                .menuStyle(.borderlessButton)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(NativeTheme.window)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(NativeTheme.border)
+                .frame(height: 1)
+        }
+    }
+
     private var gitToolWindowTitle: some View {
         Text(WorkspaceGitTopLevelTab.git.title)
             .font(.callout.weight(.medium))
@@ -130,6 +195,24 @@ struct WorkspaceGitRootView: View {
                 }
         }
         .buttonStyle(.plain)
+    }
+
+    private func selectionChip(title: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .foregroundStyle(NativeTheme.textSecondary)
+            Text(value)
+                .foregroundStyle(NativeTheme.textPrimary)
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(NativeTheme.textSecondary)
+        }
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(NativeTheme.elevated)
+        .clipShape(.capsule)
     }
 
     private var gitHubToolsTabContent: some View {

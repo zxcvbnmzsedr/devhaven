@@ -366,6 +366,10 @@ public struct NativeGitRepositoryService: Sendable {
         try resolveGitDirectory(at: repositoryPath)
     }
 
+    public func resolveCommonGitDir(at repositoryPath: String) throws -> String {
+        try resolveCommonGitDirectory(at: repositoryPath)
+    }
+
     public func loadOperationState(at repositoryPath: String) throws -> WorkspaceGitOperationState {
         let gitDirectory = try resolveGitDirectory(at: repositoryPath)
         let gitDirectoryURL = URL(fileURLWithPath: gitDirectory, isDirectory: true)
