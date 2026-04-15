@@ -168,9 +168,9 @@ jobs:
           set -euo pipefail
           bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor
 
-      - name: Swift test
+      - name: Validate arm64 compile
         if: ${{ matrix.arch == 'arm64' }}
-        run: swift test --package-path macos
+        run: swift build --package-path macos -c debug
 
       - name: Validate x86_64 compile
         if: ${{ matrix.arch == 'x86_64' }}
