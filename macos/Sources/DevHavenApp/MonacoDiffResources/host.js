@@ -19,6 +19,7 @@
   const refreshButton = document.getElementById("refresh-button");
   const leftPaneHeader = document.getElementById("left-pane-header");
   const rightPaneHeader = document.getElementById("right-pane-header");
+  const hideUnchangedRegionsEnabled = false;
 
   let editor;
   let originalModel;
@@ -33,6 +34,7 @@
   let modifiedSelectionDecorations = [];
   let lastSelectedBlockId = null;
   let currentViewerMode = "sideBySide";
+  let modelBindingCount = 0;
 
   function postMessage(type, payload) {
     const handler = window.webkit?.messageHandlers?.devhavenMonacoDiff;
@@ -120,7 +122,7 @@
       },
       bracketPairColorization: { enabled: true },
       hideUnchangedRegions: {
-        enabled: true,
+        enabled: hideUnchangedRegionsEnabled,
         contextLineCount: 3,
         minimumLineCount: 5,
         revealLineCount: 10
@@ -176,10 +178,18 @@
       monaco.editor.setModelLanguage(modifiedModel, language);
     }
 
-    editor.setModel({
-      original: originalModel,
-      modified: modifiedModel
-    });
+    const currentModelPair = editor.getModel();
+    const shouldBindModels = !currentModelPair
+      || currentModelPair.original !== originalModel
+      || currentModelPair.modified !== modifiedModel;
+
+    if (shouldBindModels) {
+      editor.setModel({
+        original: originalModel,
+        modified: modifiedModel
+      });
+      modelBindingCount += 1;
+    }
   }
 
   function clearSelectedBlockDecorations() {
@@ -553,7 +563,9 @@
           ? editor.getModifiedEditor().getOption(monaco.editor.EditorOption.readOnly)
           : null,
         selectedBlockId: lastSelectedBlockId,
-        viewerMode: currentViewerMode
+        viewerMode: currentViewerMode,
+        modelBindingCount,
+        hideUnchangedRegionsEnabled
       };
     }
   };

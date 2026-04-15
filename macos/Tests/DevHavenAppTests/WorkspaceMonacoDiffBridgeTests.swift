@@ -58,7 +58,9 @@ final class WorkspaceMonacoDiffBridgeTests: XCTestCase {
         await fulfillment(of: [changedExpectation, saveExpectation], timeout: 5.0)
         XCTAssertEqual(changedText, "struct User {\n    let id: Int\n}\n")
     }
-
+    
+    
+    
     func testBridgeRestoresInitialSelectionAfterReady() async throws {
         let bridge = WorkspaceMonacoDiffBridge()
         let payload = makePayload(
@@ -194,6 +196,51 @@ final class WorkspaceMonacoDiffBridgeTests: XCTestCase {
         XCTAssertEqual(snapshot.viewerMode, "unified")
     }
 
+    func testBridgeDoesNotRebindModelsForEchoedModifiedTextUpdate() async throws {
+        let bridge = WorkspaceMonacoDiffBridge()
+        let payload = makePayload(
+            originalText: "struct User {}\n",
+            modifiedText: "struct User {\n}\n"
+        )
+        installBridge(bridge, payload: payload)
+
+        let initialSnapshot = try await waitForSnapshot(on: bridge) { snapshot in
+            snapshot.hasEditor && snapshot.modelBindingCount == 1
+        }
+        XCTAssertEqual(initialSnapshot.modelBindingCount, 1)
+
+        try await bridge.webView.evaluateJavaScript(
+            "window.__devHavenMonaco?.debugSetModifiedText?.('struct User {\\n    let id: Int\\n}\\n')"
+        )
+
+        var echoedPayload = payload
+        echoedPayload.modifiedText = "struct User {\n    let id: Int\n}\n"
+        installBridge(bridge, payload: echoedPayload)
+
+        let echoedSnapshot = try await waitForSnapshot(on: bridge) { snapshot in
+            snapshot.modifiedText == echoedPayload.modifiedText
+        }
+        XCTAssertEqual(echoedSnapshot.modifiedText, echoedPayload.modifiedText)
+        XCTAssertEqual(
+            echoedSnapshot.modelBindingCount,
+            1,
+            "来自编辑器自身的文本回写不应重新绑定 diff editor model"
+        )
+    }
+
+    func testBridgeShowsUnchangedRegionsByDefault() async throws {
+        let bridge = WorkspaceMonacoDiffBridge()
+        installBridge(bridge, payload: makePayload())
+
+        let snapshot = try await waitForSnapshot(on: bridge) { snapshot in
+            snapshot.hasEditor
+        }
+        XCTAssertFalse(
+            snapshot.hideUnchangedRegionsEnabled,
+            "默认不应折叠 unchanged regions，避免输入时因折叠区重排造成视口跳动"
+        )
+    }
+
     private func installBridge(
         _ bridge: WorkspaceMonacoDiffBridge,
         payload: WorkspaceMonacoDiffPayload,
@@ -283,7 +330,9 @@ final class WorkspaceMonacoDiffBridgeTests: XCTestCase {
             modifiedText: nil,
             readOnly: nil,
             selectedBlockId: nil,
-            viewerMode: nil
+            viewerMode: nil,
+            modelBindingCount: 0,
+            hideUnchangedRegionsEnabled: false
         )
     }
 
@@ -300,7 +349,9 @@ final class WorkspaceMonacoDiffBridgeTests: XCTestCase {
             modifiedText: rawSnapshot["modifiedText"] as? String,
             readOnly: rawSnapshot["readOnly"] as? Bool,
             selectedBlockId: rawSnapshot["selectedBlockId"] as? String,
-            viewerMode: rawSnapshot["viewerMode"] as? String
+            viewerMode: rawSnapshot["viewerMode"] as? String,
+            modelBindingCount: rawSnapshot["modelBindingCount"] as? Int ?? 0,
+            hideUnchangedRegionsEnabled: rawSnapshot["hideUnchangedRegionsEnabled"] as? Bool ?? false
         )
     }
 }
@@ -312,4 +363,6 @@ private struct MonacoDebugSnapshot: Equatable {
     var readOnly: Bool?
     var selectedBlockId: String?
     var viewerMode: String?
+    var modelBindingCount: Int
+    var hideUnchangedRegionsEnabled: Bool
 }

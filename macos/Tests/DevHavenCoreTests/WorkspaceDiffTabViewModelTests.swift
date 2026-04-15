@@ -4,6 +4,13 @@ import XCTest
 
 @MainActor
 final class WorkspaceDiffTabViewModelTests: XCTestCase {
+    private final class SaveProbe: @unchecked Sendable {
+        var savedExecutionPath: String?
+        var savedFilePath: String?
+        var savedContent: String?
+        var loadWorkingTreeDocumentCallCount = 0
+    }
+
     func testLiveHistoryPreviewLoadsRenameAsReadOnlyCompareDocument() async throws {
         let fixture = try makeGitHistoryPreviewFixture()
         defer { try? FileManager.default.removeItem(at: fixture.repositoryURL) }
@@ -404,6 +411,97 @@ final class WorkspaceDiffTabViewModelTests: XCTestCase {
         let rebuiltDocument = try XCTUnwrap(viewModel.documentState.loadedMergeDocument)
         XCTAssertEqual(rebuiltDocument.conflictBlocks.count, 1)
         XCTAssertEqual(rebuiltDocument.resultPane.text, "<<<<<<< ours\nA\n=======\nB\n>>>>>>> theirs\n")
+    }
+
+    func testSaveEditableCompareContentDoesNotRefreshWholeDocument() throws {
+        let saveProbe = SaveProbe()
+
+        let viewModel = WorkspaceDiffTabViewModel(
+            tab: WorkspaceDiffTabState(
+                id: "diff-tab",
+                identity: "diff-tab",
+                title: "Sources/App.swift",
+                source: .workingTreeChange(
+                    repositoryPath: "/tmp/repo",
+                    executionPath: "/tmp/repo",
+                    filePath: "Sources/App.swift",
+                    group: .unstaged,
+                    status: .modified,
+                    oldPath: nil
+                ),
+                viewerMode: .sideBySide
+            ),
+            client: .init(
+                loadGitLogCommitFileDocument: { _, _ in
+                    XCTFail("不应走 git log diff 加载链路")
+                    return .compare(
+                        WorkspaceDiffCompareDocument(
+                            mode: .history,
+                            leftPane: WorkspaceDiffEditorPane(title: "Before", path: nil, text: "", isEditable: false),
+                            rightPane: WorkspaceDiffEditorPane(title: "After", path: nil, text: "", isEditable: false)
+                        )
+                    )
+                },
+                loadWorkingTreeDocument: { _ in
+                    saveProbe.loadWorkingTreeDocumentCallCount += 1
+                    return .compare(
+                        WorkspaceDiffCompareDocument(
+                            mode: .unstaged,
+                            leftPane: WorkspaceDiffEditorPane(title: "Staged", path: nil, text: "", isEditable: false),
+                            rightPane: WorkspaceDiffEditorPane(title: "Local", path: nil, text: "", isEditable: true)
+                        )
+                    )
+                },
+                saveWorkingTreeFile: { executionPath, filePath, content in
+                    saveProbe.savedExecutionPath = executionPath
+                    saveProbe.savedFilePath = filePath
+                    saveProbe.savedContent = content
+                }
+            ),
+            editableContentRebuildDelayNanoseconds: 0
+        )
+        viewModel.documentState.loadState = .loaded(
+            .compare(
+                WorkspaceDiffCompareDocument(
+                    mode: .unstaged,
+                    leftPane: WorkspaceDiffEditorPane(
+                        title: "Staged",
+                        path: "Sources/App.swift",
+                        text: "line 1\nline 2\n",
+                        isEditable: false
+                    ),
+                    rightPane: WorkspaceDiffEditorPane(
+                        title: "Local",
+                        path: "Sources/App.swift",
+                        text: "line 1\nlocal edit\n",
+                        isEditable: true
+                    ),
+                    blocks: [
+                        WorkspaceDiffCompareBlock(
+                            id: "compare-block-0",
+                            summary: "1 changed line",
+                            leftLineRange: WorkspaceDiffLineRange(startLine: 1, lineCount: 1),
+                            rightLineRange: WorkspaceDiffLineRange(startLine: 1, lineCount: 1),
+                            leftLines: ["line 2"],
+                            rightLines: ["local edit"],
+                            leftHasTrailingNewline: true,
+                            rightHasTrailingNewline: true
+                        )
+                    ]
+                )
+            )
+        )
+
+        try viewModel.saveEditableContent()
+
+        XCTAssertEqual(saveProbe.savedExecutionPath, "/tmp/repo")
+        XCTAssertEqual(saveProbe.savedFilePath, "Sources/App.swift")
+        XCTAssertEqual(saveProbe.savedContent, "line 1\nlocal edit\n")
+        XCTAssertEqual(saveProbe.loadWorkingTreeDocumentCallCount, 0, "保存不应触发整个 diff reload")
+
+        let document = try XCTUnwrap(viewModel.documentState.loadedCompareDocument)
+        XCTAssertEqual(document.rightPane.text, "line 1\nlocal edit\n")
+        XCTAssertEqual(document.blocks.count, 1)
     }
 
     private func makeViewModel(rebuildDelayNanoseconds: UInt64) -> WorkspaceDiffTabViewModel {

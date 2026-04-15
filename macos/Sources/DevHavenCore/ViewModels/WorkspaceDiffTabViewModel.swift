@@ -315,7 +315,6 @@ public final class WorkspaceDiffTabViewModel {
             return
         }
         try client.saveWorkingTreeFile(executionPath, filePath, editableText)
-        refresh()
     }
 
     public func applyMergeAction(_ action: WorkspaceDiffMergeAction, blockID: String? = nil) {
