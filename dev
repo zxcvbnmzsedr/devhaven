@@ -13,7 +13,8 @@ usage() {
 
 作用：
   以接近 `pnpm dev` 的方式启动 DevHaven 原生开发态：
-  先确保 Ghostty / Sparkle vendor 可用，再按需接入 unified log，最后运行 `swift run --package-path macos DevHavenApp`。
+  先构建 React WebUI 资源并确保 Ghostty / Sparkle vendor 可用，
+  再按需接入 unified log，最后运行 `swift run --package-path macos DevHavenApp`。
 
 选项：
   --dry-run               只打印将要执行的命令，不真正启动
@@ -103,12 +104,14 @@ VENDOR_COMMANDS=(
   "bash macos/scripts/setup-ghostty-framework.sh --ensure-worktree-vendor"
   "bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor"
 )
+WEBUI_BUILD_COMMAND=(bash macos/scripts/build-run-configuration-webui.sh)
 CLI_BUILD_COMMAND=(swift build --package-path macos --product DevHavenCLI)
 RUN_COMMAND=(swift run --package-path macos DevHavenApp)
 LOG_PREDICATE="$(build_predicate)"
 LOG_COMMAND=(log stream --style compact --level debug --predicate "$LOG_PREDICATE")
 
 if (( DRY_RUN )); then
+  print_command "React WebUI构建命令" "${WEBUI_BUILD_COMMAND[@]}"
   for command in "${VENDOR_COMMANDS[@]}"; do
     read -r -a parsed_command <<< "$command"
     print_command "vendor命令" "${parsed_command[@]}"
@@ -125,6 +128,9 @@ command -v swift >/dev/null 2>&1 || fail "未检测到 swift，请先安装 Xcod
 command -v log >/dev/null 2>&1 || fail "未检测到 macOS log 命令"
 
 trap cleanup EXIT INT TERM
+
+printf '==> 构建 Run Configuration React WebUI\n'
+"${WEBUI_BUILD_COMMAND[@]}"
 
 printf '==> 确保 Ghostty / Sparkle vendor 可用\n'
 for command in "${VENDOR_COMMANDS[@]}"; do

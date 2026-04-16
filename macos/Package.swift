@@ -41,6 +41,7 @@ let package = Package(
                 .copy("MarkdownResources"),
                 .copy("MonacoDiffResources"),
                 .copy("MonacoEditorResources"),
+                .copy("WorkspaceRunConfigurationResources"),
             ],
             linkerSettings: [
                 .linkedFramework("Carbon"),
