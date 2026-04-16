@@ -38,6 +38,7 @@ let package = Package(
             resources: [
                 .copy("GhosttyResources"),
                 .copy("AgentResources"),
+                .copy("MarkdownResources"),
                 .copy("MonacoDiffResources"),
                 .copy("MonacoEditorResources"),
             ],

@@ -161,11 +161,25 @@ public struct WorkspaceEditorSearchPresentationState: Equatable, Sendable {
     }
 }
 
+public enum WorkspaceEditorMarkdownPresentationMode: String, Equatable, Hashable, Sendable {
+    case source
+    case preview
+    case split
+}
+
 public struct WorkspaceEditorRuntimeSessionState: Equatable, Sendable {
     public var searchPresentation: WorkspaceEditorSearchPresentationState
+    public var markdownPresentationMode: WorkspaceEditorMarkdownPresentationMode
+    public var markdownSplitRatio: Double
 
-    public init(searchPresentation: WorkspaceEditorSearchPresentationState = .init()) {
+    public init(
+        searchPresentation: WorkspaceEditorSearchPresentationState = .init(),
+        markdownPresentationMode: WorkspaceEditorMarkdownPresentationMode = .split,
+        markdownSplitRatio: Double = 0.5
+    ) {
         self.searchPresentation = searchPresentation
+        self.markdownPresentationMode = markdownPresentationMode
+        self.markdownSplitRatio = min(max(markdownSplitRatio, 0.15), 0.85)
     }
 }
 

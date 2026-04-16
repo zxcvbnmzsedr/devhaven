@@ -54,25 +54,14 @@ struct WorkspaceEditorTabView: View {
         } else {
             switch tab.kind {
             case .text:
-                WorkspaceMonacoEditorView(
-                    filePath: tab.filePath,
-                    text: Binding(
-                        get: {
-                            viewModel.workspaceEditorTabState(for: projectPath, tabID: tabID)?.text ?? tab.text
-                        },
-                        set: { nextText in
-                            viewModel.updateWorkspaceEditorText(nextText, tabID: tabID, in: projectPath)
-                        }
-                    ),
-                    isEditable: tab.isEditable,
-                    shouldRequestFocus: viewModel.workspaceFocusedArea == .editorTab(tabID),
-                    displayOptions: viewModel.workspaceEditorDisplayOptions,
-                    bridge: monacoBridge,
-                    onSaveRequested: {
-                        viewModel.saveWorkspaceEditorTab(tabID, in: projectPath)
-                    }
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if isMarkdownRenderable(tab) {
+                    markdownContent(for: tab)
+                } else {
+                    sourceEditorView(
+                        for: tab,
+                        shouldRequestFocus: viewModel.workspaceFocusedArea == .editorTab(tabID)
+                    )
+                }
             case .binary:
                 editorUnavailableContent(
                     title: "二进制文件暂不支持",
@@ -136,20 +125,29 @@ struct WorkspaceEditorTabView: View {
 
             Spacer(minLength: 0)
 
+            if isMarkdownRenderable(tab) {
+                markdownPresentationPicker(for: tab)
+                    .frame(width: 108)
+            }
+
             Button("查找") {
-                monacoBridge.startSearch()
+                withVisibleSourceEditor {
+                    monacoBridge.startSearch()
+                }
             }
             .buttonStyle(.borderless)
             .disabled(tab.kind != .text)
 
             Button("替换") {
-                monacoBridge.showReplace()
+                withVisibleSourceEditor {
+                    monacoBridge.showReplace()
+                }
             }
             .buttonStyle(.borderless)
             .disabled(tab.kind != .text || !tab.isEditable)
 
             editorDisplayOptionsMenu
-                .disabled(tab.kind != .text)
+                .disabled(tab.kind != .text || isMarkdownPreviewOnly(tab))
 
             Button("重新载入") {
                 viewModel.reloadWorkspaceEditorTab(tabID, in: projectPath)
@@ -284,7 +282,107 @@ struct WorkspaceEditorTabView: View {
                 .labelStyle(.titleAndIcon)
         }
         .menuStyle(.borderlessButton)
-        .help("编辑器显示选项")
+            .help("编辑器显示选项")
+    }
+
+    @ViewBuilder
+    private func markdownContent(for tab: WorkspaceEditorTabState) -> some View {
+        switch markdownPresentationMode(for: tab) {
+        case .source:
+            sourceEditorView(
+                for: tab,
+                shouldRequestFocus: viewModel.workspaceFocusedArea == .editorTab(tabID)
+            )
+        case .preview:
+            markdownPreviewView(for: tab)
+        case .split:
+            WorkspaceSplitView(
+                direction: .horizontal,
+                ratio: markdownSplitRatio(for: tab),
+                onRatioChange: { nextRatio in
+                    updateMarkdownSplitRatio(nextRatio, for: tab)
+                },
+                onRatioChangeEnded: { nextRatio in
+                    updateMarkdownSplitRatio(nextRatio, for: tab)
+                },
+                minLeadingSize: 320,
+                minTrailingSize: 240,
+                onEqualize: {
+                    updateMarkdownSplitRatio(0.5, for: tab)
+                }
+            ) {
+                sourceEditorView(
+                    for: tab,
+                    shouldRequestFocus: viewModel.workspaceFocusedArea == .editorTab(tabID)
+                )
+            } trailing: {
+                markdownPreviewView(for: tab)
+            }
+        }
+    }
+
+    private func sourceEditorView(
+        for tab: WorkspaceEditorTabState,
+        shouldRequestFocus: Bool
+    ) -> some View {
+        WorkspaceMonacoEditorView(
+            filePath: tab.filePath,
+            text: Binding(
+                get: {
+                    viewModel.workspaceEditorTabState(for: projectPath, tabID: tabID)?.text ?? tab.text
+                },
+                set: { nextText in
+                    viewModel.updateWorkspaceEditorText(nextText, tabID: tabID, in: projectPath)
+                }
+            ),
+            isEditable: tab.isEditable,
+            shouldRequestFocus: shouldRequestFocus,
+            displayOptions: viewModel.workspaceEditorDisplayOptions,
+            bridge: monacoBridge,
+            onSaveRequested: {
+                viewModel.saveWorkspaceEditorTab(tabID, in: projectPath)
+            }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func markdownPreviewView(for tab: WorkspaceEditorTabState) -> some View {
+        WorkspaceMarkdownRenderedContentView(
+            content: tab.text,
+            baseURL: markdownBaseURL(for: tab),
+            layout: .fillAvailableSpace
+        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(NativeTheme.window)
+    }
+
+    private func markdownPresentationPicker(for tab: WorkspaceEditorTabState) -> some View {
+        Picker(
+            "",
+            selection: Binding(
+                get: {
+                    markdownPresentationMode(for: tab)
+                },
+                set: { nextMode in
+                    updateMarkdownPresentationMode(nextMode, for: tab)
+                }
+            )
+        ) {
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .accessibilityLabel("源码")
+                .tag(WorkspaceEditorMarkdownPresentationMode.source)
+            Image(systemName: "doc.text.image")
+                .accessibilityLabel("预览")
+                .tag(WorkspaceEditorMarkdownPresentationMode.preview)
+            Image(systemName: "rectangle.split.2x1")
+                .accessibilityLabel("分栏")
+                .tag(WorkspaceEditorMarkdownPresentationMode.split)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .help("Markdown 视图模式")
     }
 
     private func confirmGoToLine() {
@@ -297,25 +395,37 @@ struct WorkspaceEditorTabView: View {
 
     private func syncEditorCommandRouter() {
         editorCommandRouter.startSearchAction = {
-            monacoBridge.startSearch()
+            withVisibleSourceEditor {
+                monacoBridge.startSearch()
+            }
         }
         editorCommandRouter.showReplaceAction = {
-            monacoBridge.showReplace()
+            withVisibleSourceEditor {
+                monacoBridge.showReplace()
+            }
         }
         editorCommandRouter.navigateSearchNextAction = {
-            monacoBridge.findNext()
+            withVisibleSourceEditor {
+                monacoBridge.findNext()
+            }
         }
         editorCommandRouter.navigateSearchPreviousAction = {
-            monacoBridge.findPrevious()
+            withVisibleSourceEditor {
+                monacoBridge.findPrevious()
+            }
         }
         editorCommandRouter.useSelectionForSearchAction = {
-            monacoBridge.useSelectionForFind()
+            withVisibleSourceEditor {
+                monacoBridge.useSelectionForFind()
+            }
         }
         editorCommandRouter.closeSearchAction = {
             monacoBridge.closeSearch()
         }
         editorCommandRouter.goToLineAction = {
-            isGoToLinePresented = true
+            withVisibleSourceEditor {
+                isGoToLinePresented = true
+            }
         }
         editorCommandRouter.saveAction = {
             viewModel.saveWorkspaceEditorTab(tabID, in: projectPath)
@@ -329,6 +439,71 @@ struct WorkspaceEditorTabView: View {
         var nextOptions = viewModel.workspaceEditorDisplayOptions
         mutate(&nextOptions)
         viewModel.updateWorkspaceEditorDisplayOptions(nextOptions)
+    }
+
+    private func isMarkdownRenderable(_ tab: WorkspaceEditorTabState) -> Bool {
+        tab.kind == .text && WorkspaceEditorSyntaxStyle.infer(fromFilePath: tab.filePath) == .markdown
+    }
+
+    private func isMarkdownPreviewOnly(_ tab: WorkspaceEditorTabState) -> Bool {
+        isMarkdownRenderable(tab) && markdownPresentationMode(for: tab) == .preview
+    }
+
+    private func markdownPresentationMode(for tab: WorkspaceEditorTabState) -> WorkspaceEditorMarkdownPresentationMode {
+        guard isMarkdownRenderable(tab) else {
+            return .source
+        }
+        return viewModel.workspaceEditorRuntimeSession(for: projectPath, tabID: tabID).markdownPresentationMode
+    }
+
+    private func markdownSplitRatio(for tab: WorkspaceEditorTabState) -> Double {
+        guard isMarkdownRenderable(tab) else {
+            return 0.5
+        }
+        return viewModel.workspaceEditorRuntimeSession(for: projectPath, tabID: tabID).markdownSplitRatio
+    }
+
+    private func updateMarkdownPresentationMode(
+        _ nextMode: WorkspaceEditorMarkdownPresentationMode,
+        for tab: WorkspaceEditorTabState
+    ) {
+        guard isMarkdownRenderable(tab) else {
+            return
+        }
+        var session = viewModel.workspaceEditorRuntimeSession(for: projectPath, tabID: tabID)
+        session.markdownPresentationMode = nextMode
+        viewModel.updateWorkspaceEditorRuntimeSession(session, tabID: tabID, in: projectPath)
+    }
+
+    private func updateMarkdownSplitRatio(_ nextRatio: Double, for tab: WorkspaceEditorTabState) {
+        guard isMarkdownRenderable(tab) else {
+            return
+        }
+        var session = viewModel.workspaceEditorRuntimeSession(for: projectPath, tabID: tabID)
+        session.markdownSplitRatio = nextRatio
+        viewModel.updateWorkspaceEditorRuntimeSession(session, tabID: tabID, in: projectPath)
+    }
+
+    private func markdownBaseURL(for tab: WorkspaceEditorTabState) -> URL? {
+        URL(fileURLWithPath: tab.filePath).deletingLastPathComponent()
+    }
+
+    private func withVisibleSourceEditor(_ action: @escaping () -> Void) {
+        guard let currentTab = viewModel.workspaceEditorTabState(for: projectPath, tabID: tabID) else {
+            return
+        }
+        guard isMarkdownRenderable(currentTab),
+              markdownPresentationMode(for: currentTab) == .preview
+        else {
+            action()
+            return
+        }
+
+        updateMarkdownPresentationMode(.split, for: currentTab)
+        DispatchQueue.main.async {
+            monacoBridge.focusEditor()
+            action()
+        }
     }
 
 }
