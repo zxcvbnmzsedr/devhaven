@@ -27,64 +27,14 @@ private struct PendingWorkspaceWorktreeCreateState: Equatable {
     var error: String?
 }
 
-private struct WorkspaceAlignmentStatusProbe: Sendable {
-    let projectPath: String
-    let targetBranch: String
-    let managedWorktreePath: String
-    let branches: [NativeGitBranch]
-    let worktrees: [NativeGitWorktree]
-    let currentBranch: String
-
-    var branchExists: Bool {
-        branches.contains(where: { $0.name == targetBranch })
-    }
-
-    var occupiedTargetWorktree: NativeGitWorktree? {
-        worktrees.first(where: { $0.branch == targetBranch })
-    }
-
-    var hasOccupiedTargetCheckout: Bool {
-        currentBranch == targetBranch || occupiedTargetWorktree != nil
-    }
-}
-
-private struct DisplayProjectLookupKey: Hashable {
-    let path: String
-    let rootProjectPath: String?
-}
-
 private struct WorkspaceSidebarProjectionCacheEntry {
     let revision: Int
     let state: WorkspaceSidebarProjectionState
 }
 
-private struct WorkspaceProjectTreeProjectionCacheEntry {
-    let revision: Int
-    let projection: WorkspaceProjectTreeDisplayProjection
-}
-
 private struct WorkspaceAlignmentGroupsCacheEntry {
     let revision: Int
     let groups: [WorkspaceAlignmentGroupProjection]
-}
-
-private struct WorkspaceSidebarGroupIdentity: Hashable {
-    let id: String
-    let normalizedPath: String
-    let transientKind: Project.TransientWorkspaceKind?
-}
-
-private struct WorkspaceProjectTreeDirectoryLoadResult: Sendable {
-    let directoryPath: String
-    let childrenByDirectoryPath: [String: [WorkspaceProjectTreeNode]]
-
-    var directChildCount: Int {
-        childrenByDirectoryPath[directoryPath]?.count ?? 0
-    }
-
-    var loadedDirectoryCount: Int {
-        childrenByDirectoryPath.count
-    }
 }
 
 final class WorkspaceDirectoryWatcher: WorkspaceEditorDirectoryWatching {
@@ -150,6 +100,7 @@ public final class NativeAppViewModel {
     @ObservationIgnored private let workspaceRestoreCoordinator: WorkspaceRestoreCoordinator
     @ObservationIgnored private let workspaceAlignmentRootStore: WorkspaceAlignmentRootStore
     private let workspacePresentationState: WorkspacePresentationState
+    private let workspaceProjectTreeStateStore: WorkspaceProjectTreeStateStore
     @ObservationIgnored private lazy var workspaceFeatureViewModelStore = WorkspaceFeatureViewModelStore(
         gitRepositoryService: gitRepositoryService,
         gitHubRepositoryService: gitHubRepositoryService,
@@ -165,6 +116,175 @@ public final class NativeAppViewModel {
     @ObservationIgnored private lazy var workspaceDiffViewModelStore = WorkspaceDiffViewModelStore(
         repositoryService: gitRepositoryService,
         normalizePath: { normalizePathForCompare($0) }
+    )
+    @ObservationIgnored private lazy var workspaceAttentionController = WorkspaceAttentionController(
+        normalizePath: { normalizePathForCompare($0) },
+        openProjectPaths: { [weak self] in self?.openWorkspaceProjectPaths ?? [] },
+        activeProjectPath: { [weak self] in self?.activeWorkspaceProjectPath },
+        notificationsEnabled: { [weak self] in
+            self?.snapshot.appState.settings.workspaceInAppNotificationsEnabled ?? false
+        },
+        workspaceSession: { [weak self] in self?.workspaceSession(for: $0) },
+        workspaceController: { [weak self] in self?.workspaceController(for: $0) },
+        resolvedPresentedTabSelection: { [weak self] in
+            self?.resolvedWorkspacePresentedTabSelection(for: $0, controller: $1)
+        },
+        isWorkspacePaneCurrentlyFocused: { [weak self] in
+            self?.isWorkspacePaneCurrentlyFocused(projectPath: $0, tabID: $1, paneID: $2) ?? false
+        },
+        currentPaneIDForSignal: { [weak self] in self?.currentPaneID(for: $0) },
+        attentionStateByProjectPath: { [weak self] in self?.attentionStateByProjectPath ?? [:] },
+        setAttentionStateByProjectPath: { [weak self] in self?.attentionStateByProjectPath = $0 },
+        agentDisplayOverridesByProjectPath: { [weak self] in self?.agentDisplayOverridesByProjectPath ?? [:] },
+        setAgentDisplayOverridesByProjectPath: { [weak self] in self?.agentDisplayOverridesByProjectPath = $0 },
+        reportError: { [weak self] in self?.errorMessage = $0 },
+        codexDisplayCandidatesDidChange: { [weak self] _ in
+            guard let self else {
+                return
+            }
+            self.codexDisplayCandidatesRevision &+= 1
+        },
+        agentSignalStore: agentSignalStore
+    )
+    @ObservationIgnored lazy var workspaceDiffRequestBuilder = WorkspaceDiffRequestBuilder(
+        commitChanges: { [weak self] in self?.activeWorkspaceCommitViewModel?.changesSnapshot?.changes },
+        selectedGitCommitDetail: { [weak self] in self?.activeWorkspaceGitViewModel?.logViewModel.selectedCommitDetail }
+    )
+    @ObservationIgnored private lazy var workspaceRunConfigurationBuilder = WorkspaceRunConfigurationBuilder(
+        normalizePath: { normalizePathForCompare($0) },
+        projects: { [weak self] in self?.snapshot.projects ?? [] },
+        resolveDisplayProject: { [weak self] in self?.resolveDisplayProject(for: $0) }
+    )
+    @ObservationIgnored private lazy var projectListProjectionBuilder = ProjectListProjectionBuilder(
+        normalizePath: { normalizePathForCompare($0) }
+    )
+    @ObservationIgnored private lazy var projectCatalogSidebarProjectionBuilder = ProjectCatalogSidebarProjectionBuilder(
+        normalizePath: { normalizePathForCompare($0) },
+        pathLastComponent: { pathLastComponent($0) }
+    )
+    @ObservationIgnored lazy var workspaceRunController = WorkspaceRunController(
+        runManager: runManager,
+        terminalCommandRunner: terminalCommandRunner,
+        normalizePath: { normalizePathForCompare($0) },
+        activeProjectPath: { [weak self] in self?.activeWorkspaceProjectPath },
+        openProjectPaths: { [weak self] in self?.openWorkspaceProjectPaths ?? [] },
+        workspaceSession: { [weak self] in self?.workspaceSession(for: $0) },
+        availableConfigurations: { [weak self] in self?.resolvedWorkspaceRunConfigurations(for: $0) ?? [] },
+        reportError: { [weak self] in self?.errorMessage = $0 }
+    )
+    @ObservationIgnored private lazy var workspaceDisplayProjectResolver = WorkspaceDisplayProjectResolver(
+        normalizePath: { normalizePathForCompare($0) },
+        normalizeOptionalPath: { normalizedOptionalPathForCompare($0) },
+        projects: { [weak self] in self?.snapshot.projects ?? [] },
+        projectsByNormalizedPath: { [weak self] in self?.projectsByNormalizedPath ?? [:] },
+        workspaceSessionWithoutNormalizing: { [weak self] in self?.workspaceSessionWithoutNormalizing(for: $0) },
+        workspaceSession: { [weak self] in self?.workspaceSession(for: $0) },
+        buildWorktreeVirtualProject: { sourceProject, worktree in
+            buildWorktreeVirtualProject(sourceProject: sourceProject, worktree: worktree)
+        }
+    )
+    @ObservationIgnored private lazy var workspaceProjectProjectionBuilder = WorkspaceProjectProjectionBuilder(
+        normalizePath: { normalizePathForCompare($0) },
+        resolveDisplayProject: { [weak self] in self?.resolveDisplayProject(for: $0, rootProjectPath: $1) },
+        canonicalSessionPath: { [weak self] in self?.canonicalWorkspaceSessionPath(for: $0) },
+        exactSession: { [weak self] in self?.workspaceSessionWithoutNormalizing(for: $0) },
+        session: { [weak self] in self?.workspaceSession(for: $0) }
+    )
+    @ObservationIgnored private lazy var workspaceSessionDisplayMapper = WorkspaceSessionDisplayMapper(
+        normalizePath: { normalizePathForCompare($0) },
+        resolveDisplayProject: { [weak self] in self?.resolveDisplayProject(for: $0, rootProjectPath: $1) }
+    )
+    @ObservationIgnored private lazy var workspaceSessionPathResolver = WorkspaceSessionPathResolver(
+        normalizePath: { normalizePathForCompare($0) },
+        normalizeOptionalPath: { normalizedOptionalPathForCompare($0) }
+    )
+    @ObservationIgnored private lazy var workspaceRestoreSelectionResolver = WorkspaceRestoreSelectionResolver(
+        sessionPathResolver: workspaceSessionPathResolver,
+        displayProjectPath: { [weak self] in
+            self?.workspaceSessionDisplayMapper.displayProjectPath(for: $0, fallbackPath: $0) ?? $0
+        }
+    )
+    @ObservationIgnored private lazy var workspaceGitSelectionResolver = WorkspaceGitSelectionResolver(
+        normalizePath: { normalizePathForCompare($0) },
+        rootProjectForPath: { [weak self] in self?.projectsByNormalizedPath[$0] },
+        activeProjectPath: { [weak self] in self?.activeWorkspaceProjectPath },
+        openWorkspaceSessions: { [weak self] in self?.openWorkspaceSessions ?? [] },
+        currentBranchByProjectPath: { [weak self] in self?.currentBranchByProjectPath ?? [:] },
+        storedFamilyID: { [weak self] in self?.workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[$0] },
+        storedExecutionPath: { [weak self] in self?.workspaceSelectedGitExecutionPathByRootProjectPath[$0] },
+        resolveDisplayProject: { [weak self] in self?.resolveDisplayProject(for: $0, rootProjectPath: $1) },
+        liveRootRepositoryPath: { liveWorkspaceRootRepositoryPath(for: $0) }
+    )
+    @ObservationIgnored private lazy var workspaceAlignmentDefinitionResolver = WorkspaceAlignmentDefinitionResolver(
+        normalizePath: { normalizePathForCompare($0) },
+        normalizePathList: { normalizePathList($0) },
+        pathLastComponent: { pathLastComponent($0) },
+        projectsByNormalizedPath: { [weak self] in self?.projectsByNormalizedPath ?? [:] },
+        existingDefinitions: { [weak self] in self?.snapshot.appState.workspaceAlignmentGroups ?? [] }
+    )
+    @ObservationIgnored private lazy var workspaceProjectTreeController = WorkspaceProjectTreeController(
+        stateStore: workspaceProjectTreeStateStore,
+        fileSystemService: workspaceFileSystemService,
+        diagnostics: workspaceProjectTreeDiagnostics,
+        normalizePath: { normalizePathForCompare($0) },
+        resolveProjectPath: { [weak self] in self?.resolvedWorkspaceProjectPathKey($0) },
+        activeProjectTreeProject: { [weak self] in self?.activeWorkspaceProjectTreeProject },
+        syncGitSelection: { [weak self] rootProjectPath, selectedPath in
+            self?.syncWorkspaceGitSelectionFromProjectTreeSelectionIfNeeded(
+                rootProjectPath: rootProjectPath,
+                selectedPath: selectedPath
+            )
+        },
+        reportError: { [weak self] in self?.errorMessage = $0 }
+    )
+    @ObservationIgnored private lazy var workspaceSidebarProjectionBuilder = WorkspaceSidebarProjectionBuilder(
+        normalizePath: { normalizePathForCompare($0) },
+        openWorkspaceSessions: { [weak self] in self?.openWorkspaceSessions ?? [] },
+        activeProjectPath: { [weak self] in self?.activeWorkspaceProjectPath },
+        projectsByNormalizedPath: { [weak self] in self?.projectsByNormalizedPath ?? [:] },
+        currentBranchByProjectPath: { [weak self] in self?.currentBranchByProjectPath ?? [:] },
+        attentionStateByProjectPath: { [weak self] in self?.attentionStateByProjectPath ?? [:] },
+        agentDisplayOverridesByProjectPath: { [weak self] in self?.agentDisplayOverridesByProjectPath ?? [:] },
+        pendingWorktreeCreates: { [weak self] in
+            self?.pendingWorkspaceWorktreeCreatesByPath.values.map { pending in
+                WorkspaceSidebarPendingWorktreeCreate(
+                    rootProjectPath: pending.rootProjectPath,
+                    branch: pending.branch,
+                    baseBranch: pending.baseBranch,
+                    worktreePath: pending.worktreePath,
+                    createdAt: pending.createdAt,
+                    status: pending.status == .creating ? .creating : .failed,
+                    step: pending.step,
+                    message: pending.message,
+                    error: pending.error
+                )
+            } ?? []
+        },
+        resolvedPresentedTabSelection: { [weak self] in
+            self?.resolvedWorkspacePresentedTabSelection(for: $0, controller: $1)
+        }
+    )
+    @ObservationIgnored private lazy var workspaceAlignmentProjectionBuilder = WorkspaceAlignmentProjectionBuilder(
+        normalizePath: { normalizePathForCompare($0) },
+        activeProjectPath: { [weak self] in self?.activeWorkspaceProjectPath },
+        activeWorkspaceRootGroupID: { [weak self] in self?.activeWorkspaceSession?.workspaceRootContext?.workspaceID },
+        activeWorkspaceOwnedGroupID: { [weak self] in self?.activeWorkspaceSession?.workspaceAlignmentGroupID },
+        projectsByNormalizedPath: { [weak self] in self?.projectsByNormalizedPath ?? [:] },
+        currentBranchByProjectPath: { [weak self] in self?.currentBranchByProjectPath ?? [:] },
+        aliasesForGroup: { [weak self] definition, projectsByNormalizedPath in
+            self?.resolvedWorkspaceAlignmentAliases(
+                for: definition,
+                projectsByNormalizedPath: projectsByNormalizedPath
+            ) ?? [:]
+        },
+        statusForMember: { [weak self] groupID, projectPath in
+            guard let self else {
+                return nil
+            }
+            return self.workspaceAlignmentStatusByKey[
+                self.workspaceAlignmentStatusKey(groupID: groupID, projectPath: projectPath)
+            ]
+        }
     )
     @ObservationIgnored private lazy var workspaceToolWindowCoordinator = WorkspaceToolWindowCoordinator(
         presentationState: workspacePresentationState,
@@ -194,6 +314,7 @@ public final class NativeAppViewModel {
         },
         removeDiffViewModel: { [weak self] in self?.workspaceDiffViewModelStore.remove(tabID: $0) }
     )
+    @ObservationIgnored private let workspacePresentedTabSnapshotBuilder = WorkspacePresentedTabSnapshotBuilder()
     @ObservationIgnored private lazy var workspaceEditorPresentationStore = WorkspaceEditorPresentationStore(
         presentationState: workspacePresentationState,
         editorTabsForProject: { [weak self] in self?.workspaceEditorTabsByProjectPath[$0] ?? [] }
@@ -203,6 +324,7 @@ public final class NativeAppViewModel {
     )
     @ObservationIgnored private let workspaceEditorDocumentStore = WorkspaceEditorDocumentStore()
     @ObservationIgnored private let workspaceEditorCloseCoordinator = WorkspaceEditorCloseCoordinator()
+    @ObservationIgnored private let workspaceAlignmentStatusResolver = WorkspaceAlignmentStatusResolver()
     @ObservationIgnored private lazy var workspaceEditorRuntimeCoordinator = WorkspaceEditorRuntimeCoordinator(
         editorTabsForProject: { [weak self] in self?.workspaceEditorTabsByProjectPath[$0] ?? [] },
         parentDirectoryPath: { [weak self] in self?.workspaceFileSystemService.parentDirectoryPath(for: $0) ?? $0 },
@@ -230,18 +352,10 @@ public final class NativeAppViewModel {
     @ObservationIgnored private var projectDocumentLoadTask: Task<Void, Never>?
     @ObservationIgnored private var projectNotesSummaryBackfillTask: Task<Void, Never>?
     @ObservationIgnored private var projectDocumentLoadRevision = 0
-    @ObservationIgnored private var isAgentSignalObservationStarted = false
-    @ObservationIgnored private var lastAppliedAgentSignalSnapshotsByTerminalSessionID: [String: WorkspaceAgentSessionSignal] = [:]
-    @ObservationIgnored private var lastAppliedAgentSignalProjectPaths: Set<String> = []
-    @ObservationIgnored private var displayProjectCacheByLookupKey: [DisplayProjectLookupKey: Project?] = [:]
-    @ObservationIgnored private var cachedCodexDisplayCandidates: [WorkspaceAgentDisplayCandidate] = []
-    @ObservationIgnored private var workspaceProjectTreeRefreshTasksByProjectPath: [String: Task<Void, Never>] = [:]
-    @ObservationIgnored private var workspaceProjectTreeRefreshGenerationByProjectPath: [String: Int] = [:]
     @ObservationIgnored private var workspaceWorktreeRefreshTasksByRootProjectPath: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var projectsByNormalizedPath: [String: Project] = [:]
     @ObservationIgnored private var workspaceSessionIndexByNormalizedPath: [String: Int] = [:]
     @ObservationIgnored private var workspaceSidebarProjectionCache: WorkspaceSidebarProjectionCacheEntry?
-    @ObservationIgnored private var workspaceProjectTreeProjectionCacheByProjectPath: [String: WorkspaceProjectTreeProjectionCacheEntry] = [:]
     @ObservationIgnored private var workspaceAlignmentGroupsCache: WorkspaceAlignmentGroupsCacheEntry?
     @ObservationIgnored private var workspaceToastDismissTask: Task<Void, Never>?
 
@@ -313,7 +427,7 @@ public final class NativeAppViewModel {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: snapshot)
             if oldValue.projects != snapshot.projects {
-                displayProjectCacheByLookupKey.removeAll()
+                workspaceDisplayProjectResolver.clearCache()
                 rebuildProjectLookupIndex()
             }
             refreshActiveWorkspaceGitSelectionState()
@@ -323,7 +437,7 @@ public final class NativeAppViewModel {
     public var openWorkspaceSessions: [OpenWorkspaceSessionState] {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: openWorkspaceSessions)
-            displayProjectCacheByLookupKey.removeAll()
+            workspaceDisplayProjectResolver.clearCache()
             rebuildWorkspaceSessionIndex()
             syncMountedWorkspaceProjectPathAfterSessionMutation()
             refreshCodexDisplayCandidates()
@@ -358,7 +472,22 @@ public final class NativeAppViewModel {
         set { workspacePresentationState.focusedArea = newValue }
     }
     public var workspacePendingEditorCloseRequest: WorkspaceEditorCloseRequest?
-    private var workspaceProjectTreeStatesByProjectPath: [String: WorkspaceProjectTreeState]
+    private var workspaceProjectTreeStatesByProjectPath: [String: WorkspaceProjectTreeState] {
+        get { workspaceProjectTreeStateStore.statesByProjectPath }
+        set { workspaceProjectTreeStateStore.statesByProjectPath = newValue }
+    }
+    private var workspaceProjectTreeRefreshTasksByProjectPath: [String: Task<Void, Never>] {
+        get { workspaceProjectTreeStateStore.refreshTasksByProjectPath }
+        set { workspaceProjectTreeStateStore.refreshTasksByProjectPath = newValue }
+    }
+    private var workspaceProjectTreeRefreshGenerationByProjectPath: [String: Int] {
+        get { workspaceProjectTreeStateStore.refreshGenerationByProjectPath }
+        set { workspaceProjectTreeStateStore.refreshGenerationByProjectPath = newValue }
+    }
+    private var workspaceProjectTreeProjectionCacheByProjectPath: [String: (revision: Int, projection: WorkspaceProjectTreeDisplayProjection)] {
+        get { workspaceProjectTreeStateStore.projectionCacheByProjectPath }
+        set { workspaceProjectTreeStateStore.projectionCacheByProjectPath = newValue }
+    }
     private var workspaceEditorTabsByProjectPath: [String: [WorkspaceEditorTabState]]
     private var workspaceEditorPresentationByProjectPath: [String: WorkspaceEditorPresentationState] {
         get { workspacePresentationState.editorPresentationByProjectPath }
@@ -390,7 +519,6 @@ public final class NativeAppViewModel {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: agentDisplayOverridesByProjectPath)
         }
     }
-    private var workspaceRunConsoleStateByProjectPath: [String: WorkspaceRunConsoleState]
     private var currentBranchByProjectPath: [String: String] {
         didSet {
             noteWorkspaceSidebarProjectionMutation(from: oldValue, to: currentBranchByProjectPath)
@@ -431,7 +559,10 @@ public final class NativeAppViewModel {
     public var gitStatisticsProgressText: String?
     public var isProjectDocumentLoading: Bool
     public var errorMessage: String?
-    public private(set) var workspaceProjectTreeRefreshingProjectPaths: Set<String>
+    public private(set) var workspaceProjectTreeRefreshingProjectPaths: Set<String> {
+        get { workspaceProjectTreeStateStore.refreshingProjectPaths }
+        set { workspaceProjectTreeStateStore.refreshingProjectPaths = newValue }
+    }
     public private(set) var workspaceToastMessage: String?
     public var isDashboardPresented: Bool
     public var isSettingsPresented: Bool
@@ -495,6 +626,7 @@ public final class NativeAppViewModel {
             baseDirectoryURL: store.workspaceRootsDirectoryURL
         )
         self.workspacePresentationState = WorkspacePresentationState()
+        self.workspaceProjectTreeStateStore = WorkspaceProjectTreeStateStore()
         self.workspacePaneSnapshotProvider = nil
         self.snapshot = NativeAppSnapshot()
         self.selectedProjectPath = nil
@@ -504,11 +636,9 @@ public final class NativeAppViewModel {
         self.activeWorkspaceSupportsGitToolWindows = false
         self.activeWorkspaceGitSelectionSnapshotCache = nil
         self.workspacePendingEditorCloseRequest = nil
-        self.workspaceProjectTreeStatesByProjectPath = [:]
         self.workspaceEditorTabsByProjectPath = [:]
         self.attentionStateByProjectPath = [:]
         self.agentDisplayOverridesByProjectPath = [:]
-        self.workspaceRunConsoleStateByProjectPath = [:]
         self.currentBranchByProjectPath = [:]
         self.workspaceSelectedGitRepositoryFamilyIDByRootProjectPath = [:]
         self.workspaceSelectedGitExecutionPathByRootProjectPath = [:]
@@ -528,7 +658,6 @@ public final class NativeAppViewModel {
         self.gitStatisticsProgressText = nil
         self.isProjectDocumentLoading = false
         self.errorMessage = nil
-        self.workspaceProjectTreeRefreshingProjectPaths = []
         self.workspaceToastMessage = nil
         self.isDashboardPresented = false
         self.isSettingsPresented = false
@@ -543,10 +672,7 @@ public final class NativeAppViewModel {
         self.hasLoadedInitialData = false
         self.rebuildProjectLookupIndex()
         self.rebuildWorkspaceSessionIndex()
-
-        resolvedRunManager.onEvent = { [weak self] event in
-            self?.handleWorkspaceRunManagerEvent(event)
-        }
+        _ = workspaceRunController
     }
 
     public var projectListViewMode: ProjectListViewMode {
@@ -562,225 +688,83 @@ public final class NativeAppViewModel {
     }
 
     public var visibleProjects: [Project] {
-        let hidden = Set(snapshot.appState.recycleBin)
-        return snapshot.projects.filter { !hidden.contains($0.path) }
+        projectListProjectionBuilder.visibleProjects(
+            projects: snapshot.projects,
+            recycleBin: snapshot.appState.recycleBin
+        )
     }
 
     public var filteredProjects: [Project] {
-        sortProjects(visibleProjects.filter(matchesAllFilters))
+        projectListProjectionBuilder.filteredProjects(
+            visibleProjects: visibleProjects,
+            searchQuery: searchQuery,
+            selectedDirectory: selectedDirectory,
+            directProjectPaths: snapshot.appState.directProjectPaths,
+            selectedHeatmapDateKey: selectedHeatmapDateKey,
+            selectedTag: selectedTag,
+            selectedDateFilter: selectedDateFilter,
+            selectedGitFilter: selectedGitFilter,
+            sortOrder: projectListSortOrder
+        )
     }
 
     public var selectedProject: Project? {
-        guard let selectedProjectPath else {
-            return filteredProjects.first ?? visibleProjects.first
-        }
-        return resolveDisplayProject(for: selectedProjectPath)
+        workspaceProjectProjectionBuilder.selectedProject(
+            selectedProjectPath: selectedProjectPath,
+            filteredProjects: filteredProjects,
+            visibleProjects: visibleProjects
+        )
     }
 
     public var activeWorkspaceProject: Project? {
-        guard let activeWorkspaceProjectPath else {
-            return nil
-        }
-        return resolveDisplayProject(for: activeWorkspaceProjectPath)
+        workspaceProjectProjectionBuilder.activeWorkspaceProject(activeProjectPath: activeWorkspaceProjectPath)
     }
 
     public var mountedWorkspaceProjectPath: String? {
-        if let activeWorkspaceProjectPath {
-            return canonicalWorkspaceSessionPath(for: activeWorkspaceProjectPath)
-        }
-        if let hiddenMountedWorkspaceProjectPath {
-            return canonicalWorkspaceSessionPath(for: hiddenMountedWorkspaceProjectPath)
-        }
-        return nil
+        workspaceProjectProjectionBuilder.mountedWorkspaceProjectPath(
+            activeProjectPath: activeWorkspaceProjectPath,
+            hiddenMountedProjectPath: hiddenMountedWorkspaceProjectPath
+        )
     }
 
     public var activeWorkspaceProjectTreeProject: Project? {
-        if let activeWorkspaceProject {
-            return activeWorkspaceProject
-        }
-        guard let session = activeWorkspaceSession,
-              let workspaceRootContext = session.workspaceRootContext
-        else {
-            return nil
-        }
-        return .workspaceRoot(name: workspaceRootContext.workspaceName, path: session.projectPath)
+        workspaceProjectProjectionBuilder.activeWorkspaceProjectTreeProject(
+            activeProject: activeWorkspaceProject,
+            activeSession: activeWorkspaceSession
+        )
     }
 
     public var openWorkspaceProjectPaths: [String] {
-        openWorkspaceSessions.map { normalizePathForCompare($0.projectPath) }
+        workspaceProjectProjectionBuilder.openWorkspaceProjectPaths(sessions: openWorkspaceSessions)
     }
 
     public var openWorkspaceRootProjectPaths: [String] {
-        orderedOpenWorkspaceRootProjectPaths()
+        workspaceProjectProjectionBuilder.openWorkspaceRootProjectPaths(sessions: openWorkspaceSessions)
     }
 
     public var openWorkspaceProjects: [Project] {
-        openWorkspaceSessions.compactMap { resolveDisplayProject(for: $0.projectPath, rootProjectPath: $0.rootProjectPath) }
+        workspaceProjectProjectionBuilder.openWorkspaceProjects(sessions: openWorkspaceSessions)
     }
 
     public var availableWorkspaceProjects: [Project] {
-        let openedPaths = Set(openWorkspaceRootProjectPaths.map(normalizePathForCompare))
-        return visibleProjects.filter { !openedPaths.contains(normalizePathForCompare($0.path)) }
+        workspaceProjectProjectionBuilder.availableWorkspaceProjects(
+            visibleProjects: visibleProjects,
+            openRootProjectPaths: openWorkspaceRootProjectPaths
+        )
     }
 
     public var workspaceAlignmentProjectOptions: [Project] {
-        visibleProjects.filter { !$0.isQuickTerminal }
+        workspaceProjectProjectionBuilder.workspaceAlignmentProjectOptions(visibleProjects: visibleProjects)
     }
 
     public var workspaceSidebarGroups: [WorkspaceSidebarProjectGroup] {
-        let showsInAppNotifications = snapshot.appState.settings.workspaceInAppNotificationsEnabled
-        let moveNotifiedWorktreeToTop = snapshot.appState.settings.moveNotifiedWorktreeToTop
-        let collapsedProjectPaths = Set(
-            snapshot.appState.settings.collapsedWorkspaceSidebarProjectPaths.map(normalizePathForCompare)
+        workspaceSidebarProjectionBuilder.groups(
+            showsInAppNotifications: snapshot.appState.settings.workspaceInAppNotificationsEnabled,
+            moveNotifiedWorktreeToTop: snapshot.appState.settings.moveNotifiedWorktreeToTop,
+            collapsedProjectPaths: Set(
+                snapshot.appState.settings.collapsedWorkspaceSidebarProjectPaths.map(normalizePathForCompare)
+            )
         )
-        let projectsByNormalizedPath = self.projectsByNormalizedPath
-
-        return orderedWorkspaceSidebarGroupIdentities().compactMap { identity in
-            if let transientKind = identity.transientKind {
-                guard let session = openWorkspaceSessions.first(where: {
-                    workspaceSidebarGroupIdentity(for: $0)?.id == identity.id
-                }) else {
-                    return nil
-                }
-                let attention = workspaceAttentionState(for: session.projectPath)
-                let agentOverrides = agentDisplayOverridesByProjectPath[normalizePathForCompare(session.projectPath)] ?? [:]
-                let preferredPaneIDs = preferredSidebarAgentPaneIDs(for: session)
-                let transientProject = switch transientKind {
-                case .workspaceRoot:
-                    Project.workspaceRoot(
-                        name: session.workspaceRootContext?.workspaceName ?? pathLastComponent(session.projectPath),
-                        path: session.projectPath
-                    )
-                case .quickTerminal:
-                    Project.quickTerminal(at: session.projectPath)
-                case .directoryWorkspace:
-                    session.transientDisplayProject ?? Project.directoryWorkspace(at: session.projectPath)
-                }
-                return WorkspaceSidebarProjectGroup(
-                    rootProject: transientProject,
-                    worktrees: [],
-                    isWorktreeListExpanded: true,
-                    isActive: normalizedPathsMatch(activeWorkspaceProjectPath, session.projectPath),
-                    notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
-                    unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
-                    taskStatus: attention?.taskStatus,
-                    agentState: resolvedSidebarAgentState(
-                        attention: attention,
-                        overridesByPaneID: agentOverrides,
-                        preferredPaneIDs: preferredPaneIDs
-                    ),
-                    agentPhase: resolvedSidebarAgentPhase(
-                        attention: attention,
-                        overridesByPaneID: agentOverrides,
-                        preferredPaneIDs: preferredPaneIDs
-                    ),
-                    agentAttention: resolvedSidebarAgentAttention(
-                        attention: attention,
-                        overridesByPaneID: agentOverrides,
-                        preferredPaneIDs: preferredPaneIDs
-                    ),
-                    agentSummary: resolvedSidebarAgentSummary(
-                        attention: attention,
-                        overridesByPaneID: agentOverrides,
-                        preferredPaneIDs: preferredPaneIDs
-                    ),
-                    agentKind: resolvedSidebarAgentKind(
-                        attention: attention,
-                        overridesByPaneID: agentOverrides,
-                        preferredPaneIDs: preferredPaneIDs
-                    )
-                )
-            }
-
-            let rootPath = identity.normalizedPath
-            guard let rootProject = projectsByNormalizedPath[rootPath] else {
-                return nil
-            }
-            let worktrees = orderedSidebarWorktreeItems(
-                for: rootProject,
-                rootProjectPath: rootPath,
-                showsInAppNotifications: showsInAppNotifications,
-                moveNotifiedWorktreeToTop: moveNotifiedWorktreeToTop
-            )
-            let rootAttention = workspaceAttentionState(for: rootPath)
-            let rootAgentOverrides = agentDisplayOverridesByProjectPath[rootPath] ?? [:]
-            let rootSession = openWorkspaceSessions.first(where: {
-                normalizePathForCompare($0.projectPath) == rootPath &&
-                    normalizePathForCompare($0.rootProjectPath) == rootPath
-            })
-            let rootPreferredPaneIDs = preferredSidebarAgentPaneIDs(for: rootSession)
-            let rootAgentState = resolvedSidebarAgentState(
-                attention: rootAttention,
-                overridesByPaneID: rootAgentOverrides,
-                preferredPaneIDs: rootPreferredPaneIDs
-            )
-            let rootAgentPhase = resolvedSidebarAgentPhase(
-                attention: rootAttention,
-                overridesByPaneID: rootAgentOverrides,
-                preferredPaneIDs: rootPreferredPaneIDs
-            )
-            let rootAgentAttention = resolvedSidebarAgentAttention(
-                attention: rootAttention,
-                overridesByPaneID: rootAgentOverrides,
-                preferredPaneIDs: rootPreferredPaneIDs
-            )
-            let rootAgentSummary = resolvedSidebarAgentSummary(
-                attention: rootAttention,
-                overridesByPaneID: rootAgentOverrides,
-                preferredPaneIDs: rootPreferredPaneIDs
-            )
-            let rootAgentKind = resolvedSidebarAgentKind(
-                attention: rootAttention,
-                overridesByPaneID: rootAgentOverrides,
-                preferredPaneIDs: rootPreferredPaneIDs
-            )
-            let notifications = showsInAppNotifications
-                ? ([rootAttention?.notifications ?? []] + worktrees.map(\.notifications))
-                    .flatMap { $0 }
-                    .sorted { $0.createdAt > $1.createdAt }
-                : []
-            let unreadNotificationCount = showsInAppNotifications
-                ? (rootAttention?.unreadCount ?? 0)
-                    + worktrees.reduce(into: 0) { count, item in
-                        count += item.unreadNotificationCount
-                    }
-                : 0
-            let isGroupActive = normalizedPathsMatch(activeWorkspaceProjectPath, rootPath) || worktrees.contains(where: \.isActive)
-            let groupAgentProjection = makeGroupAgentProjection(
-                rootIsActive: normalizedPathsMatch(activeWorkspaceProjectPath, rootPath),
-                rootAgentState: rootAgentState,
-                rootAgentPhase: rootAgentPhase,
-                rootAgentAttention: rootAgentAttention,
-                rootAgentSummary: rootAgentSummary,
-                rootAgentKind: rootAgentKind,
-                rootAgentUpdatedAt: resolvedSidebarAgentUpdatedAt(
-                    attention: rootAttention,
-                    overridesByPaneID: rootAgentOverrides,
-                    preferredPaneIDs: rootPreferredPaneIDs
-                ),
-                worktrees: worktrees
-            )
-            return WorkspaceSidebarProjectGroup(
-                rootProject: rootProject,
-                worktrees: worktrees,
-                isWorktreeListExpanded: !collapsedProjectPaths.contains(rootPath),
-                isActive: isGroupActive,
-                currentBranch: currentBranchByProjectPath[rootPath],
-                notifications: notifications,
-                unreadNotificationCount: unreadNotificationCount,
-                taskStatus: makeGroupTaskStatus(
-                    rootProjectPath: rootPath,
-                    rootAttention: rootAttention,
-                    worktrees: worktrees
-                ),
-                agentState: groupAgentProjection?.state,
-                agentPhase: groupAgentProjection?.phase,
-                agentAttention: groupAgentProjection?.attention,
-                agentSummary: groupAgentProjection?.summary,
-                agentKind: groupAgentProjection?.kind,
-                agentUpdatedAt: groupAgentProjection?.updatedAt
-            )
-        }
     }
 
     public var workspaceAlignmentGroups: [WorkspaceAlignmentGroupProjection] {
@@ -789,106 +773,14 @@ public final class NativeAppViewModel {
             return cache.groups
         }
 
-        let projectsByNormalizedPath = self.projectsByNormalizedPath
-        let activeWorkspaceRootGroupID = activeWorkspaceSession?.workspaceRootContext?.workspaceID
-        let activeWorkspaceOwnedGroupID = activeWorkspaceSession?.workspaceAlignmentGroupID
-        let normalizedActiveWorkspaceProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath)
-        let groups = snapshot.appState.workspaceAlignmentGroups.map { definition in
-            let aliasByProjectPath = resolvedWorkspaceAlignmentAliases(
-                for: definition,
-                projectsByNormalizedPath: projectsByNormalizedPath
-            )
-            let members = definition.effectiveMembers.map { memberDefinition in
-                let normalizedProjectPath = normalizePathForCompare(memberDefinition.projectPath)
-                let status = workspaceAlignmentStatusByKey[
-                    workspaceAlignmentStatusKey(
-                        groupID: definition.id,
-                        projectPath: memberDefinition.projectPath
-                    )
-                ] ?? .checking
-                let project = projectsByNormalizedPath[normalizedProjectPath]
-                let openTarget = workspaceAlignmentOpenTarget(
-                    for: normalizedProjectPath,
-                    targetBranch: memberDefinition.targetBranch,
-                    status: status
-                )
-                let isActive = isActiveWorkspaceAlignmentMember(
-                    groupID: definition.id,
-                    memberProjectPath: normalizedProjectPath,
-                    status: status,
-                    openTarget: openTarget,
-                    normalizedActiveWorkspaceProjectPath: normalizedActiveWorkspaceProjectPath,
-                    activeWorkspaceOwnedGroupID: activeWorkspaceOwnedGroupID
-                )
-                return WorkspaceAlignmentMemberProjection(
-                    groupID: definition.id,
-                    projectPath: normalizedProjectPath,
-                    alias: aliasByProjectPath[normalizedProjectPath] ?? pathLastComponent(normalizedProjectPath),
-                    projectName: project?.name ?? pathLastComponent(memberDefinition.projectPath),
-                    targetBranch: memberDefinition.targetBranch,
-                    branchLabel: workspaceAlignmentBranchLabel(
-                        for: normalizedProjectPath,
-                        targetBranch: memberDefinition.targetBranch,
-                        status: status,
-                        openTarget: openTarget
-                    ),
-                    status: status,
-                    openTarget: openTarget,
-                    isActive: isActive
-                )
-            }
-            let isActive = activeWorkspaceRootGroupID == definition.id ||
-                activeWorkspaceOwnedGroupID == definition.id ||
-                members.contains(where: \.isActive)
-            return WorkspaceAlignmentGroupProjection(
-                definition: definition,
-                members: members,
-                isActive: isActive
-            )
-        }
+        let groups = workspaceAlignmentProjectionBuilder.groups(
+            definitions: snapshot.appState.workspaceAlignmentGroups
+        )
         workspaceAlignmentGroupsCache = WorkspaceAlignmentGroupsCacheEntry(
             revision: workspaceSidebarProjectionRevision,
             groups: groups
         )
         return groups
-    }
-
-    private func isActiveWorkspaceAlignmentMember(
-        groupID: String,
-        memberProjectPath: String,
-        status: WorkspaceAlignmentMemberStatus,
-        openTarget: WorkspaceAlignmentOpenTarget,
-        normalizedActiveWorkspaceProjectPath: String?,
-        activeWorkspaceOwnedGroupID: String?
-    ) -> Bool {
-        guard let normalizedActiveWorkspaceProjectPath else {
-            return false
-        }
-
-        let normalizedMemberProjectPath = normalizePathForCompare(memberProjectPath)
-        let normalizedOpenTargetPath = normalizePathForCompare(openTarget.path)
-
-        if let activeWorkspaceOwnedGroupID {
-            guard activeWorkspaceOwnedGroupID == groupID else {
-                return false
-            }
-            return normalizedActiveWorkspaceProjectPath == normalizedOpenTargetPath ||
-                normalizedActiveWorkspaceProjectPath == normalizedMemberProjectPath
-        }
-
-        guard normalizedActiveWorkspaceProjectPath == normalizedOpenTargetPath else {
-            return false
-        }
-
-        switch openTarget {
-        case .worktree:
-            return true
-        case .project:
-            guard case .aligned = status else {
-                return false
-            }
-            return normalizedActiveWorkspaceProjectPath == normalizedMemberProjectPath
-        }
     }
 
     public func workspaceSidebarProjectionState() -> WorkspaceSidebarProjectionState {
@@ -911,235 +803,12 @@ public final class NativeAppViewModel {
     }
 
     func workspaceAttentionState(for projectPath: String) -> WorkspaceAttentionState? {
-        attentionStateByProjectPath[normalizePathForCompare(projectPath)]
-    }
-
-    public func workspaceRunConsoleState(for projectPath: String) -> WorkspaceRunConsoleState? {
-        workspaceRunConsoleStateByProjectPath[normalizePathForCompare(projectPath)]
-    }
-
-    public func availableWorkspaceRunConfigurations(in projectPath: String? = nil) -> [WorkspaceRunConfiguration] {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
-            return []
-        }
-        return resolvedWorkspaceRunConfigurations(for: projectPath)
-    }
-
-    public func selectedWorkspaceRunConfiguration(in projectPath: String? = nil) -> WorkspaceRunConfiguration? {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
-            return nil
-        }
-        return resolvedSelectedWorkspaceRunConfiguration(for: projectPath)
-    }
-
-    public func workspaceRunToolbarState(for projectPath: String? = nil) -> WorkspaceRunToolbarState {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
-            return WorkspaceRunToolbarState()
-        }
-
-        let configurations = resolvedWorkspaceRunConfigurations(for: projectPath)
-        let consoleState = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
-        let selectedConfiguration = resolvedSelectedWorkspaceRunConfiguration(
-            for: projectPath,
-            configurations: configurations
-        )
-
-        return WorkspaceRunToolbarState(
-            configurations: configurations,
-            selectedConfigurationID: consoleState.selectedConfigurationID ?? selectedConfiguration?.id,
-            canRun: selectedConfiguration?.canRun ?? false,
-            canStop: consoleState.selectedSession?.state.isActive ?? false,
-            hasSessions: !consoleState.sessions.isEmpty,
-            isLogsVisible: consoleState.isVisible
-        )
-    }
-
-    public func selectWorkspaceRunConfiguration(_ configurationID: String, in projectPath: String? = nil) {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath) else {
-            return
-        }
-        var state = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
-        state.selectedConfigurationID = configurationID
-        workspaceRunConsoleStateByProjectPath[projectPath] = state
-    }
-
-    public func runSelectedWorkspaceConfiguration(in projectPath: String? = nil) throws {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              let session = openWorkspaceSessions.first(where: { $0.projectPath == projectPath }),
-              let configuration = selectedWorkspaceRunConfiguration(in: projectPath)
-        else {
-            let error = WorkspaceTerminalCommandError.noActiveWorkspace
-            errorMessage = error.localizedDescription
-            throw error
-        }
-
-        guard configuration.canRun else {
-            let message = configuration.disabledReason ?? "当前运行配置缺少必要参数，请先完成配置。"
-            let error = NSError(domain: "DevHavenCore.WorkspaceRunConfiguration", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: message
-            ])
-            errorMessage = message
-            throw error
-        }
-
-        var state = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
-        if let existingSession = state.sessions.first(where: { $0.configurationID == configuration.id }),
-           existingSession.state.isActive {
-            runManager.stop(sessionID: existingSession.id)
-        }
-
-        let sessionID = UUID().uuidString
-        let placeholderSession = WorkspaceRunSession(
-            id: sessionID,
-            configurationID: configuration.id,
-            configurationName: configuration.name,
-            configurationSource: configuration.source,
-            projectPath: projectPath,
-            rootProjectPath: session.rootProjectPath,
-            command: configuration.displayCommand,
-            workingDirectory: configuration.workingDirectory,
-            state: .starting,
-            startedAt: Date()
-        )
-        if let existingIndex = state.sessions.firstIndex(where: { $0.configurationID == configuration.id }) {
-            state.sessions[existingIndex] = placeholderSession
-        } else {
-            state.sessions.append(placeholderSession)
-        }
-        state.selectedSessionID = sessionID
-        state.selectedConfigurationID = configuration.id
-        state.isVisible = true
-        workspaceRunConsoleStateByProjectPath[projectPath] = state
-
-        do {
-            let runSession = try runManager.start(
-                WorkspaceRunStartRequest(
-                    sessionID: sessionID,
-                    configurationID: configuration.id,
-                    configurationName: configuration.name,
-                    configurationSource: configuration.source,
-                    projectPath: projectPath,
-                    rootProjectPath: session.rootProjectPath,
-                    executable: configuration.executable,
-                    displayCommand: configuration.displayCommand,
-                    workingDirectory: configuration.workingDirectory
-                )
-            )
-            var currentState = workspaceRunConsoleStateByProjectPath[projectPath] ?? state
-            if let index = currentState.sessions.firstIndex(where: { $0.id == sessionID }) {
-                var updatedSession = runSession
-                updatedSession.startedAt = currentState.sessions[index].startedAt
-                updatedSession.displayBuffer = currentState.sessions[index].displayBuffer
-                currentState.sessions[index] = updatedSession
-            } else if let index = currentState.sessions.firstIndex(where: { $0.configurationID == configuration.id }) {
-                currentState.sessions[index] = runSession
-            } else {
-                currentState.sessions.append(runSession)
-            }
-            workspaceRunConsoleStateByProjectPath[projectPath] = currentState
-            errorMessage = nil
-        } catch {
-            let failureBuffer = "启动失败：\((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)\n"
-            var currentState = workspaceRunConsoleStateByProjectPath[projectPath] ?? state
-            let failureSession = WorkspaceRunSession(
-                id: sessionID,
-                configurationID: configuration.id,
-                configurationName: configuration.name,
-                configurationSource: configuration.source,
-                projectPath: projectPath,
-                rootProjectPath: session.rootProjectPath,
-                command: configuration.command,
-                workingDirectory: configuration.workingDirectory,
-                state: .failed(exitCode: -1),
-                startedAt: currentState.sessions.first(where: { $0.id == sessionID })?.startedAt ?? Date(),
-                endedAt: Date(),
-                displayBuffer: failureBuffer
-            )
-            if let index = currentState.sessions.firstIndex(where: { $0.id == sessionID || $0.configurationID == configuration.id }) {
-                currentState.sessions[index] = failureSession
-            } else {
-                currentState.sessions.append(failureSession)
-            }
-            workspaceRunConsoleStateByProjectPath[projectPath] = currentState
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            throw error
-        }
-    }
-
-    public func selectWorkspaceRunSession(_ sessionID: String, in projectPath: String? = nil) {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              var state = workspaceRunConsoleStateByProjectPath[projectPath],
-              state.sessions.contains(where: { $0.id == sessionID })
-        else {
-            return
-        }
-        state.selectedSessionID = sessionID
-        state.selectedConfigurationID = state.sessions.first(where: { $0.id == sessionID })?.configurationID
-        state.isVisible = true
-        workspaceRunConsoleStateByProjectPath[projectPath] = state
-    }
-
-    public func stopSelectedWorkspaceRunSession(in projectPath: String? = nil) {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              let state = workspaceRunConsoleStateByProjectPath[projectPath],
-              let sessionID = state.selectedSession?.id
-        else {
-            return
-        }
-        runManager.stop(sessionID: sessionID)
-    }
-
-    public func toggleWorkspaceRunConsole(in projectPath: String? = nil) {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              var state = workspaceRunConsoleStateByProjectPath[projectPath]
-        else {
-            return
-        }
-        state.isVisible.toggle()
-        workspaceRunConsoleStateByProjectPath[projectPath] = state
-    }
-
-    public func updateWorkspaceRunConsolePanelHeight(_ height: Double, in projectPath: String? = nil) {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              var state = workspaceRunConsoleStateByProjectPath[projectPath]
-        else {
-            return
-        }
-        state.panelHeight = height
-        workspaceRunConsoleStateByProjectPath[projectPath] = state
-    }
-
-    public func clearSelectedWorkspaceRunConsoleBuffer(in projectPath: String? = nil) {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              var state = workspaceRunConsoleStateByProjectPath[projectPath],
-              let selectedSessionID = state.selectedSession?.id,
-              let index = state.sessions.firstIndex(where: { $0.id == selectedSessionID })
-        else {
-            return
-        }
-        state.sessions[index].displayBuffer = ""
-        workspaceRunConsoleStateByProjectPath[projectPath] = state
-    }
-
-    public func openSelectedWorkspaceRunLog(in projectPath: String? = nil) throws {
-        guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              let state = workspaceRunConsoleStateByProjectPath[projectPath],
-              let path = state.selectedSession?.logFilePath
-        else {
-            return
-        }
-        do {
-            try terminalCommandRunner("/usr/bin/open", [path])
-            errorMessage = nil
-        } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            throw error
-        }
+        workspaceAttentionController.workspaceAttentionState(for: projectPath)
     }
 
     public func saveWorkspaceRunConfigurations(_ runConfigurations: [ProjectRunConfiguration], in projectPath: String? = nil) throws {
         guard let projectPath = resolveWorkspaceRunProjectPath(projectPath),
-              let ownerProjectPath = resolveWorkspaceScriptOwnerProjectPath(for: projectPath),
+              let ownerProjectPath = workspaceRunConfigurationBuilder.ownerProjectPath(for: projectPath),
               let ownerIndex = snapshot.projects.firstIndex(where: {
                   normalizePathForCompare($0.path) == normalizePathForCompare(ownerProjectPath)
               })
@@ -1163,34 +832,14 @@ public final class NativeAppViewModel {
         body: String,
         createdAt: Date = Date()
     ) {
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !(trimmedTitle.isEmpty && trimmedBody.isEmpty) else {
-            return
-        }
-        guard snapshot.appState.settings.workspaceInAppNotificationsEnabled else {
-            return
-        }
-        guard let session = workspaceSession(for: projectPath) else {
-            return
-        }
-
-        let normalizedProjectPath = normalizePathForCompare(projectPath)
-        var attention = attentionStateByProjectPath[normalizedProjectPath] ?? WorkspaceAttentionState()
-        attention.appendNotification(
-            WorkspaceTerminalNotification(
-                projectPath: projectPath,
-                rootProjectPath: session.rootProjectPath,
-                workspaceId: session.controller.workspaceId,
-                tabId: tabID,
-                paneId: paneID,
-                title: trimmedTitle,
-                body: trimmedBody,
-                createdAt: createdAt,
-                isRead: isWorkspacePaneCurrentlyFocused(projectPath: projectPath, tabID: tabID, paneID: paneID)
-            )
+        workspaceAttentionController.recordWorkspaceNotification(
+            projectPath: projectPath,
+            tabID: tabID,
+            paneID: paneID,
+            title: title,
+            body: body,
+            createdAt: createdAt
         )
-        attentionStateByProjectPath[normalizedProjectPath] = attention
     }
 
     public func updateWorkspaceTaskStatus(
@@ -1198,141 +847,49 @@ public final class NativeAppViewModel {
         paneID: String,
         status: WorkspaceTaskStatus
     ) {
-        let normalizedProjectPath = normalizePathForCompare(projectPath)
-        var attention = attentionStateByProjectPath[normalizedProjectPath] ?? WorkspaceAttentionState()
-        let previousAttention = attention
-        attention.setTaskStatus(status, for: paneID)
-        guard attention != previousAttention else {
-            return
-        }
-        attentionStateByProjectPath[normalizedProjectPath] = attention
+        workspaceAttentionController.updateWorkspaceTaskStatus(
+            projectPath: projectPath,
+            paneID: paneID,
+            status: status
+        )
     }
 
     public func recordAgentSignal(_ signal: WorkspaceAgentSessionSignal) {
-        let normalizedProjectPath = normalizePathForCompare(signal.projectPath)
-        guard openWorkspaceProjectPaths.contains(normalizedProjectPath) else {
-            return
-        }
-        let normalizedSignal = normalizedAgentSignal(signal)
-        var attention = attentionStateByProjectPath[normalizedProjectPath] ?? WorkspaceAttentionState()
-        let previousAttention = attention
-        applyAgentSignal(normalizedSignal, to: &attention)
-        guard attention != previousAttention else {
-            return
-        }
-        invalidateAppliedAgentSignalCache()
-        attentionStateByProjectPath[normalizedSignal.projectPath] = attention
+        workspaceAttentionController.recordAgentSignal(signal)
     }
 
     public func clearAgentSignal(projectPath: String, paneID: String) {
-        let normalizedProjectPath = normalizePathForCompare(projectPath)
-        guard var attention = attentionStateByProjectPath[normalizedProjectPath] else {
-            return
-        }
-        let previousAttention = attention
-        attention.clearAgentState(for: paneID)
-        guard attention != previousAttention else {
-            return
-        }
-        invalidateAppliedAgentSignalCache()
-        attentionStateByProjectPath[normalizedProjectPath] = attention
+        workspaceAttentionController.clearAgentSignal(projectPath: projectPath, paneID: paneID)
     }
 
     public func startWorkspaceAgentSignalObservation() {
-        guard !isAgentSignalObservationStarted else {
-            refreshWorkspaceAgentSignals()
-            return
-        }
-        agentSignalStore.onSignalsChange = { [weak self] snapshots in
-            Task { @MainActor in
-                self?.applyAgentSignalSnapshots(snapshots)
-            }
-        }
-        do {
-            try agentSignalStore.start()
-            isAgentSignalObservationStarted = true
-            applyAgentSignalSnapshots(agentSignalStore.currentSnapshots)
-        } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-        }
+        workspaceAttentionController.startWorkspaceAgentSignalObservation()
     }
 
     public func stopWorkspaceAgentSignalObservation() {
-        guard isAgentSignalObservationStarted else {
-            return
-        }
-        agentSignalStore.stop()
-        isAgentSignalObservationStarted = false
-        invalidateAppliedAgentSignalCache()
+        workspaceAttentionController.stopWorkspaceAgentSignalObservation()
     }
 
     public func refreshWorkspaceAgentSignals() {
-        applyAgentSignalSnapshots(agentSignalStore.currentSnapshots)
+        workspaceAttentionController.refreshWorkspaceAgentSignals()
     }
 
     public func codexDisplayCandidates() -> [WorkspaceAgentDisplayCandidate] {
-        refreshCodexDisplayCandidates()
-        return cachedCodexDisplayCandidates
+        workspaceAttentionController.codexDisplayCandidates()
     }
 
     private func refreshCodexDisplayCandidates() {
-        let candidates: [WorkspaceAgentDisplayCandidate]
-        if let activeWorkspaceProjectPath,
-           openWorkspaceProjectPaths.contains(normalizePathForCompare(activeWorkspaceProjectPath)),
-           let controller = workspaceController(for: activeWorkspaceProjectPath),
-           case let .terminal(selectedTerminalTabID)? = resolvedWorkspacePresentedTabSelection(
-               for: activeWorkspaceProjectPath,
-               controller: controller
-           ),
-           let selectedTab = controller.tabs.first(where: { $0.id == selectedTerminalTabID }),
-           let attention = workspaceAttentionState(for: activeWorkspaceProjectPath) {
-            let visiblePaneIDs = Set(selectedTab.leaves.map(\.id))
-            candidates = attention.agentStateByPaneID.compactMap { entry -> WorkspaceAgentDisplayCandidate? in
-                let (paneID, state) = entry
-                guard visiblePaneIDs.contains(paneID),
-                      (state == .running || state == .waiting),
-                      attention.agentKindByPaneID[paneID] == .codex
-                else {
-                    return nil
-                }
-                return WorkspaceAgentDisplayCandidate(
-                    projectPath: activeWorkspaceProjectPath,
-                    paneID: paneID,
-                    signalSessionID: attention.agentSessionIDByPaneID[paneID],
-                    signalState: state,
-                    signalPhase: attention.agentPhaseByPaneID[paneID],
-                    signalAttention: attention.agentAttentionByPaneID[paneID],
-                    signalUpdatedAt: attention.agentUpdatedAtByPaneID[paneID]
-                )
-            }
-        } else {
-            candidates = []
-        }
-        let sortedCandidates = WorkspaceAgentDisplayCandidate.observationStableSorted(candidates)
-        guard cachedCodexDisplayCandidates != sortedCandidates else {
-            return
-        }
-        cachedCodexDisplayCandidates = sortedCandidates
-        codexDisplayCandidatesRevision &+= 1
+        workspaceAttentionController.refreshCodexDisplayCandidates()
     }
 
     public func replaceWorkspaceAgentDisplayOverrides(
         _ overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
     ) {
-        let filteredOverrides = filteredWorkspaceAgentDisplayOverrides(overridesByProjectPath)
-        guard agentDisplayOverridesByProjectPath != filteredOverrides else {
-            return
-        }
-        agentDisplayOverridesByProjectPath = filteredOverrides
+        workspaceAttentionController.replaceWorkspaceAgentDisplayOverrides(overridesByProjectPath)
     }
 
     public func markWorkspaceNotificationsRead(projectPath: String, paneID: String) {
-        let normalizedProjectPath = normalizePathForCompare(projectPath)
-        guard var attention = attentionStateByProjectPath[normalizedProjectPath] else {
-            return
-        }
-        attention.markNotificationsRead(for: paneID)
-        attentionStateByProjectPath[normalizedProjectPath] = attention
+        workspaceAttentionController.markWorkspaceNotificationsRead(projectPath: projectPath, paneID: paneID)
     }
 
     public func focusWorkspaceNotification(_ notification: WorkspaceTerminalNotification) {
@@ -1346,12 +903,10 @@ public final class NativeAppViewModel {
         }
         controller.selectTab(notification.tabId)
         controller.focusPane(notification.paneId)
-
-        guard var attention = attentionStateByProjectPath[normalizedProjectPath] else {
-            return
-        }
-        attention.markNotificationRead(id: notification.id)
-        attentionStateByProjectPath[normalizedProjectPath] = attention
+        workspaceAttentionController.markWorkspaceNotificationRead(
+            projectPath: normalizedProjectPath,
+            notificationID: notification.id
+        )
     }
 
     public var activeWorkspaceController: GhosttyWorkspaceController? {
@@ -1587,7 +1142,7 @@ public final class NativeAppViewModel {
         else {
             return nil
         }
-        return workspaceProjectTreeDisplayProjection(
+        return workspaceProjectTreeController.displayProjection(
             for: activeWorkspaceProjectPath,
             state: state
         )
@@ -1604,34 +1159,10 @@ public final class NativeAppViewModel {
         let normalizedProjectPath = normalizePathForCompare(projectPath)
         let controller = workspaceController(for: normalizedProjectPath)
         let selected = resolvedWorkspacePresentedTabSelection(for: normalizedProjectPath, controller: controller)
-        let terminalTabs = controller?.tabs.map { tab in
-            WorkspacePresentedTabItem(
-                id: tab.id,
-                title: tab.title,
-                selection: .terminal(tab.id),
-                isSelected: selected == .terminal(tab.id)
-            )
-        } ?? []
-        let editorTabs = (workspaceEditorTabsByProjectPath[normalizedProjectPath] ?? []).map { tab in
-            WorkspacePresentedTabItem(
-                id: tab.id,
-                title: tab.isDirty ? "● \(tab.title)" : tab.title,
-                selection: .editor(tab.id),
-                isSelected: selected == .editor(tab.id),
-                isPinned: tab.isPinned,
-                isPreview: tab.isPreview
-            )
-        }
-        let diffTabs = (workspaceDiffTabsByProjectPath[normalizedProjectPath] ?? []).map { tab in
-            WorkspacePresentedTabItem(
-                id: tab.id,
-                title: tab.title,
-                selection: .diff(tab.id),
-                isSelected: selected == .diff(tab.id)
-            )
-        }
-        return WorkspacePresentedTabSnapshot(
-            items: terminalTabs + editorTabs + diffTabs,
+        return workspacePresentedTabSnapshotBuilder.snapshot(
+            controller: controller,
+            editorTabs: workspaceEditorTabsByProjectPath[normalizedProjectPath] ?? [],
+            diffTabs: workspaceDiffTabsByProjectPath[normalizedProjectPath] ?? [],
             selection: selected
         )
     }
@@ -1715,25 +1246,11 @@ public final class NativeAppViewModel {
     }
 
     public var directoryRows: [DirectoryRow] {
-        var rows: [DirectoryRow] = [DirectoryRow(filter: .all, title: "全部", count: visibleProjects.count, isSystemEntry: true)]
-        rows.append(
-            DirectoryRow(
-                filter: .directProjects,
-                title: "直接添加",
-                count: visibleProjects.filter { directProjectPathSet.contains(normalizePathForCompare($0.path)) }.count,
-                isSystemEntry: true
-            )
+        projectCatalogSidebarProjectionBuilder.directoryRows(
+            visibleProjects: visibleProjects,
+            directories: snapshot.appState.directories,
+            directProjectPaths: snapshot.appState.directProjectPaths
         )
-        rows.append(
-            contentsOf: snapshot.appState.directories.map { directory in
-                DirectoryRow(
-                    filter: .directory(directory),
-                    title: pathLastComponent(directory),
-                    count: visibleProjects.filter { $0.path.hasPrefix(directory) }.count
-                )
-            }
-        )
-        return rows
     }
 
     public var isDirectProjectsDirectorySelected: Bool {
@@ -1744,31 +1261,14 @@ public final class NativeAppViewModel {
     }
 
     public var tagRows: [TagRow] {
-        var counts = [String: Int]()
-        for project in visibleProjects {
-            for tag in project.tags {
-                counts[tag, default: 0] += 1
-            }
-        }
-
-        var rows: [TagRow] = [TagRow(name: nil, title: "全部", count: visibleProjects.count)]
-        rows.append(
-            contentsOf: snapshot.appState.tags
-                .sorted { (counts[$0.name] ?? 0) > (counts[$1.name] ?? 0) }
-                .map { tag in
-                    TagRow(
-                        name: tag.name,
-                        title: tag.name,
-                        count: counts[tag.name] ?? 0,
-                        colorHex: hexColor(for: tag.color)
-                    )
-                }
+        projectCatalogSidebarProjectionBuilder.tagRows(
+            visibleProjects: visibleProjects,
+            tags: snapshot.appState.tags
         )
-        return rows
     }
 
     public var sidebarHeatmapDays: [GitHeatmapDay] {
-        buildGitHeatmapDays(projects: visibleProjects, days: GitDashboardRange.threeMonths.days)
+        projectCatalogSidebarProjectionBuilder.sidebarHeatmapDays(visibleProjects: visibleProjects)
     }
 
     public var isHeatmapFilterActive: Bool {
@@ -1776,48 +1276,35 @@ public final class NativeAppViewModel {
     }
 
     public var heatmapActiveProjects: [GitActiveProject] {
-        guard let selectedHeatmapDateKey else {
-            return []
-        }
-        return buildGitActiveProjects(on: selectedHeatmapDateKey, projects: visibleProjects)
+        projectCatalogSidebarProjectionBuilder.heatmapActiveProjects(
+            selectedDateKey: selectedHeatmapDateKey,
+            visibleProjects: visibleProjects
+        )
     }
 
     public var selectedHeatmapSummary: String? {
-        guard let selectedHeatmapDateKey else {
-            return nil
-        }
-        let totalCommits = heatmapActiveProjects.reduce(into: 0) { $0 += $1.commitCount }
-        return "\(selectedHeatmapDateKey) · \(heatmapActiveProjects.count) 个活跃项目 · \(totalCommits) 次提交"
+        projectCatalogSidebarProjectionBuilder.selectedHeatmapSummary(
+            selectedDateKey: selectedHeatmapDateKey,
+            activeProjects: heatmapActiveProjects
+        )
     }
 
     public var gitStatisticsLastUpdated: Date? {
-        visibleProjects
-            .map(\.checked)
-            .filter { $0 != .zero }
-            .max()
-            .flatMap(swiftDateToDate)
+        projectCatalogSidebarProjectionBuilder.gitStatisticsLastUpdated(visibleProjects: visibleProjects)
     }
 
     public var cliSessionItems: [CLISessionItem] {
-        openWorkspaceSessions
-            .filter { $0.isQuickTerminal && $0.workspaceRootContext == nil }
-            .map { session in
-            CLISessionItem(
-                projectPath: session.projectPath,
-                title: Project.quickTerminal(at: session.projectPath).name,
-                subtitle: session.projectPath,
-                statusText: normalizedPathsMatch(activeWorkspaceProjectPath, session.projectPath) ? "已打开" : "可恢复"
-            )
-            }
+        projectCatalogSidebarProjectionBuilder.cliSessionItems(
+            sessions: openWorkspaceSessions,
+            activeProjectPath: activeWorkspaceProjectPath
+        )
     }
 
     public var recycleBinItems: [RecycleBinItem] {
-        snapshot.appState.recycleBin.map { path in
-            if let project = snapshot.projects.first(where: { $0.path == path }) {
-                return RecycleBinItem(path: path, name: project.name, missing: false)
-            }
-            return RecycleBinItem(path: path, name: pathLastComponent(path), missing: true)
-        }
+        projectCatalogSidebarProjectionBuilder.recycleBinItems(
+            recycleBin: snapshot.appState.recycleBin,
+            projects: snapshot.projects
+        )
     }
 
     public func load() {
@@ -1896,7 +1383,7 @@ public final class NativeAppViewModel {
         try store.updateProjectsGitMetadata(results)
         load()
 
-        return makeGitStatisticsRefreshSummary(from: results)
+        return GitStatisticsRefreshSummary(results: results)
     }
 
     public func refreshGitStatisticsAsync() async throws -> GitStatisticsRefreshSummary {
@@ -1930,25 +1417,7 @@ public final class NativeAppViewModel {
         gitStatisticsProgressText = "正在刷新项目列表..."
         load()
 
-        return makeGitStatisticsRefreshSummary(from: results)
-    }
-
-    private func makeGitStatisticsRefreshSummary(from results: [GitDailyRefreshResult]) -> GitStatisticsRefreshSummary {
-        let failedRepositories = results.reduce(into: 0) { partialResult, result in
-            if result.error != nil {
-                partialResult += 1
-            }
-        }
-        let updatedRepositories = results.reduce(into: 0) { partialResult, result in
-            if result.error == nil {
-                partialResult += 1
-            }
-        }
-        return GitStatisticsRefreshSummary(
-            requestedRepositories: results.count,
-            updatedRepositories: updatedRepositories,
-            failedRepositories: failedRepositories
-        )
+        return GitStatisticsRefreshSummary(results: results)
     }
 
     public func selectProject(_ path: String?) {
@@ -2094,17 +1563,17 @@ public final class NativeAppViewModel {
         }
 
         let sourceSessions = openWorkspaceSessions.filter {
-            workspaceSidebarGroupIdentity(for: $0)?.id == sourceGroupID
+            workspaceSidebarProjectionBuilder.groupID(for: $0) == sourceGroupID
         }
         guard !sourceSessions.isEmpty else {
             return
         }
 
         let remainingSessions = openWorkspaceSessions.filter {
-            workspaceSidebarGroupIdentity(for: $0)?.id != sourceGroupID
+            workspaceSidebarProjectionBuilder.groupID(for: $0) != sourceGroupID
         }
         let targetIndices = remainingSessions.enumerated().compactMap { element -> Int? in
-            workspaceSidebarGroupIdentity(for: element.element)?.id == targetGroupID ? element.offset : nil
+            workspaceSidebarProjectionBuilder.groupID(for: element.element) == targetGroupID ? element.offset : nil
         }
         guard let insertionIndex = insertAfter
             ? targetIndices.last.map({ $0 + 1 })
@@ -2146,9 +1615,8 @@ public final class NativeAppViewModel {
             openWorkspaceSessions.removeAll { removedPaths.contains($0.projectPath) }
             removedPaths.forEach { runManager.stopAll(projectPath: $0) }
             clearWorkspaceRuntimePresentationState(for: removedPaths)
-            attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
-            workspaceRunConsoleStateByProjectPath = workspaceRunConsoleStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
-            pruneWorkspaceAgentDisplayOverrides()
+            workspaceRunController.retainConsoleState(for: openWorkspaceProjectPaths)
+            syncAttentionStateWithOpenSessions()
 
             if openWorkspaceSessions.isEmpty {
                 activeWorkspaceProjectPath = nil
@@ -2195,9 +1663,8 @@ public final class NativeAppViewModel {
         }
         removedPaths.forEach { runManager.stopAll(projectPath: $0) }
         clearWorkspaceRuntimePresentationState(for: removedPaths)
-        attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
-        workspaceRunConsoleStateByProjectPath = workspaceRunConsoleStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
-        pruneWorkspaceAgentDisplayOverrides()
+        workspaceRunController.retainConsoleState(for: openWorkspaceProjectPaths)
+        syncAttentionStateWithOpenSessions()
 
         if openWorkspaceSessions.isEmpty {
             activeWorkspaceProjectPath = nil
@@ -2226,9 +1693,8 @@ public final class NativeAppViewModel {
         openWorkspaceSessions.remove(at: index)
         removedPaths.forEach { runManager.stopAll(projectPath: $0) }
         clearWorkspaceRuntimePresentationState(for: removedPaths)
-        attentionStateByProjectPath = attentionStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
-        workspaceRunConsoleStateByProjectPath = workspaceRunConsoleStateByProjectPath.filter { openWorkspaceProjectPaths.contains($0.key) }
-        pruneWorkspaceAgentDisplayOverrides()
+        workspaceRunController.retainConsoleState(for: openWorkspaceProjectPaths)
+        syncAttentionStateWithOpenSessions()
 
         if openWorkspaceSessions.isEmpty {
             activeWorkspaceProjectPath = nil
@@ -2437,235 +1903,23 @@ public final class NativeAppViewModel {
     }
 
     public func prepareActiveWorkspaceProjectTreeState() {
-        guard let activeWorkspaceProjectTreeProject else {
-            return
-        }
-        let normalizedProjectPath = normalizePathForCompare(activeWorkspaceProjectTreeProject.path)
-        if workspaceProjectTreeStatesByProjectPath[normalizedProjectPath] == nil,
-           !workspaceProjectTreeRefreshingProjectPaths.contains(normalizedProjectPath) {
-            refreshWorkspaceProjectTree(for: normalizedProjectPath)
-        }
+        workspaceProjectTreeController.prepareActiveProjectTreeState()
     }
 
     public func refreshWorkspaceProjectTree(for projectPath: String? = nil) {
-        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
-            return
-        }
-        scheduleWorkspaceProjectTreeRefresh(
-            for: resolvedProjectPath,
-            preserving: workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
-        )
+        workspaceProjectTreeController.refreshProjectTree(for: projectPath)
     }
 
     public func refreshWorkspaceProjectTreeNode(_ path: String?, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath) else {
-            return
-        }
-        // 首版先走整棵树重建，优先保证 rename/delete/create 后路径映射与展开态一致。
-        scheduleWorkspaceProjectTreeRefresh(
-            for: resolvedProjectPath,
-            preserving: workspaceProjectTreeStatesByProjectPath[resolvedProjectPath],
-            preferredSelectionPath: path
-        )
+        workspaceProjectTreeController.refreshProjectTreeNode(path, in: projectPath)
     }
 
     public func selectWorkspaceProjectTreeNode(_ path: String?, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
-              var state = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
-        else {
-            return
-        }
-        state.selectedPath = state.canonicalDisplayPath(for: path)
-        workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
-        syncWorkspaceGitSelectionFromProjectTreeSelectionIfNeeded(
-            rootProjectPath: resolvedProjectPath,
-            selectedPath: state.selectedPath
-        )
+        workspaceProjectTreeController.selectProjectTreeNode(path, in: projectPath)
     }
 
     public func toggleWorkspaceProjectTreeDirectory(_ directoryPath: String, in projectPath: String? = nil) {
-        guard let resolvedProjectPath = resolvedWorkspaceProjectPathKey(projectPath),
-              var state = workspaceProjectTreeStatesByProjectPath[resolvedProjectPath]
-        else {
-            return
-        }
-
-        let projection = workspaceProjectTreeDisplayProjection(
-            for: resolvedProjectPath,
-            state: state
-        )
-        let normalizedDirectoryPath = projection.aliasMap[normalizePathForCompare(directoryPath)]
-            ?? normalizePathForCompare(directoryPath)
-
-        if state.expandedDirectoryPaths.contains(normalizedDirectoryPath) {
-            state.expandedDirectoryPaths.remove(normalizedDirectoryPath)
-            state.loadingDirectoryPaths.remove(normalizedDirectoryPath)
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
-            workspaceProjectTreeDiagnostics.recordDirectoryCollapsed(
-                projectPath: resolvedProjectPath,
-                directoryPath: normalizedDirectoryPath,
-                revision: state.revision,
-                expandedCount: state.expandedDirectoryPaths.count
-            )
-            return
-        }
-
-        state.expandedDirectoryPaths.insert(normalizedDirectoryPath)
-        if let existingChildren = state.childrenByDirectoryPath[normalizedDirectoryPath] {
-            state.errorMessage = nil
-            workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state.canonicalizedForDisplay()
-            errorMessage = nil
-            preloadWorkspaceProjectTreeVisibleChainsIfNeeded(
-                for: normalizedDirectoryPath,
-                projectRootPath: resolvedProjectPath,
-                children: existingChildren
-            )
-            return
-        }
-
-        state.loadingDirectoryPaths.insert(normalizedDirectoryPath)
-        state.errorMessage = nil
-        let loadingRevision = state.revision
-        workspaceProjectTreeStatesByProjectPath[resolvedProjectPath] = state
-        errorMessage = nil
-        workspaceProjectTreeDiagnostics.recordDirectoryLoadStarted(
-            projectPath: resolvedProjectPath,
-            directoryPath: normalizedDirectoryPath,
-            revision: loadingRevision
-        )
-
-        let projectRootPath = resolvedProjectPath
-        let fileSystemService = workspaceFileSystemService
-        let startTime = ProcessInfo.processInfo.systemUptime
-        Task.detached(priority: .userInitiated) { [weak self] in
-            do {
-                let result = try Self.loadWorkspaceProjectTreeChildrenSnapshot(
-                    service: fileSystemService,
-                    directoryPath: normalizedDirectoryPath,
-                    projectRootPath: projectRootPath
-                )
-                await self?.finishWorkspaceProjectTreeDirectoryLoadSuccess(
-                    for: resolvedProjectPath,
-                    directoryPath: normalizedDirectoryPath,
-                    result: result,
-                    startTime: startTime
-                )
-            } catch {
-                let errorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                await self?.finishWorkspaceProjectTreeDirectoryLoadFailure(
-                    for: resolvedProjectPath,
-                    directoryPath: normalizedDirectoryPath,
-                    errorDescription: errorDescription,
-                    startTime: startTime
-                )
-            }
-        }
-    }
-
-    private func finishWorkspaceProjectTreeDirectoryLoadSuccess(
-        for projectPath: String,
-        directoryPath: String,
-        result: WorkspaceProjectTreeDirectoryLoadResult,
-        startTime: TimeInterval
-    ) {
-        guard var latestState = workspaceProjectTreeStatesByProjectPath[projectPath] else {
-            return
-        }
-
-        latestState.loadingDirectoryPaths.remove(directoryPath)
-        for (path, children) in result.childrenByDirectoryPath {
-            latestState.childrenByDirectoryPath[path] = children
-        }
-        latestState.errorMessage = nil
-        latestState.advanceStructureRevision()
-        let finalizedState = latestState.canonicalizedForDisplay()
-        workspaceProjectTreeStatesByProjectPath[projectPath] = finalizedState
-        errorMessage = nil
-        workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
-            projectPath: projectPath,
-            directoryPath: directoryPath,
-            revision: finalizedState.revision,
-            durationMs: elapsedMilliseconds(since: startTime),
-            loadedDirectoryCount: result.loadedDirectoryCount,
-            directChildCount: result.directChildCount,
-            status: "success",
-            errorDescription: nil
-        )
-    }
-
-    private func finishWorkspaceProjectTreeDirectoryLoadFailure(
-        for projectPath: String,
-        directoryPath: String,
-        errorDescription: String,
-        startTime: TimeInterval
-    ) {
-        guard var latestState = workspaceProjectTreeStatesByProjectPath[projectPath] else {
-            return
-        }
-
-        latestState.loadingDirectoryPaths.remove(directoryPath)
-        latestState.errorMessage = errorDescription
-        workspaceProjectTreeStatesByProjectPath[projectPath] = latestState
-        errorMessage = latestState.errorMessage
-        workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
-            projectPath: projectPath,
-            directoryPath: directoryPath,
-            revision: latestState.revision,
-            durationMs: elapsedMilliseconds(since: startTime),
-            loadedDirectoryCount: 0,
-            directChildCount: 0,
-            status: "failed",
-            errorDescription: latestState.errorMessage
-        )
-    }
-
-    private func preloadWorkspaceProjectTreeVisibleChainsIfNeeded(
-        for directoryPath: String,
-        projectRootPath: String,
-        children: [WorkspaceProjectTreeNode]
-    ) {
-        let fileSystemService = workspaceFileSystemService
-        let startRevision = workspaceProjectTreeStatesByProjectPath[projectRootPath]?.revision ?? 0
-        let startTime = ProcessInfo.processInfo.systemUptime
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else {
-                return
-            }
-            guard let result = try? Self.preloadWorkspaceProjectTreeVisibleChainsSnapshot(
-                service: fileSystemService,
-                children: children,
-                projectRootPath: projectRootPath
-            ), !result.isEmpty else {
-                return
-            }
-
-            await MainActor.run {
-                guard var latestState = self.workspaceProjectTreeStatesByProjectPath[projectRootPath] else {
-                    return
-                }
-                var didMerge = false
-                for (path, loadedChildren) in result where latestState.childrenByDirectoryPath[path] != loadedChildren {
-                    latestState.childrenByDirectoryPath[path] = loadedChildren
-                    didMerge = true
-                }
-                guard didMerge else {
-                    return
-                }
-                latestState.advanceStructureRevision()
-                let finalizedState = latestState.canonicalizedForDisplay()
-                self.workspaceProjectTreeStatesByProjectPath[projectRootPath] = finalizedState
-                self.workspaceProjectTreeDiagnostics.recordDirectoryLoadFinished(
-                    projectPath: projectRootPath,
-                    directoryPath: directoryPath,
-                    revision: max(startRevision, finalizedState.revision),
-                    durationMs: elapsedMilliseconds(since: startTime),
-                    loadedDirectoryCount: result.count,
-                    directChildCount: children.count,
-                    status: "success",
-                    errorDescription: nil
-                )
-            }
-        }
+        workspaceProjectTreeController.toggleDirectory(directoryPath, in: projectPath)
     }
 
     private func scheduleWorkspaceProjectTreeRefresh(
@@ -2673,130 +1927,11 @@ public final class NativeAppViewModel {
         preserving state: WorkspaceProjectTreeState?,
         preferredSelectionPath: String? = nil
     ) {
-        let normalizedProjectPath = normalizePathForCompare(projectPath)
-        let nextGeneration = (workspaceProjectTreeRefreshGenerationByProjectPath[normalizedProjectPath] ?? 0) &+ 1
-        workspaceProjectTreeRefreshGenerationByProjectPath[normalizedProjectPath] = nextGeneration
-        workspaceProjectTreeRefreshingProjectPaths.insert(normalizedProjectPath)
-        workspaceProjectTreeRefreshTasksByProjectPath[normalizedProjectPath]?.cancel()
-
-        let fileSystemService = workspaceFileSystemService
-        let startTime = ProcessInfo.processInfo.systemUptime
-        workspaceProjectTreeRefreshTasksByProjectPath[normalizedProjectPath] = Task.detached(priority: .userInitiated) { [weak self] in
-            do {
-                let rebuiltState = try Self.buildWorkspaceProjectTreeStateSnapshot(
-                    service: fileSystemService,
-                    projectPath: normalizedProjectPath,
-                    preserving: state
-                )
-                await self?.finishWorkspaceProjectTreeRefresh(
-                    for: normalizedProjectPath,
-                    generation: nextGeneration,
-                    rebuiltState: rebuiltState,
-                    preferredSelectionPath: preferredSelectionPath,
-                    startTime: startTime
-                )
-            } catch is CancellationError {
-                await self?.finishWorkspaceProjectTreeRefreshCancellation(
-                    for: normalizedProjectPath,
-                    generation: nextGeneration
-                )
-            } catch {
-                let errorDescription = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                await self?.finishWorkspaceProjectTreeRefreshFailure(
-                    for: normalizedProjectPath,
-                    generation: nextGeneration,
-                    preserving: state,
-                    errorDescription: errorDescription
-                )
-            }
-        }
-    }
-
-    private func finishWorkspaceProjectTreeRefresh(
-        for projectPath: String,
-        generation: Int,
-        rebuiltState: WorkspaceProjectTreeState,
-        preferredSelectionPath: String?,
-        startTime: TimeInterval
-    ) {
-        guard workspaceProjectTreeRefreshGenerationByProjectPath[projectPath] == generation else {
-            return
-        }
-
-        var finalState = rebuiltState
-        if let latestState = workspaceProjectTreeStatesByProjectPath[projectPath] {
-            finalState.expandedDirectoryPaths = latestState.expandedDirectoryPaths
-                .filter { normalizePathForCompare($0) != normalizePathForCompare(projectPath) }
-                .filter { workspaceFileSystemService.directoryExists(at: $0) }
-            finalState.loadingDirectoryPaths = latestState.loadingDirectoryPaths
-            for (path, children) in latestState.childrenByDirectoryPath {
-                guard normalizePathForCompare(path) != normalizePathForCompare(projectPath) else {
-                    continue
-                }
-                finalState.childrenByDirectoryPath[path] = children
-            }
-            if preferredSelectionPath == nil,
-               let latestSelectedPath = latestState.selectedPath,
-               FileManager.default.fileExists(atPath: latestSelectedPath) {
-                finalState.selectedPath = latestSelectedPath
-            }
-        }
-        if let preferredSelectionPath {
-            finalState.selectedPath = finalState.canonicalDisplayPath(for: preferredSelectionPath)
-            if finalState.selectedPath == nil,
-               FileManager.default.fileExists(atPath: preferredSelectionPath) {
-                finalState.selectedPath = normalizePathForCompare(preferredSelectionPath)
-            }
-        }
-        finalState = finalState.canonicalizedForDisplay()
-        finalState.errorMessage = nil
-        workspaceProjectTreeStatesByProjectPath[projectPath] = finalState
-        syncWorkspaceGitSelectionFromProjectTreeSelectionIfNeeded(
-            rootProjectPath: projectPath,
-            selectedPath: finalState.selectedPath
+        workspaceProjectTreeController.refreshProjectTree(
+            for: projectPath,
+            preserving: state,
+            preferredSelectionPath: preferredSelectionPath
         )
-        workspaceProjectTreeRefreshingProjectPaths.remove(projectPath)
-        workspaceProjectTreeRefreshTasksByProjectPath[projectPath] = nil
-        errorMessage = nil
-        workspaceProjectTreeDiagnostics.recordTreeRebuilt(
-            projectPath: projectPath,
-            revision: finalState.revision,
-            durationMs: elapsedMilliseconds(since: startTime),
-            rootCount: finalState.rootNodes.count,
-            expandedCount: finalState.expandedDirectoryPaths.count
-        )
-    }
-
-    private func finishWorkspaceProjectTreeRefreshFailure(
-        for projectPath: String,
-        generation: Int,
-        preserving state: WorkspaceProjectTreeState?,
-        errorDescription: String
-    ) {
-        guard workspaceProjectTreeRefreshGenerationByProjectPath[projectPath] == generation else {
-            return
-        }
-
-        var fallbackState = workspaceProjectTreeStatesByProjectPath[projectPath]
-            ?? state
-            ?? WorkspaceProjectTreeState(rootProjectPath: projectPath)
-        fallbackState.errorMessage = errorDescription
-        workspaceProjectTreeStatesByProjectPath[projectPath] = fallbackState
-        workspaceProjectTreeRefreshingProjectPaths.remove(projectPath)
-        workspaceProjectTreeRefreshTasksByProjectPath[projectPath] = nil
-        errorMessage = fallbackState.errorMessage
-    }
-
-    private func finishWorkspaceProjectTreeRefreshCancellation(
-        for projectPath: String,
-        generation: Int
-    ) {
-        guard workspaceProjectTreeRefreshGenerationByProjectPath[projectPath] == generation else {
-            return
-        }
-
-        workspaceProjectTreeRefreshingProjectPaths.remove(projectPath)
-        workspaceProjectTreeRefreshTasksByProjectPath[projectPath] = nil
     }
 
     public func openWorkspaceEditorTab(
@@ -3278,7 +2413,11 @@ public final class NativeAppViewModel {
 
     private func closeWorkspaceEditorTabs(_ tabIDs: [String], in resolvedProjectPath: String) {
         workspacePendingEditorCloseRequest = nil
-        let displayProjectPath = displayWorkspaceProjectPath(for: resolvedProjectPath)
+        let displayProjectPath = workspaceSessionDisplayMapper.displayProjectPath(
+            for: resolvedProjectPath,
+            rootProjectPath: resolvedProjectPath,
+            fallbackPath: resolvedProjectPath
+        )
         let result = workspaceEditorCloseCoordinator.beginClosing(
             tabIDs,
             in: resolvedProjectPath,
@@ -5000,119 +4139,6 @@ public final class NativeAppViewModel {
         readmeFallback = document.readmeFallback
     }
 
-    private func matchesAllFilters(project: Project) -> Bool {
-        switch selectedDirectory {
-        case .all:
-            break
-        case let .directory(path):
-            if !project.path.hasPrefix(path) {
-                return false
-            }
-        case .directProjects:
-            if !directProjectPathSet.contains(normalizePathForCompare(project.path)) {
-                return false
-            }
-        }
-        if let selectedHeatmapDateKey {
-            if gitCommitCount(on: selectedHeatmapDateKey, project: project) <= 0 {
-                return false
-            }
-        } else if let selectedTag, !project.tags.contains(selectedTag) {
-            return false
-        }
-        switch selectedGitFilter {
-        case .all:
-            break
-        case .gitOnly where !project.isGitRepository:
-            return false
-        case .nonGitOnly where project.isGitRepository:
-            return false
-        default:
-            break
-        }
-        if !matchesDateFilter(project: project) {
-            return false
-        }
-
-        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !query.isEmpty else {
-            return true
-        }
-        return project.name.lowercased().contains(query)
-            || project.path.lowercased().contains(query)
-            || (project.notesSummary?.lowercased().contains(query) ?? false)
-            || project.tags.contains(where: { $0.lowercased().contains(query) })
-            || (project.isGitRepository && (project.gitLastCommitMessage?.lowercased().contains(query) ?? false))
-    }
-
-    private var directProjectPathSet: Set<String> {
-        Set(snapshot.appState.directProjectPaths.map(normalizePathForCompare))
-    }
-
-    private func matchesDateFilter(project: Project) -> Bool {
-        guard selectedDateFilter != .all else {
-            return true
-        }
-        guard let date = swiftDateToDate(project.mtime) else {
-            return false
-        }
-        let now = Date()
-        let interval: TimeInterval = selectedDateFilter == .lastDay ? 24 * 60 * 60 : 7 * 24 * 60 * 60
-        return now.timeIntervalSince(date) <= interval
-    }
-
-    private func sortProjects(_ projects: [Project]) -> [Project] {
-        switch projectListSortOrder {
-        case .defaultOrder:
-            return projects
-        case .nameAscending:
-            return projects.sorted { lhs, rhs in
-                compareProjectsByName(lhs: lhs, rhs: rhs, ascending: true)
-            }
-        case .nameDescending:
-            return projects.sorted { lhs, rhs in
-                compareProjectsByName(lhs: lhs, rhs: rhs, ascending: false)
-            }
-        case .modifiedNewestFirst:
-            return projects.sorted { lhs, rhs in
-                compareProjectsByModifiedTime(lhs: lhs, rhs: rhs, newestFirst: true)
-            }
-        case .modifiedOldestFirst:
-            return projects.sorted { lhs, rhs in
-                compareProjectsByModifiedTime(lhs: lhs, rhs: rhs, newestFirst: false)
-            }
-        }
-    }
-
-    private func compareProjectsByName(
-        lhs: Project,
-        rhs: Project,
-        ascending: Bool
-    ) -> Bool {
-        let comparison = lhs.name.localizedStandardCompare(rhs.name)
-        if comparison != .orderedSame {
-            return ascending
-                ? comparison == .orderedAscending
-                : comparison == .orderedDescending
-        }
-        return compareProjectsByModifiedTime(lhs: lhs, rhs: rhs, newestFirst: true)
-    }
-
-    private func compareProjectsByModifiedTime(
-        lhs: Project,
-        rhs: Project,
-        newestFirst: Bool
-    ) -> Bool {
-        if lhs.mtime != rhs.mtime {
-            return newestFirst ? lhs.mtime > rhs.mtime : lhs.mtime < rhs.mtime
-        }
-        let comparison = lhs.name.localizedStandardCompare(rhs.name)
-        if comparison != .orderedSame {
-            return comparison == .orderedAscending
-        }
-        return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
-    }
-
     public func gitDashboardSummary(for range: GitDashboardRange) -> GitDashboardSummary {
         buildGitDashboardSummary(projects: visibleProjects, tagCount: snapshot.appState.tags.count, range: range)
     }
@@ -5161,24 +4187,9 @@ public final class NativeAppViewModel {
                 return nil
             }
 
-            let normalizedProjectPath = normalizePathForCompare(sessionSnapshot.projectPath)
-            let normalizedRootProjectPath = normalizePathForCompare(sessionSnapshot.rootProjectPath)
-            let normalizedSessionSnapshot = ProjectWorkspaceRestoreSnapshot(
-                projectPath: normalizedProjectPath,
-                rootProjectPath: normalizedRootProjectPath,
-                isQuickTerminal: sessionSnapshot.isQuickTerminal,
-                transientDisplayProject: normalizedTransientDisplayProject(
-                    sessionSnapshot.transientDisplayProject,
-                    fallbackPath: normalizedProjectPath
-                ),
-                workspaceRootContext: sessionSnapshot.workspaceRootContext,
-                workspaceAlignmentGroupID: sessionSnapshot.workspaceAlignmentGroupID,
-                workspaceId: sessionSnapshot.workspaceId,
-                selectedTabId: sessionSnapshot.selectedTabId,
-                nextTabNumber: sessionSnapshot.nextTabNumber,
-                nextPaneNumber: sessionSnapshot.nextPaneNumber,
-                tabs: sessionSnapshot.tabs
-            )
+            let normalizedSessionSnapshot = workspaceSessionDisplayMapper.normalizedRestoreSnapshot(sessionSnapshot)
+            let normalizedProjectPath = normalizedSessionSnapshot.projectPath
+            let normalizedRootProjectPath = normalizedSessionSnapshot.rootProjectPath
 
             let controller = GhosttyWorkspaceController(
                 projectPath: normalizedProjectPath,
@@ -5198,26 +4209,10 @@ public final class NativeAppViewModel {
                     ?? context
             }
 
-            let displayProjectPath = resolveDisplayProject(
-                for: normalizedProjectPath,
-                rootProjectPath: normalizedRootProjectPath
-            )?.path ?? normalizedProjectPath
-            let displayRootProjectPath = resolveDisplayProject(
-                for: normalizedRootProjectPath,
-                rootProjectPath: normalizedRootProjectPath
-            )?.path ?? normalizedRootProjectPath
-
-            return OpenWorkspaceSessionState(
-                projectPath: displayProjectPath,
-                rootProjectPath: displayRootProjectPath,
+            return workspaceSessionDisplayMapper.restoredSessionState(
+                from: normalizedSessionSnapshot,
                 controller: controller,
-                isQuickTerminal: sessionSnapshot.isQuickTerminal,
-                transientDisplayProject: normalizedTransientDisplayProject(
-                    sessionSnapshot.transientDisplayProject,
-                    fallbackPath: normalizedProjectPath
-                ),
-                workspaceRootContext: restoredWorkspaceRootContext,
-                workspaceAlignmentGroupID: sessionSnapshot.workspaceAlignmentGroupID
+                workspaceRootContext: restoredWorkspaceRootContext
             )
         }
 
@@ -5229,23 +4224,21 @@ public final class NativeAppViewModel {
         syncAttentionStateWithOpenSessions()
         restoreWorkspaceEditorPresentation(from: restoredSnapshot)
 
-        let restoredActiveProjectPath = restoredSnapshot.activeProjectPath.flatMap { candidate in
-            canonicalWorkspaceSessionPath(for: candidate, in: restoredSessions)
-        } ?? restoredSessions.last?.projectPath
+        let restoreSelection = workspaceRestoreSelectionResolver.resolveSelection(
+            activeProjectPathCandidate: restoredSnapshot.activeProjectPath,
+            selectedProjectPathCandidate: restoredSnapshot.selectedProjectPath,
+            sessions: restoredSessions,
+            currentSelectedProjectPath: selectedProjectPath
+        )
 
-        activeWorkspaceProjectPath = restoredActiveProjectPath
-        selectedProjectPath = restoredSnapshot.selectedProjectPath.flatMap { candidate in
-            if let workspaceSessionPath = canonicalWorkspaceSessionPath(for: candidate, in: restoredSessions) {
-                return workspaceSessionPath
-            }
-            return resolveDisplayProject(for: candidate)?.path
-        } ?? restoredActiveProjectPath ?? selectedProjectPath
+        activeWorkspaceProjectPath = restoreSelection.activeProjectPath
+        selectedProjectPath = restoreSelection.selectedProjectPath
 
-        if let restoredActiveProjectPath,
+        if let restoredActiveProjectPath = restoreSelection.activeProjectPath,
            let paneID = workspaceController(for: restoredActiveProjectPath)?.selectedPane?.id {
             markWorkspaceNotificationsRead(projectPath: restoredActiveProjectPath, paneID: paneID)
         }
-        if let restoredActiveProjectPath {
+        if let restoredActiveProjectPath = restoreSelection.activeProjectPath {
             let selection = resolvedWorkspacePresentedTabSelection(for: restoredActiveProjectPath)
             workspaceFocusedArea = selection.map(defaultFocusedArea(for:)) ?? .terminal
         }
@@ -5343,118 +4336,34 @@ public final class NativeAppViewModel {
     }
 
     private func workspaceSessionIndex(for path: String) -> Int? {
-        workspaceSessionIndexByNormalizedPath[normalizePathForCompare(path)]
+        workspaceSessionPathResolver.sessionIndex(
+            for: path,
+            indexByNormalizedPath: workspaceSessionIndexByNormalizedPath
+        )
     }
 
     private func workspaceSession(for path: String?) -> OpenWorkspaceSessionState? {
-        guard let normalizedPath = normalizedOptionalPathForCompare(path) else {
-            return nil
-        }
-        if let index = workspaceSessionIndexByNormalizedPath[normalizedPath],
-           openWorkspaceSessions.indices.contains(index) {
-            return openWorkspaceSessions[index]
-        }
-        return openWorkspaceSessions.last(where: {
-            !$0.isQuickTerminal &&
-                normalizePathForCompare($0.rootProjectPath) == normalizedPath
-        })
+        workspaceSessionPathResolver.session(
+            for: path,
+            sessions: openWorkspaceSessions,
+            indexByNormalizedPath: workspaceSessionIndexByNormalizedPath
+        )
     }
 
     private func canonicalWorkspaceSessionPath(
         for path: String?,
         in sessions: [OpenWorkspaceSessionState]? = nil
     ) -> String? {
-        guard let normalizedPath = normalizedOptionalPathForCompare(path) else {
-            return nil
-        }
         if let sessions {
-            return sessions.first(where: { $0.projectPath == normalizedPath })?.projectPath
-                ?? sessions.last(where: {
-                    !$0.isQuickTerminal &&
-                        normalizePathForCompare($0.rootProjectPath) == normalizedPath
-                })?.projectPath
-        }
-        guard let index = workspaceSessionIndexByNormalizedPath[normalizedPath],
-              openWorkspaceSessions.indices.contains(index)
-        else {
-            return openWorkspaceSessions.last(where: {
-                !$0.isQuickTerminal &&
-                    normalizePathForCompare($0.rootProjectPath) == normalizedPath
-            })?.projectPath
-        }
-        return openWorkspaceSessions[index].projectPath
-    }
-
-    private func orderedOpenWorkspaceRootProjectPaths() -> [String] {
-        var paths: [String] = []
-        var seen = Set<String>()
-
-        for session in openWorkspaceSessions where !session.isQuickTerminal {
-            let normalizedRootProjectPath = normalizePathForCompare(session.rootProjectPath)
-            if seen.insert(normalizedRootProjectPath).inserted {
-                paths.append(session.rootProjectPath)
-            }
-        }
-
-        return paths
-    }
-
-    private func orderedWorkspaceSidebarGroupIdentities() -> [WorkspaceSidebarGroupIdentity] {
-        var identities: [WorkspaceSidebarGroupIdentity] = []
-        var seen = Set<String>()
-
-        for session in openWorkspaceSessions {
-            guard let identity = workspaceSidebarGroupIdentity(for: session),
-                  seen.insert(identity.id).inserted
-            else {
-                continue
-            }
-            identities.append(identity)
-        }
-
-        return identities
-    }
-
-    private func workspaceSidebarGroupIdentity(
-        for session: OpenWorkspaceSessionState
-    ) -> WorkspaceSidebarGroupIdentity? {
-        if let transientProject = session.transientDisplayProject,
-           transientProject.isDirectoryWorkspace {
-            return WorkspaceSidebarGroupIdentity(
-                id: transientProject.id,
-                normalizedPath: normalizePathForCompare(session.projectPath),
-                transientKind: .directoryWorkspace
+            return workspaceSessionPathResolver.canonicalSessionPath(
+                for: path,
+                sessions: sessions
             )
         }
-        if session.isQuickTerminal {
-            if let workspaceRootContext = session.workspaceRootContext {
-                let transientProject = Project.workspaceRoot(
-                    name: workspaceRootContext.workspaceName,
-                    path: session.projectPath
-                )
-                return WorkspaceSidebarGroupIdentity(
-                    id: transientProject.id,
-                    normalizedPath: normalizePathForCompare(session.projectPath),
-                    transientKind: .workspaceRoot
-                )
-            }
-
-            let transientProject = Project.quickTerminal(at: session.projectPath)
-            return WorkspaceSidebarGroupIdentity(
-                id: transientProject.id,
-                normalizedPath: normalizePathForCompare(session.projectPath),
-                transientKind: .quickTerminal
-            )
-        }
-
-        let normalizedRootProjectPath = normalizePathForCompare(session.rootProjectPath)
-        guard let rootProject = projectsByNormalizedPath[normalizedRootProjectPath] else {
-            return nil
-        }
-        return WorkspaceSidebarGroupIdentity(
-            id: rootProject.id,
-            normalizedPath: normalizedRootProjectPath,
-            transientKind: nil
+        return workspaceSessionPathResolver.canonicalSessionPath(
+            for: path,
+            sessions: openWorkspaceSessions,
+            indexByNormalizedPath: workspaceSessionIndexByNormalizedPath
         )
     }
 
@@ -5462,7 +4371,11 @@ public final class NativeAppViewModel {
         guard let index = workspaceSessionIndex(for: path) else {
             return
         }
-        openWorkspaceSessions[index].rootProjectPath = displayWorkspaceProjectPath(for: rootProjectPath)
+        openWorkspaceSessions[index].rootProjectPath = workspaceSessionDisplayMapper.displayProjectPath(
+            for: rootProjectPath,
+            rootProjectPath: rootProjectPath,
+            fallbackPath: rootProjectPath
+        )
         openWorkspaceSessions[index].workspaceAlignmentGroupID = nil
     }
 
@@ -5525,24 +4438,6 @@ public final class NativeAppViewModel {
         return nil
     }
 
-    private func buildWorkspaceProjectTreeState(
-        for projectPath: String,
-        preserving existingState: WorkspaceProjectTreeState?
-    ) throws -> WorkspaceProjectTreeState {
-        try Self.buildWorkspaceProjectTreeStateSnapshot(
-            service: workspaceFileSystemService,
-            projectPath: projectPath,
-            preserving: existingState
-        )
-    }
-
-    private func rebuildWorkspaceProjectTree(
-        for projectPath: String,
-        preserving state: WorkspaceProjectTreeState?
-    ) throws -> WorkspaceProjectTreeState {
-        try buildWorkspaceProjectTreeState(for: projectPath, preserving: state)
-    }
-
     private func resolveWorkspaceProjectTreeTargetDirectory(
         targetPath: String?,
         projectPath: String
@@ -5586,217 +4481,6 @@ public final class NativeAppViewModel {
             remapWorkspacePathPrefix($0, sourcePrefix: sourcePrefix, destinationPrefix: destinationPrefix)
         }
         return state
-    }
-
-    private func loadWorkspaceProjectTreeChildren(
-        for directoryPath: String,
-        projectRootPath: String,
-        into state: inout WorkspaceProjectTreeState
-    ) throws {
-        let normalizedDirectoryPath = normalizePathForCompare(directoryPath)
-        let children = try workspaceFileSystemService.listDirectory(at: normalizedDirectoryPath)
-        state.childrenByDirectoryPath[normalizedDirectoryPath] = children
-        try preloadVisibleWorkspaceProjectTreeDisplayChains(
-            forChildren: children,
-            projectRootPath: projectRootPath,
-            into: &state
-        )
-    }
-
-    private func preloadVisibleWorkspaceProjectTreeDisplayChains(
-        forChildren children: [WorkspaceProjectTreeNode],
-        projectRootPath: String,
-        into state: inout WorkspaceProjectTreeState
-    ) throws {
-        for child in children where child.isDirectory {
-            try preloadWorkspaceProjectTreeDisplayChain(
-                startingAt: child,
-                projectRootPath: projectRootPath,
-                into: &state
-            )
-        }
-    }
-
-    private func preloadWorkspaceProjectTreeDisplayChain(
-        startingAt node: WorkspaceProjectTreeNode,
-        projectRootPath: String,
-        into state: inout WorkspaceProjectTreeState
-    ) throws {
-        guard let sourceRootPath = WorkspaceProjectTreeJavaPackageSupport.javaSourceRoot(
-            for: node.path,
-            projectRootPath: projectRootPath
-        ),
-        normalizePathForCompare(node.path) != normalizePathForCompare(sourceRootPath),
-        WorkspaceProjectTreeJavaPackageSupport.isPackageDirectoryPath(node.path, within: sourceRootPath)
-        else {
-            return
-        }
-
-        var currentNode = node
-        while true {
-            let currentPath = normalizePathForCompare(currentNode.path)
-            let children = try workspaceFileSystemService.listDirectory(at: currentPath)
-            state.childrenByDirectoryPath[currentPath] = children
-            guard let nextNode = WorkspaceProjectTreeJavaPackageSupport.compactedChildDirectory(
-                children: children,
-                sourceRootPath: sourceRootPath
-            ) else {
-                return
-            }
-            currentNode = nextNode
-        }
-    }
-
-    private func workspaceProjectTreeDisplayProjection(
-        for projectPath: String,
-        state: WorkspaceProjectTreeState
-    ) -> WorkspaceProjectTreeDisplayProjection {
-        if let cache = workspaceProjectTreeProjectionCacheByProjectPath[projectPath],
-           cache.revision == state.revision {
-            return cache.projection
-        }
-
-        let startTime = ProcessInfo.processInfo.systemUptime
-        let projection = state.displayProjection
-        workspaceProjectTreeProjectionCacheByProjectPath[projectPath] = WorkspaceProjectTreeProjectionCacheEntry(
-            revision: state.revision,
-            projection: projection
-        )
-        workspaceProjectTreeDiagnostics.recordProjectionBuilt(
-            projectPath: projectPath,
-            revision: state.revision,
-            durationMs: elapsedMilliseconds(since: startTime),
-            rootCount: projection.rootNodes.count,
-            aliasCount: projection.aliasMap.count
-        )
-        return projection
-    }
-
-    nonisolated private static func loadWorkspaceProjectTreeChildrenSnapshot(
-        service: WorkspaceFileSystemService,
-        directoryPath: String,
-        projectRootPath: String
-    ) throws -> WorkspaceProjectTreeDirectoryLoadResult {
-        let normalizedDirectoryPath = normalizePathForCompare(directoryPath)
-        let normalizedProjectRootPath = normalizePathForCompare(projectRootPath)
-        let children = try service.listDirectory(at: normalizedDirectoryPath)
-        var loadedChildrenByDirectoryPath: [String: [WorkspaceProjectTreeNode]] = [
-            normalizedDirectoryPath: children
-        ]
-
-        for child in children where child.isDirectory {
-            try preloadWorkspaceProjectTreeDisplayChain(
-                service: service,
-                startingAt: child,
-                projectRootPath: normalizedProjectRootPath,
-                into: &loadedChildrenByDirectoryPath
-            )
-        }
-
-        return WorkspaceProjectTreeDirectoryLoadResult(
-            directoryPath: normalizedDirectoryPath,
-            childrenByDirectoryPath: loadedChildrenByDirectoryPath
-        )
-    }
-
-    nonisolated private static func buildWorkspaceProjectTreeStateSnapshot(
-        service: WorkspaceFileSystemService,
-        projectPath: String,
-        preserving existingState: WorkspaceProjectTreeState?
-    ) throws -> WorkspaceProjectTreeState {
-        let normalizedProjectPath = normalizePathForCompare(projectPath)
-        var nextState = existingState ?? WorkspaceProjectTreeState(rootProjectPath: normalizedProjectPath)
-        nextState.advanceStructureRevision()
-
-        let rootNodes = try service.listDirectory(at: normalizedProjectPath)
-        nextState.rootProjectPath = normalizedProjectPath
-        nextState.rootNodes = rootNodes
-        nextState.childrenByDirectoryPath[normalizedProjectPath] = rootNodes
-
-        let rootProjectionChildren = try preloadWorkspaceProjectTreeVisibleChainsSnapshot(
-            service: service,
-            children: rootNodes,
-            projectRootPath: normalizedProjectPath
-        )
-        for (path, children) in rootProjectionChildren {
-            nextState.childrenByDirectoryPath[path] = children
-        }
-        nextState.errorMessage = nil
-
-        let expandedPaths = (existingState?.expandedDirectoryPaths ?? [])
-            .filter { normalizePathForCompare($0) != normalizedProjectPath }
-            .filter { service.directoryExists(at: $0) }
-
-        nextState.expandedDirectoryPaths = Set(expandedPaths)
-        nextState.loadingDirectoryPaths = []
-        for directoryPath in expandedPaths {
-            let result = try loadWorkspaceProjectTreeChildrenSnapshot(
-                service: service,
-                directoryPath: directoryPath,
-                projectRootPath: normalizedProjectPath
-            )
-            for (path, children) in result.childrenByDirectoryPath {
-                nextState.childrenByDirectoryPath[path] = children
-            }
-        }
-
-        if let selectedPath = existingState?.selectedPath,
-           FileManager.default.fileExists(atPath: selectedPath) {
-            nextState.selectedPath = selectedPath
-        } else {
-            nextState.selectedPath = nil
-        }
-
-        return nextState.canonicalizedForDisplay()
-    }
-
-    nonisolated private static func preloadWorkspaceProjectTreeVisibleChainsSnapshot(
-        service: WorkspaceFileSystemService,
-        children: [WorkspaceProjectTreeNode],
-        projectRootPath: String
-    ) throws -> [String: [WorkspaceProjectTreeNode]] {
-        let normalizedProjectRootPath = normalizePathForCompare(projectRootPath)
-        var loadedChildrenByDirectoryPath: [String: [WorkspaceProjectTreeNode]] = [:]
-        for child in children where child.isDirectory {
-            try preloadWorkspaceProjectTreeDisplayChain(
-                service: service,
-                startingAt: child,
-                projectRootPath: normalizedProjectRootPath,
-                into: &loadedChildrenByDirectoryPath
-            )
-        }
-        return loadedChildrenByDirectoryPath
-    }
-
-    nonisolated private static func preloadWorkspaceProjectTreeDisplayChain(
-        service: WorkspaceFileSystemService,
-        startingAt node: WorkspaceProjectTreeNode,
-        projectRootPath: String,
-        into loadedChildrenByDirectoryPath: inout [String: [WorkspaceProjectTreeNode]]
-    ) throws {
-        guard let sourceRootPath = WorkspaceProjectTreeJavaPackageSupport.javaSourceRoot(
-            for: node.path,
-            projectRootPath: projectRootPath
-        ),
-        normalizePathForCompare(node.path) != normalizePathForCompare(sourceRootPath),
-        WorkspaceProjectTreeJavaPackageSupport.isPackageDirectoryPath(node.path, within: sourceRootPath)
-        else {
-            return
-        }
-
-        var currentNode = node
-        while true {
-            let currentPath = normalizePathForCompare(currentNode.path)
-            let children = try service.listDirectory(at: currentPath)
-            loadedChildrenByDirectoryPath[currentPath] = children
-            guard let nextNode = WorkspaceProjectTreeJavaPackageSupport.compactedChildDirectory(
-                children: children,
-                sourceRootPath: sourceRootPath
-            ) else {
-                return
-            }
-            currentNode = nextNode
-        }
     }
 
     private func remapWorkspaceEditorTabs(
@@ -5988,262 +4672,6 @@ public final class NativeAppViewModel {
         workspacePresentedTabCoordinator.resolvedSelection(for: projectPath, controller: controller)
     }
 
-    private func requestChainForActiveDiffSource(
-        source: WorkspaceDiffSource,
-        preferredTitle: String,
-        preferredViewerMode: WorkspaceDiffViewerMode
-    ) -> WorkspaceDiffRequestChain {
-        switch source {
-        case let .gitLogCommitFile(repositoryPath, commitHash, filePath):
-            return gitLogDiffRequestChain(
-                repositoryPath: repositoryPath,
-                commitHash: commitHash,
-                activeFilePath: filePath,
-                activePreferredTitle: preferredTitle,
-                preferredViewerMode: preferredViewerMode
-            )
-        case let .workingTreeChange(repositoryPath, executionPath, filePath, group, status, oldPath):
-            return commitDiffRequestChain(
-                repositoryPath: repositoryPath,
-                executionPath: executionPath,
-                activeFilePath: filePath,
-                activeGroup: group,
-                activeStatus: status,
-                activeOldPath: oldPath,
-                activePreferredTitle: preferredTitle,
-                preferredViewerMode: preferredViewerMode,
-                changes: nil
-            )
-        }
-    }
-
-    private func commitDiffRequestChain(
-        repositoryPath: String,
-        executionPath: String,
-        activeFilePath: String,
-        activeGroup: WorkspaceCommitChangeGroup?,
-        activeStatus: WorkspaceCommitChangeStatus?,
-        activeOldPath: String?,
-        activePreferredTitle: String,
-        preferredViewerMode: WorkspaceDiffViewerMode,
-        changes: [WorkspaceCommitChange]?
-    ) -> WorkspaceDiffRequestChain {
-        let snapshotChanges = changes ?? activeWorkspaceCommitViewModel?.changesSnapshot?.changes
-        guard let snapshotChanges, !snapshotChanges.isEmpty else {
-            return WorkspaceDiffRequestChain(
-                items: [
-                    workingTreeRequestItem(
-                        repositoryPath: repositoryPath,
-                        executionPath: executionPath,
-                        filePath: activeFilePath,
-                        group: activeGroup,
-                        status: activeStatus,
-                        oldPath: activeOldPath,
-                        title: activePreferredTitle,
-                        preferredViewerMode: preferredViewerMode
-                    )
-                ]
-            )
-        }
-
-        let items = snapshotChanges.map { change in
-            workingTreeRequestItem(
-                repositoryPath: repositoryPath,
-                executionPath: executionPath,
-                filePath: change.path,
-                group: change.group,
-                status: change.status,
-                oldPath: change.oldPath,
-                title: change.path == activeFilePath ? activePreferredTitle : "Changes: \(diffDisplayTitle(for: change.path))",
-                preferredViewerMode: preferredViewerMode
-            )
-        }
-        let activeIndex = items.firstIndex(where: {
-            if case let .workingTreeChange(_, _, filePath, _, _, oldPath) = $0.source {
-                return filePath == activeFilePath && oldPath == activeOldPath
-            }
-            return false
-        }) ?? 0
-        return WorkspaceDiffRequestChain(items: items, activeIndex: activeIndex)
-    }
-
-    private func gitLogDiffRequestChain(
-        repositoryPath: String,
-        commitHash: String,
-        activeFilePath: String,
-        activePreferredTitle: String,
-        preferredViewerMode: WorkspaceDiffViewerMode
-    ) -> WorkspaceDiffRequestChain {
-        guard let detail = activeWorkspaceGitViewModel?.logViewModel.selectedCommitDetail,
-              detail.hash == commitHash,
-              !detail.files.isEmpty
-        else {
-            return WorkspaceDiffRequestChain(
-                items: [
-                    gitLogRequestItem(
-                        repositoryPath: repositoryPath,
-                        commitHash: commitHash,
-                        file: WorkspaceGitCommitFileChange(path: activeFilePath, status: .modified),
-                        detail: nil,
-                        title: activePreferredTitle,
-                        preferredViewerMode: preferredViewerMode
-                    )
-                ]
-            )
-        }
-
-        let items = detail.files.map { file in
-            gitLogRequestItem(
-                repositoryPath: repositoryPath,
-                commitHash: commitHash,
-                file: file,
-                detail: detail,
-                title: file.path == activeFilePath ? activePreferredTitle : "Commit: \(diffDisplayTitle(for: file.path))",
-                preferredViewerMode: preferredViewerMode
-            )
-        }
-        let activeIndex = items.firstIndex(where: {
-            if case let .gitLogCommitFile(_, _, filePath) = $0.source {
-                return filePath == activeFilePath
-            }
-            return false
-        }) ?? 0
-        return WorkspaceDiffRequestChain(items: items, activeIndex: activeIndex)
-    }
-
-    private func workingTreeRequestItem(
-        repositoryPath: String,
-        executionPath: String,
-        filePath: String,
-        group: WorkspaceCommitChangeGroup?,
-        status: WorkspaceCommitChangeStatus?,
-        oldPath: String?,
-        title: String,
-        preferredViewerMode: WorkspaceDiffViewerMode
-    ) -> WorkspaceDiffRequestItem {
-        WorkspaceDiffRequestItem(
-            id: "working-tree|\(executionPath)|\(filePath)",
-            title: title,
-            source: .workingTreeChange(
-                repositoryPath: repositoryPath,
-                executionPath: executionPath,
-                filePath: filePath,
-                group: group,
-                status: status,
-                oldPath: oldPath
-            ),
-            preferredViewerMode: preferredViewerMode
-        )
-    }
-
-    private func gitLogRequestItem(
-        repositoryPath: String,
-        commitHash: String,
-        file: WorkspaceGitCommitFileChange,
-        detail: WorkspaceGitCommitDetail?,
-        title: String,
-        preferredViewerMode: WorkspaceDiffViewerMode
-    ) -> WorkspaceDiffRequestItem {
-        let timestampText = detail.map { gitDiffTimestampText($0.authorTimestamp) }
-        let parentRevision = detail?.parentHashes.first
-        return WorkspaceDiffRequestItem(
-            id: "git-log|\(repositoryPath)|\(commitHash)|\(file.path)",
-            title: title,
-            source: .gitLogCommitFile(
-                repositoryPath: repositoryPath,
-                commitHash: commitHash,
-                filePath: file.path
-            ),
-            preferredViewerMode: preferredViewerMode,
-            paneMetadataSeeds: [
-                WorkspaceDiffPaneMetadataSeed(
-                    role: .left,
-                    title: "Before",
-                    path: file.oldPath ?? file.path,
-                    revision: parentRevision,
-                    hash: parentRevision,
-                    author: detail?.authorName,
-                    timestamp: timestampText
-                ),
-                WorkspaceDiffPaneMetadataSeed(
-                    role: .right,
-                    title: "After",
-                    path: file.path,
-                    oldPath: file.oldPath,
-                    revision: detail?.shortHash ?? commitHash,
-                    hash: detail?.hash ?? commitHash,
-                    author: detail?.authorName,
-                    timestamp: timestampText,
-                    copyPayloads: [
-                        WorkspaceDiffPaneCopyPayload(
-                            id: "commit-hash",
-                            label: "提交哈希",
-                            value: detail?.hash ?? commitHash
-                        )
-                    ]
-                ),
-            ]
-        )
-    }
-
-    private func diffDisplayTitle(for path: String) -> String {
-        let fileName = (path as NSString).lastPathComponent
-        return fileName.isEmpty ? path : fileName
-    }
-
-    private static let gitDiffTimestampFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "yyyy-MM-dd HH:mm"
-        return formatter
-    }()
-
-    private func gitDiffTimestampText(_ timestamp: TimeInterval) -> String {
-        Self.gitDiffTimestampFormatter.string(from: Date(timeIntervalSince1970: timestamp))
-    }
-
-    private func activeWorkspaceCommitDiffPreviewRequest(
-        repositoryPath: String,
-        executionPath: String,
-        filePath: String,
-        group: WorkspaceCommitChangeGroup?,
-        status: WorkspaceCommitChangeStatus?,
-        oldPath: String?,
-        allChanges: [WorkspaceCommitChange]? = nil,
-        preferredTitle: String,
-        preferredViewerMode: WorkspaceDiffViewerMode
-    ) -> WorkspaceDiffOpenRequest? {
-        guard let activeWorkspaceProjectPath else {
-            return nil
-        }
-        let chain = commitDiffRequestChain(
-            repositoryPath: repositoryPath,
-            executionPath: executionPath,
-            activeFilePath: filePath,
-            activeGroup: group,
-            activeStatus: status,
-            activeOldPath: oldPath,
-            activePreferredTitle: preferredTitle,
-            preferredViewerMode: preferredViewerMode,
-            changes: allChanges
-        )
-        guard let activeItem = chain.activeItem else {
-            return nil
-        }
-        return WorkspaceDiffOpenRequest(
-            projectPath: activeWorkspaceProjectPath,
-            source: activeItem.source,
-            preferredTitle: activeItem.title,
-            preferredViewerMode: activeItem.preferredViewerMode,
-            requestChain: chain,
-            identityOverride: commitPreviewIdentity(for: executionPath),
-            originContext: WorkspaceDiffOriginContext(
-                presentedTabSelection: workspaceSelectedPresentedTab(for: activeWorkspaceProjectPath),
-                focusedArea: workspaceFocusedArea
-            )
-        )
-    }
-
     @discardableResult
     private func openWorkspaceDiffSession(
         projectPath: String,
@@ -6357,8 +4785,7 @@ public final class NativeAppViewModel {
     }
 
     private var activeWorkspaceSession: OpenWorkspaceSessionState? {
-        workspaceSessionWithoutNormalizing(for: activeWorkspaceProjectPath)
-            ?? workspaceSession(for: activeWorkspaceProjectPath)
+        workspaceProjectProjectionBuilder.activeWorkspaceSession(activeProjectPath: activeWorkspaceProjectPath)
     }
 
     private func workspaceController(for projectPath: String? = nil) -> GhosttyWorkspaceController? {
@@ -6434,133 +4861,6 @@ public final class NativeAppViewModel {
         normalizedOptionalPathForCompare(lhs) == normalizedOptionalPathForCompare(rhs)
     }
 
-    private func displayWorkspaceProjectPath(for projectPath: String) -> String {
-        resolveDisplayProject(for: projectPath, rootProjectPath: projectPath)?.path ?? projectPath
-    }
-
-    private func makeProjectRunConfiguration(
-        configuration: ProjectRunConfiguration,
-        projectPath: String,
-        rootProjectPath: String
-    ) -> WorkspaceRunConfiguration {
-        switch configuration.kind {
-        case .customShell:
-            let command = configuration.customShell?.command.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return WorkspaceRunConfiguration(
-                id: workspaceProjectRunConfigurationID(projectPath: projectPath, configurationID: configuration.id),
-                projectPath: projectPath,
-                rootProjectPath: rootProjectPath,
-                source: .projectRunConfiguration,
-                sourceID: configuration.id,
-                name: configuration.name,
-                executable: .shell(command: command),
-                displayCommand: command,
-                workingDirectory: projectPath,
-                isShared: false,
-                canRun: !command.isEmpty,
-                disabledReason: command.isEmpty ? "命令为空，请先完善自定义 Shell 配置。" : nil
-            )
-        case .remoteLogViewer:
-            let resolution = resolveRemoteLogViewerExecutable(configuration.remoteLogViewer)
-            return WorkspaceRunConfiguration(
-                id: workspaceProjectRunConfigurationID(projectPath: projectPath, configurationID: configuration.id),
-                projectPath: projectPath,
-                rootProjectPath: rootProjectPath,
-                source: .projectRunConfiguration,
-                sourceID: configuration.id,
-                name: configuration.name,
-                executable: resolution.executable,
-                displayCommand: resolution.displayCommand,
-                workingDirectory: projectPath,
-                isShared: false,
-                canRun: resolution.canRun,
-                disabledReason: resolution.disabledReason
-            )
-        }
-    }
-
-    private func workspaceProjectRunConfigurationID(projectPath: String, configurationID: String) -> String {
-        "project::\(projectPath)::\(configurationID)"
-    }
-
-    private struct RemoteLogViewerExecutableResolution {
-        var executable: WorkspaceRunExecutable
-        var displayCommand: String
-        var canRun: Bool
-        var disabledReason: String?
-    }
-
-    private func resolveRemoteLogViewerExecutable(_ configuration: ProjectRunRemoteLogViewerConfiguration?) -> RemoteLogViewerExecutableResolution {
-        guard let configuration else {
-            return RemoteLogViewerExecutableResolution(
-                executable: .process(program: "/usr/bin/ssh", arguments: []),
-                displayCommand: "/usr/bin/ssh",
-                canRun: false,
-                disabledReason: "远程日志配置缺失，请重新创建该运行配置。"
-            )
-        }
-
-        let server = configuration.server.trimmingCharacters(in: .whitespacesAndNewlines)
-        let logPath = configuration.logPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !server.isEmpty, !logPath.isEmpty else {
-            return RemoteLogViewerExecutableResolution(
-                executable: .process(program: "/usr/bin/ssh", arguments: []),
-                displayCommand: "/usr/bin/ssh",
-                canRun: false,
-                disabledReason: "远程日志配置缺少服务器或日志路径。"
-            )
-        }
-
-        var args = [String]()
-        let user = configuration.user?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !user.isEmpty {
-            args.append(contentsOf: ["-l", user])
-        }
-        if let port = configuration.port, port > 0 {
-            args.append(contentsOf: ["-p", String(port)])
-        }
-        let identityFile = configuration.identityFile?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !identityFile.isEmpty {
-            args.append(contentsOf: ["-i", identityFile])
-        }
-        let strictHostKeyChecking = configuration.strictHostKeyChecking?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !strictHostKeyChecking.isEmpty {
-            args.append(contentsOf: ["-o", "StrictHostKeyChecking=\(strictHostKeyChecking)"])
-        }
-        if !configuration.allowPasswordPrompt {
-            args.append(contentsOf: ["-o", "BatchMode=yes"])
-        }
-
-        let lines = max(1, configuration.lines ?? 200)
-        let remoteCommand = remoteTailCommand(logPath: logPath, lines: lines, follow: configuration.follow)
-        args.append(server)
-        args.append(remoteCommand)
-
-        return RemoteLogViewerExecutableResolution(
-            executable: .process(program: "/usr/bin/ssh", arguments: args),
-            displayCommand: processDisplayCommand(program: "/usr/bin/ssh", arguments: args),
-            canRun: true,
-            disabledReason: nil
-        )
-    }
-
-    private func remoteTailCommand(logPath: String, lines: Int, follow: Bool) -> String {
-        var components = ["tail", "-n", String(lines)]
-        if follow {
-            components.append("-F")
-        }
-        components.append(shellQuote(logPath))
-        return components.joined(separator: " ")
-    }
-
-    private func processDisplayCommand(program: String, arguments: [String]) -> String {
-        ([program] + arguments.map(shellQuote)).joined(separator: " ")
-    }
-
-    private func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
-    }
-
     private func resolveWorkspaceRunProjectPath(_ projectPath: String?) -> String? {
         let candidate = projectPath ?? activeWorkspaceProjectPath
         guard let candidate else {
@@ -6572,460 +4872,12 @@ public final class NativeAppViewModel {
         return candidate
     }
 
-    private func resolveWorkspaceScriptOwnerProjectPath(for projectPath: String) -> String? {
-        if snapshot.projects.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(projectPath) }) {
-            return projectPath
-        }
-        return snapshot.projects.first(where: { project in
-            project.worktrees.contains(where: { normalizePathForCompare($0.path) == normalizePathForCompare(projectPath) })
-        })?.path
-    }
-
-    private func handleWorkspaceRunManagerEvent(_ event: WorkspaceRunManagerEvent) {
-        switch event {
-        case let .output(projectPath, sessionID, chunk):
-            updateWorkspaceRunConsoleState(for: projectPath) { state in
-                guard let index = state.sessions.firstIndex(where: { $0.id == sessionID }) else {
-                    return
-                }
-                state.sessions[index].appendDisplayChunk(chunk)
-            }
-        case let .stateChanged(projectPath, sessionID, runState):
-            updateWorkspaceRunConsoleState(for: projectPath) { state in
-                guard let index = state.sessions.firstIndex(where: { $0.id == sessionID }) else {
-                    return
-                }
-                state.sessions[index].state = runState
-                if !runState.isActive {
-                    state.sessions[index].endedAt = Date()
-                }
-            }
-        }
-    }
-
-    private func updateWorkspaceRunConsoleState(
-        for projectPath: String,
-        mutate: (inout WorkspaceRunConsoleState) -> Void
-    ) {
-        guard var state = workspaceRunConsoleStateByProjectPath[projectPath] else {
-            return
-        }
-        mutate(&state)
-        workspaceRunConsoleStateByProjectPath[projectPath] = state
-    }
-
     private func activeWorkspaceGitSelectionSnapshot() -> WorkspaceGitSelectionSnapshot? {
         activeWorkspaceGitSelectionSnapshotCache
     }
 
     private func gitSelectionSnapshot(for rootProjectPath: String) -> WorkspaceGitSelectionSnapshot? {
-        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
-        guard !normalizedRootProjectPath.isEmpty else {
-            return nil
-        }
-
-        if let repositoryPath = rootWorkspaceRepositoryPath(for: normalizedRootProjectPath) {
-            let rootProject = projectsByNormalizedPath[normalizedRootProjectPath]
-            let executionContexts = workspaceGitExecutionContexts(
-                rootProjectPath: repositoryPath,
-                rootProjectName: rootProject?.name,
-                persistedWorktrees: rootProject?.worktrees ?? []
-            )
-            let preferredExecutionPath = preferredWorkspaceGitExecutionPath(
-                for: repositoryPath,
-                allowedPaths: Set(executionContexts.map(\.path))
-            )
-            let repositoryDisplayName = {
-                if let name = rootProject?.name, !name.isEmpty {
-                    return name
-                }
-                let lastComponent = pathLastComponent(repositoryPath)
-                return lastComponent.isEmpty ? repositoryPath : lastComponent
-            }()
-            let family = WorkspaceGitRepositoryFamilyContext(
-                id: repositoryPath,
-                displayName: repositoryDisplayName,
-                repositoryPath: repositoryPath,
-                preferredExecutionPath: preferredExecutionPath,
-                members: executionContexts
-            )
-            let gitContext = WorkspaceGitRepositoryContext(
-                rootProjectPath: repositoryPath,
-                repositoryPath: repositoryPath,
-                repositoryFamilies: [family],
-                selectedRepositoryFamilyID: family.id
-            )
-            let commitContext = WorkspaceCommitRepositoryContext(
-                rootProjectPath: repositoryPath,
-                repositoryPath: repositoryPath,
-                executionPath: preferredExecutionPath,
-                repositoryFamilies: [family],
-                selectedRepositoryFamilyID: family.id
-            )
-            return WorkspaceGitSelectionSnapshot(
-                gitContext: gitContext,
-                commitContext: commitContext
-            )
-        }
-
-        let repositoryFamilies = discoverWorkspaceGitRepositoryFamilies(in: normalizedRootProjectPath)
-        guard !repositoryFamilies.isEmpty else {
-            return nil
-        }
-
-        let selectedFamilyID = resolveSelectedWorkspaceGitRepositoryFamilyID(
-            rootProjectPath: normalizedRootProjectPath,
-            families: repositoryFamilies
-        )
-        guard let selectedFamily = repositoryFamilies.first(where: { $0.id == selectedFamilyID }) ?? repositoryFamilies.first else {
-            return nil
-        }
-        let selectedExecutionPath = resolveSelectedWorkspaceGitExecutionPath(
-            rootProjectPath: normalizedRootProjectPath,
-            family: selectedFamily
-        )
-        let gitContext = WorkspaceGitRepositoryContext(
-            rootProjectPath: normalizedRootProjectPath,
-            repositoryPath: selectedFamily.repositoryPath,
-            repositoryFamilies: repositoryFamilies,
-            selectedRepositoryFamilyID: selectedFamily.id
-        )
-        let commitContext = WorkspaceCommitRepositoryContext(
-            rootProjectPath: normalizedRootProjectPath,
-            repositoryPath: selectedFamily.repositoryPath,
-            executionPath: selectedExecutionPath,
-            repositoryFamilies: repositoryFamilies,
-            selectedRepositoryFamilyID: selectedFamily.id
-        )
-        return WorkspaceGitSelectionSnapshot(
-            gitContext: gitContext,
-            commitContext: commitContext
-        )
-    }
-
-    private func rootWorkspaceRepositoryPath(for rootProjectPath: String) -> String? {
-        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
-        guard !normalizedRootProjectPath.isEmpty else {
-            return nil
-        }
-        if let rootProject = projectsByNormalizedPath[normalizedRootProjectPath],
-           rootProject.isGitRepository {
-            return rootProject.path
-        }
-        return liveWorkspaceRootRepositoryPath(for: normalizedRootProjectPath)
-    }
-
-    private func preferredWorkspaceGitExecutionPath(
-        for rootProjectPath: String,
-        allowedPaths: Set<String>? = nil
-    ) -> String {
-        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
-        if let storedExecutionPath = workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath],
-           allowedPaths?.contains(storedExecutionPath) != false {
-            return storedExecutionPath
-        }
-        if let activeWorkspaceProjectPath,
-           openWorkspaceSessions.contains(where: {
-               $0.projectPath == activeWorkspaceProjectPath && $0.rootProjectPath == rootProjectPath
-           }),
-           allowedPaths?.contains(activeWorkspaceProjectPath) != false
-        {
-            return activeWorkspaceProjectPath
-        }
-        return rootProjectPath
-    }
-
-    private func workspaceGitExecutionContexts(
-        rootProjectPath: String,
-        rootProjectName: String?,
-        persistedWorktrees: [ProjectWorktree]
-    ) -> [WorkspaceGitWorktreeContext] {
-        let displayName = {
-            if let rootProjectName, !rootProjectName.isEmpty {
-                return rootProjectName
-            }
-            let lastComponent = pathLastComponent(rootProjectPath)
-            return lastComponent.isEmpty ? rootProjectPath : lastComponent
-        }()
-        let rootContext = WorkspaceGitWorktreeContext(
-            path: rootProjectPath,
-            displayName: displayName,
-            branchName: currentBranchByProjectPath[rootProjectPath],
-            isRootProject: true
-        )
-        let worktreeContexts = persistedWorktrees.map { worktree in
-            WorkspaceGitWorktreeContext(
-                path: worktree.path,
-                displayName: worktree.name,
-                branchName: worktree.branch,
-                isRootProject: false
-            )
-        }
-        return [rootContext] + worktreeContexts
-    }
-
-    private func discoverWorkspaceGitRepositoryFamilies(in rootProjectPath: String) -> [WorkspaceGitRepositoryFamilyContext] {
-        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
-        guard !normalizedRootProjectPath.isEmpty else {
-            return []
-        }
-
-        let candidates = workspaceGitRepositoryCandidates(in: normalizedRootProjectPath)
-        var discoveredRepositories: [DiscoveredWorkspaceGitRepository] = []
-        discoveredRepositories.reserveCapacity(candidates.count)
-
-        for candidate in candidates {
-            let normalizedCandidatePath = normalizePathForCompare(candidate.path)
-            guard !normalizedCandidatePath.isEmpty,
-                  normalizedCandidatePath != normalizedRootProjectPath,
-                  directoryExists(at: normalizedCandidatePath)
-            else {
-                continue
-            }
-            guard let gitDirectories = workspaceGitDirectoriesForCandidate(at: normalizedCandidatePath) else {
-                continue
-            }
-
-            let branchName = currentBranchByProjectPath[normalizedCandidatePath]
-
-            discoveredRepositories.append(
-                DiscoveredWorkspaceGitRepository(
-                    path: normalizedCandidatePath,
-                    displayName: candidate.displayName,
-                    branchName: branchName,
-                    gitDirectory: gitDirectories.gitDirectory,
-                    commonGitDirectory: gitDirectories.commonGitDirectory,
-                    isRootRepository: gitDirectories.gitDirectory == gitDirectories.commonGitDirectory
-                )
-            )
-        }
-
-        let groupedRepositories = Dictionary(grouping: discoveredRepositories, by: \.commonGitDirectory)
-        let activeProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath)
-        let storedExecutionPath = workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath]
-
-        return groupedRepositories.values.compactMap { repositories in
-            let members = repositories
-                .sorted { discoveredWorkspaceRepositoryOrder(lhs: $0, rhs: $1) }
-                .map { repository in
-                    WorkspaceGitWorktreeContext(
-                        path: repository.path,
-                        displayName: repository.displayName,
-                        branchName: repository.branchName,
-                        isRootProject: repository.isRootRepository
-                    )
-                }
-            guard !members.isEmpty else {
-                return nil
-            }
-
-            let repositoryPath = members.first(where: \.isRootProject)?.path ?? members[0].path
-            let familyDisplayName = members.first(where: \.isRootProject)?.displayName ?? members[0].displayName
-            let preferredExecutionPath = resolvePreferredWorkspaceGitExecutionPath(
-                members: members,
-                storedExecutionPath: storedExecutionPath,
-                activeProjectPath: activeProjectPath,
-                fallbackPath: repositoryPath
-            )
-
-            return WorkspaceGitRepositoryFamilyContext(
-                id: repositories[0].commonGitDirectory,
-                displayName: familyDisplayName,
-                repositoryPath: repositoryPath,
-                preferredExecutionPath: preferredExecutionPath,
-                members: members
-            )
-        }
-        .sorted {
-            $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
-        }
-    }
-
-    private func workspaceGitRepositoryCandidates(in rootProjectPath: String) -> [WorkspaceGitRepositoryCandidate] {
-        let rootURL = URL(fileURLWithPath: rootProjectPath, isDirectory: true)
-        let fileManager = FileManager.default
-        var candidates = [WorkspaceGitRepositoryCandidate]()
-        var seenPaths = Set<String>()
-
-        if let childURLs = try? fileManager.contentsOfDirectory(
-            at: rootURL,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        ) {
-            for childURL in childURLs {
-                let normalizedPath = normalizePathForCompare(childURL.path)
-                guard !normalizedPath.isEmpty,
-                      seenPaths.insert(normalizedPath).inserted,
-                      directoryExists(at: normalizedPath)
-                else {
-                    continue
-                }
-                candidates.append(
-                    WorkspaceGitRepositoryCandidate(
-                        path: childURL.path,
-                        displayName: childURL.lastPathComponent
-                    )
-                )
-            }
-        }
-
-        for session in openWorkspaceSessions where
-            !session.isQuickTerminal &&
-            normalizePathForCompare(session.rootProjectPath) == rootProjectPath
-        {
-            let normalizedPath = normalizePathForCompare(session.projectPath)
-            guard normalizedPath != rootProjectPath,
-                  seenPaths.insert(normalizedPath).inserted
-            else {
-                continue
-            }
-            let displayName = resolveDisplayProject(
-                for: session.projectPath,
-                rootProjectPath: session.rootProjectPath
-            )?.name ?? pathLastComponent(session.projectPath)
-            candidates.append(
-                WorkspaceGitRepositoryCandidate(
-                    path: session.projectPath,
-                    displayName: displayName
-                )
-            )
-        }
-
-        return candidates
-    }
-
-    private func workspaceGitDirectoriesForCandidate(
-        at path: String
-    ) -> (gitDirectory: String, commonGitDirectory: String)? {
-        let repositoryURL = URL(fileURLWithPath: path, isDirectory: true)
-        let markerURL = repositoryURL.appending(path: ".git")
-        var isDirectory: ObjCBool = false
-        let gitDirectory: String
-
-        if FileManager.default.fileExists(atPath: markerURL.path, isDirectory: &isDirectory),
-           isDirectory.boolValue {
-            gitDirectory = normalizePathForCompare(markerURL.standardizedFileURL.path)
-        } else if FileManager.default.fileExists(atPath: markerURL.path),
-                  let content = try? String(contentsOf: markerURL, encoding: .utf8),
-                  let parsedGitDirectory = workspaceGitDirectoryFromDotGitFile(
-                    content,
-                    repositoryPath: path
-                  ) {
-            gitDirectory = normalizePathForCompare(parsedGitDirectory)
-        } else {
-            return nil
-        }
-
-        guard directoryExists(at: gitDirectory) else {
-            return nil
-        }
-        return (
-            gitDirectory: gitDirectory,
-            commonGitDirectory: workspaceCommonGitDirectory(forGitDirectory: gitDirectory)
-        )
-    }
-
-    private func workspaceCommonGitDirectory(forGitDirectory gitDirectory: String) -> String {
-        let gitDirectoryURL = URL(fileURLWithPath: gitDirectory, isDirectory: true)
-        let commonDirURL = gitDirectoryURL.appending(path: "commondir")
-
-        if let content = try? String(contentsOf: commonDirURL, encoding: .utf8),
-           let firstLine = content.split(whereSeparator: \.isNewline).first {
-            let rawPath = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !rawPath.isEmpty {
-                let resolvedURL = rawPath.hasPrefix("/")
-                    ? URL(fileURLWithPath: rawPath)
-                    : gitDirectoryURL.appending(path: rawPath)
-                return normalizePathForCompare(resolvedURL.standardizedFileURL.path)
-            }
-        }
-
-        let components = gitDirectoryURL.standardizedFileURL.pathComponents
-        if let worktreesIndex = components.lastIndex(of: "worktrees"),
-           worktreesIndex > 0 {
-            return normalizePathForCompare(
-                NSString.path(withComponents: Array(components.prefix(upTo: worktreesIndex)))
-            )
-        }
-
-        return normalizePathForCompare(gitDirectory)
-    }
-
-    private func workspaceGitDirectoryFromDotGitFile(
-        _ content: String,
-        repositoryPath: String
-    ) -> String? {
-        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let markerRange = trimmed.range(of: "gitdir:") else {
-            return nil
-        }
-
-        let rawPath = trimmed[markerRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !rawPath.isEmpty else {
-            return nil
-        }
-        if rawPath.hasPrefix("/") {
-            return URL(fileURLWithPath: rawPath).standardizedFileURL.path
-        }
-        return URL(fileURLWithPath: repositoryPath, isDirectory: true)
-            .appending(path: rawPath)
-            .standardizedFileURL
-            .path
-    }
-
-    private func resolveSelectedWorkspaceGitRepositoryFamilyID(
-        rootProjectPath: String,
-        families: [WorkspaceGitRepositoryFamilyContext]
-    ) -> String {
-        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
-        if let storedFamilyID = workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath],
-           families.contains(where: { $0.id == storedFamilyID }) {
-            return storedFamilyID
-        }
-
-        if let activeProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath),
-           let activeFamily = families.first(where: { family in
-               family.members.contains(where: { $0.path == activeProjectPath })
-           }) {
-            return activeFamily.id
-        }
-
-        return families[0].id
-    }
-
-    private func resolveSelectedWorkspaceGitExecutionPath(
-        rootProjectPath: String,
-        family: WorkspaceGitRepositoryFamilyContext
-    ) -> String {
-        let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
-        let storedExecutionPath = workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath]
-        let activeProjectPath = normalizedOptionalPathForCompare(activeWorkspaceProjectPath)
-        return resolvePreferredWorkspaceGitExecutionPath(
-            members: family.members,
-            storedExecutionPath: storedExecutionPath,
-            activeProjectPath: activeProjectPath,
-            fallbackPath: family.preferredExecutionPath
-        )
-    }
-
-    private func resolvePreferredWorkspaceGitExecutionPath(
-        members: [WorkspaceGitWorktreeContext],
-        storedExecutionPath: String?,
-        activeProjectPath: String?,
-        fallbackPath: String
-    ) -> String {
-        if let storedExecutionPath,
-           members.contains(where: { $0.path == storedExecutionPath }) {
-            return storedExecutionPath
-        }
-        if let activeProjectPath,
-           members.contains(where: { $0.path == activeProjectPath }) {
-            return activeProjectPath
-        }
-        if members.contains(where: { $0.path == fallbackPath }) {
-            return fallbackPath
-        }
-        return members[0].path
+        workspaceGitSelectionResolver.selectionSnapshot(for: rootProjectPath)
     }
 
     private func syncWorkspaceGitSelectionFromProjectTreeSelectionIfNeeded(
@@ -7034,16 +4886,9 @@ public final class NativeAppViewModel {
     ) {
         let normalizedRootProjectPath = normalizePathForCompare(rootProjectPath)
         guard normalizedRootProjectPath == normalizePathForCompare(activeWorkspaceRootProjectPath ?? ""),
-              let selectedPath = normalizedOptionalPathForCompare(selectedPath)
-        else {
-            return
-        }
-
-        let repositoryFamilies = discoverWorkspaceGitRepositoryFamilies(in: normalizedRootProjectPath)
-        guard !repositoryFamilies.isEmpty,
-              let selection = matchingWorkspaceGitFamilySelection(
-                for: selectedPath,
-                in: repositoryFamilies
+              let selection = workspaceGitSelectionResolver.selectionForProjectTreePath(
+                selectedPath,
+                in: normalizedRootProjectPath
               )
         else {
             return
@@ -7051,54 +4896,13 @@ public final class NativeAppViewModel {
 
         let previousFamilyID = workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath]
         let previousExecutionPath = workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath]
-        guard previousFamilyID != selection.family.id || previousExecutionPath != selection.executionPath else {
+        guard previousFamilyID != selection.familyID || previousExecutionPath != selection.executionPath else {
             return
         }
 
-        workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath] = selection.family.id
+        workspaceSelectedGitRepositoryFamilyIDByRootProjectPath[normalizedRootProjectPath] = selection.familyID
         workspaceSelectedGitExecutionPathByRootProjectPath[normalizedRootProjectPath] = selection.executionPath
         syncActiveWorkspaceToolWindowContext()
-    }
-
-    private func matchingWorkspaceGitFamilySelection(
-        for selectedPath: String,
-        in families: [WorkspaceGitRepositoryFamilyContext]
-    ) -> (family: WorkspaceGitRepositoryFamilyContext, executionPath: String)? {
-        let normalizedSelectedPath = normalizePathForCompare(selectedPath)
-        var bestMatch: (family: WorkspaceGitRepositoryFamilyContext, executionPath: String, score: Int)?
-
-        for family in families {
-            for member in family.members {
-                let normalizedMemberPath = normalizePathForCompare(member.path)
-                guard normalizedSelectedPath == normalizedMemberPath
-                    || normalizedSelectedPath.hasPrefix(normalizedMemberPath + "/")
-                else {
-                    continue
-                }
-                let score = normalizedMemberPath.count
-                if let bestMatch, bestMatch.score >= score {
-                    continue
-                }
-                bestMatch = (family, member.path, score)
-            }
-        }
-
-        return bestMatch.map { ($0.family, $0.executionPath) }
-    }
-
-    private func discoveredWorkspaceRepositoryOrder(
-        lhs: DiscoveredWorkspaceGitRepository,
-        rhs: DiscoveredWorkspaceGitRepository
-    ) -> Bool {
-        if lhs.isRootRepository != rhs.isRootRepository {
-            return lhs.isRootRepository && !rhs.isRootRepository
-        }
-        return lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
-    }
-
-    private func directoryExists(at path: String) -> Bool {
-        var isDirectory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     private func refreshCurrentBranch(for projectPath: String) {
@@ -7215,34 +5019,7 @@ public final class NativeAppViewModel {
         _ definition: WorkspaceAlignmentGroupDefinition,
         replacing groupID: String?
     ) throws {
-        guard !definition.name.isEmpty else {
-            throw NativeWorktreeError.invalidProject("工作区名称不能为空")
-        }
-        let duplicateName = snapshot.appState.workspaceAlignmentGroups.contains {
-            $0.id != groupID && $0.name.caseInsensitiveCompare(definition.name) == .orderedSame
-        }
-        if duplicateName {
-            throw NativeWorktreeError.invalidProject("已存在同名工作区")
-        }
-        let members = definition.effectiveMembers
-        let normalizedMemberPaths = members.map { normalizePathForCompare($0.projectPath) }
-        if Set(normalizedMemberPaths).count != normalizedMemberPaths.count {
-            throw NativeWorktreeError.invalidProject("工作区内存在重复项目")
-        }
-        for member in members {
-            if member.targetBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let projectName = snapshot.projects.first(where: {
-                    normalizePathForCompare($0.path) == normalizePathForCompare(member.projectPath)
-                })?.name ?? pathLastComponent(member.projectPath)
-                throw NativeWorktreeError.invalidBranch("请为 \(projectName) 填写目标 branch")
-            }
-            if member.specifiedBaseBranch?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true {
-                let projectName = snapshot.projects.first(where: {
-                    normalizePathForCompare($0.path) == normalizePathForCompare(member.projectPath)
-                })?.name ?? pathLastComponent(member.projectPath)
-                throw NativeWorktreeError.invalidBaseBranch("请为 \(projectName) 选择基线分支")
-            }
-        }
+        try workspaceAlignmentDefinitionResolver.validate(definition, replacing: groupID)
     }
 
     private func buildWorkspaceAlignmentMemberAliases(
@@ -7250,31 +5027,19 @@ public final class NativeAppViewModel {
         existing: [String: String],
         projectsByNormalizedPath: [String: Project]? = nil
     ) -> [String: String] {
-        let normalizedPaths = normalizePathList(projectPaths)
-        let projectsByNormalizedPath = projectsByNormalizedPath ?? self.projectsByNormalizedPath
-        var aliases = [String: String]()
-        var usedAliases = Set<String>()
-
-        for path in normalizedPaths {
-            let preferredAlias = existing[path]
-            let projectName = projectsByNormalizedPath[path]?.name ?? pathLastComponent(path)
-            let alias = uniqueWorkspaceAlignmentAlias(
-                preferredAlias ?? projectName,
-                usedAliases: &usedAliases
-            )
-            aliases[path] = alias
-        }
-
-        return aliases
+        workspaceAlignmentDefinitionResolver.aliases(
+            for: projectPaths,
+            existing: existing,
+            projectsByNormalizedPath: projectsByNormalizedPath
+        )
     }
 
     private func resolvedWorkspaceAlignmentAliases(
         for definition: WorkspaceAlignmentGroupDefinition,
         projectsByNormalizedPath: [String: Project]? = nil
     ) -> [String: String] {
-        buildWorkspaceAlignmentMemberAliases(
-            for: definition.effectiveMembers.map(\.projectPath),
-            existing: definition.memberAliases,
+        workspaceAlignmentDefinitionResolver.aliases(
+            for: definition,
             projectsByNormalizedPath: projectsByNormalizedPath
         )
     }
@@ -7283,42 +5048,13 @@ public final class NativeAppViewModel {
         for projectPath: String,
         in definition: WorkspaceAlignmentGroupDefinition
     ) -> WorkspaceAlignmentMemberDefinition? {
-        definition.effectiveMembers.first(where: {
-            normalizePathForCompare($0.projectPath) == normalizePathForCompare(projectPath)
-        })
+        workspaceAlignmentDefinitionResolver.memberDefinition(for: projectPath, in: definition)
     }
 
     private func normalizeWorkspaceAlignmentMemberDefinitions(
         _ members: [WorkspaceAlignmentMemberDefinition]
     ) -> [WorkspaceAlignmentMemberDefinition] {
-        var seen = Set<String>()
-        return members
-            .map { $0.sanitized() }
-            .filter { !$0.projectPath.isEmpty }
-            .filter { seen.insert(normalizePathForCompare($0.projectPath)).inserted }
-    }
-
-    private func uniqueWorkspaceAlignmentAlias(
-        _ preferredAlias: String,
-        usedAliases: inout Set<String>
-    ) -> String {
-        let sanitizedBase = sanitizeWorkspaceAlignmentAlias(preferredAlias)
-        var candidate = sanitizedBase
-        var suffix = 2
-        while usedAliases.contains(candidate.lowercased()) {
-            candidate = "\(sanitizedBase)-\(suffix)"
-            suffix += 1
-        }
-        usedAliases.insert(candidate.lowercased())
-        return candidate
-    }
-
-    private func sanitizeWorkspaceAlignmentAlias(_ rawValue: String) -> String {
-        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let replaced = trimmed
-            .replacingOccurrences(of: #"[^A-Za-z0-9._-]+"#, with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-._"))
-        return replaced.isEmpty ? "member" : replaced
+        workspaceAlignmentDefinitionResolver.normalizedMembers(members)
     }
 
     private func syncWorkspaceAlignmentRootIfPossible(_ groupID: String) throws -> URL? {
@@ -7351,65 +5087,6 @@ public final class NativeAppViewModel {
         workspaceAlignmentStatusByKey = workspaceAlignmentStatusByKey.filter { !$0.key.hasPrefix("\(groupID)|") }
     }
 
-    private func workspaceAlignmentOpenTarget(
-        for projectPath: String,
-        targetBranch: String,
-        status: WorkspaceAlignmentMemberStatus
-    ) -> WorkspaceAlignmentOpenTarget {
-        guard case .aligned = status else {
-            return .project(projectPath: projectPath)
-        }
-
-        let normalizedProjectPath = normalizePathForCompare(projectPath)
-        guard let rootProject = projectsByNormalizedPath[normalizedProjectPath] else {
-            return .project(projectPath: projectPath)
-        }
-
-        let currentBranch = currentBranchByProjectPath[rootProject.path] ?? currentBranchByProjectPath[normalizedProjectPath]
-        if currentBranch == targetBranch {
-            return .project(projectPath: rootProject.path)
-        }
-
-        if let worktree = rootProject.worktrees.first(where: { $0.branch == targetBranch }) {
-            return .worktree(rootProjectPath: rootProject.path, worktreePath: worktree.path)
-        }
-
-        return .project(projectPath: rootProject.path)
-    }
-
-    private func workspaceAlignmentBranchLabel(
-        for projectPath: String,
-        targetBranch: String,
-        status: WorkspaceAlignmentMemberStatus,
-        openTarget: WorkspaceAlignmentOpenTarget
-    ) -> String {
-        switch status {
-        case let .currentBranch(branch):
-            return branch
-        case .aligned, .branchMissing, .worktreeMissing, .checking, .applying, .applyFailed, .checkFailed:
-            break
-        }
-
-        if let rootProject = snapshot.projects.first(where: {
-            normalizePathForCompare($0.path) == normalizePathForCompare(projectPath)
-        }) {
-            switch openTarget {
-            case .project:
-                if let currentBranch = currentBranchByProjectPath[rootProject.path] {
-                    return currentBranch
-                }
-            case let .worktree(_, worktreePath):
-                if let worktree = rootProject.worktrees.first(where: {
-                    normalizePathForCompare($0.path) == normalizePathForCompare(worktreePath)
-                }) {
-                    return worktree.branch
-                }
-            }
-        }
-
-        return targetBranch
-    }
-
     private func resolveWorkspaceAlignmentBaseBranch(
         for member: WorkspaceAlignmentMemberDefinition
     ) async throws -> String {
@@ -7436,7 +5113,7 @@ public final class NativeAppViewModel {
             gitWorktrees: probe.worktrees,
             currentBranch: probe.currentBranch
         )
-        let status = resolveWorkspaceAlignmentStatus(from: probe)
+        let status = workspaceAlignmentStatusResolver.status(from: probe)
         updateWorkspaceAlignmentStatus(status, groupID: definition.id, projectPath: member.projectPath)
     }
 
@@ -7464,18 +5141,6 @@ public final class NativeAppViewModel {
                 currentBranch: currentBranch
             )
         }.value
-    }
-
-    private func resolveWorkspaceAlignmentStatus(from probe: WorkspaceAlignmentStatusProbe) -> WorkspaceAlignmentMemberStatus {
-        if probe.hasOccupiedTargetCheckout {
-            return .aligned
-        }
-
-        if !probe.branchExists {
-            return .branchMissing
-        }
-
-        return .currentBranch(probe.currentBranch)
     }
 
     private func applyWorkspaceAlignmentRule(
@@ -7525,406 +5190,6 @@ public final class NativeAppViewModel {
         }
     }
 
-    private func orderedSidebarWorktreeItems(
-        for rootProject: Project,
-        rootProjectPath: String,
-        showsInAppNotifications: Bool,
-        moveNotifiedWorktreeToTop: Bool
-    ) -> [WorkspaceSidebarWorktreeItem] {
-        let persistedPaths = Set(rootProject.worktrees.map { normalizePathForCompare($0.path) })
-        let persistedItems = rootProject.worktrees.map { worktree -> WorkspaceSidebarWorktreeItem in
-            let visibleSidebarSession = openWorkspaceSessions.first(where: {
-                normalizePathForCompare($0.projectPath) == normalizePathForCompare(worktree.path) &&
-                    !$0.isQuickTerminal &&
-                    normalizePathForCompare($0.rootProjectPath) == normalizePathForCompare(rootProjectPath)
-            })
-            let attention = visibleSidebarSession.flatMap { workspaceAttentionState(for: $0.projectPath) }
-            let paneOverrides = agentDisplayOverridesByPaneID(for: worktree.path)
-            let preferredPaneIDs = preferredSidebarAgentPaneIDs(for: visibleSidebarSession)
-            return WorkspaceSidebarWorktreeItem(
-                rootProjectPath: rootProjectPath,
-                worktree: worktree,
-                isOpen: visibleSidebarSession != nil,
-                isActive: visibleSidebarSession != nil && normalizedPathsMatch(activeWorkspaceProjectPath, worktree.path),
-                notifications: showsInAppNotifications ? (attention?.notifications ?? []) : [],
-                unreadNotificationCount: showsInAppNotifications ? (attention?.unreadCount ?? 0) : 0,
-                taskStatus: attention.map(\.taskStatus),
-                agentState: resolvedSidebarAgentState(
-                    attention: attention,
-                    overridesByPaneID: paneOverrides,
-                    preferredPaneIDs: preferredPaneIDs
-                ),
-                agentPhase: resolvedSidebarAgentPhase(
-                    attention: attention,
-                    overridesByPaneID: paneOverrides,
-                    preferredPaneIDs: preferredPaneIDs
-                ),
-                agentAttention: resolvedSidebarAgentAttention(
-                    attention: attention,
-                    overridesByPaneID: paneOverrides,
-                    preferredPaneIDs: preferredPaneIDs
-                ),
-                agentSummary: resolvedSidebarAgentSummary(
-                    attention: attention,
-                    overridesByPaneID: paneOverrides,
-                    preferredPaneIDs: preferredPaneIDs
-                ),
-                agentKind: resolvedSidebarAgentKind(
-                    attention: attention,
-                    overridesByPaneID: paneOverrides,
-                    preferredPaneIDs: preferredPaneIDs
-                ),
-                agentUpdatedAt: resolvedSidebarAgentUpdatedAt(
-                    attention: attention,
-                    overridesByPaneID: paneOverrides,
-                    preferredPaneIDs: preferredPaneIDs
-                )
-            )
-        }
-        let pendingItems = pendingWorkspaceWorktreeCreatesByPath.values
-            .filter { normalizePathForCompare($0.rootProjectPath) == normalizePathForCompare(rootProjectPath) }
-            .filter { !persistedPaths.contains(normalizePathForCompare($0.worktreePath)) }
-            .sorted { $0.worktreePath < $1.worktreePath }
-            .map { pending -> WorkspaceSidebarWorktreeItem in
-                let syntheticWorktree = ProjectWorktree(
-                    id: createWorktreeProjectID(path: pending.worktreePath),
-                    name: resolveWorktreeName(pending.worktreePath),
-                    path: pending.worktreePath,
-                    branch: pending.branch,
-                    baseBranch: pending.baseBranch,
-                    inheritConfig: true,
-                    created: pending.createdAt,
-                    updatedAt: pending.createdAt
-                )
-                return WorkspaceSidebarWorktreeItem(
-                    rootProjectPath: rootProjectPath,
-                    worktree: syntheticWorktree,
-                    isOpen: false,
-                    isActive: false,
-                    notifications: [],
-                    unreadNotificationCount: 0,
-                    taskStatus: nil,
-                    agentState: nil,
-                    agentPhase: nil,
-                    agentAttention: nil,
-                    agentSummary: nil,
-                    agentKind: nil,
-                    agentUpdatedAt: nil,
-                    displayStateOverride: pending.status == .creating
-                        ? .creating(message: pending.message)
-                        : .failed(message: pending.error ?? pending.message),
-                    displayInitStepOverride: pending.step,
-                    displayInitErrorOverride: pending.error,
-                    displayInitMessageOverride: pending.message
-                )
-            }
-        let items = persistedItems + pendingItems
-        guard moveNotifiedWorktreeToTop, showsInAppNotifications else {
-            return items
-        }
-        let originalIndices = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($0.element.path, $0.offset) })
-        return items.sorted { lhs, rhs in
-            if compareSidebarWorktreeItems(lhs, rhs) {
-                return true
-            }
-            if compareSidebarWorktreeItems(rhs, lhs) {
-                return false
-            }
-            return (originalIndices[lhs.path] ?? 0) < (originalIndices[rhs.path] ?? 0)
-        }
-    }
-
-    private func preferredSidebarAgentPaneIDs(
-        for session: OpenWorkspaceSessionState?
-    ) -> Set<String> {
-        guard let session else {
-            return []
-        }
-        let projectPath = normalizePathForCompare(session.projectPath)
-        let controller = session.controller
-
-        if case let .terminal(selectedTerminalTabID)? = resolvedWorkspacePresentedTabSelection(
-            for: projectPath,
-            controller: controller
-        ),
-           let selectedTab = controller.tabs.first(where: { $0.id == selectedTerminalTabID }) {
-            return Set(selectedTab.leaves.map(\.id))
-        }
-
-        if let selectedTab = controller.selectedTab {
-            return Set(selectedTab.leaves.map(\.id))
-        }
-
-        return []
-    }
-
-    private func resolvedSidebarAgentState(
-        attention: WorkspaceAttentionState?,
-        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
-        preferredPaneIDs: Set<String>
-    ) -> WorkspaceAgentState? {
-        guard let attention else {
-            return nil
-        }
-        return preferredPaneIDs.isEmpty
-            ? attention.resolvedAgentState(overridesByPaneID: overridesByPaneID)
-            : attention.resolvedAgentState(
-                overridesByPaneID: overridesByPaneID,
-                preferringPaneIDs: preferredPaneIDs
-            )
-    }
-
-    private func resolvedSidebarAgentPhase(
-        attention: WorkspaceAttentionState?,
-        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
-        preferredPaneIDs: Set<String>
-    ) -> WorkspaceAgentPhase? {
-        guard let attention else {
-            return nil
-        }
-        return preferredPaneIDs.isEmpty
-            ? attention.resolvedAgentPhase(overridesByPaneID: overridesByPaneID)
-            : attention.resolvedAgentPhase(
-                overridesByPaneID: overridesByPaneID,
-                preferringPaneIDs: preferredPaneIDs
-            )
-    }
-
-    private func resolvedSidebarAgentAttention(
-        attention: WorkspaceAttentionState?,
-        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
-        preferredPaneIDs: Set<String>
-    ) -> WorkspaceAgentAttentionRequirement? {
-        guard let attention else {
-            return nil
-        }
-        return preferredPaneIDs.isEmpty
-            ? attention.resolvedAgentAttention(overridesByPaneID: overridesByPaneID)
-            : attention.resolvedAgentAttention(
-                overridesByPaneID: overridesByPaneID,
-                preferringPaneIDs: preferredPaneIDs
-            )
-    }
-
-    private func resolvedSidebarAgentSummary(
-        attention: WorkspaceAttentionState?,
-        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
-        preferredPaneIDs: Set<String>
-    ) -> String? {
-        guard let attention else {
-            return nil
-        }
-        return preferredPaneIDs.isEmpty
-            ? attention.resolvedAgentSummary(overridesByPaneID: overridesByPaneID)
-            : attention.resolvedAgentSummary(
-                overridesByPaneID: overridesByPaneID,
-                preferringPaneIDs: preferredPaneIDs
-            )
-    }
-
-    private func resolvedSidebarAgentKind(
-        attention: WorkspaceAttentionState?,
-        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
-        preferredPaneIDs: Set<String>
-    ) -> WorkspaceAgentKind? {
-        guard let attention else {
-            return nil
-        }
-        return preferredPaneIDs.isEmpty
-            ? attention.resolvedAgentKind(overridesByPaneID: overridesByPaneID)
-            : attention.resolvedAgentKind(
-                overridesByPaneID: overridesByPaneID,
-                preferringPaneIDs: preferredPaneIDs
-            )
-    }
-
-    private func resolvedSidebarAgentUpdatedAt(
-        attention: WorkspaceAttentionState?,
-        overridesByPaneID: [String: WorkspaceAgentPresentationOverride],
-        preferredPaneIDs: Set<String>
-    ) -> Date? {
-        guard let attention else {
-            return nil
-        }
-        return preferredPaneIDs.isEmpty
-            ? attention.resolvedAgentUpdatedAt(overridesByPaneID: overridesByPaneID)
-            : attention.resolvedAgentUpdatedAt(
-                overridesByPaneID: overridesByPaneID,
-                preferringPaneIDs: preferredPaneIDs
-            )
-    }
-
-    private func compareSidebarWorktreeItems(
-        _ lhs: WorkspaceSidebarWorktreeItem,
-        _ rhs: WorkspaceSidebarWorktreeItem
-    ) -> Bool {
-        if lhs.hasUnreadNotifications != rhs.hasUnreadNotifications {
-            return lhs.hasUnreadNotifications && !rhs.hasUnreadNotifications
-        }
-
-        let lhsDate = lhs.notifications.first?.createdAt
-        let rhsDate = rhs.notifications.first?.createdAt
-        switch (lhsDate, rhsDate) {
-        case let (lhsDate?, rhsDate?) where lhsDate != rhsDate:
-            return lhsDate > rhsDate
-        case (.some, .none):
-            return true
-        case (.none, .some):
-            return false
-        default:
-            return false
-        }
-    }
-
-    private func makeGroupTaskStatus(
-        rootProjectPath: String,
-        rootAttention: WorkspaceAttentionState?,
-        worktrees: [WorkspaceSidebarWorktreeItem]
-    ) -> WorkspaceTaskStatus? {
-        let statuses = [rootAttention?.taskStatus] + worktrees.map(\.taskStatus)
-        if statuses.contains(.running) {
-            return .running
-        }
-        if workspaceAttentionState(for: rootProjectPath) != nil || worktrees.contains(where: { $0.taskStatus != nil }) {
-            return .idle
-        }
-        return nil
-    }
-
-    private struct SidebarGroupAgentProjection {
-        var state: WorkspaceAgentState
-        var phase: WorkspaceAgentPhase?
-        var attention: WorkspaceAgentAttentionRequirement?
-        var summary: String?
-        var kind: WorkspaceAgentKind?
-        var updatedAt: Date?
-    }
-
-    private func makeGroupAgentProjection(
-        rootIsActive: Bool,
-        rootAgentState: WorkspaceAgentState?,
-        rootAgentPhase: WorkspaceAgentPhase?,
-        rootAgentAttention: WorkspaceAgentAttentionRequirement?,
-        rootAgentSummary: String?,
-        rootAgentKind: WorkspaceAgentKind?,
-        rootAgentUpdatedAt: Date?,
-        worktrees: [WorkspaceSidebarWorktreeItem]
-    ) -> SidebarGroupAgentProjection? {
-        let activeWorktreeCandidates = worktrees.compactMap { worktree -> SidebarGroupAgentCandidate? in
-            guard worktree.isActive, let state = worktree.agentState else {
-                return nil
-            }
-            return SidebarGroupAgentCandidate(
-                state: state,
-                phase: worktree.agentPhase,
-                attention: worktree.agentAttention,
-                summary: worktree.agentSummary,
-                kind: worktree.agentKind,
-                updatedAt: worktree.agentUpdatedAt,
-                isActive: true,
-                isOpen: worktree.isOpen
-            )
-        }
-        if let prioritizedActiveWorktree = prioritizedSidebarAgentCandidate(from: activeWorktreeCandidates) {
-            return SidebarGroupAgentProjection(
-                state: prioritizedActiveWorktree.state,
-                phase: prioritizedActiveWorktree.phase,
-                attention: prioritizedActiveWorktree.attention,
-                summary: prioritizedActiveWorktree.summary,
-                kind: prioritizedActiveWorktree.kind,
-                updatedAt: prioritizedActiveWorktree.updatedAt
-            )
-        }
-
-        var fallbackCandidates = worktrees.compactMap { worktree -> SidebarGroupAgentCandidate? in
-            guard let state = worktree.agentState else {
-                return nil
-            }
-            return SidebarGroupAgentCandidate(
-                state: state,
-                phase: worktree.agentPhase,
-                attention: worktree.agentAttention,
-                summary: worktree.agentSummary,
-                kind: worktree.agentKind,
-                updatedAt: worktree.agentUpdatedAt,
-                isActive: worktree.isActive,
-                isOpen: worktree.isOpen
-            )
-        }
-        if let rootAgentState {
-            fallbackCandidates.append(
-                SidebarGroupAgentCandidate(
-                    state: rootAgentState,
-                    phase: rootAgentPhase,
-                    attention: rootAgentAttention,
-                    summary: rootAgentSummary,
-                    kind: rootAgentKind,
-                    updatedAt: rootAgentUpdatedAt,
-                    isActive: rootIsActive,
-                    isOpen: rootIsActive,
-                    isRoot: true
-                )
-            )
-        }
-
-        guard let prioritizedCandidate = prioritizedSidebarAgentCandidate(from: fallbackCandidates) else {
-            return nil
-        }
-        return SidebarGroupAgentProjection(
-            state: prioritizedCandidate.state,
-            phase: prioritizedCandidate.phase,
-            attention: prioritizedCandidate.attention,
-            summary: prioritizedCandidate.summary,
-            kind: prioritizedCandidate.kind,
-            updatedAt: prioritizedCandidate.updatedAt
-        )
-    }
-
-    private func prioritizedSidebarAgentCandidate(
-        from candidates: [SidebarGroupAgentCandidate]
-    ) -> SidebarGroupAgentCandidate? {
-        candidates.max { lhs, rhs in
-            if lhs.activityPriority != rhs.activityPriority {
-                return lhs.activityPriority < rhs.activityPriority
-            }
-            if (lhs.attention?.priority ?? 0) != (rhs.attention?.priority ?? 0) {
-                return (lhs.attention?.priority ?? 0) < (rhs.attention?.priority ?? 0)
-            }
-            if lhs.state.priority != rhs.state.priority {
-                return lhs.state.priority < rhs.state.priority
-            }
-            if (lhs.updatedAt ?? .distantPast) != (rhs.updatedAt ?? .distantPast) {
-                return (lhs.updatedAt ?? .distantPast) < (rhs.updatedAt ?? .distantPast)
-            }
-            if lhs.isRoot != rhs.isRoot {
-                return lhs.isRoot && !rhs.isRoot
-            }
-            return false
-        }
-    }
-
-    private struct SidebarGroupAgentCandidate {
-        var state: WorkspaceAgentState
-        var phase: WorkspaceAgentPhase?
-        var attention: WorkspaceAgentAttentionRequirement?
-        var summary: String?
-        var kind: WorkspaceAgentKind?
-        var updatedAt: Date?
-        var isActive: Bool
-        var isOpen: Bool
-        var isRoot: Bool = false
-
-        var activityPriority: Int {
-            if isActive {
-                return 2
-            }
-            if isOpen {
-                return 1
-            }
-            return 0
-        }
-    }
-
     private func isWorkspacePaneCurrentlyFocused(
         projectPath: String,
         tabID: String,
@@ -7939,94 +5204,7 @@ public final class NativeAppViewModel {
     }
 
     private func syncAttentionStateWithOpenSessions() {
-        let activePaths = Set(openWorkspaceProjectPaths)
-        attentionStateByProjectPath = attentionStateByProjectPath.filter { activePaths.contains($0.key) }
-        agentDisplayOverridesByProjectPath = agentDisplayOverridesByProjectPath.filter { activePaths.contains($0.key) }
-        if isAgentSignalObservationStarted {
-            applyAgentSignalSnapshots(agentSignalStore.currentSnapshots)
-        }
-    }
-
-    private func applyAgentSignalSnapshots(_ snapshots: [String: WorkspaceAgentSessionSignal]) {
-        let normalizedSnapshots = normalizedAgentSignalSnapshots(snapshots)
-        let openPaths = Set(openWorkspaceProjectPaths)
-        guard lastAppliedAgentSignalProjectPaths != openPaths ||
-                lastAppliedAgentSignalSnapshotsByTerminalSessionID != normalizedSnapshots
-        else {
-            return
-        }
-
-        let previousSnapshots = lastAppliedAgentSignalSnapshotsByTerminalSessionID
-        var nextAttentionStateByProjectPath = attentionStateByProjectPath.filter { openPaths.contains($0.key) }
-
-        for (terminalSessionID, previousSignal) in previousSnapshots {
-            guard openPaths.contains(previousSignal.projectPath) else {
-                continue
-            }
-            if let currentSignal = snapshots[terminalSessionID],
-               currentSignal.projectPath == previousSignal.projectPath,
-               currentSignal.paneId == previousSignal.paneId {
-                continue
-            }
-            guard var attention = nextAttentionStateByProjectPath[previousSignal.projectPath] else {
-                continue
-            }
-            attention.clearAgentState(for: previousSignal.paneId)
-            nextAttentionStateByProjectPath[previousSignal.projectPath] = attention
-        }
-
-        for (terminalSessionID, signal) in normalizedSnapshots where openPaths.contains(signal.projectPath) {
-            if previousSnapshots[terminalSessionID] == signal {
-                continue
-            }
-            var attention = nextAttentionStateByProjectPath[signal.projectPath] ?? WorkspaceAttentionState()
-            applyAgentSignal(signal, to: &attention)
-            nextAttentionStateByProjectPath[signal.projectPath] = attention
-        }
-
-        if attentionStateByProjectPath != nextAttentionStateByProjectPath {
-            attentionStateByProjectPath = nextAttentionStateByProjectPath
-        }
-        lastAppliedAgentSignalProjectPaths = openPaths
-        lastAppliedAgentSignalSnapshotsByTerminalSessionID = normalizedSnapshots
-        pruneWorkspaceAgentDisplayOverrides()
-    }
-
-    private func invalidateAppliedAgentSignalCache() {
-        lastAppliedAgentSignalProjectPaths = []
-        lastAppliedAgentSignalSnapshotsByTerminalSessionID = [:]
-    }
-
-    private func pruneWorkspaceAgentDisplayOverrides() {
-        let filteredOverrides = filteredWorkspaceAgentDisplayOverrides(agentDisplayOverridesByProjectPath)
-        guard agentDisplayOverridesByProjectPath != filteredOverrides else {
-            return
-        }
-        agentDisplayOverridesByProjectPath = filteredOverrides
-    }
-
-    private func filteredWorkspaceAgentDisplayOverrides(
-        _ overridesByProjectPath: [String: [String: WorkspaceAgentPresentationOverride]]
-    ) -> [String: [String: WorkspaceAgentPresentationOverride]] {
-        guard !overridesByProjectPath.isEmpty else {
-            return [:]
-        }
-
-        let validPaneIDsByProjectPath = Dictionary(
-            grouping: codexDisplayCandidates(),
-            by: \.projectPath
-        ).mapValues { Set($0.map(\.paneID)) }
-
-        return overridesByProjectPath.reduce(into: [:]) { result, entry in
-            guard let validPaneIDs = validPaneIDsByProjectPath[entry.key] else {
-                return
-            }
-            let filteredOverrides = entry.value.filter { validPaneIDs.contains($0.key) }
-            guard !filteredOverrides.isEmpty else {
-                return
-            }
-            result[entry.key] = filteredOverrides
-        }
+        workspaceAttentionController.syncAttentionStateWithOpenSessions()
     }
 
     private func noteWorkspaceSidebarProjectionMutation<T: Equatable>(
@@ -8059,46 +5237,6 @@ public final class NativeAppViewModel {
         }
     }
 
-    private func applyAgentSignal(
-        _ signal: WorkspaceAgentSessionSignal,
-        to attention: inout WorkspaceAttentionState
-    ) {
-        attention.setAgentState(
-            signal.effectiveState,
-            kind: signal.agentKind,
-            sessionID: signal.sessionId,
-            phase: signal.effectivePhase,
-            attention: signal.effectiveAttention,
-            summary: signal.summary,
-            updatedAt: signal.updatedAt,
-            for: signal.paneId
-        )
-    }
-
-    private func agentDisplayOverridesByPaneID(for projectPath: String) -> [String: WorkspaceAgentPresentationOverride] {
-        agentDisplayOverridesByProjectPath[normalizePathForCompare(projectPath)] ?? [:]
-    }
-
-    private func normalizedAgentSignalSnapshots(
-        _ snapshots: [String: WorkspaceAgentSessionSignal]
-    ) -> [String: WorkspaceAgentSessionSignal] {
-        snapshots.reduce(into: [:]) { partialResult, entry in
-            partialResult[entry.key] = normalizedAgentSignal(entry.value)
-        }
-    }
-
-    private func normalizedAgentSignal(
-        _ signal: WorkspaceAgentSessionSignal
-    ) -> WorkspaceAgentSessionSignal {
-        var normalized = signal
-        normalized.projectPath = normalizePathForCompare(signal.projectPath)
-        if let resolvedPaneID = currentPaneID(for: signal),
-           resolvedPaneID != signal.paneId {
-            normalized.paneId = resolvedPaneID
-        }
-        return normalized
-    }
-
     private func currentPaneID(
         for signal: WorkspaceAgentSessionSignal
     ) -> String? {
@@ -8118,83 +5256,14 @@ public final class NativeAppViewModel {
     }
 
     private func resolvedWorkspaceRunConfigurations(for projectPath: String) -> [WorkspaceRunConfiguration] {
-        guard let session = openWorkspaceSessions.first(where: { $0.projectPath == projectPath }),
-              let project = resolveDisplayProject(for: projectPath)
-        else {
-            return []
-        }
-
-        return project.runConfigurations.map {
-            makeProjectRunConfiguration(
-                configuration: $0,
-                projectPath: projectPath,
-                rootProjectPath: session.rootProjectPath
-            )
-        }
-    }
-
-    private func resolvedSelectedWorkspaceRunConfiguration(
-        for projectPath: String,
-        configurations: [WorkspaceRunConfiguration]? = nil
-    ) -> WorkspaceRunConfiguration? {
-        let resolvedConfigurations = configurations ?? resolvedWorkspaceRunConfigurations(for: projectPath)
-        guard !resolvedConfigurations.isEmpty else {
-            return nil
-        }
-        let state = workspaceRunConsoleStateByProjectPath[projectPath] ?? WorkspaceRunConsoleState()
-        if let selectedConfigurationID = state.selectedConfigurationID,
-           let selected = resolvedConfigurations.first(where: { $0.id == selectedConfigurationID }) {
-            return selected
-        }
-        return resolvedConfigurations.first
+        workspaceRunConfigurationBuilder.configurations(
+            for: projectPath,
+            sessions: openWorkspaceSessions
+        )
     }
 
     private func resolveDisplayProject(for path: String, rootProjectPath: String? = nil) -> Project? {
-        let lookupKey = DisplayProjectLookupKey(path: path, rootProjectPath: rootProjectPath)
-        if let cachedProject = displayProjectCacheByLookupKey[lookupKey] {
-            return cachedProject
-        }
-
-        let normalizedPath = normalizePathForCompare(path)
-        let resolvedProject: Project?
-        if let project = projectsByNormalizedPath[normalizedPath] {
-            resolvedProject = project
-        } else {
-            let rootProject: Project?
-            if let rootProjectPath {
-                rootProject = normalizedOptionalPathForCompare(rootProjectPath).flatMap { projectsByNormalizedPath[$0] }
-            } else {
-                rootProject = snapshot.projects.first(where: { project in
-                    project.worktrees.contains(where: { normalizePathForCompare($0.path) == normalizedPath })
-                })
-            }
-
-            if let rootProject,
-               let worktree = rootProject.worktrees.first(where: { normalizePathForCompare($0.path) == normalizedPath }) {
-                resolvedProject = buildWorktreeVirtualProject(sourceProject: rootProject, worktree: worktree)
-            } else if let session = workspaceSessionWithoutNormalizing(for: normalizedPath)
-                        ?? workspaceSession(for: normalizedPath) {
-                resolvedProject = session.transientDisplayProject
-            } else {
-                resolvedProject = nil
-            }
-        }
-
-        displayProjectCacheByLookupKey[lookupKey] = resolvedProject
-        return resolvedProject
-    }
-
-    private func normalizedTransientDisplayProject(
-        _ project: Project?,
-        fallbackPath: String
-    ) -> Project? {
-        guard let project else {
-            return nil
-        }
-        if project.isDirectoryWorkspace {
-            return Project.directoryWorkspace(at: fallbackPath)
-        }
-        return project
+        workspaceDisplayProjectResolver.resolveProject(for: path, rootProjectPath: rootProjectPath)
     }
 
     private func persistProjects(_ projects: [Project]) throws {
@@ -8416,553 +5485,10 @@ struct WorkspaceGitSelectionSnapshot {
     let commitContext: WorkspaceCommitRepositoryContext
 }
 
-private struct WorkspaceGitRepositoryCandidate {
-    let path: String
-    let displayName: String
-}
-
-private struct DiscoveredWorkspaceGitRepository {
-    let path: String
-    let displayName: String
-    let branchName: String?
-    let gitDirectory: String
-    let commonGitDirectory: String
-    let isRootRepository: Bool
-}
-
-private func loadProjectDocumentFromDisk(_ projectPath: String) throws -> ProjectDocumentSnapshot {
-    try LegacyCompatStore().loadProjectDocument(at: projectPath)
-}
-
 private func normalizePathForCompare(_ path: String) -> String {
-    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        return ""
-    }
-    var normalized = canonicalPathForFileSystemCompare(trimmed)
-        .replacingOccurrences(of: "\\", with: "/")
-    while normalized.count > 1 && normalized.hasSuffix("/") {
-        normalized.removeLast()
-    }
-    return normalized
-}
-
-private func canonicalPathForFileSystemCompare(_ path: String) -> String {
-    let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
-    let fileManager = FileManager.default
-    var ancestorPath = standardizedPath
-    var trailingComponents = [String]()
-
-    while ancestorPath != "/", !fileManager.fileExists(atPath: ancestorPath) {
-        let lastComponent = (ancestorPath as NSString).lastPathComponent
-        guard !lastComponent.isEmpty else {
-            break
-        }
-        trailingComponents.insert(lastComponent, at: 0)
-        ancestorPath = (ancestorPath as NSString).deletingLastPathComponent
-        if ancestorPath.isEmpty {
-            ancestorPath = "/"
-            break
-        }
-    }
-
-    let canonicalAncestorPath = realpathString(ancestorPath) ?? ancestorPath
-    guard !trailingComponents.isEmpty else {
-        return canonicalAncestorPath
-    }
-
-    return trailingComponents.reduce(canonicalAncestorPath as NSString) { partial, component in
-        partial.appendingPathComponent(component) as NSString
-    } as String
-}
-
-private func realpathString(_ path: String) -> String? {
-    guard !path.isEmpty else {
-        return nil
-    }
-    return path.withCString { pointer in
-        guard let resolvedPointer = realpath(pointer, nil) else {
-            return nil
-        }
-        defer { free(resolvedPointer) }
-        return String(cString: resolvedPointer)
-    }
-}
-
-private func elapsedMilliseconds(since startTime: TimeInterval) -> Int {
-    max(0, Int(((ProcessInfo.processInfo.systemUptime - startTime) * 1000).rounded()))
+    nativeAppNormalizePathForCompare(path)
 }
 
 private func normalizePathList(_ paths: [String]) -> [String] {
-    var seen = Set<String>()
-    return paths
-        .map(normalizePathForCompare)
-        .filter { !$0.isEmpty }
-        .filter { seen.insert($0).inserted }
-}
-
-private func normalizedOptionalPathForCompare(_ path: String?) -> String? {
-    guard let path else {
-        return nil
-    }
-    let normalizedPath = normalizePathForCompare(path)
-    return normalizedPath.isEmpty ? nil : normalizedPath
-}
-
-private func pathLastComponent(_ path: String) -> String {
-    let lastComponent = (path as NSString).lastPathComponent
-    return lastComponent.isEmpty ? path : lastComponent
-}
-
-private enum ProjectImportError: LocalizedError {
-    case importRejected(String)
-    case unsupportedGitWorktree(String)
-    case invalidDirectory(String)
-
-    var errorDescription: String? {
-        switch self {
-        case let .importRejected(message):
-            return message
-        case let .unsupportedGitWorktree(path):
-            return "不支持导入 Git worktree：\(path)"
-        case let .invalidDirectory(path):
-            return "无法读取目录：\(path)"
-        }
-    }
-}
-
-@MainActor
-private func validateImportedDirectoryPath(
-    _ path: String,
-    diagnostics: ProjectImportDiagnostics
-) throws -> String {
-    let normalizedPath = normalizePathForCompare(path)
-    guard !normalizedPath.isEmpty else {
-        let error = ProjectImportError.invalidDirectory(path)
-        diagnostics.recordValidationRejected(path: path, reason: error.localizedDescription)
-        throw error
-    }
-
-    let directoryURL = URL(fileURLWithPath: normalizedPath, isDirectory: true)
-    let keys: Set<URLResourceKey> = [.isDirectoryKey]
-    guard let resourceValues = try? directoryURL.resourceValues(forKeys: keys),
-          resourceValues.isDirectory == true
-    else {
-        let error = ProjectImportError.invalidDirectory(normalizedPath)
-        diagnostics.recordValidationRejected(path: normalizedPath, reason: error.localizedDescription)
-        throw error
-    }
-    guard !isGitWorktree(directoryURL) else {
-        let error = ProjectImportError.unsupportedGitWorktree(normalizedPath)
-        diagnostics.recordValidationRejected(path: normalizedPath, reason: error.localizedDescription)
-        throw error
-    }
-    diagnostics.recordValidationAccepted(path: normalizedPath)
-    return normalizedPath
-}
-
-private func mergeProjectsByPath(existing: [Project], updates: [Project]) -> [Project] {
-    let updatesByPath = Dictionary(uniqueKeysWithValues: updates.map { (normalizePathForCompare($0.path), $0) })
-    let existingPaths = Set(existing.map { normalizePathForCompare($0.path) })
-
-    var nextProjects = existing.map { project in
-        updatesByPath[normalizePathForCompare(project.path)] ?? project
-    }
-    for project in updates where !existingPaths.contains(normalizePathForCompare(project.path)) {
-        nextProjects.append(project)
-    }
-    return nextProjects
-}
-
-public struct ProjectCatalogRefreshRequest: Sendable {
-    public let directories: [String]
-    public let directProjectPaths: [String]
-    public let existingProjects: [Project]
-    public let storeHomeDirectoryURL: URL
-
-    public init(directories: [String], directProjectPaths: [String], existingProjects: [Project], storeHomeDirectoryURL: URL) {
-        self.directories = directories
-        self.directProjectPaths = directProjectPaths
-        self.existingProjects = existingProjects
-        self.storeHomeDirectoryURL = storeHomeDirectoryURL
-    }
-}
-
-private let maxProjectDiscoveryDepth = 6
-
-private func loadProjectNotesSummary(at projectPath: String) -> String? {
-    let notesURL = URL(fileURLWithPath: projectPath, isDirectory: true).appending(path: "PROJECT_NOTES.md")
-    guard FileManager.default.fileExists(atPath: notesURL.path),
-          let content = try? String(contentsOf: notesURL, encoding: .utf8)
-    else {
-        return nil
-    }
-    return projectNotesSummary(from: content)
-}
-
-private func rebuildProjectCatalogSnapshot(_ request: ProjectCatalogRefreshRequest) async throws -> [Project] {
-    let discoveredPaths = discoverProjects(in: request.directories)
-    let nextPaths = normalizePathList(discoveredPaths + request.directProjectPaths)
-    let rebuiltProjects = buildProjects(paths: nextPaths, existing: request.existingProjects)
-    try LegacyCompatStore(homeDirectoryURL: request.storeHomeDirectoryURL).updateProjects(rebuiltProjects)
-    return rebuiltProjects
-}
-
-private func survivingDirectProjectPaths(
-    from directProjectPaths: [String],
-    rebuiltProjects: [Project]
-) -> [String] {
-    let rebuiltProjectPaths = Set(rebuiltProjects.map { normalizePathForCompare($0.path) })
-    return normalizePathList(
-        directProjectPaths.filter { rebuiltProjectPaths.contains(normalizePathForCompare($0)) }
-    )
-}
-
-private func discoverProjects(in directories: [String]) -> [String] {
-    let discovered = directories.flatMap(scanDirectoryWithGit)
-    return normalizePathList(discovered).sorted()
-}
-
-private func scanDirectoryWithGit(_ path: String) -> [String] {
-    let rootURL = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
-    guard FileManager.default.fileExists(atPath: rootURL.path) else {
-        return []
-    }
-
-    var results: [String] = []
-    if isGitRepo(rootURL), !isGitWorktree(rootURL) {
-        results.append(rootURL.path)
-    }
-
-    let childDirectories = childDirectories(of: rootURL, shouldSkip: shouldSkipDirectDirectory)
-    for directoryURL in childDirectories where !isGitWorktree(directoryURL) {
-        results.append(directoryURL.path)
-    }
-    results.append(contentsOf: childDirectories.flatMap { collectNestedGitRepos(in: $0, depth: 1) })
-    return results
-}
-
-private func collectNestedGitRepos(in directoryURL: URL, depth: Int) -> [String] {
-    guard depth < maxProjectDiscoveryDepth else {
-        return []
-    }
-
-    if isGitRepo(directoryURL) {
-        return isGitWorktree(directoryURL) ? [] : [directoryURL.path]
-    }
-
-    let childDirectories = childDirectories(of: directoryURL, shouldSkip: shouldSkipRecursiveDirectory)
-    return childDirectories.flatMap { collectNestedGitRepos(in: $0, depth: depth + 1) }
-}
-
-private func childDirectories(of rootURL: URL, shouldSkip: (String) -> Bool) -> [URL] {
-    let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
-    guard let contents = try? FileManager.default.contentsOfDirectory(
-        at: rootURL,
-        includingPropertiesForKeys: Array(keys),
-        options: [.skipsSubdirectoryDescendants]
-    ) else {
-        return []
-    }
-
-    return contents.filter { candidate in
-        let resourceValues = try? candidate.resourceValues(forKeys: keys)
-        let isDirectory = resourceValues?.isDirectory == true
-        let isSymbolicLink = resourceValues?.isSymbolicLink == true
-        return isDirectory && !isSymbolicLink && !shouldSkip(candidate.lastPathComponent)
-    }
-}
-
-private func shouldSkipDirectDirectory(_ name: String) -> Bool {
-    name.hasPrefix(".")
-}
-
-private func shouldSkipRecursiveDirectory(_ name: String) -> Bool {
-    guard !name.hasPrefix(".") else {
-        return true
-    }
-    return [".git", "node_modules", "target", "dist", "build"].contains(name)
-}
-
-private func buildProjects(paths: [String], existing: [Project]) -> [Project] {
-    let existingByPath = Dictionary(uniqueKeysWithValues: existing.map { (normalizePathForCompare($0.path), $0) })
-    return paths.compactMap { createProject(path: $0, existingByPath: existingByPath) }
-}
-
-private func createProject(path: String, existingByPath: [String: Project]) -> Project? {
-    let normalizedPath = normalizePathForCompare(path)
-    let projectURL = URL(fileURLWithPath: normalizedPath, isDirectory: true)
-    guard !isGitWorktree(projectURL) else {
-        return nil
-    }
-
-    let keys: Set<URLResourceKey> = [.isDirectoryKey, .contentModificationDateKey, .fileSizeKey]
-    guard let resourceValues = try? projectURL.resourceValues(forKeys: keys),
-          resourceValues.isDirectory == true
-    else {
-        return nil
-    }
-
-    let now = Date()
-    let modificationDate = resourceValues.contentModificationDate ?? now
-    let size = Int64(resourceValues.fileSize ?? 0)
-    let checksum = "\(Int(modificationDate.timeIntervalSince1970))_\(size)"
-    let isGitRepository = isGitRepo(projectURL)
-    let notesSummary = loadProjectNotesSummary(at: normalizedPath)
-
-    if let existing = existingByPath[normalizedPath] {
-        return Project(
-            id: existing.id,
-            name: projectURL.lastPathComponent.isEmpty ? normalizedPath : projectURL.lastPathComponent,
-            path: normalizedPath,
-            tags: existing.tags,
-            runConfigurations: existing.runConfigurations,
-            worktrees: existing.worktrees,
-            mtime: swiftDateFromDate(modificationDate),
-            size: size,
-            checksum: checksum,
-            isGitRepository: isGitRepository,
-            gitCommits: existing.gitCommits,
-            gitLastCommit: existing.gitLastCommit,
-            gitLastCommitMessage: existing.gitLastCommitMessage,
-            gitDaily: existing.gitDaily,
-            notesSummary: notesSummary,
-            created: existing.created,
-            checked: swiftDateFromDate(now),
-            hasPersistedNotesSummary: true
-        )
-    }
-
-    return Project(
-        id: UUID().uuidString.lowercased(),
-        name: projectURL.lastPathComponent.isEmpty ? normalizedPath : projectURL.lastPathComponent,
-        path: normalizedPath,
-        tags: [],
-        runConfigurations: [],
-        worktrees: [],
-        mtime: swiftDateFromDate(modificationDate),
-        size: size,
-        checksum: checksum,
-        isGitRepository: isGitRepository,
-        gitCommits: 0,
-        gitLastCommit: .zero,
-        gitLastCommitMessage: nil,
-        gitDaily: nil,
-        notesSummary: notesSummary,
-        created: swiftDateFromDate(now),
-        checked: swiftDateFromDate(now),
-        hasPersistedNotesSummary: true
-    )
-}
-
-private struct ProjectGitInfo {
-    let commitCount: Int
-    let lastCommit: SwiftDate
-    let lastCommitMessage: String?
-}
-
-private func loadGitInfo(for path: String) -> ProjectGitInfo {
-    let projectURL = URL(fileURLWithPath: path, isDirectory: true)
-    guard isGitRepo(projectURL), !isGitWorktree(projectURL) else {
-        return ProjectGitInfo(commitCount: 0, lastCommit: .zero, lastCommitMessage: nil)
-    }
-
-    let commitCount = Int(runGitCommand(in: path, arguments: ["rev-list", "--count", "HEAD"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
-    let logOutput = runGitCommand(in: path, arguments: ["log", "--format=%ct%x1f%s", "-n", "1"])
-    let (lastCommitUnix, lastCommitMessage) = parseLastCommitLogOutput(logOutput)
-    return ProjectGitInfo(
-        commitCount: commitCount,
-        lastCommit: lastCommitUnix > 0 ? swiftDateFromDate(Date(timeIntervalSince1970: lastCommitUnix)) : .zero,
-        lastCommitMessage: lastCommitMessage
-    )
-}
-
-private func parseLastCommitLogOutput(_ output: String?) -> (TimeInterval, String?) {
-    guard let output else {
-        return (0, nil)
-    }
-    let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        return (0, nil)
-    }
-
-    let parts = trimmed.split(separator: "\u{1f}", maxSplits: 1, omittingEmptySubsequences: false)
-    let lastCommit = TimeInterval(parts.first ?? "") ?? 0
-    let message = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
-    return (lastCommit, message.isEmpty ? nil : message)
-}
-
-private func runGitCommand(in path: String, arguments: [String]) -> String? {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-    process.arguments = arguments
-    process.currentDirectoryURL = URL(fileURLWithPath: path, isDirectory: true)
-
-    let stdout = Pipe()
-    let stderr = Pipe()
-    process.standardOutput = stdout
-    process.standardError = stderr
-
-    do {
-        try process.run()
-    } catch {
-        return nil
-    }
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        return nil
-    }
-    return String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
-}
-
-private func isGitRepo(_ url: URL) -> Bool {
-    guard !isGitWorktree(url) else {
-        return false
-    }
-    return FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .notDirectory).path)
-        || FileManager.default.fileExists(atPath: url.appending(path: ".git", directoryHint: .isDirectory).path)
-}
-
-private func liveWorkspaceRootRepositoryPath(for path: String) -> String? {
-    let normalizedPath = normalizePathForCompare(path)
-    guard !normalizedPath.isEmpty else {
-        return nil
-    }
-    let repositoryURL = URL(fileURLWithPath: normalizedPath, isDirectory: true)
-    guard isGitRepo(repositoryURL), !isGitWorktree(repositoryURL) else {
-        return nil
-    }
-    return normalizedPath
-}
-
-private func isGitWorktree(_ url: URL) -> Bool {
-    let gitURL = url.appending(path: ".git", directoryHint: .notDirectory)
-    var isDirectory: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: gitURL.path, isDirectory: &isDirectory),
-          !isDirectory.boolValue,
-          let resolvedGitDir = resolveGitDirFromFile(gitURL)
-    else {
-        return false
-    }
-    return resolvedGitDir.pathComponents.contains("worktrees")
-}
-
-private func resolveGitDirFromFile(_ gitFileURL: URL) -> URL? {
-    guard let content = try? String(contentsOf: gitFileURL, encoding: .utf8) else {
-        return nil
-    }
-    guard let firstLine = content.split(whereSeparator: \.isNewline).first?.trimmingCharacters(in: .whitespacesAndNewlines),
-          firstLine.hasPrefix("gitdir:")
-    else {
-        return nil
-    }
-    let rawPath = String(firstLine.dropFirst("gitdir:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !rawPath.isEmpty else {
-        return nil
-    }
-    let candidateURL = URL(fileURLWithPath: rawPath)
-    if candidateURL.path.hasPrefix("/") {
-        return candidateURL
-    }
-    return gitFileURL.deletingLastPathComponent().appending(path: rawPath).standardizedFileURL
-}
-
-private func createWorktreeProjectID(path: String) -> String {
-    "worktree:\(path)"
-}
-
-private func resolveWorktreeName(_ path: String) -> String {
-    pathLastComponent(path)
-}
-
-private func buildReadyWorktree(path: String, branch: String, now: SwiftDate) -> ProjectWorktree {
-    ProjectWorktree(
-        id: createWorktreeProjectID(path: path),
-        name: resolveWorktreeName(path),
-        path: path,
-        branch: branch,
-        inheritConfig: true,
-        created: now,
-        updatedAt: now
-    )
-}
-
-private func buildWorktreeVirtualProject(sourceProject: Project, worktree: ProjectWorktree) -> Project {
-    let now = swiftDateFromDate(Date())
-    return Project(
-        id: createWorktreeProjectID(path: worktree.path),
-        name: worktree.name,
-        path: worktree.path,
-        tags: sourceProject.tags,
-        runConfigurations: sourceProject.runConfigurations,
-        worktrees: [],
-        mtime: sourceProject.mtime,
-        size: sourceProject.size,
-        checksum: "worktree:\(worktree.path)",
-        isGitRepository: sourceProject.isGitRepository,
-        gitCommits: sourceProject.gitCommits,
-        gitLastCommit: sourceProject.gitLastCommit,
-        gitLastCommitMessage: sourceProject.gitLastCommitMessage,
-        gitDaily: sourceProject.gitDaily,
-        notesSummary: sourceProject.notesSummary,
-        created: worktree.created,
-        checked: now,
-        hasPersistedNotesSummary: sourceProject.hasPersistedNotesSummary
-    )
-}
-
-private func buildSyncedWorktrees(
-    existingWorktrees: [ProjectWorktree],
-    gitWorktrees: [NativeGitWorktree],
-    preservedLiveWorktrees: [ProjectWorktree] = [],
-    promotedPendingWorktrees: [ProjectWorktree] = []
-) -> [ProjectWorktree] {
-    let existingByPath = Dictionary(uniqueKeysWithValues: existingWorktrees.map { (normalizePathForCompare($0.path), $0) })
-    let promotedPendingByPath = Dictionary(uniqueKeysWithValues: promotedPendingWorktrees.map {
-        (normalizePathForCompare($0.path), $0)
-    })
-    let now = swiftDateFromDate(Date())
-    var mergedWorktrees = gitWorktrees
-        .map { item -> ProjectWorktree in
-            let normalizedPath = normalizePathForCompare(item.path)
-            let existing = existingByPath[normalizedPath] ?? promotedPendingByPath[normalizedPath]
-            return ProjectWorktree(
-                id: existing?.id ?? createWorktreeProjectID(path: item.path),
-                name: existing?.name ?? resolveWorktreeName(item.path),
-                path: item.path,
-                branch: item.branch,
-                baseBranch: existing?.baseBranch,
-                inheritConfig: existing?.inheritConfig ?? true,
-                created: existing?.created ?? now,
-                updatedAt: existing?.updatedAt
-            )
-        }
-    for worktree in preservedLiveWorktrees where !mergedWorktrees.contains(where: {
-        normalizePathForCompare($0.path) == normalizePathForCompare(worktree.path)
-    }) {
-        mergedWorktrees.append(
-            ProjectWorktree(
-                id: worktree.id,
-                name: worktree.name,
-                path: worktree.path,
-                branch: worktree.branch,
-                baseBranch: worktree.baseBranch,
-                inheritConfig: worktree.inheritConfig,
-                created: worktree.created,
-                updatedAt: worktree.updatedAt
-            )
-        )
-    }
-    return mergedWorktrees.sorted { $0.path < $1.path }
-}
-
-private func swiftDateFromDate(_ date: Date) -> SwiftDate {
-    date.timeIntervalSinceReferenceDate
-}
-
-private func hexColor(for color: ColorData) -> String {
-    let r = Int(max(0, min(255, round(color.r * 255))))
-    let g = Int(max(0, min(255, round(color.g * 255))))
-    let b = Int(max(0, min(255, round(color.b * 255))))
-    return String(format: "#%02X%02X%02X", r, g, b)
+    nativeAppNormalizePathList(paths)
 }

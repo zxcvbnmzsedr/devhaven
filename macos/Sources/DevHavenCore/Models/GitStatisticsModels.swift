@@ -137,6 +137,22 @@ public struct GitStatisticsRefreshSummary: Equatable, Sendable {
         self.updatedRepositories = updatedRepositories
         self.failedRepositories = failedRepositories
     }
+
+    public init(results: [GitDailyRefreshResult]) {
+        self.init(
+            requestedRepositories: results.count,
+            updatedRepositories: results.reduce(into: 0) { count, result in
+                if result.error == nil {
+                    count += 1
+                }
+            },
+            failedRepositories: results.reduce(into: 0) { count, result in
+                if result.error != nil {
+                    count += 1
+                }
+            }
+        )
+    }
 }
 
 public struct GitDailyRefreshResult: Equatable, Sendable {
