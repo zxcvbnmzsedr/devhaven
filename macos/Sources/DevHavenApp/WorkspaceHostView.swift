@@ -426,14 +426,9 @@ struct WorkspaceHostView: View {
                 },
                 onClosePaneItem: { paneID, itemID in
                     workspace.focusPane(paneID)
-                    workspace.closePaneItem(inPane: paneID, itemID: itemID)
-                    if let selectedBrowser = workspace.selectedPane?.selectedBrowserState {
-                        viewModel.setWorkspaceFocusedArea(.browserPaneItem(selectedBrowser.id))
-                    } else {
-                        viewModel.setWorkspaceFocusedArea(.terminal)
-                    }
+                    requestClosePaneItem(paneID: paneID, itemID: itemID)
                 },
-                onClosePane: { workspace.closePane($0) },
+                onClosePane: { requestClosePane($0) },
                 onSplitPane: { paneID, direction in
                     workspace.focusPane(paneID)
                     _ = workspace.splitFocusedPane(direction: direction)
@@ -716,10 +711,24 @@ struct WorkspaceHostView: View {
             closeTerminalTab(tabID)
             return true
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_OTHER:
-            workspace.closeOtherTabs(keeping: tabID)
+            let affectedTabIDs = workspace.tabs
+                .map(\.id)
+                .filter { $0 != tabID }
+            confirmCloseTabs(
+                affectedTabIDs,
+                actionDescription: "关闭其他标签页"
+            ) {
+                workspace.closeOtherTabs(keeping: tabID)
+            }
             return true
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_RIGHT:
-            workspace.closeTabsToRight(of: tabID)
+            let affectedTabIDs = terminalTabIDsToRight(of: tabID)
+            confirmCloseTabs(
+                affectedTabIDs,
+                actionDescription: "关闭右侧标签页"
+            ) {
+                workspace.closeTabsToRight(of: tabID)
+            }
             return true
         default:
             return false
@@ -738,6 +747,12 @@ struct WorkspaceHostView: View {
     }
 
     private func closeTerminalTab(_ tabID: String) {
+        confirmCloseTabs([tabID], actionDescription: "关闭整个标签页") {
+            closeTerminalTabNow(tabID)
+        }
+    }
+
+    private func closeTerminalTabNow(_ tabID: String) {
         if shouldCloseTransientWorkspace(for: .tab) {
             viewModel.closeWorkspaceProjectWithFeedback(project.path)
             return
@@ -839,17 +854,144 @@ struct WorkspaceHostView: View {
     ) -> Bool {
         switch mode {
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_THIS:
-            workspace.closePaneItem(inPane: paneID, itemID: itemID)
+            requestClosePaneItem(paneID: paneID, itemID: itemID)
             return true
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_OTHER:
-            workspace.closeOtherPaneItems(inPane: paneID, keeping: itemID)
+            let affectedItemIDs = paneState(for: paneID)?
+                .items
+                .map(\.id)
+                .filter { $0 != itemID } ?? []
+            confirmClosePaneItems(
+                affectedItemIDs,
+                actionDescription: "关闭其他终端标签"
+            ) {
+                workspace.closeOtherPaneItems(inPane: paneID, keeping: itemID)
+            }
             return true
         case GHOSTTY_ACTION_CLOSE_TAB_MODE_RIGHT:
-            workspace.closePaneItemsToRight(inPane: paneID, of: itemID)
+            let affectedItemIDs = paneItemIDsToRight(inPane: paneID, of: itemID)
+            confirmClosePaneItems(
+                affectedItemIDs,
+                actionDescription: "关闭右侧终端标签"
+            ) {
+                workspace.closePaneItemsToRight(inPane: paneID, of: itemID)
+            }
             return true
         default:
             return false
         }
+    }
+
+    private func requestClosePane(_ paneID: String) {
+        confirmClosePaneItems(
+            terminalItemIDs(inPane: paneID),
+            actionDescription: "关闭整个窗格"
+        ) {
+            workspace.closePane(paneID)
+        }
+    }
+
+    private func requestClosePaneItem(
+        paneID: String,
+        itemID: String
+    ) {
+        guard let pane = paneState(for: paneID),
+              let item = pane.items.first(where: { $0.id == itemID })
+        else {
+            return
+        }
+
+        let performClose = {
+            workspace.closePaneItem(inPane: paneID, itemID: itemID)
+            if let selectedBrowser = workspace.selectedPane?.selectedBrowserState {
+                viewModel.setWorkspaceFocusedArea(.browserPaneItem(selectedBrowser.id))
+            } else {
+                viewModel.setWorkspaceFocusedArea(.terminal)
+            }
+        }
+
+        guard item.isTerminal else {
+            performClose()
+            return
+        }
+
+        confirmClosePaneItems(
+            [itemID],
+            actionDescription: "关闭终端标签",
+            performClose: performClose
+        )
+    }
+
+    private func confirmCloseTabs(
+        _ tabIDs: [String],
+        actionDescription: String,
+        performClose: @escaping () -> Void
+    ) {
+        let itemIDs = tabIDs.flatMap { terminalItemIDs(inTab: $0) }
+        confirmClosePaneItems(
+            itemIDs,
+            actionDescription: actionDescription,
+            performClose: performClose
+        )
+    }
+
+    private func confirmClosePaneItems(
+        _ itemIDs: [String],
+        actionDescription: String,
+        performClose: @escaping () -> Void
+    ) {
+        let evaluators: [any WorkspaceTerminalCloseRequirementEvaluating] = itemIDs.compactMap { itemID in
+            terminalSessionStore.modelIfLoaded(forItemID: itemID).map { $0 as any WorkspaceTerminalCloseRequirementEvaluating }
+        }
+        WorkspaceTerminalCloseCoordinator.confirmIfNeeded(
+            evaluators: evaluators,
+            actionDescription: actionDescription,
+            performClose: performClose
+        )
+    }
+
+    private func paneState(for paneID: String) -> WorkspacePaneState? {
+        workspace.tabs
+            .flatMap(\.leaves)
+            .first(where: { $0.id == paneID })
+    }
+
+    private func tabState(for tabID: String) -> WorkspaceTabState? {
+        workspace.tabs.first(where: { $0.id == tabID })
+    }
+
+    private func terminalItemIDs(inPane paneID: String) -> [String] {
+        paneState(for: paneID)?
+            .items
+            .filter(\.isTerminal)
+            .map(\.id) ?? []
+    }
+
+    private func terminalItemIDs(inTab tabID: String) -> [String] {
+        tabState(for: tabID)?
+            .leaves
+            .flatMap { pane in
+                pane.items.filter(\.isTerminal).map(\.id)
+            } ?? []
+    }
+
+    private func terminalTabIDsToRight(of tabID: String) -> [String] {
+        guard let index = workspace.tabs.firstIndex(where: { $0.id == tabID }) else {
+            return []
+        }
+        return Array(workspace.tabs.dropFirst(index + 1)).map(\.id)
+    }
+
+    private func paneItemIDsToRight(
+        inPane paneID: String,
+        of itemID: String
+    ) -> [String] {
+        guard let pane = paneState(for: paneID),
+              let index = pane.items.firstIndex(where: { $0.id == itemID })
+        else {
+            return []
+        }
+        return Array(pane.items.dropFirst(index + 1)).map(\.id)
     }
 
     private func handlePaneItemGotoTab(

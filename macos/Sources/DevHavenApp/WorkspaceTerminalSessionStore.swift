@@ -125,6 +125,10 @@ final class WorkspaceTerminalSessionStore: ObservableObject {
         return modelsByItemID[selectedItemID]
     }
 
+    func modelIfLoaded(forItemID itemID: String) -> GhosttySurfaceHostModel? {
+        modelsByItemID[itemID]
+    }
+
     func syncSelectedItemIDs(_ selectedItemIDsByPaneID: [String: String]) {
         self.selectedItemIDByPaneID = selectedItemIDsByPaneID
         syncCodexTrackingForLoadedModels()
@@ -210,6 +214,10 @@ final class WorkspaceTerminalStoreRegistry: ObservableObject {
 
     func modelIfLoaded(for projectPath: String, paneID: String) -> GhosttySurfaceHostModel? {
         storesByProjectPath[projectPath]?.modelIfLoaded(for: paneID)
+    }
+
+    func modelIfLoaded(for projectPath: String, itemID: String) -> GhosttySurfaceHostModel? {
+        storesByProjectPath[projectPath]?.modelIfLoaded(forItemID: itemID)
     }
 
     func syncSelectedItemIDs(

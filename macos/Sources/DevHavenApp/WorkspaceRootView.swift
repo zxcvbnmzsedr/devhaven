@@ -37,7 +37,10 @@ struct WorkspaceRootView: View {
                     persistSidebarWidth(WorkspaceSidebarLayoutPolicy.defaultSidebarWidth)
                 }
             ) {
-                WorkspaceProjectSidebarHostView(viewModel: viewModel)
+                WorkspaceProjectSidebarHostView(
+                    viewModel: viewModel,
+                    terminalStoreRegistry: terminalStoreRegistry
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } trailing: {
                 WorkspaceChromeContainerView(viewModel: viewModel) {

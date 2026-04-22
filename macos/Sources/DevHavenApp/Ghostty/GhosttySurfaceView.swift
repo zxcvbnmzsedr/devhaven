@@ -983,6 +983,13 @@ final class GhosttyTerminalSurfaceView: NSView {
         bridge.closeSurface(processAlive: processAlive)
     }
 
+    func requestClose() {
+        guard let surface else {
+            return
+        }
+        ghostty_surface_request_close(surface)
+    }
+
     private func syncPreedit(clearIfNeeded: Bool = true) {
         guard let surface else { return }
 

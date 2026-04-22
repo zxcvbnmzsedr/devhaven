@@ -435,7 +435,7 @@ struct GhosttySurfaceHost: View {
 
 @MainActor
 @Observable
-final class GhosttySurfaceHostModel {
+final class GhosttySurfaceHostModel: WorkspaceTerminalCloseRequirementEvaluating {
     static let codexDisplaySnapshotWindowLimit = CodexAgentDisplaySnapshot.windowLimit
     static let codexDisplaySnapshotRefreshDelay: TimeInterval = 0.6
     static let codexDisplayVisibleTextCacheInterval: TimeInterval = 1
@@ -501,6 +501,8 @@ final class GhosttySurfaceHostModel {
     private var onSplitAction: ((GhosttySplitAction) -> Bool)?
     @ObservationIgnored
     private let workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics
+    @ObservationIgnored
+    private let closePrompt: any WorkspaceTerminalClosePrompting
     private var ownedSurfaceView: GhosttyTerminalSurfaceView?
     @ObservationIgnored
     private var lastPreferredFocus = false
@@ -534,6 +536,8 @@ final class GhosttySurfaceHostModel {
     private var cachedRestoreVisibleTextSample: String?
     @ObservationIgnored
     private var cachedRestoreVisibleTextSampleAt: Date?
+    @ObservationIgnored
+    private var pendingCloseRequirementEvaluation: ((WorkspaceTerminalCloseRequirement) -> Void)?
 
     var currentSurfaceView: GhosttyTerminalSurfaceView? {
         ownedSurfaceView
@@ -612,6 +616,7 @@ final class GhosttySurfaceHostModel {
         onGotoTab: ((ghostty_action_goto_tab_e) -> Bool)? = nil,
         onMoveTab: ((ghostty_action_move_tab_s) -> Bool)? = nil,
         onSplitAction: ((GhosttySplitAction) -> Bool)? = nil,
+        closePrompt: any WorkspaceTerminalClosePrompting = AppKitWorkspaceTerminalClosePrompt(),
         appRuntime: GhosttyAppRuntime = .shared,
         workspaceLaunchDiagnostics: WorkspaceLaunchDiagnostics = .shared
     ) {
@@ -629,6 +634,7 @@ final class GhosttySurfaceHostModel {
         self.onGotoTab = onGotoTab
         self.onMoveTab = onMoveTab
         self.onSplitAction = onSplitAction
+        self.closePrompt = closePrompt
         self.workspaceLaunchDiagnostics = workspaceLaunchDiagnostics
         self.terminalRuntime = appRuntime.runtime
         self.surfaceWorkingDirectory = request.workingDirectory
@@ -1023,21 +1029,61 @@ final class GhosttySurfaceHostModel {
 
     func releaseSurface() {
         cancelPendingWindowResponderRestore()
+        pendingCloseRequirementEvaluation = nil
         ownedSurfaceView?.tearDown()
         resetSurfaceRuntimeState()
     }
 
     private func handleProcessExit(processAlive: Bool) {
-        guard !processAlive else {
+        if let pendingCloseRequirementEvaluation {
+            self.pendingCloseRequirementEvaluation = nil
+            pendingCloseRequirementEvaluation(
+                processAlive
+                    ? .needsConfirmation(displayTitle: displayTitle(fallback: "终端"))
+                    : .canClose
+            )
             return
         }
 
+        guard !processAlive else {
+            if closePrompt.confirmCloseTerminals(
+                displayTitles: [displayTitle(fallback: "终端")],
+                actionDescription: "关闭终端"
+            ) {
+                finalizeSurfaceExit()
+            }
+            return
+        }
+
+        finalizeSurfaceExit()
+    }
+
+    private func finalizeSurfaceExit() {
         cancelPendingWindowResponderRestore()
         ownedSurfaceView?.tearDown()
         resetSurfaceRuntimeState()
         rendererHealthy = true
         processState = .exited
         onSurfaceExit?()
+    }
+
+    func evaluateCloseRequirement(
+        _ completion: @escaping (WorkspaceTerminalCloseRequirement) -> Void
+    ) {
+        guard pendingCloseRequirementEvaluation == nil else {
+            completion(.needsConfirmation(displayTitle: displayTitle(fallback: "终端")))
+            return
+        }
+        guard let ownedSurfaceView, ownedSurfaceView.hasLiveSurface else {
+            completion(.canClose)
+            return
+        }
+        pendingCloseRequirementEvaluation = completion
+        ownedSurfaceView.requestClose()
+    }
+
+    func debugHandleCloseRequest(processAlive: Bool) {
+        handleProcessExit(processAlive: processAlive)
     }
 
     private func requestFocusIfNeeded(

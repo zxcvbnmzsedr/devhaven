@@ -44,6 +44,7 @@ private struct WorkspaceAlignmentDeleteRequest: Identifiable {
 
 struct WorkspaceProjectSidebarHostView: View {
     @Bindable var viewModel: NativeAppViewModel
+    let terminalStoreRegistry: WorkspaceTerminalStoreRegistry
     @StateObject private var sidebarProjectionStore = WorkspaceSidebarProjectionStore()
     @State private var isProjectPickerPresented = false
     @State private var worktreeDialogProjectPath: String?
@@ -125,7 +126,7 @@ struct WorkspaceProjectSidebarHostView: View {
                 pendingDeleteRequest = WorktreeDeleteRequest(presentation: presentation)
             },
             onFocusNotification: viewModel.focusWorkspaceNotification,
-            onCloseProject: viewModel.closeWorkspaceProject,
+            onCloseProject: requestCloseProject,
             onMoveProjectGroup: { sourceID, targetID, insertAfter in
                 viewModel.moveWorkspaceSidebarGroup(
                     sourceID,
@@ -323,6 +324,33 @@ struct WorkspaceProjectSidebarHostView: View {
                 onClose: dismissAlignmentAddProjects
             )
             .preferredColorScheme(preferredColorScheme)
+        }
+    }
+
+    private func requestCloseProject(_ projectPath: String) {
+        guard let session = viewModel.openWorkspaceSessions.first(where: { $0.projectPath == projectPath }) else {
+            viewModel.closeWorkspaceProject(projectPath)
+            return
+        }
+
+        let evaluators: [any WorkspaceTerminalCloseRequirementEvaluating] = session.controller.tabs.flatMap { tab in
+            tab.leaves.flatMap { pane in
+                pane.items.compactMap { item in
+                    guard item.isTerminal else {
+                        return nil
+                    }
+                    return terminalStoreRegistry.modelIfLoaded(
+                        for: projectPath,
+                        itemID: item.id
+                    ).map { $0 as any WorkspaceTerminalCloseRequirementEvaluating }
+                }
+            }
+        }
+        WorkspaceTerminalCloseCoordinator.confirmIfNeeded(
+            evaluators: evaluators,
+            actionDescription: "关闭项目"
+        ) {
+            viewModel.closeWorkspaceProject(projectPath)
         }
     }
 
