@@ -1,0 +1,71 @@
+--- a/Sources/ContentView.swift
++++ b/Sources/ContentView.swift
+@@ -1750,6 +1750,7 @@
+             fileExplorerState: fileExplorerState,
+             featureFlags: featureFlags,
+             isPresented: sidebarState.isVisible,
++            isFullScreen: isFullScreen,
+             sidebarUnread: sidebarUnread,
+             titlebarControlsLayoutModel: titlebarControlsLayoutModel,
+             windowId: windowId,
+@@ -2107,10 +2108,14 @@
+                 )
+             },
+             onNewTab: {
+-                AppDelegate.shared?.performNewWorkspaceAction(
+-                    tabManager: tabManager,
+-                    debugSource: "titlebar.fullscreenNewWorkspace"
+-                )
++                if tabManager.isEmbeddedInHost {
++                    addTab()
++                } else {
++                    AppDelegate.shared?.performNewWorkspaceAction(
++                        tabManager: tabManager,
++                        debugSource: "titlebar.fullscreenNewWorkspace"
++                    )
++                }
+             },
+             onFocusHistoryBack: {
+                 if !tabManager.navigateBack() {
+@@ -11281,6 +11286,7 @@
+             && lhs.sidebarUnread === rhs.sidebarUnread
+             && lhs.titlebarControlsLayoutModel === rhs.titlebarControlsLayoutModel
+             && lhs.isPresented == rhs.isPresented
++            && lhs.isFullScreen == rhs.isFullScreen
+             && lhs.chromeBackgroundColor.isEqual(rhs.chromeBackgroundColor)
+     }
+ 
+@@ -11288,6 +11294,9 @@
+     @ObservedObject var fileExplorerState: FileExplorerState
+     var featureFlags: CmuxFeatureFlags = .shared
+     var isPresented: Bool = true
++    var isFullScreen: Bool = false
++    @AppStorage(WorkspacePresentationModeSettings.modeKey)
++    private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
+     let sidebarUnread: SidebarUnreadModel
+     let titlebarControlsLayoutModel: TitlebarControlsLayoutModel
+     let windowId: UUID
+@@ -11881,7 +11890,11 @@
+                     devHavenSidebarHeader
+                         .padding(.top, 4)
+                         .padding(.bottom, 2)
+-                    devHavenTitlebarControls
++                    // Standard fullscreen mounts controls in ContentView's titlebar.
++                    // Minimal mode has no titlebar, so it still needs this row.
++                    if !isFullScreen || WorkspacePresentationModeSettings.mode(for: workspacePresentationMode) == .minimal {
++                        devHavenTitlebarControls
++                    }
+                 }
+                 if CmuxExtensionSidebarSelection.resolvesToDefaultSidebar(effectiveProviderId: effectiveExtensionSidebarProviderId) {
+                     workspaceScrollArea(renderContext: renderContext)
+@@ -13058,7 +13071,9 @@
+                     .background(TitlebarDoubleClickMonitorView())
+             }
+             .overlay(alignment: .topLeading) {
+-                minimalModeSidebarTitlebarControlsOverlay()
++                if !tabManager.isEmbeddedInHost {
++                    minimalModeSidebarTitlebarControlsOverlay()
++                }
+             }
+             .background(Color.clear)
+             .modifier(ClearScrollBackground())

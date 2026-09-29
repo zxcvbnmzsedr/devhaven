@@ -109,8 +109,10 @@ struct NotificationIndicatorSmoke: App {
                 let second = focusedTerminal
                 check(first !== second, "new pane owns input")
                 // This is a disposable shell. Writing to the first surface does
-                // not move keyboard focus from the second surface.
-                first.insertText("printf '\\a'\n")
+                // not move keyboard focus from the second surface. Delay BEL
+                // until injected input has drained so its accepted-input callback
+                // cannot race with the notification being asserted below.
+                first.insertText("sleep 0.5; printf '\\a'\n")
                 later {
                     let ring = notificationRing(in: first)
                     check(ring.opacity == 1, "background BEL creates a persistent unread ring")
@@ -122,12 +124,12 @@ struct NotificationIndicatorSmoke: App {
                         later {
                             check(window.firstResponder === first, "click focuses the unread pane")
                             check(ring.opacity == 0, "click clears the persistent unread ring")
-                            first.insertText("printf '\\a'\n")
+                            first.insertText("sleep 0.5; printf '\\a'\n")
                             later {
                                 check(ring.opacity == 0, "BEL in the focused terminal does not mark it unread")
                                 // Repeat the background path, clearing via input.
                                 click(second)
-                                first.insertText("printf '\\a'\n")
+                                first.insertText("sleep 0.5; printf '\\a'\n")
                                 later {
                                     check(ring.opacity == 1, "second background BEL marks the pane unread")
                                     first.insertText(" ")

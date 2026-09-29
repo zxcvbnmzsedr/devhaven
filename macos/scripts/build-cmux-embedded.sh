@@ -44,6 +44,17 @@ cmp -s "$INTEGRATION_DIR/CmuxEmbedded.xcscheme" "$CMUX_DIR/cmux.xcodeproj/xcshar
 cmp -s "$INTEGRATION_DIR/CmuxEmbeddedRootView.swift" "$CMUX_DIR/Sources/CmuxEmbeddedRootView.swift" ||
   cp "$INTEGRATION_DIR/CmuxEmbeddedRootView.swift" "$CMUX_DIR/Sources/"
 
+# This follow-up extends workspace-list/titlebar hunks. Peel it off before
+# checking those base patches, then reapply it after the base layer is ready.
+# This supports both existing patched checkouts and clean pinned sources.
+fullscreen_controls_source_snapshot=""
+if git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-fullscreen-controls.patch" 2>/dev/null; then
+  fullscreen_controls_source_snapshot="$(mktemp "${TMPDIR:-/tmp}/devhaven-cmux-content.XXXXXX")"
+  cp -p "$CMUX_DIR/Sources/ContentView.swift" "$fullscreen_controls_source_snapshot"
+  trap 'rm -f "$fullscreen_controls_source_snapshot"' EXIT
+  git -C "$CMUX_DIR" apply --reverse "$INTEGRATION_DIR/cmux-embedded-fullscreen-controls.patch"
+fi
+
 if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-lifecycle.patch" 2>/dev/null; then
   git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-lifecycle.patch"
 elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-lifecycle.patch" 2>/dev/null; then
@@ -121,6 +132,23 @@ if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-notification
 elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-notification-indicators.patch" 2>/dev/null; then
   echo "cmux embedded notification-indicators patch does not match the pinned source" >&2
   exit 1
+fi
+
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-fullscreen-controls.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-fullscreen-controls.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-fullscreen-controls.patch" 2>/dev/null; then
+  echo "cmux embedded fullscreen-controls patch does not match the pinned source" >&2
+  exit 1
+fi
+
+# Reapplying an unchanged patch must not invalidate the large Swift target on
+# every build. Restore the original timestamp only when the content is identical.
+if [[ -n "$fullscreen_controls_source_snapshot" ]]; then
+  if cmp -s "$fullscreen_controls_source_snapshot" "$CMUX_DIR/Sources/ContentView.swift"; then
+    touch -r "$fullscreen_controls_source_snapshot" "$CMUX_DIR/Sources/ContentView.swift"
+  fi
+  rm -f "$fullscreen_controls_source_snapshot"
+  trap - EXIT
 fi
 
 if [[ ! -d "$CMUX_DIR/GhosttyKit.xcframework" ]]; then

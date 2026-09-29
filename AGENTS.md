@@ -21,6 +21,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
   - 原生子工程入口；当前额外链接本地构建的 `CmuxEmbedded.xcframework`
 - `macos/CmuxEmbeddedIntegration/`
   - cmux 嵌入层的源码、Xcode scheme 与 pinned 源码补丁；构建脚本将其应用到指定 cmux commit。内嵌模式通过侧边栏补丁在顶部标题行提供“返回”入口，并隐藏 cmux 账号与升级入口；拖动补丁只允许 cmux 顶部显式拖动区域移动窗口，侧边栏空白处不再触发窗口拖动；独立 cmux App 保持原样
+  - `cmux-embedded-fullscreen-controls.patch` 让内嵌侧边栏工具行与 cmux 顶部全屏工具栏互斥，标准模式全屏时移除整行占位，极简模式保留侧边栏按钮；侧边栏接收 `ContentView.isFullScreen` 并纳入 Equatable 比较，避免切换后保留旧布局。全屏“＋”同样走宿主项目选择器。构建时先反向移除此后置补丁再检查基础补丁，最后重新应用，兼容已有 ThirdParty 工作树与重复构建。
   - `cmux-embedded-terminal-exit.patch` 将 shell 退出与 surface 关闭回调按 workspace ID 路由到内嵌宿主的弱引用 registry，不得依赖独立 cmux 的 `AppDelegate.shared`。`Ctrl+D` 保留 shell EOF 语义；宿主初始化禁用 `autoWelcomeIfNeeded`，避免向首个 shell 注入独立 cmux 的欢迎命令。最后一个 shell 正常退出时清理项目会话，后台退出也要同步项目列表。真实按键回归入口为 `macos/scripts/test-cmux-terminal-exit.sh <DevHaven.app 绝对路径>`
   - `cmux-embedded-window-buttons.patch` 让内嵌标题栏按 AppKit 系统按钮的真实 bounds 排除关闭、最小化和缩放按钮，统一用于单击拖动与双击标题栏动作；不得只检查 `contentView.hitTest`，因为 full-size content 会命中按钮下方的拖动层。回归入口为 `macos/scripts/test-cmux-window-buttons.sh <DevHaven.app 绝对路径>`
   - `cmux-embedded-terminal-focus.patch` 将终端工作区归属、自动焦点恢复与当前输入 pane 校验接到 `EmbeddedTerminalOwnerRegistry`；内嵌模式不得依赖独立 cmux 的 `AppDelegate.shared` 判断终端是否聚焦，否则鼠标按下会被当作 focus-only 点击丢弃，无法拖选。保留 selected workspace / input surface / 可见性校验，后台会话不得抢焦点。回归入口为 `macos/scripts/test-cmux-terminal-selection.sh <DevHaven.app 绝对路径>`。
