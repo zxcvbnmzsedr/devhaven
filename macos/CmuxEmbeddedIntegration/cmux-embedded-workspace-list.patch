@@ -1,0 +1,87 @@
+--- a/Sources/ContentView.swift
++++ b/Sources/ContentView.swift
+@@ -3665,6 +3665,10 @@
+     }
+ 
+     private func addTab() {
++        if tabManager.isEmbeddedInHost {
++            NotificationCenter.default.post(name: Notification.Name("DevHaven.CmuxEmbedded.OpenProjectPicker"), object: nil)
++            return
++        }
+         tabManager.addWorkspaceIfActive()
+         sidebarSelectionState.selection = .tabs
+     }
+@@ -11877,6 +11881,7 @@
+                     devHavenSidebarHeader
+                         .padding(.top, 4)
+                         .padding(.bottom, 2)
++                    devHavenTitlebarControls
+                 }
+                 if CmuxExtensionSidebarSelection.resolvesToDefaultSidebar(effectiveProviderId: effectiveExtensionSidebarProviderId) {
+                     workspaceScrollArea(renderContext: renderContext)
+@@ -11994,6 +11999,15 @@
+         .frame(height: 24)
+     }
+ 
++    private var devHavenTitlebarControls: some View {
++        WindowDragHandleView()
++            .background(TitlebarDoubleClickMonitorView())
++            .frame(height: 38)
++            .overlay(alignment: .topLeading) {
++                minimalModeSidebarTitlebarControlsOverlay()
++            }
++    }
++
+     private func workspaceScrollArea(renderContext: WorkspaceListRenderContext) -> some View {
+         // The AppKit NSTableView sidebar is opt-in while it soaks; default stays
+         // on the SwiftUI list. The flag key is declared only in FeatureFlags.swift.
+@@ -12125,12 +12139,16 @@
+             .overlay(alignment: .top) {
+                 // The sidebar top strip remains draggable and handles
+                 // double-clicks with the standard titlebar action.
+-                WindowDragHandleView()
+-                    .frame(height: sidebarTitlebarInteractionHeight)
+-                    .background(TitlebarDoubleClickMonitorView())
++                if !tabManager.isEmbeddedInHost {
++                    WindowDragHandleView()
++                        .frame(height: sidebarTitlebarInteractionHeight)
++                        .background(TitlebarDoubleClickMonitorView())
++                }
+             }
+             .overlay(alignment: .topLeading) {
+-                minimalModeSidebarTitlebarControlsOverlay()
++                if !tabManager.isEmbeddedInHost {
++                    minimalModeSidebarTitlebarControlsOverlay()
++                }
+             }
+             .overlay(alignment: .top) {
+                 workspaceReorderDropOverlay(
+@@ -12325,7 +12343,7 @@
+                 )
+             )
+             .overlay(alignment: .top) {
+-                if isPresented {
++                if isPresented && !tabManager.isEmbeddedInHost {
+                     // The sidebar top strip remains draggable and handles
+                     // double-clicks with the standard titlebar action.
+                     WindowDragHandleView()
+@@ -12334,7 +12352,7 @@
+                 }
+             }
+             .overlay(alignment: .topLeading) {
+-                if isPresented { minimalModeSidebarTitlebarControlsOverlay() }
++                if isPresented && !tabManager.isEmbeddedInHost { minimalModeSidebarTitlebarControlsOverlay() }
+             }
+             .background(Color.clear)
+             .onChange(of: selectedWorkspaceId) { _, _ in
+@@ -12486,6 +12504,10 @@
+                 tabManager.closeWorkspaceWithConfirmation(workspace)
+             },
+             createWorkspaceAtEnd: {
++                if tabManager.isEmbeddedInHost {
++                    NotificationCenter.default.post(name: Notification.Name("DevHaven.CmuxEmbedded.OpenProjectPicker"), object: nil)
++                    return
++                }
+                 if let appDelegate = AppDelegate.shared {
+                     appDelegate.createWorkspaceAtEndFromSidebar(
+                         windowId: windowId,

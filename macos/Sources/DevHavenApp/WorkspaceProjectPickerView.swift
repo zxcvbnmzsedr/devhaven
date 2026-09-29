@@ -22,7 +22,7 @@ struct WorkspaceProjectPickerView: View {
                 ContentUnavailableView(
                     "没有可打开项目",
                     systemImage: "plus.square.on.square",
-                    description: Text("当前可见项目都已经在左侧已打开列表中了。")
+                    description: Text("当前可见项目都已经在左侧对话列表中了。")
                 )
                 .foregroundStyle(NativeTheme.textSecondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -63,7 +63,7 @@ struct WorkspaceProjectPickerView: View {
                 Text("打开项目")
                     .font(.headline)
                     .foregroundStyle(NativeTheme.textPrimary)
-                Text("把更多项目加入左侧已打开列表。")
+                Text("打开项目后会显示在左侧对话列表中。")
                     .font(.caption)
                     .foregroundStyle(NativeTheme.textSecondary)
             }

@@ -1,0 +1,93 @@
+diff --git a/Sources/ContentView.swift b/Sources/ContentView.swift
+--- a/Sources/ContentView.swift
++++ b/Sources/ContentView.swift
+@@ -11862,10 +11862,17 @@
+         )
+         let _ = SidebarProfilingSignposts.end(signpost)
+         ZStack(alignment: .bottomLeading) {
+-            if CmuxExtensionSidebarSelection.resolvesToDefaultSidebar(effectiveProviderId: effectiveExtensionSidebarProviderId) {
+-                workspaceScrollArea(renderContext: renderContext)
+-            } else {
+-                extensionSidebarScrollArea(renderContext: renderContext)
++            VStack(spacing: 0) {
++                if tabManager.isEmbeddedInHost {
++                    devHavenSidebarHeader
++                        .padding(.top, 4)
++                        .padding(.bottom, 2)
++                }
++                if CmuxExtensionSidebarSelection.resolvesToDefaultSidebar(effectiveProviderId: effectiveExtensionSidebarProviderId) {
++                    workspaceScrollArea(renderContext: renderContext)
++                } else {
++                    extensionSidebarScrollArea(renderContext: renderContext)
++                }
+             }
+             if isPresented {
+                 SidebarFooter(
+@@ -11943,6 +11950,38 @@
+             frozenShortcutHintsTabId = nil
+         }
+         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
++    }
++
++    private var devHavenSidebarHeader: some View {
++        HStack(spacing: 10) {
++            Spacer(minLength: 0)
++
++            Button {
++                NotificationCenter.default.post(
++                    name: Notification.Name("DevHaven.CmuxEmbedded.ReturnHome"),
++                    object: windowId.uuidString
++                )
++            } label: {
++                Text("返回")
++                    .font(.system(size: 12, weight: .semibold))
++                    .frame(height: 24)
++                    .contentShape(Rectangle())
++            }
++            .buttonStyle(.plain)
++            .accessibilityLabel("返回 DevHaven 主页")
++            .accessibilityIdentifier("DevHavenReturnHomeButton")
++            .titlebarInteractiveControl()
++            .background(CmuxEmbeddedHeaderActionRegion {
++                NotificationCenter.default.post(
++                    name: Notification.Name("DevHaven.CmuxEmbedded.ReturnHome"),
++                    object: windowId.uuidString
++                )
++            })
++        }
++        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
++        .padding(.horizontal, 12)
++        .padding(.leading, 68)
++        .frame(height: 24)
+     }
+ 
+     private func workspaceScrollArea(renderContext: WorkspaceListRenderContext) -> some View {
+@@ -15414,6 +15453,7 @@
+     let modifierKeyMonitor: WindowScopedShortcutHintModifierMonitor
+     let onSendFeedback: () -> Void
+     @State private var extensionBrowserAnchorView: NSView?
++    @EnvironmentObject private var tabManager: TabManager
+     @LiveSetting(\.betaFeatures.extensions) private var extensionsExperimentalEnabled
+     // Reuse the exact Command-hold shortcut-hint signal that drives the per-row
+     // shortcut badges (`showModifierHoldHints && modifierKeyMonitor.isModifierPressed`,
+@@ -15436,9 +15476,9 @@
+ 
+     var body: some View {
+         HStack(spacing: 4) {
+-            if shows(.account) || shows(.mobileConnect) || shows(.help) {
++            if (!tabManager.isEmbeddedInHost && shows(.account)) || shows(.mobileConnect) || shows(.help) {
+                 HStack(spacing: 0) {
+-                    if shows(.account), CmuxFeatureFlags.shared.isSidebarAccountButtonEnabled {
++                    if !tabManager.isEmbeddedInHost, shows(.account), CmuxFeatureFlags.shared.isSidebarAccountButtonEnabled {
+                         SidebarAccountMenuButton()
+                     }
+                     if shows(.mobileConnect), CmuxFeatureFlags.shared.isMobileConnectButtonEnabled {
+@@ -15455,7 +15495,7 @@
+                (showModifierHoldHints && modifierKeyMonitor.isModifierPressed) || isShortcutPopoverPresented {
+                 ShortcutDiscoveryButton(isPopoverPresented: $isShortcutPopoverPresented)
+             }
+-            if shows(.upgrade) {
++            if !tabManager.isEmbeddedInHost, shows(.upgrade) {
+                 SidebarProBadge()
+             }
+             // The puzzle button opens the extensions browser; it only shows

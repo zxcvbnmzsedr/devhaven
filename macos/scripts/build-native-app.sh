@@ -207,6 +207,13 @@ APP_STAGE_PATH="$STAGE_DIR/$APP_BUNDLE_NAME"
 INFO_PLIST_PATH="$APP_STAGE_PATH/Contents/Info.plist"
 FRAMEWORKS_PATH="$APP_STAGE_PATH/Contents/Frameworks"
 SPARKLE_FRAMEWORK_SRC="$MACOS_DIR/Vendor/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+CMUX_BUILD_ARCH="$(uname -m)"
+if [[ "$SWIFT_TRIPLE" == arm64-* ]]; then
+  CMUX_BUILD_ARCH="arm64"
+elif [[ "$SWIFT_TRIPLE" == x86_64-* ]]; then
+  CMUX_BUILD_ARCH="x86_64"
+fi
+CMUX_FRAMEWORK_SRC="$MACOS_DIR/Vendor/CmuxEmbedded.xcframework/macos-$CMUX_BUILD_ARCH/CmuxEmbedded.framework"
 
 cleanup() {
   rm -rf "$STAGE_DIR"
@@ -231,6 +238,14 @@ bash "$SCRIPT_DIR/setup-ghostty-framework.sh" --ensure-worktree-vendor
 log "确保 Sparkle vendor 可用"
 bash "$SCRIPT_DIR/setup-sparkle-framework.sh" --ensure-worktree-vendor
 
+log "构建 cmux 原生嵌入框架"
+CMUX_BUILD_CONFIGURATION="Debug"
+if [[ "$CONFIGURATION" == "release" ]]; then
+  CMUX_BUILD_CONFIGURATION="Release"
+fi
+CMUX_EMBEDDED_ARCH="$CMUX_BUILD_ARCH" CMUX_EMBEDDED_CONFIGURATION="$CMUX_BUILD_CONFIGURATION" \
+  bash "$SCRIPT_DIR/build-cmux-embedded.sh"
+
 log "构建 Run Configuration React WebUI"
 bash "$SCRIPT_DIR/build-run-configuration-webui.sh"
 
@@ -247,6 +262,7 @@ RESOURCE_BUNDLE_PATH="$BIN_DIR/DevHavenNative_DevHavenApp.bundle"
 [[ -f "$CLI_HELPER_PATH" ]] || fail "未找到 CLI helper：$CLI_HELPER_PATH"
 [[ -d "$RESOURCE_BUNDLE_PATH" ]] || fail "未找到 SwiftPM 资源 bundle：$RESOURCE_BUNDLE_PATH"
 [[ -d "$SPARKLE_FRAMEWORK_SRC" ]] || fail "未找到 Sparkle.framework：$SPARKLE_FRAMEWORK_SRC"
+[[ -d "$CMUX_FRAMEWORK_SRC" ]] || fail "未找到 CmuxEmbedded.framework：$CMUX_FRAMEWORK_SRC"
 
 DEFAULT_FEED_URL="$STABLE_FEED_URL"
 if [[ "$UPDATE_CHANNEL" == "nightly" ]]; then
@@ -260,6 +276,11 @@ cp "$EXECUTABLE_PATH" "$APP_STAGE_PATH/Contents/MacOS/DevHavenApp"
 cp "$CLI_HELPER_PATH" "$APP_STAGE_PATH/Contents/MacOS/DevHavenCLI"
 ditto "$RESOURCE_BUNDLE_PATH" "$APP_STAGE_PATH/Contents/Resources/$(basename "$RESOURCE_BUNDLE_PATH")"
 ditto "$SPARKLE_FRAMEWORK_SRC" "$FRAMEWORKS_PATH/Sparkle.framework"
+ditto "$CMUX_FRAMEWORK_SRC" "$FRAMEWORKS_PATH/CmuxEmbedded.framework"
+mkdir -p "$APP_STAGE_PATH/Contents/Resources/Licenses/cmux"
+cp "$MACOS_DIR/ThirdParty/cmux/LICENSE" "$APP_STAGE_PATH/Contents/Resources/Licenses/cmux/LICENSE"
+cp "$MACOS_DIR/ThirdParty/cmux/THIRD_PARTY_LICENSES.md" \
+  "$APP_STAGE_PATH/Contents/Resources/Licenses/cmux/THIRD_PARTY_LICENSES.md"
 ensure_binary_rpath "$APP_STAGE_PATH/Contents/MacOS/DevHavenApp" "@executable_path/../Frameworks"
 
 HAS_ICON=0

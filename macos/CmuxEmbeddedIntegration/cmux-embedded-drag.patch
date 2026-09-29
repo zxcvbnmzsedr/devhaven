@@ -1,0 +1,55 @@
+diff --git a/Sources/ContentView.swift b/Sources/ContentView.swift
+--- a/Sources/ContentView.swift
++++ b/Sources/ContentView.swift
+@@ -3534,8 +3534,13 @@ struct ContentView: View {
+         window.titlebarAppearsTransparent = true
+         // Native AppKit titlebar dragging steals pane-tab drags in minimal
+         // mode. Keep the main window immovable by default; explicit chrome
+         // drag zones temporarily enable performDrag for real app moves.
+-        configureCmuxMainWindowDragBehavior(window)
++        if tabManager.isEmbeddedInHost {
++            window.isMovableByWindowBackground = false
++            window.isMovable = true
++        } else {
++            configureCmuxMainWindowDragBehavior(window)
++        }
+         window.styleMask.insert(.fullSizeContentView)
+ 
+         // Track this window for fullscreen notifications
+diff --git a/Sources/Sidebar/SidebarEmptyAreaWindowDragController.swift b/Sources/Sidebar/SidebarEmptyAreaWindowDragController.swift
+--- a/Sources/Sidebar/SidebarEmptyAreaWindowDragController.swift
++++ b/Sources/Sidebar/SidebarEmptyAreaWindowDragController.swift
+@@ -1,4 +1,23 @@
+ import AppKit
+ 
++/// Tracks only the host windows that contain an embedded cmux workspace.
++/// Weak references avoid extending a SwiftUI window's lifetime.
++@MainActor
++enum CmuxEmbeddedWindowDragPolicy {
++    private static let windows = NSHashTable<NSWindow>.weakObjects()
++
++    static func markEmbedded(_ window: NSWindow) {
++        windows.add(window)
++    }
++
++    static func unmarkEmbedded(_ window: NSWindow) {
++        windows.remove(window)
++    }
++
++    static func isEmbedded(_ window: NSWindow) -> Bool {
++        windows.contains(window)
++    }
++}
++
+ /// Coordinates window dragging from empty sidebar space.
+ ///
+@@ -61,6 +80,9 @@ struct SidebarEmptyAreaWindowDragController {
+         in view: NSView
+     ) -> SidebarEmptyAreaWindowDragOutcome {
+         guard let window = view.window else { return .passThrough }
+         guard !isWindowDragSuppressed(window: window) else { return .passThrough }
++        // Embedded cmux only moves from its explicit top chrome. Empty sidebar
++        // space belongs to the host's content, not to a window drag region.
++        guard !CmuxEmbeddedWindowDragPolicy.isEmbedded(window) else { return .passThrough }
+ 
+         let start = event.locationInWindow

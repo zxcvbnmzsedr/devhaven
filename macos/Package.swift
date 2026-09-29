@@ -1,5 +1,11 @@
 // swift-tools-version: 6.0
 import PackageDescription
+import Foundation
+
+let cmuxBuildProductsPath = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .appendingPathComponent("Vendor/CmuxBuildProducts")
+    .path
 
 let package = Package(
     name: "DevHavenNative",
@@ -21,6 +27,10 @@ let package = Package(
             name: "Sparkle",
             path: "Vendor/Sparkle.xcframework"
         ),
+        .binaryTarget(
+            name: "CmuxEmbedded",
+            path: "Vendor/CmuxEmbedded.xcframework"
+        ),
         .target(
             name: "DevHavenCore"
         ),
@@ -34,6 +44,7 @@ let package = Package(
                 "DevHavenCore",
                 "GhosttyKit",
                 "Sparkle",
+                "CmuxEmbedded",
             ],
             resources: [
                 .copy("GhosttyResources"),
@@ -46,6 +57,11 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Carbon"),
                 .linkedLibrary("c++"),
+                .linkedFramework("Sentry", .when(platforms: [.macOS])),
+                .linkedFramework("Iroh", .when(platforms: [.macOS])),
+                .unsafeFlags([
+                    "-F", cmuxBuildProductsPath,
+                ]),
             ]
         ),
         .testTarget(

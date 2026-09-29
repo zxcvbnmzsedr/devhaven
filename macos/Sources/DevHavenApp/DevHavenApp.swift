@@ -46,6 +46,7 @@ final class DevHavenAppDelegate: NSObject, NSApplicationDelegate {
 struct DevHavenApp: App {
     @NSApplicationDelegateAdaptor(DevHavenAppDelegate.self) private var appDelegate
     @State private var viewModel = Self.makeViewModel()
+    @State private var cmuxHostStore = CmuxEmbeddedHostStore()
     @StateObject private var updateController = DevHavenUpdateController()
     @StateObject private var quitGuard = AppQuitGuard()
 
@@ -58,7 +59,8 @@ struct DevHavenApp: App {
             AppRootView(
                 viewModel: viewModel,
                 updateController: updateController,
-                quitGuard: quitGuard
+                quitGuard: quitGuard,
+                cmuxHostStore: cmuxHostStore
             )
                 .frame(minWidth: 1280, minHeight: 820)
         }

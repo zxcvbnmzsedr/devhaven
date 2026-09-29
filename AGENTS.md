@@ -18,7 +18,13 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 - `release`
   - 本机 release 打包入口；固定委托 `bash macos/scripts/build-native-app.sh --release`，并透传其余参数
 - `macos/Package.swift`
-  - 原生子工程入口
+  - 原生子工程入口；当前额外链接本地构建的 `CmuxEmbedded.xcframework`
+- `macos/CmuxEmbeddedIntegration/`
+  - cmux 嵌入层的源码、Xcode scheme 与 pinned 源码补丁；构建脚本将其应用到指定 cmux commit。内嵌模式通过侧边栏补丁在顶部标题行提供“返回”入口，并隐藏 cmux 账号与升级入口；拖动补丁只允许 cmux 顶部显式拖动区域移动窗口，侧边栏空白处不再触发窗口拖动；独立 cmux App 保持原样
+- `macos/ThirdParty/cmux/`
+  - 构建脚本获取的 cmux 源码工作树，不纳入 DevHaven 版本库；`CmuxEmbedded` target 从其 `ContentView` 构建 Workspace 二级界面，不通过外部 cmux App 跳转
+- `macos/Sources/DevHavenApp/CmuxEmbeddedHostView.swift`
+  - 通过 C ABI 加载 cmux 原生框架并把 `NSHostingView` 挂入 DevHaven Workspace；单个 cmux 宿主跨项目切换与返回主页保留，原生对话列表每行对应一个已打开项目，不另设“已打开项目”列表
 - `macos/WebUI/WorkspaceRunConfiguration/`
   - 运行配置页的标准 React + Vite 源码工程；源码位于 `src/`，通过 `npm run build` 输出到 App 资源目录
 - `macos/Sources/DevHavenApp/`
@@ -47,7 +53,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 - `macos/Sources/DevHavenApp/WorkspaceSplitTreeView.swift`
   - 工作区 pane 扁平布局渲染；根据 `WorkspacePaneTree` 的 leaf frame / split handle 结果平铺 pane 与 divider overlay，不再让 pane host 跟着递归 split 树迁移
 - `macos/Sources/DevHavenApp/WorkspaceRootView.swift`
-  - Workspace 根布局；负责项目导航与右侧 Workspace chrome 的 split、导航宽度持久化，以及“项目列表不属于工作区 chrome”这一层级关系
+  - Workspace 二级入口；挂载同一套 cmux 原生界面，以当前项目路径初始化，并同步已打开项目与 cmux workspace 的一对一关系。内嵌 cmux 侧边栏的主页按钮通过 `DevHaven.CmuxEmbedded.ReturnHome` 通知回到 DevHaven 主页
 - `macos/Sources/DevHavenApp/WorkspaceProjectSidebarHostView.swift`
   - Workspace 外层项目导航宿主；负责已打开项目列表、project picker、worktree dialog 与删除 worktree 确认，不负责 terminal / Git 主内容
 - `macos/Sources/DevHavenApp/WorkspaceChromeContainerView.swift`
@@ -183,7 +189,9 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 - `macos/Tests/`
   - 原生 UI / Core 测试
 - `macos/scripts/build-native-app.sh`
-  - 原生 `.app` 本地打包脚本；负责嵌入 Sparkle.framework，并写入 `CFBundleVersion` / `SUFeedURL` / `DevHavenUpdateDeliveryMode` / 下载页 URL / `SUPublicEDKey`
+  - 原生 `.app` 本地打包脚本；负责嵌入 Sparkle.framework 与 CmuxEmbedded.framework，并写入 `CFBundleVersion` / `SUFeedURL` / `DevHavenUpdateDeliveryMode` / 下载页 URL / `SUPublicEDKey`
+- `macos/scripts/build-cmux-embedded.sh`
+  - 固定 cmux commit、应用 `CmuxEmbeddedIntegration` 补丁，并按目标架构构建 `CmuxEmbedded.xcframework`，供 DevHaven 原生入口加载
 - `macos/scripts/build-run-configuration-webui.sh`
   - 运行配置页 React WebUI 构建脚本；负责安装 Node 依赖并将 Vite 构建产物写入 `WorkspaceRunConfigurationResources`
 - `macos/scripts/setup-ghostty-framework.sh`
@@ -191,7 +199,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 - `macos/scripts/setup-sparkle-framework.sh`
   - 准备 `macos/Vendor` 的 Sparkle.xcframework 与 SparkleTools
 - `macos/scripts/create-universal-app.sh`
-  - 把 arm64 / x86_64 `.app` 合成 universal `.app`，供 Sparkle feed 发布使用
+  - 把 arm64 / x86_64 `.app` 及其 CmuxEmbedded.framework 合成 universal `.app`，供 Sparkle feed 发布使用
 - `macos/scripts/generate-appcast.sh`
   - Sparkle `generate_appcast` 的统一封装，负责生成 stable/nightly appcast
 - `macos/scripts/promote-appcast.sh`

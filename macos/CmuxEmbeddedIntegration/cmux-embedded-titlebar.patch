@@ -1,0 +1,91 @@
+diff --git a/Sources/MinimalModeSidebarTitlebarControlsOverlay.swift b/Sources/MinimalModeSidebarTitlebarControlsOverlay.swift
+index 4e3f2412a2..3ccc5d34b3 100644
+--- a/Sources/MinimalModeSidebarTitlebarControlsOverlay.swift
++++ b/Sources/MinimalModeSidebarTitlebarControlsOverlay.swift
+@@ -12,6 +12,7 @@ struct MinimalModeSidebarTitlebarControlsOverlay: View {
+     let onNewTab: () -> Void
+     let onFocusHistoryBack: () -> Void
+     let onFocusHistoryForward: () -> Void
++    @EnvironmentObject private var tabManager: TabManager
+ 
+     @AppStorage(WorkspacePresentationModeSettings.modeKey)
+     private var workspacePresentationMode = WorkspacePresentationModeSettings.defaultMode.rawValue
+@@ -21,7 +22,7 @@ struct MinimalModeSidebarTitlebarControlsOverlay: View {
+     }
+ 
+     var body: some View {
+-        if isMinimalMode {
++        if isMinimalMode || tabManager.isEmbeddedInHost {
+             HiddenTitlebarSidebarControlsView(
+                 unreadModel: unreadModel,
+                 layoutModel: layoutModel,
+diff --git a/Sources/Update/UpdateTitlebarAccessory.swift b/Sources/Update/UpdateTitlebarAccessory.swift
+index a3eb2a6165..c24a3f177a 100644
+--- a/Sources/Update/UpdateTitlebarAccessory.swift
++++ b/Sources/Update/UpdateTitlebarAccessory.swift
+@@ -1547,13 +1547,17 @@ struct HiddenTitlebarSidebarControlsView: View {
+     let onNewTab: () -> Void
+     let onFocusHistoryBack: () -> Void
+     let onFocusHistoryForward: () -> Void
++    @EnvironmentObject private var tabManager: TabManager
+     @StateObject private var viewModel = TitlebarControlsViewModel()
+     @ObservedObject private var popoverVisibilityState = NotificationsPopoverVisibilityState.shared
+     @State private var isHoveringHost = false
+     @State private var isHoveringWindowChrome = false
+     @State private var hostWindowNumber: Int?
+     private var shouldPinControls: Bool {
+-        isHoveringHost || isHoveringWindowChrome || popoverVisibilityState.isShown(in: hostWindowNumber)
++        tabManager.isEmbeddedInHost
++            || isHoveringHost
++            || isHoveringWindowChrome
++            || popoverVisibilityState.isShown(in: hostWindowNumber)
+     }
+ 
+     var body: some View {
+@@ -1620,7 +1624,7 @@ struct HiddenTitlebarSidebarControlsView: View {
+ 
+             MinimalModeSidebarControlActionProxyView(
+                 config: style.config,
+-                requiresRevealedState: true
++                requiresRevealedState: !tabManager.isEmbeddedInHost
+             ) { slot, anchorView, _ in
+                 switch slot {
+                 case .toggleSidebar:
+diff --git a/Sources/WindowDecorationsController.swift b/Sources/WindowDecorationsController.swift
+index 2f690d17c5..eb9a5d8ac6 100644
+--- a/Sources/WindowDecorationsController.swift
++++ b/Sources/WindowDecorationsController.swift
+@@ -419,7 +419,9 @@ final class WindowDecorationsController {
+         }()
+         target.config = TitlebarControlsStyle.stored().config
+         target.isEnabled = true
+-        target.requiresRevealedState = true
++        target.requiresRevealedState = !MainActor.assumeIsolated {
++            CmuxEmbeddedWindowDragPolicy.isEmbedded(window)
++        }
+         target.telemetryPrefix = "minimalSidebarTitlebarClickTarget"
+         target.onAction = { [weak self, weak window, weak target] slot, _, locationInWindow in
+             let anchorView = target
+diff --git a/Sources/ContentView.swift b/Sources/ContentView.swift
+index 2574ce3531..56dda2ca87 100644
+--- a/Sources/ContentView.swift
++++ b/Sources/ContentView.swift
+@@ -1756,10 +1756,14 @@ struct ContentView: View {
+             onSendFeedback: presentFeedbackComposer,
+             onToggleSidebar: { sidebarState.toggle() },
+             onNewTab: {
+-                AppDelegate.shared?.performNewWorkspaceAction(
+-                    tabManager: tabManager,
+-                    debugSource: "titlebar.hiddenNewWorkspace"
+-                )
++                if tabManager.isEmbeddedInHost {
++                    addTab()
++                } else {
++                    AppDelegate.shared?.performNewWorkspaceAction(
++                        tabManager: tabManager,
++                        debugSource: "titlebar.hiddenNewWorkspace"
++                    )
++                }
+             },
+             observedWindowReference: observedWindowReference,
+             chromeBackgroundColor: windowAppearanceSnapshot.resolvedChromeBackgroundColor,

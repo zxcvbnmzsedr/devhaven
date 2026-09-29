@@ -49,4 +49,7 @@ macos/Vendor/CodeEditPackages/
 .swiftpm/
 macos/Vendor/Sparkle.xcframework/
 macos/Vendor/SparkleTools/
+macos/Vendor/CmuxEmbedded.xcframework/
+macos/Vendor/CmuxBuildProducts/
+macos/ThirdParty/cmux/
 .omx/

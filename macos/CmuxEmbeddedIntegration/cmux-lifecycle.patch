@@ -1,0 +1,65 @@
+diff --git a/Sources/BrowserWindowPortal.swift b/Sources/BrowserWindowPortal.swift
+index 66e1626ac8..12b61e18ba 100644
+--- a/Sources/BrowserWindowPortal.swift
++++ b/Sources/BrowserWindowPortal.swift
+@@ -4089,7 +4089,7 @@ enum BrowserWindowPortalRegistry {
+         )
+     }
+ 
+-    private static func removePortal(for window: NSWindow) {
++    static func removePortal(for window: NSWindow) {
+         removePortal(windowId: ObjectIdentifier(window), window: window)
+     }
+ 
+diff --git a/Sources/ContentView.swift b/Sources/ContentView.swift
+index 2574ce3531..dc70eb1de2 100644
+--- a/Sources/ContentView.swift
++++ b/Sources/ContentView.swift
+@@ -3527,6 +3527,7 @@ struct ContentView: View {
+         appearance: WindowAppearanceSnapshot,
+         commandPaletteOverlayView: AnyView
+     ) {
++        guard !tabManager.isFinalizedForWindowClose else { return }
+         window.identifier = NSUserInterfaceItemIdentifier(windowIdentifier)
+         window.isRestorable = false
+         setMinimalModeSidebarTitlebarControlsAvailable(sidebarState.isVisible, in: window)
+diff --git a/Sources/TabManager.swift b/Sources/TabManager.swift
+index 188ec7bba3..dde1bad886 100644
+--- a/Sources/TabManager.swift
++++ b/Sources/TabManager.swift
+@@ -182,6 +182,8 @@ class TabManager: ObservableObject {
+     /// The window that owns this TabManager. Set by AppDelegate.registerMainWindow().
+     /// Used to apply title updates to the correct window instead of NSApp.keyWindow.
+     weak var window: NSWindow?
++    /// The owning window belongs to DevHaven when this manager is embedded.
++    var isEmbeddedInHost = false
+     /// Stable identifier of the owning macOS window. Used only for opt-in title
+     /// templates that expose a WM-matchable per-window token.
+     var windowId: UUID?
+@@ -3020,6 +3022,13 @@ class TabManager: ObservableObject {
+             return false
+         }
+         if tabs.count <= 1 {
++            if isEmbeddedInHost {
++                NotificationCenter.default.post(
++                    name: Notification.Name("DevHaven.CmuxEmbedded.CloseWorkspace"),
++                    object: windowId?.uuidString
++                )
++                return true
++            }
+             // Last workspace in this window closes via the window-close path. For a
+             // remote-tmux mirror this DETACHES from the remote session (kept alive for
+             // resume); the mark seam is a retained no-op (see
+diff --git a/Sources/TerminalWindowPortal.swift b/Sources/TerminalWindowPortal.swift
+index b3532bf456..4613a234b0 100644
+--- a/Sources/TerminalWindowPortal.swift
++++ b/Sources/TerminalWindowPortal.swift
+@@ -3101,7 +3101,7 @@ enum TerminalWindowPortalRegistry {
+         )
+     }
+ 
+-    private static func removePortal(for window: NSWindow) {
++    static func removePortal(for window: NSWindow) {
+         removePortal(windowId: ObjectIdentifier(window), window: window)
+     }
+ 

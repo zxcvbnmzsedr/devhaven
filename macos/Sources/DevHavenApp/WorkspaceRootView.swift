@@ -4,75 +4,28 @@ import DevHavenCore
 struct WorkspaceRootView: View {
     @Bindable var viewModel: NativeAppViewModel
     let terminalStoreRegistry: WorkspaceTerminalStoreRegistry
-    @State private var sidebarWidth: CGFloat = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
-
+    let cmuxHostStore: CmuxEmbeddedHostStore
     var body: some View {
-        GeometryReader { geometry in
-            let totalWidth = geometry.size.width
-
-            WorkspaceSplitView(
-                direction: .horizontal,
-                ratio: WorkspaceSidebarLayoutPolicy.sidebarRatio(
-                    for: sidebarWidth,
-                    totalWidth: totalWidth
-                ),
-                onRatioChange: { ratio in
-                    sidebarWidth = WorkspaceSidebarLayoutPolicy.sidebarWidth(
-                        for: ratio,
-                        totalWidth: totalWidth
-                    )
-                },
-                onRatioChangeEnded: { ratio in
-                    let committedWidth = WorkspaceSidebarLayoutPolicy.sidebarWidth(
-                        for: ratio,
-                        totalWidth: totalWidth
-                    )
-                    sidebarWidth = committedWidth
-                    persistSidebarWidth(committedWidth)
-                },
-                minLeadingSize: WorkspaceSidebarLayoutPolicy.minimumSidebarWidth,
-                minTrailingSize: WorkspaceSidebarLayoutPolicy.minimumWorkspaceContentWidth,
-                onEqualize: {
-                    sidebarWidth = WorkspaceSidebarLayoutPolicy.defaultSidebarWidth
-                    persistSidebarWidth(WorkspaceSidebarLayoutPolicy.defaultSidebarWidth)
-                }
-            ) {
-                WorkspaceProjectSidebarHostView(
-                    viewModel: viewModel,
-                    terminalStoreRegistry: terminalStoreRegistry
-                )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            } trailing: {
-                WorkspaceChromeContainerView(viewModel: viewModel) {
-                    WorkspaceShellView(
-                        viewModel: viewModel,
-                        terminalStoreRegistry: terminalStoreRegistry
-                    )
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .onAppear {
-                syncSidebarWidth(totalWidth: totalWidth)
-            }
-            .onChange(of: viewModel.workspaceSidebarWidth) { _, _ in
-                syncSidebarWidth(totalWidth: totalWidth)
-            }
-            .onChange(of: totalWidth) { _, _ in
-                syncSidebarWidth(totalWidth: totalWidth)
-            }
-        }
-        .background(NativeTheme.window)
-    }
-
-    private func syncSidebarWidth(totalWidth: CGFloat) {
-        sidebarWidth = WorkspaceSidebarLayoutPolicy.clampSidebarWidth(
-            CGFloat(viewModel.workspaceSidebarWidth),
-            totalWidth: totalWidth
+        let projectNames = Dictionary(
+            viewModel.openWorkspaceProjects.map { ($0.path, $0.name) },
+            uniquingKeysWith: { first, _ in first }
         )
-    }
+        let projects = viewModel.openWorkspaceSessions.map { session in
+            CmuxEmbeddedProject(
+                path: session.projectPath,
+                name: session.isQuickTerminal
+                    ? "快速终端"
+                    : projectNames[session.projectPath]
+                        ?? URL(fileURLWithPath: session.projectPath).lastPathComponent
+            )
+        }
 
-    private func persistSidebarWidth(_ width: CGFloat) {
-        let persistedWidth = Double(width.rounded())
-        viewModel.updateWorkspaceSidebarWidth(persistedWidth)
+        CmuxEmbeddedHostView(
+            workingDirectory: viewModel.activeWorkspaceProjectPath,
+            projects: projects,
+            hostStore: cmuxHostStore
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: .top)
     }
 }

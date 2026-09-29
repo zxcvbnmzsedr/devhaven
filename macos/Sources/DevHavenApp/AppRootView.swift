@@ -7,19 +7,23 @@ struct AppRootView: View {
     @Bindable var viewModel: NativeAppViewModel
     @ObservedObject var updateController: DevHavenUpdateController
     @ObservedObject var quitGuard: AppQuitGuard
+    let cmuxHostStore: CmuxEmbeddedHostStore
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var workspaceTerminalStoreRegistry = WorkspaceTerminalStoreRegistry()
     @State private var cliCoordinator: WorkspaceCLICommandCoordinator?
+    @State private var isCmuxProjectPickerPresented = false
     @State private var projectDetailPanelWidth: CGFloat = AppRootProjectDetailLayoutPolicy.defaultPanelWidth
 
     init(
         viewModel: NativeAppViewModel,
         updateController: DevHavenUpdateController = DevHavenUpdateController(),
-        quitGuard: AppQuitGuard = AppQuitGuard()
+        quitGuard: AppQuitGuard = AppQuitGuard(),
+        cmuxHostStore: CmuxEmbeddedHostStore = CmuxEmbeddedHostStore()
     ) {
         self.viewModel = viewModel
         self.updateController = updateController
         self.quitGuard = quitGuard
+        self.cmuxHostStore = cmuxHostStore
     }
 
     var body: some View {
@@ -133,7 +137,11 @@ struct AppRootView: View {
                 .allowsHitTesting(false)
         )
         .background(
-            MainWindowCloseConfirmationBridge()
+            MainWindowCloseConfirmationBridge(onConfirmedClose: {
+                if viewModel.isWorkspacePresented {
+                    viewModel.exitWorkspace()
+                }
+            })
                 .allowsHitTesting(false)
         )
         .background(
@@ -147,6 +155,17 @@ struct AppRootView: View {
         .sheet(isPresented: $viewModel.isDashboardPresented) {
             GitDashboardView(viewModel: viewModel)
                 .preferredColorScheme(preferredColorScheme)
+        }
+        .sheet(isPresented: $isCmuxProjectPickerPresented) {
+            WorkspaceProjectPickerView(
+                projects: viewModel.availableWorkspaceProjects,
+                onOpenProject: { path in
+                    viewModel.enterWorkspace(path)
+                    isCmuxProjectPickerPresented = false
+                },
+                onClose: { isCmuxProjectPickerPresented = false }
+            )
+            .preferredColorScheme(preferredColorScheme)
         }
         .sheet(isPresented: $viewModel.isSettingsPresented) {
             SettingsView(
@@ -200,6 +219,32 @@ struct AppRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             cliCoordinator?.stop()
             viewModel.flushWorkspaceRestoreSnapshotNow()
+            cmuxHostStore.destroyAll()
+        }
+        .onChange(of: viewModel.openWorkspaceSessions.map(\.projectPath)) { _, paths in
+            cmuxHostStore.retainSessions(at: Set(paths))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.CloseWorkspace"))) { _ in
+            guard viewModel.isWorkspacePresented else { return }
+            viewModel.exitWorkspace()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.ReturnHome"))) { _ in
+            guard viewModel.isWorkspacePresented else { return }
+            viewModel.exitWorkspace()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.ActivateProject"))) { notification in
+            guard viewModel.isWorkspacePresented,
+                  let path = notification.object as? String else { return }
+            viewModel.activateWorkspaceSidebarProject(path)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.OpenProjectPicker"))) { _ in
+            guard viewModel.isWorkspacePresented else { return }
+            isCmuxProjectPickerPresented = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.ClosedProject"))) { notification in
+            guard viewModel.isWorkspacePresented,
+                  let path = notification.object as? String else { return }
+            viewModel.closeWorkspaceSession(path)
         }
         .onChange(of: projectDetailPresentation.showsPersistentSidebar) { _, isPersistent in
             if isPersistent {
@@ -231,7 +276,8 @@ struct AppRootView: View {
             if contentVisibilityPolicy.keepsWorkspaceMounted {
                 WorkspaceRootView(
                     viewModel: viewModel,
-                    terminalStoreRegistry: workspaceTerminalStoreRegistry
+                    terminalStoreRegistry: workspaceTerminalStoreRegistry,
+                    cmuxHostStore: cmuxHostStore
                 )
                     .opacity(contentVisibilityPolicy.workspaceContentOpacity)
                     .allowsHitTesting(contentVisibilityPolicy.workspaceContentAllowsHitTesting)
@@ -243,6 +289,14 @@ struct AppRootView: View {
     }
 
     private func handleMainWindowCloseShortcut() -> Bool {
+        if viewModel.isWorkspacePresented,
+           !viewModel.isDashboardPresented,
+           !viewModel.isSettingsPresented,
+           !viewModel.isRecycleBinPresented,
+           !viewModel.isDetailPanelPresented {
+            CmuxEmbeddedWorkspaceActions.closeCurrentPanel()
+            return true
+        }
         let action = MainWindowCloseShortcutPlanner().action(for: mainWindowCloseShortcutContext)
         switch action {
         case .hideDashboard:
@@ -675,15 +729,19 @@ enum AppRootProjectDetailLayoutPolicy {
 }
 
 private struct MainWindowCloseConfirmationBridge: NSViewRepresentable {
+    let onConfirmedClose: @MainActor () -> Void
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
     func makeNSView(context: Context) -> NSView {
-        NSView(frame: .zero)
+        context.coordinator.onConfirmedClose = onConfirmedClose
+        return NSView(frame: .zero)
     }
 
     func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.onConfirmedClose = onConfirmedClose
         DispatchQueue.main.async {
             guard let window = view.window else {
                 context.coordinator.detach()
@@ -699,6 +757,7 @@ private struct MainWindowCloseConfirmationBridge: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSWindowDelegate {
         private let handler = MainWindowCloseConfirmationHandler(prompt: AppKitMainWindowClosePrompt())
+        var onConfirmedClose: @MainActor () -> Void = {}
         private weak var trackedWindow: NSWindow?
         private weak var forwardedDelegate: (any NSWindowDelegate)?
 
@@ -731,7 +790,12 @@ private struct MainWindowCloseConfirmationBridge: NSViewRepresentable {
             guard handler.shouldAllowClose(windowNumber: sender.windowNumber) else {
                 return false
             }
-            return forwardedDelegate?.windowShouldClose?(sender) ?? true
+            let shouldClose = forwardedDelegate?.windowShouldClose?(sender) ?? true
+            if shouldClose {
+                let onConfirmedClose = onConfirmedClose
+                DispatchQueue.main.async(execute: onConfirmedClose)
+            }
+            return shouldClose
         }
 
         isolated deinit {
