@@ -81,6 +81,41 @@ elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedde
   exit 1
 fi
 
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-terminal-exit.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-terminal-exit.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-terminal-exit.patch" 2>/dev/null; then
+  echo "cmux embedded terminal-exit patch does not match the pinned source" >&2
+  exit 1
+fi
+
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-workspace-groups.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-workspace-groups.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-workspace-groups.patch" 2>/dev/null; then
+  echo "cmux embedded workspace-groups patch does not match the pinned source" >&2
+  exit 1
+fi
+
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-localization.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-localization.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-localization.patch" 2>/dev/null; then
+  echo "cmux embedded localization patch does not match the pinned source" >&2
+  exit 1
+fi
+
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-terminal-focus.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-terminal-focus.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-terminal-focus.patch" 2>/dev/null; then
+  echo "cmux embedded terminal-focus patch does not match the pinned source" >&2
+  exit 1
+fi
+
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-window-buttons.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-window-buttons.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-window-buttons.patch" 2>/dev/null; then
+  echo "cmux embedded window-buttons patch does not match the pinned source" >&2
+  exit 1
+fi
+
 if [[ ! -d "$CMUX_DIR/GhosttyKit.xcframework" ]]; then
   (cd "$CMUX_DIR" && ./scripts/download-prebuilt-ghosttykit.sh)
 fi
@@ -106,6 +141,11 @@ FRAMEWORK_PATH="$DERIVED_DATA_DIR/Build/Products/$BUILD_CONFIGURATION/CmuxEmbedd
 install_name_tool -id \
   "@rpath/CmuxEmbedded.framework/Versions/A/CmuxEmbedded" \
   "$FRAMEWORK_PATH/Versions/A/CmuxEmbedded"
+
+python3 "$SCRIPT_DIR/prepare-cmux-localization.py" prepare \
+  --source "$CMUX_DIR" \
+  --products "$DERIVED_DATA_DIR/Build/Products/$BUILD_CONFIGURATION" \
+  --framework "$FRAMEWORK_PATH"
 
 rm -rf "$OUTPUT_DIR"
 xcodebuild -create-xcframework \

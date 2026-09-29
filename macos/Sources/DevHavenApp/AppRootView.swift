@@ -242,8 +242,7 @@ struct AppRootView: View {
             isCmuxProjectPickerPresented = true
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.ClosedProject"))) { notification in
-            guard viewModel.isWorkspacePresented,
-                  let path = notification.object as? String else { return }
+            guard let path = notification.object as? String else { return }
             viewModel.closeWorkspaceSession(path)
         }
         .onChange(of: projectDetailPresentation.showsPersistentSidebar) { _, isPersistent in

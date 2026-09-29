@@ -21,10 +21,19 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
   - 原生子工程入口；当前额外链接本地构建的 `CmuxEmbedded.xcframework`
 - `macos/CmuxEmbeddedIntegration/`
   - cmux 嵌入层的源码、Xcode scheme 与 pinned 源码补丁；构建脚本将其应用到指定 cmux commit。内嵌模式通过侧边栏补丁在顶部标题行提供“返回”入口，并隐藏 cmux 账号与升级入口；拖动补丁只允许 cmux 顶部显式拖动区域移动窗口，侧边栏空白处不再触发窗口拖动；独立 cmux App 保持原样
+  - `cmux-embedded-terminal-exit.patch` 将 shell 退出与 surface 关闭回调按 workspace ID 路由到内嵌宿主的弱引用 registry，不得依赖独立 cmux 的 `AppDelegate.shared`。`Ctrl+D` 保留 shell EOF 语义；宿主初始化禁用 `autoWelcomeIfNeeded`，避免向首个 shell 注入独立 cmux 的欢迎命令。最后一个 shell 正常退出时清理项目会话，后台退出也要同步项目列表。真实按键回归入口为 `macos/scripts/test-cmux-terminal-exit.sh <DevHaven.app 绝对路径>`
+  - `cmux-embedded-window-buttons.patch` 让内嵌标题栏按 AppKit 系统按钮的真实 bounds 排除关闭、最小化和缩放按钮，统一用于单击拖动与双击标题栏动作；不得只检查 `contentView.hitTest`，因为 full-size content 会命中按钮下方的拖动层。回归入口为 `macos/scripts/test-cmux-window-buttons.sh <DevHaven.app 绝对路径>`
+  - `cmux-embedded-terminal-focus.patch` 将终端工作区归属、自动焦点恢复与当前输入 pane 校验接到 `EmbeddedTerminalOwnerRegistry`；内嵌模式不得依赖独立 cmux 的 `AppDelegate.shared` 判断终端是否聚焦，否则鼠标按下会被当作 focus-only 点击丢弃，无法拖选。保留 selected workspace / input surface / 可见性校验，后台会话不得抢焦点。回归入口为 `macos/scripts/test-cmux-terminal-selection.sh <DevHaven.app 绝对路径>`。
+  - `cmux-embedded-workspace-groups.patch` 将侧边栏空分组菜单直接接到当前 `TabManager`；分组 anchor 是 cmux 的原生工作区，项目同步不得把它当成未关联项目清理，也不得复用为新打开项目。`tabsPublisher` 会在拖动排序的 remove/insert 中间态发布，宿主必须合并到下一次主队列执行并读取最终 tabs，再判断项目关闭或未关联项目；不能用单次发布的缺失 ID 直接移除项目映射。回归入口为 `macos/scripts/test-cmux-workspace-groups.sh <DevHaven.app 绝对路径>`
+  - `CmuxEmbeddedRootView.swift` 按项目路径将分组名称、成员、侧边栏顺序、折叠/置顶及颜色/图标保存在宿主 `UserDefaults` 的 `DevHaven.CmuxEmbedded.ProjectLayout.v1`，在首批项目同步完毕后映射到新 workspace ID；不得持久化运行时 workspace ID 作为项目身份，也不得通过恢复分组额外打开项目。监听 tabs/groups 的最终状态并在退出前保存；跨进程回归使用 `test-cmux-workspace-groups.sh <App 路径> --restore`。
 - `macos/ThirdParty/cmux/`
   - 构建脚本获取的 cmux 源码工作树，不纳入 DevHaven 版本库；`CmuxEmbedded` target 从其 `ContentView` 构建 Workspace 二级界面，不通过外部 cmux App 跳转
 - `macos/Sources/DevHavenApp/CmuxEmbeddedHostView.swift`
   - 通过 C ABI 加载 cmux 原生框架并把 `NSHostingView` 挂入 DevHaven Workspace；单个 cmux 宿主跨项目切换与返回主页保留，原生对话列表每行对应一个已打开项目，不另设“已打开项目”列表
+- `macos/Sources/DevHavenApp/CmuxEmbeddedWorkspaceCommands.swift`
+  - 二级页面的终端菜单命令；`⌘T` 新建当前项目的终端标签、`⌘D` 向右分屏、`⌘⇧D` 向下分屏均经由 `cmux_embedded_host_view_perform_command` 操作当前内嵌 cmux 的 `TabManager`。不得再调用旧 `GhosttyWorkspaceController`，也不得用旧 pane 选中态启用菜单；返回主页、宿主分离或窗口显示 sheet 时不得修改后台 cmux 会话
+- `macos/Sources/DevHavenApp/DevHavenMain.swift`、`CmuxEmbeddedWorkerBootstrap.swift`
+  - 进程入口在创建 `DevHavenApp` 之前识别 `--cmux-paste-preparation-worker`，通过 C ABI 执行 cmux 原生剪贴板 worker 并以其状态退出。cmux 会重新执行宿主二进制准备粘贴内容；该分支不得创建窗口、加载项目或启动会话恢复，缺少 worker 符号也必须直接失败退出
 - `macos/WebUI/WorkspaceRunConfiguration/`
   - 运行配置页的标准 React + Vite 源码工程；源码位于 `src/`，通过 `npm run build` 输出到 App 资源目录
 - `macos/Sources/DevHavenApp/`
@@ -192,6 +201,9 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
   - 原生 `.app` 本地打包脚本；负责嵌入 Sparkle.framework 与 CmuxEmbedded.framework，并写入 `CFBundleVersion` / `SUFeedURL` / `DevHavenUpdateDeliveryMode` / 下载页 URL / `SUPublicEDKey`
 - `macos/scripts/build-cmux-embedded.sh`
   - 固定 cmux commit、应用 `CmuxEmbeddedIntegration` 补丁，并按目标架构构建 `CmuxEmbedded.xcframework`，供 DevHaven 原生入口加载
+- `macos/scripts/prepare-cmux-localization.py`、`macos/CmuxEmbeddedIntegration/Localization/`
+  - 编译上游 cmux 与 macOS/共享 package 的简体中文资源，补齐 Bonsplit 标签栏中文；翻译补充保存在 `Main.json` / `Bonsplit.json`，不要直接修改忽略的 ThirdParty catalog。品牌、快捷键和命令语法保留原文，并在构建时检查上游变化与缺失翻译。
+  - cmux 的 `String(localized:)` 默认查找 `Bundle.main`，因此打包脚本必须将中文 `.lproj` 安装到 App 主 Resources；`dev` 必须安装到 SwiftPM executable 所在目录。Swift package 的资源 bundle 随 CmuxEmbedded.framework 分发，供 `Bundle.module` 独立查找。
 - `macos/scripts/build-run-configuration-webui.sh`
   - 运行配置页 React WebUI 构建脚本；负责安装 Node 依赖并将 Vite 构建产物写入 `WorkspaceRunConfigurationResources`
 - `macos/scripts/setup-ghostty-framework.sh`
@@ -222,7 +234,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 ## 模块边界
 
 ### 1) 原生 App 壳
-- 入口：`macos/Sources/DevHavenApp/DevHavenApp.swift`
+- 进程入口：`macos/Sources/DevHavenApp/DevHavenMain.swift`；正常 App 场景：`macos/Sources/DevHavenApp/DevHavenApp.swift`
 - 退出保护：`macos/Sources/DevHavenApp/AppQuitGuard.swift`
 - 主界面壳：`AppRootView.swift`、`MainContentView.swift`、`ProjectDetailRootView.swift`
 - 终端工作区壳：`WorkspaceRootView.swift`、`WorkspaceProjectSidebarHostView.swift`、`WorkspaceChromeContainerView.swift`、`WorkspaceShellView.swift`、`WorkspaceHostView.swift`、`WorkspaceProjectListView.swift`

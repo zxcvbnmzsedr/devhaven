@@ -119,6 +119,7 @@ if (( DRY_RUN )); then
   done
   print_command "cmux嵌入框架命令" "${CMUX_EMBEDDED_COMMAND[@]}"
   print_command "CLI构建命令" "${CLI_BUILD_COMMAND[@]}"
+  print_command "cmux中文资源命令" python3 macos/scripts/prepare-cmux-localization.py install --framework macos/Vendor/CmuxEmbedded.xcframework/macos-$(uname -m)/CmuxEmbedded.framework --destination '<SwiftPM bin path>'
   if (( ENABLE_LOG )); then
     print_command "日志命令" "${LOG_COMMAND[@]}"
   fi
@@ -144,6 +145,11 @@ printf '==> 构建 cmux 原生嵌入框架\n'
 
 printf '==> 构建 DevHavenCLI helper\n'
 "${CLI_BUILD_COMMAND[@]}"
+
+CMUX_FRAMEWORK_PATH="$ROOT_DIR/macos/Vendor/CmuxEmbedded.xcframework/macos-$(uname -m)/CmuxEmbedded.framework"
+DEV_BIN_DIR="$(swift build --package-path macos --show-bin-path)"
+python3 macos/scripts/prepare-cmux-localization.py install \
+  --framework "$CMUX_FRAMEWORK_PATH" --destination "$DEV_BIN_DIR"
 
 if (( ENABLE_LOG )); then
   printf '==> 启动 unified log 观察（logs=%s）\n' "$LOG_MODE"

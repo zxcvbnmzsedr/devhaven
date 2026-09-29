@@ -1,0 +1,136 @@
+diff --git a/Sources/Panels/TerminalPanel.swift b/Sources/Panels/TerminalPanel.swift
+index 565028c85c..50c94834e6 100644
+--- a/Sources/Panels/TerminalPanel.swift
++++ b/Sources/Panels/TerminalPanel.swift
+@@ -41,7 +41,7 @@ final class TerminalPanel: Panel, ObservableObject {
+     var seededWorkspaceEnvironment: [String: String] = [:]
+ 
+     /// Published title from the terminal process
+-    @Published private(set) var title: String = "Terminal"
++    @Published private(set) var title: String = String(localized: "notification.desktop.defaultTerminalTitle", defaultValue: "Terminal")
+ 
+     /// Published directory from the terminal
+     @Published private(set) var directory: String = ""
+@@ -111,7 +111,7 @@ final class TerminalPanel: Panel, ObservableObject {
+     private var attentionFlashActiveUntil: TimeInterval = 0
+ 
+     var displayTitle: String {
+-        title.isEmpty ? "Terminal" : title
++        title.isEmpty ? String(localized: "notification.desktop.defaultTerminalTitle", defaultValue: "Terminal") : title
+     }
+ 
+     var displayIcon: String? {
+@@ -159,7 +159,7 @@ final class TerminalPanel: Panel, ObservableObject {
+         self.id = surface.id
+         self.workspaceId = workspaceId
+         self.surface = surface
+-        self.title = surface.agentPanelTitle.flatMap { AutomaticTerminalTitle($0)?.value } ?? "Terminal"
++        self.title = surface.agentPanelTitle.flatMap { AutomaticTerminalTitle($0)?.value } ?? String(localized: "notification.desktop.defaultTerminalTitle", defaultValue: "Terminal")
+         // Subscribe to surface's search state changes
+         surface.$searchState
+             .sink { [weak self] state in
+diff --git a/Sources/Workspace.swift b/Sources/Workspace.swift
+index f1a12d07c7..354a3a6ca4 100644
+--- a/Sources/Workspace.swift
++++ b/Sources/Workspace.swift
+@@ -3993,7 +3993,7 @@ final class Workspace: Identifiable, ObservableObject, FilePreviewTabMetadataHos
+ 
+     init(
+         id: UUID? = nil,
+-        title: String = "Terminal",
++        title: String = String(localized: "notification.desktop.defaultTerminalTitle", defaultValue: "Terminal"),
+         workingDirectory: String? = nil,
+         portOrdinal: Int = 0,
+         configTemplate: CmuxSurfaceConfigTemplate? = nil,
+--- a/Sources/TabManager.swift
++++ b/Sources/TabManager.swift
+@@ -1378,7 +1378,7 @@
+             let defaultTitle: String
+             switch initialSurface {
+             case .terminal:
+-                defaultTitle = "Terminal \(nextTabCount)"
++                defaultTitle = String(format: String(localized: "Terminal %lld"), nextTabCount)
+             case .browser:
+                 // Match the browser surface's blank new-tab title; the
+                 // single-panel title sync keeps the workspace title following
+@@ -6689,7 +6689,7 @@
+             )
+             let fallback = Workspace(
+                 id: fallbackWorkspaceId,
+-                title: "Terminal 1",
++                title: String(format: String(localized: "Terminal %lld"), 1),
+                 portOrdinal: ordinal,
+                 tabDragTransferRegistry: tabDragTransferRegistry,
+                 settings: settings,
+--- a/Sources/Workspace.swift
++++ b/Sources/Workspace.swift
+@@ -3611,10 +3611,10 @@
+ 
+     static func currentSplitButtonTooltips() -> BonsplitConfiguration.SplitButtonTooltips {
+         BonsplitConfiguration.SplitButtonTooltips(
+-            newTerminal: KeyboardShortcutSettings.Action.newSurface.tooltip("New Terminal"),
+-            newBrowser: KeyboardShortcutSettings.Action.openBrowser.tooltip("New Browser"),
+-            splitRight: KeyboardShortcutSettings.Action.splitRight.tooltip("Split Right"),
+-            splitDown: KeyboardShortcutSettings.Action.splitDown.tooltip("Split Down")
++            newTerminal: KeyboardShortcutSettings.Action.newSurface.tooltip(String(localized: "New Terminal")),
++            newBrowser: KeyboardShortcutSettings.Action.openBrowser.tooltip(String(localized: "New Browser")),
++            splitRight: KeyboardShortcutSettings.Action.splitRight.tooltip(String(localized: "Split Right")),
++            splitDown: KeyboardShortcutSettings.Action.splitDown.tooltip(String(localized: "Split Down"))
+         )
+     }
+ 
+--- a/Sources/GhosttyTerminalView.swift
++++ b/Sources/GhosttyTerminalView.swift
+@@ -5977,7 +5977,7 @@
+     }
+ 
+     override func accessibilityHelp() -> String? {
+-        "Terminal content area"
++        String(localized: "Terminal content area")
+     }
+ 
+     override func accessibilityValue() -> Any? {
+--- a/Sources/Sidebar/AppKitList/Cells/SidebarWorkspaceRowColorMenu.swift
++++ b/Sources/Sidebar/AppKitList/Cells/SidebarWorkspaceRowColorMenu.swift
+@@ -15,7 +15,7 @@
+         apply: @escaping (String) -> Void
+     ) {
+         for entry in palette {
+-            let colorItem = SidebarRowMenuActionItem(title: entry.name) {
++            let colorItem = SidebarRowMenuActionItem(title: Bundle.main.localizedString(forKey: "workspaceColor.name.\(entry.name)", value: entry.name, table: nil)) {
+                 apply(entry.hex)
+             }
+             colorItem.state = WorkspaceTabColorSettings.paletteEntryMatches(
+--- a/Sources/TabItemView+WorkspaceContextMenu.swift
++++ b/Sources/TabItemView+WorkspaceContextMenu.swift
+@@ -190,7 +190,7 @@
+                             .opacity(isSelected ? 1 : 0)
+                             .frame(width: 12)
+                         Image(nsImage: coloredCircleImage(color: tabColorSwatchColor(for: entry.hex)))
+-                        Text(entry.name)
++                        Text(Bundle.main.localizedString(forKey: "workspaceColor.name.\(entry.name)", value: entry.name, table: nil))
+                     }
+                 }
+             }
+--- a/Packages/macOS/CmuxSettingsUI/Sources/CmuxSettingsUI/Sections/WorkspaceColorsSection.swift
++++ b/Packages/macOS/CmuxSettingsUI/Sources/CmuxSettingsUI/Sections/WorkspaceColorsSection.swift
+@@ -207,7 +207,7 @@
+         }()
+         SettingsCardRow(
+             configurationReview: .json("workspaceColors.colors"),
+-            entry.name,
++            Bundle.main.localizedString(forKey: "workspaceColor.name.\(entry.name)", value: entry.name, table: nil),
+             subtitle: subtitle
+         ) {
+             HStack(spacing: 8) {
+--- a/Sources/ContentView.swift
++++ b/Sources/ContentView.swift
+@@ -7443,7 +7443,7 @@
+             default:
+                 return String(
+                     localized: "command.workspaceColor.named",
+-                    defaultValue: "Workspace Color: \(paletteName)"
++                    defaultValue: "Workspace Color: \(Bundle.main.localizedString(forKey: "workspaceColor.name.\(paletteName)", value: paletteName, table: nil))"
+                 )
+             }
+         }

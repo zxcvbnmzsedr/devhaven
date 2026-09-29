@@ -1,0 +1,81 @@
+--- a/Sources/GhosttyTerminalView.swift
++++ b/Sources/GhosttyTerminalView.swift
+@@ -900,7 +900,7 @@
+ #endif
+ 
+             DispatchQueue.main.async {
+-                guard let app = AppDelegate.shared else { return }
++                let app = AppDelegate.shared
+                 guard let callbackSurface = callbackContext.terminalSurface else {
+ #if DEBUG
+                     cmuxDebugLog(
+@@ -918,10 +918,12 @@
+ #endif
+                     return
+                 }
+-                if app.closeWindowDockRuntimeSurface(surfaceId: callbackSurfaceId, force: !needsConfirmClose) { return }
++                if app?.closeWindowDockRuntimeSurface(surfaceId: callbackSurfaceId, force: !needsConfirmClose) == true { return }
+                 // Close requests must be resolved by the callback's workspace/surface IDs only.
+                 // If the mapping is already gone (duplicate/stale callback), ignore it.
+-                if let callbackTabId, let manager = app.tabManagerFor(tabId: callbackTabId) ?? app.tabManager {
++                if let callbackTabId,
++                   let manager = EmbeddedTerminalOwnerRegistry.manager(for: callbackTabId)
++                    ?? app?.tabManagerFor(tabId: callbackTabId) ?? app?.tabManager {
+                     if needsConfirmClose {
+                         manager.closeRuntimeSurfaceWithConfirmation(
+                             tabId: callbackTabId,
+--- a/Sources/GhosttyApp+ChildExitPolicy.swift
++++ b/Sources/GhosttyApp+ChildExitPolicy.swift
+@@ -36,15 +36,16 @@
+             // Avoid re-entrant close/deinit while Ghostty dispatches this callback.
+             DispatchQueue.main.async {
+                 runtimeSurface.markShellExited()
+-                guard let app = AppDelegate.shared else { return }
++                let app = AppDelegate.shared
+                 guard GhosttyApp.terminalSurfaceRegistry.surface(id: runtimeSurface.id) === runtimeSurface else { return }
+                 if !keepSurfaceVisible,
+                    let surfaceId,
+-                   app.closeWindowDockRuntimeSurface(surfaceId: surfaceId, force: true) {
++                   app?.closeWindowDockRuntimeSurface(surfaceId: surfaceId, force: true) == true {
+                     return
+                 }
+                 if let tabId, let surfaceId,
+-                   let manager = app.tabManagerFor(tabId: tabId) ?? app.tabManager {
++                   let manager = EmbeddedTerminalOwnerRegistry.manager(for: tabId)
++                    ?? app?.tabManagerFor(tabId: tabId) ?? app?.tabManager {
+                     manager.closePanelAfterChildExited(
+                         tabId: tabId,
+                         surfaceId: surfaceId,
+--- a/Sources/TabManager.swift
++++ b/Sources/TabManager.swift
+@@ -3294,7 +3294,11 @@
+         // semantics (and close the window when it was the last workspace).
+         if tab.panels.count <= 1 {
+             if tabs.count <= 1 {
+-                if let app = AppDelegate.shared {
++                if isEmbeddedInHost {
++                    // Publish the empty workspace list so the host closes its project
++                    // session and returns home. Never retain an exited last shell.
++                    finalizeAllWorkspacesForWindowClose()
++                } else if let app = AppDelegate.shared {
+                     // Notification cleanup belongs to the committed outcome:
+                     // unregisterMainWindow handles a closed window and
+                     // applicationWillTerminate clears the store on Quit.
+@@ -6942,3 +6946,17 @@
+ enum BrowserFirstResponderNotificationUserInfoKey {
+     static let pointerInitiated = "pointerInitiated"
+ }
++
++/// Embedded hosts have no cmux AppDelegate. Resolve terminal callbacks by the
++/// owning workspace ID, including background workspaces, without retaining hosts.
++@MainActor
++enum EmbeddedTerminalOwnerRegistry {
++    static let managers = NSHashTable<TabManager>.weakObjects()
++
++    static func manager(for workspaceId: UUID) -> TabManager? {
++        managers.allObjects.first {
++            $0.isEmbeddedInHost && !$0.isFinalizedForWindowClose &&
++                $0.workspacesById[workspaceId] != nil
++        }
++    }
++}

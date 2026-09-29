@@ -1,0 +1,65 @@
+--- a/Sources/ContentView.swift
++++ b/Sources/ContentView.swift
+@@ -12524,7 +12524,7 @@
+                 selection = .tabs
+             },
+             createEmptyWorkspaceGroup: {
+-                _ = AppDelegate.shared?.createEmptyWorkspaceGroup(tabManager: tabManager)
++                _ = tabManager.createEmptyWorkspaceGroup()
+             },
+             beginWorkspaceDrag: { workspaceId in
+                 _ = dragState.beginDragging(tabId: workspaceId)
+@@ -15268,7 +15268,7 @@
+                 syncWorkspaceRowSelectionAfterMutation()
+             },
+             createEmptyGroup: {
+-                _ = AppDelegate.shared?.createEmptyWorkspaceGroup(tabManager: tabManager)
++                _ = tabManager.createEmptyWorkspaceGroup()
+             },
+             createGroup: { workspaceIds in
+                 guard !workspaceIds.isEmpty else { return }
+--- a/Sources/Sidebar/AppKitList/Cells/SidebarWorkspaceRowCommands.swift
++++ b/Sources/Sidebar/AppKitList/Cells/SidebarWorkspaceRowCommands.swift
+@@ -387,7 +387,7 @@
+             shortcut: newGroupShortcut
+         ) { [weak tabManager] in
+             guard let tabManager else { return }
+-            _ = AppDelegate.shared?.createEmptyWorkspaceGroup(tabManager: tabManager)
++            _ = tabManager.createEmptyWorkspaceGroup()
+         })
+ 
+         let targetWorkspaces = targetIds.compactMap { id in
+--- a/Sources/VerticalTabsSidebar+EmptyAreasAndFooter.swift
++++ b/Sources/VerticalTabsSidebar+EmptyAreasAndFooter.swift
+@@ -476,12 +476,12 @@
+             )
+             if let key = newWorkspaceGroupShortcut.keyEquivalent {
+                 Button(newWorkspaceGroupLabel) {
+-                    _ = AppDelegate.shared?.createEmptyWorkspaceGroup(tabManager: tabManager)
++                    _ = tabManager.createEmptyWorkspaceGroup()
+                 }
+                 .keyboardShortcut(key, modifiers: newWorkspaceGroupShortcut.eventModifiers)
+             } else {
+                 Button(newWorkspaceGroupLabel) {
+-                    _ = AppDelegate.shared?.createEmptyWorkspaceGroup(tabManager: tabManager)
++                    _ = tabManager.createEmptyWorkspaceGroup()
+                 }
+             }
+         }
+--- a/Sources/TabManager.swift
++++ b/Sources/TabManager.swift
+@@ -2128,6 +2128,14 @@
+ 
+     // MARK: - Workspace Groups (WorkspaceGroupCoordinator, CmuxWorkspaces)
+ 
++    /// Sidebar actions already have their owning manager; they must also work
++    /// in embedded hosts that do not create the standalone cmux AppDelegate.
++    @discardableResult
++    func createEmptyWorkspaceGroup() -> Bool {
++        guard !isFinalizedForWindowClose, selectedTab?.isRemoteTmuxMirror != true else { return false }
++        return createWorkspaceGroup(name: "") != nil
++    }
++
+     @discardableResult
+     func createWorkspaceGroup(
+         name: String,

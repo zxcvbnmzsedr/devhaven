@@ -277,6 +277,8 @@ cp "$CLI_HELPER_PATH" "$APP_STAGE_PATH/Contents/MacOS/DevHavenCLI"
 ditto "$RESOURCE_BUNDLE_PATH" "$APP_STAGE_PATH/Contents/Resources/$(basename "$RESOURCE_BUNDLE_PATH")"
 ditto "$SPARKLE_FRAMEWORK_SRC" "$FRAMEWORKS_PATH/Sparkle.framework"
 ditto "$CMUX_FRAMEWORK_SRC" "$FRAMEWORKS_PATH/CmuxEmbedded.framework"
+python3 "$SCRIPT_DIR/prepare-cmux-localization.py" install \
+  --framework "$CMUX_FRAMEWORK_SRC" --destination "$APP_STAGE_PATH/Contents/Resources"
 mkdir -p "$APP_STAGE_PATH/Contents/Resources/Licenses/cmux"
 cp "$MACOS_DIR/ThirdParty/cmux/LICENSE" "$APP_STAGE_PATH/Contents/Resources/Licenses/cmux/LICENSE"
 cp "$MACOS_DIR/ThirdParty/cmux/THIRD_PARTY_LICENSES.md" \
@@ -297,7 +299,9 @@ cat > "$INFO_PLIST_PATH" <<PLIST
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key>
-  <string>zh_CN</string>
+  <string>zh-Hans</string>
+  <key>CFBundleLocalizations</key>
+  <array><string>zh-Hans</string></array>
   <key>CFBundleExecutable</key>
   <string>DevHavenApp</string>
   <key>CFBundleIdentifier</key>

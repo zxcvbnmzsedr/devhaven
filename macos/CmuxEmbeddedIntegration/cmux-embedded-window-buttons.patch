@@ -1,0 +1,29 @@
+--- a/Sources/WindowDragHandleView.swift
++++ b/Sources/WindowDragHandleView.swift
+@@ -566,7 +566,26 @@
+     }
+ }
+ 
++/// Native traffic lights live outside contentView. Embedded content hit-testing
++/// can see the drag strip underneath, so check the actual AppKit button bounds
++/// before any content hit-test or synthetic titlebar double-click handling.
++func isEmbeddedStandardWindowButtonHit(window: NSWindow, locationInWindow: NSPoint) -> Bool {
++    dispatchPrecondition(condition: .onQueue(.main))
++    guard MainActor.assumeIsolated({ CmuxEmbeddedWindowDragPolicy.isEmbedded(window) }) else { return false }
++    return [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].contains { type in
++        guard let button = window.standardWindowButton(type),
++              button.window === window,
++              !button.isHiddenOrHasHiddenAncestor,
++              button.alphaValue > 0 else { return false }
++        // Disabled buttons still reserve their area; clicking one must not drag.
++        return button.bounds.contains(button.convert(locationInWindow, from: nil))
++    }
++}
++
+ func isMinimalModeTitlebarControlHit(window: NSWindow, locationInWindow: NSPoint) -> Bool {
++    if isEmbeddedStandardWindowButtonHit(window: window, locationInWindow: locationInWindow) {
++        return true
++    }
+     if isMinimalModeSidebarTitlebarControlButtonHit(window: window, locationInWindow: locationInWindow) {
+         return true
+     }

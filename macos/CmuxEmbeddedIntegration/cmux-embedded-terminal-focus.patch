@@ -1,0 +1,56 @@
+--- a/Sources/GhosttyTerminalView.swift
++++ b/Sources/GhosttyTerminalView.swift
+@@ -3632,7 +3632,10 @@
+ extension TerminalSurface {
+     @MainActor
+     func owningWorkspace() -> Workspace? {
+-        AppDelegate.shared?.workspaceFor(tabId: tabId)
++        if let manager = EmbeddedTerminalOwnerRegistry.manager(for: tabId) {
++            return manager.workspacesById[tabId]
++        }
++        return AppDelegate.shared?.workspaceFor(tabId: tabId)
+     }
+ }
+ 
+@@ -11830,8 +11833,9 @@
+             return
+         }
+ 
+-        guard let delegate = AppDelegate.shared,
+-              let tabManager = delegate.tabManagerFor(tabId: tabId) ?? delegate.tabManager,
++        let delegate = AppDelegate.shared
++        guard let tabManager = EmbeddedTerminalOwnerRegistry.manager(for: tabId)
++                ?? delegate?.tabManagerFor(tabId: tabId) ?? delegate?.tabManager,
+               tabManager.selectedTabId == tabId else {
+             scheduleAutomaticFirstResponderApply(
+                 reason: "ensureFocus.inactiveTab",
+@@ -11849,7 +11853,7 @@
+             return
+         }
+ 
+-        guard delegate.allowsTerminalKeyboardFocus(workspaceId: tabId, panelId: surfaceId, in: window) else {
++        guard delegate?.allowsTerminalKeyboardFocus(workspaceId: tabId, panelId: surfaceId, in: window) != false else {
+ #if DEBUG
+             dlog("focus.ensure.skip surface=\(surfaceView.terminalSurface?.id.uuidString.prefix(5) ?? "nil") reason=coordinatorRightSidebar")
+ #endif
+@@ -11893,7 +11897,7 @@
+ 
+         if !window.isKeyWindow {
+             guard shouldAllowEnsureFocusWindowActivation(
+-                activeTabManager: delegate.tabManager,
++                activeTabManager: delegate?.tabManager,
+                 targetTabManager: tabManager,
+                 keyWindow: NSApp.keyWindow,
+                 mainWindow: NSApp.mainWindow,
+@@ -11949,8 +11953,9 @@
+     }
+ 
+     private func matchesCurrentTerminalFocusTarget(tabId: UUID, surfaceId: UUID) -> Bool {
+-        guard let delegate = AppDelegate.shared,
+-              let tabManager = delegate.tabManagerFor(tabId: tabId) ?? delegate.tabManager,
++        let delegate = AppDelegate.shared
++        guard let tabManager = EmbeddedTerminalOwnerRegistry.manager(for: tabId)
++                ?? delegate?.tabManagerFor(tabId: tabId) ?? delegate?.tabManager,
+               tabManager.selectedTabId == tabId,
+               let tab = tabManager.tabs.first(where: { $0.id == tabId }) else {
+             return false

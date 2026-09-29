@@ -23,6 +23,7 @@ private enum CmuxEmbeddedHostBridge {
     private typealias DestroyFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
     private typealias SuspendFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
     private typealias CloseCurrentPanelFunction = @convention(c) (UnsafeMutableRawPointer?) -> Void
+    private typealias PerformCommandFunction = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Bool
     private typealias UpdateProjectsFunction = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void
     private static var activeHostPointer: UnsafeMutableRawPointer?
     private static var lastProjectsSnapshot: CmuxEmbeddedProjectsSnapshot?
@@ -68,6 +69,15 @@ private enum CmuxEmbeddedHostBridge {
                 as: CloseCurrentPanelFunction.self
               ) else { return }
         function(activeHostPointer)
+    }
+
+    static func perform(_ command: CmuxEmbeddedWorkspaceCommand) -> Bool {
+        guard let activeHostPointer,
+              let function: PerformCommandFunction = symbol(
+                "cmux_embedded_host_view_perform_command",
+                as: PerformCommandFunction.self
+              ) else { return false }
+        return function(activeHostPointer, command.rawValue)
     }
 
     static func deactivate(_ hostPointer: UnsafeMutableRawPointer) {
@@ -210,6 +220,11 @@ struct CmuxEmbeddedHostView: NSViewRepresentable {
 
 @MainActor
 enum CmuxEmbeddedWorkspaceActions {
+    @discardableResult
+    static func perform(_ command: CmuxEmbeddedWorkspaceCommand) -> Bool {
+        CmuxEmbeddedHostBridge.perform(command)
+    }
+
     static func closeCurrentPanel() {
         CmuxEmbeddedHostBridge.closeCurrentPanel()
     }

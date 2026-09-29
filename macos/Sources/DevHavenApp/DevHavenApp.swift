@@ -42,7 +42,6 @@ final class DevHavenAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-@main
 struct DevHavenApp: App {
     @NSApplicationDelegateAdaptor(DevHavenAppDelegate.self) private var appDelegate
     @State private var viewModel = Self.makeViewModel()
@@ -66,13 +65,7 @@ struct DevHavenApp: App {
         }
         .defaultSize(width: 1480, height: 920)
         .commands {
-            CommandGroup(replacing: .newItem) {
-                Button("新建工作区标签") {
-                    _ = viewModel.createWorkspaceTerminalTab()
-                }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
-                .disabled(viewModel.activeWorkspaceController == nil)
-            }
+            CmuxEmbeddedWorkspaceCommands(isWorkspacePresented: viewModel.isWorkspacePresented)
 
             CommandGroup(replacing: .appTermination) {
                 Button("退出 DevHaven") {
@@ -110,14 +103,6 @@ struct DevHavenApp: App {
                     viewModel.revealRecycleBin()
                 }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
-
-                Divider()
-
-                Button("向右分屏") {
-                    _ = viewModel.activeWorkspaceController?.splitFocusedPane(direction: .right)
-                }
-                .keyboardShortcut("d", modifiers: [.command])
-                .disabled(!viewModel.activeWorkspaceHasSelectedPane)
             }
 
             WorkspaceSearchCommands()

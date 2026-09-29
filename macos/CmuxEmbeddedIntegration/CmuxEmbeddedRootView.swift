@@ -3,7 +3,16 @@ import AppKit
 import Bonsplit
 import CmuxUpdater
 import CmuxAppKitSupportUI
+import CmuxPanes
 import Combine
+import CmuxWorkspaces
+
+/// Runs before DevHaven's SwiftUI App is initialized in a re-executed worker.
+/// Keep the upstream isolated clipboard reader, deadlines and validation.
+@_cdecl("cmux_embedded_run_paste_preparation_worker")
+public func cmuxEmbeddedRunPastePreparationWorker() -> Int32 {
+    TerminalPastePreparationWorker().run(arguments: CommandLine.arguments)
+}
 
 /// The cmux workspace composition root exposed for hosts that embed cmux.
 ///
@@ -46,10 +55,12 @@ public struct CmuxEmbeddedRootView: View {
         let tabManager = TabManager(
             initialWorkspaceTitle: initialWorkspaceTitle,
             initialWorkingDirectory: initialWorkingDirectory,
+            autoWelcomeIfNeeded: false,
             tabDragTransferRegistry: tabDragTransferRegistry
         )
         tabManager.windowId = windowId
         tabManager.isEmbeddedInHost = true
+        EmbeddedTerminalOwnerRegistry.managers.add(tabManager)
         onTabManagerCreated(tabManager)
 
         let configStore = CmuxConfigStore()
@@ -183,6 +194,17 @@ public func cmuxEmbeddedHostViewCloseCurrentPanel(_ hostPointer: UnsafeMutableRa
         .closeCurrentPanel()
 }
 
+/// Stable command IDs shared with DevHaven's CmuxEmbeddedWorkspaceCommand.
+/// Execute against this host's live TabManager, never the standalone app delegate.
+@_cdecl("cmux_embedded_host_view_perform_command")
+@MainActor
+public func cmuxEmbeddedHostViewPerformCommand(_ hostPointer: UnsafeMutableRawPointer?, _ command: Int32) -> Bool {
+    guard let hostPointer else { return false }
+    return Unmanaged<CmuxEmbeddedHostView>.fromOpaque(hostPointer)
+        .takeUnretainedValue()
+        .performCommand(command)
+}
+
 @MainActor
 private final class CmuxEmbeddedHostView: NSView {
     private struct Project: Decodable {
@@ -201,6 +223,8 @@ private final class CmuxEmbeddedHostView: NSView {
     private var projectPathsByWorkspaceId: [UUID: String] = [:]
     private var subscriptions = Set<AnyCancellable>()
     private var isSynchronizingProjects = false
+    private var isProjectReconciliationScheduled = false
+    private var hasRestoredProjectLayout = false
     private var originalWindowState: OriginalWindowState?
     private var titlebarDragMonitor: Any?
     private var needsPortalRebind = false
@@ -244,31 +268,17 @@ private final class CmuxEmbeddedHostView: NSView {
             }
             .store(in: &subscriptions)
         tabManager.tabsPublisher
-            .sink { [weak self] tabs in
-                guard let self, !self.isSynchronizingProjects else { return }
-                let liveIds = Set(tabs.map(\.id))
-                for (path, id) in Array(self.projectWorkspaceIds) where !liveIds.contains(id) {
-                    self.projectWorkspaceIds.removeValue(forKey: path)
-                    self.projectPathsByWorkspaceId.removeValue(forKey: id)
-                    NotificationCenter.default.post(
-                        name: Notification.Name("DevHaven.CmuxEmbedded.ClosedProject"),
-                        object: path
-                    )
-                }
-                if tabs.contains(where: { self.projectPathsByWorkspaceId[$0.id] == nil }) {
-                    DispatchQueue.main.async { [weak self] in
-                        guard let self, !self.isSynchronizingProjects else { return }
-                        for workspace in self.tabManager.tabs where self.projectPathsByWorkspaceId[workspace.id] == nil {
-                            if self.tabManager.tabs.count > 1 {
-                                self.tabManager.closeWorkspace(workspace, recordHistory: false)
-                            }
-                        }
-                        NotificationCenter.default.post(
-                            name: Notification.Name("DevHaven.CmuxEmbedded.OpenProjectPicker"),
-                            object: nil
-                        )
-                    }
-                }
+            .sink { [weak self] _ in
+                self?.scheduleProjectReconciliation()
+            }
+            .store(in: &subscriptions)
+        tabManager.workspaceGroupsPublisher
+            .sink { [weak self] _ in self?.scheduleProjectReconciliation() }
+            .store(in: &subscriptions)
+        NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in
+                self?.saveProjectLayout()
+                UserDefaults.standard.synchronize()
             }
             .store(in: &subscriptions)
         translatesAutoresizingMaskIntoConstraints = false
@@ -280,6 +290,49 @@ private final class CmuxEmbeddedHostView: NSView {
             hostingView.topAnchor.constraint(equalTo: topAnchor),
             hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+    }
+
+    private func scheduleProjectReconciliation() {
+        guard !didTearDown, !isSynchronizingProjects, !isProjectReconciliationScheduled else { return }
+        isProjectReconciliationScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isProjectReconciliationScheduled = false
+            guard !self.didTearDown, !self.isSynchronizingProjects else { return }
+            self.reconcileProjectsAfterWorkspaceMutation()
+        }
+    }
+
+    private func reconcileProjectsAfterWorkspaceMutation() {
+        defer { saveProjectLayout() }
+        // tabsPublisher emits during willSet, including remove/insert steps of
+        // a single drag reorder. Reconcile only the settled live list: a missing
+        // ID in an intermediate publication is not a closed project. Group
+        // creation also publishes its anchor before publishing group metadata.
+        let liveIds = Set(tabManager.tabs.map(\.id))
+        let closedProjects = projectWorkspaceIds.filter { !liveIds.contains($0.value) }
+        for (path, id) in closedProjects {
+            projectWorkspaceIds.removeValue(forKey: path)
+            projectPathsByWorkspaceId.removeValue(forKey: id)
+        }
+        for path in closedProjects.keys {
+            NotificationCenter.default.post(
+                name: Notification.Name("DevHaven.CmuxEmbedded.ClosedProject"),
+                object: path
+            )
+        }
+
+        let unassigned = tabManager.tabs.filter {
+            projectPathsByWorkspaceId[$0.id] == nil && !isGroupAnchor($0.id)
+        }
+        guard !unassigned.isEmpty else { return }
+        for workspace in unassigned where tabManager.tabs.count > 1 {
+            tabManager.closeWorkspace(workspace, recordHistory: false)
+        }
+        NotificationCenter.default.post(
+            name: Notification.Name("DevHaven.CmuxEmbedded.OpenProjectPicker"),
+            object: nil
+        )
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -351,6 +404,13 @@ private final class CmuxEmbeddedHostView: NSView {
                   event.clickCount == 1,
                   let contentView = window.contentView else { return event }
 
+            // Let AppKit's traffic lights win even when embedded header or
+            // drag views overlap them in the full-size content area.
+            guard !isEmbeddedStandardWindowButtonHit(
+                window: window,
+                locationInWindow: event.locationInWindow
+            ) else { return event }
+
             if CmuxEmbeddedHeaderActionRegion.performActionIfHit(
                 in: window,
                 at: event.locationInWindow
@@ -382,12 +442,42 @@ private final class CmuxEmbeddedHostView: NSView {
         tabManager.closeCurrentPanelWithConfirmation()
     }
 
+    func performCommand(_ command: Int32) -> Bool {
+        guard !didTearDown,
+              originalWindowState != nil,
+              let window, window.isKeyWindow,
+              window.attachedSheet == nil,
+              NSApp.modalWindow == nil,
+              let workspace = tabManager.selectedWorkspace else { return false }
+
+        switch command {
+        case 0: // New terminal tab in the current project's focused pane.
+            tabManager.newSurface()
+            return true
+        case 1, 2: // Split right / down.
+            let direction: SplitDirection = command == 1 ? .right : .down
+            if workspace.layoutMode == .canvas {
+                return workspace.openNewCanvasPane(
+                    type: .terminal,
+                    focus: true,
+                    direction: direction.canvasDirection
+                ) != nil
+            }
+            return tabManager.createSplitOutcome(direction: direction).isAccepted
+        default:
+            return false
+        }
+    }
+
     func updateProjects(json: String) {
         guard !didTearDown,
               let data = json.data(using: .utf8),
               let snapshot = try? JSONDecoder().decode(ProjectsSnapshot.self, from: data) else { return }
         isSynchronizingProjects = true
-        defer { isSynchronizingProjects = false }
+        defer {
+            isSynchronizingProjects = false
+            saveProjectLayout()
+        }
 
         let desiredPaths = Set(snapshot.projects.map(\.path))
         for (path, id) in Array(projectWorkspaceIds) where !desiredPaths.contains(path) {
@@ -408,7 +498,9 @@ private final class CmuxEmbeddedHostView: NSView {
             }
             // Reuse the startup workspace before creating another terminal.
             let workspace: Workspace?
-            if let unassigned = tabManager.tabs.first(where: { projectPathsByWorkspaceId[$0.id] == nil }) {
+            if let unassigned = tabManager.tabs.first(where: {
+                projectPathsByWorkspaceId[$0.id] == nil && !isGroupAnchor($0.id)
+            }) {
                 workspace = unassigned
             } else {
                 workspace = tabManager.addWorkspaceIfActive(
@@ -432,11 +524,163 @@ private final class CmuxEmbeddedHostView: NSView {
            tabManager.selectedTabId != id {
             tabManager.selectWorkspace(workspace)
         }
+        // Restore after active-project selection so its normal auto-expand
+        // behavior cannot overwrite a saved collapsed group during startup.
+        restoreProjectLayoutIfNeeded()
+    }
+
+    // Persist only sidebar organization. DevHaven remains the owner of which
+    // projects reopen; cmux workspace UUIDs and terminal processes are transient.
+    private struct ProjectLayout: Codable {
+        var version = 1
+        var groups: [Group]
+        var projects: [Item]
+        var order: [Row]
+
+        struct Item: Codable {
+            let path: String
+            let isPinned: Bool
+        }
+        struct Group: Codable {
+            let id: UUID
+            let name: String
+            let isCollapsed: Bool
+            let isPinned: Bool
+            let customColor: String?
+            let iconSymbol: String?
+            let externalID: String?
+            let isEmpty: Bool
+            let anchorProjectPath: String?
+            let anchorDirectory: String?
+            let projectPaths: [String]
+        }
+        enum Row: Codable {
+            case project(String)
+            case group(UUID)
+        }
+    }
+
+    private static let projectLayoutKey = "DevHaven.CmuxEmbedded.ProjectLayout.v1"
+
+    private func saveProjectLayout() {
+        guard hasRestoredProjectLayout, !didTearDown else { return }
+        let groups = tabManager.workspaceGroups.map { group in
+            ProjectLayout.Group(
+                id: group.id, name: group.name,
+                isCollapsed: group.isCollapsed, isPinned: group.isPinned,
+                customColor: group.customColor, iconSymbol: group.iconSymbol,
+                externalID: group.externalID, isEmpty: group.isEmpty,
+                anchorProjectPath: group.liveAnchorWorkspaceId.flatMap { projectPathsByWorkspaceId[$0] },
+                anchorDirectory: group.liveAnchorWorkspaceId.flatMap { tabManager.workspacesById[$0]?.currentDirectory },
+                projectPaths: tabManager.tabs.filter { $0.groupId == group.id }.compactMap { projectPathsByWorkspaceId[$0.id] }
+            )
+        }
+        let groupsByAnchor = Dictionary(tabManager.workspaceGroups.map { ($0.anchorWorkspaceId, $0.id) }, uniquingKeysWith: { first, _ in first })
+        // Header-only groups retain their slots through the ordered groups
+        // array; cmux's normalizer merges those with these live top-level rows.
+        let order = tabManager.tabs.compactMap { workspace -> ProjectLayout.Row? in
+            if let groupId = groupsByAnchor[workspace.id] { return .group(groupId) }
+            guard workspace.groupId == nil else { return nil }
+            return projectPathsByWorkspaceId[workspace.id].map { .project($0) }
+        }
+        let projects = tabManager.tabs.compactMap { workspace -> ProjectLayout.Item? in
+            guard let path = projectPathsByWorkspaceId[workspace.id] else { return nil }
+            return .init(path: path, isPinned: workspace.isPinned)
+        }
+        let layout = ProjectLayout(groups: groups, projects: projects, order: order)
+        guard let data = try? JSONEncoder().encode(layout) else { return }
+        UserDefaults.standard.set(data, forKey: Self.projectLayoutKey)
+    }
+
+    private func restoreProjectLayoutIfNeeded() {
+        guard !hasRestoredProjectLayout, !projectWorkspaceIds.isEmpty else { return }
+        hasRestoredProjectLayout = true
+        guard let data = UserDefaults.standard.data(forKey: Self.projectLayoutKey),
+              let layout = try? JSONDecoder().decode(ProjectLayout.self, from: data),
+              layout.version == 1,
+              Set(layout.groups.map(\.id)).count == layout.groups.count else { return }
+
+        var restoredGroups: [WorkspaceGroup] = []
+        var membersByGroup: [UUID: [Workspace]] = [:]
+        var claimedPaths = Set<String>()
+        for saved in layout.groups {
+            var members = saved.projectPaths.compactMap { path -> Workspace? in
+                guard let id = projectWorkspaceIds[path],
+                      let workspace = tabManager.workspacesById[id],
+                      claimedPaths.insert(path).inserted else { return nil }
+                return workspace
+            }
+            let anchor: Workspace?
+            if let path = saved.anchorProjectPath,
+               let id = projectWorkspaceIds[path],
+               let member = members.first(where: { $0.id == id }) {
+                anchor = member
+            } else if saved.anchorProjectPath != nil, let first = members.first {
+                anchor = first
+            } else if saved.isEmpty && members.isEmpty {
+                anchor = nil
+            } else {
+                anchor = tabManager.addWorkspaceIfActive(
+                    title: saved.name, workingDirectory: saved.anchorDirectory,
+                    inheritWorkingDirectory: false, select: false,
+                    eagerLoadTerminal: false, autoWelcomeIfNeeded: false
+                )
+            }
+            if let anchor {
+                members.removeAll { $0.id == anchor.id }
+                members.insert(anchor, at: 0)
+                if projectPathsByWorkspaceId[anchor.id] == nil {
+                    tabManager.setCustomTitle(tabId: anchor.id, title: saved.name, propagateToCloud: false)
+                }
+            }
+            for member in members { member.groupId = saved.id }
+            restoredGroups.append(WorkspaceGroup(
+                id: saved.id, name: saved.name, isCollapsed: saved.isCollapsed,
+                isPinned: saved.isPinned, anchor: anchor.map { .workspace($0.id) } ?? .empty(saved.id),
+                customColor: saved.customColor, iconSymbol: saved.iconSymbol, externalID: saved.externalID,
+                anchorWorkspaceProvenance: anchor.map { projectPathsByWorkspaceId[$0.id] == nil ? .generated : .user } ?? .unknown
+            ))
+            membersByGroup[saved.id] = members
+        }
+        tabManager.workspaceGroups = restoredGroups
+        for project in layout.projects {
+            if let id = projectWorkspaceIds[project.path] {
+                tabManager.workspacesById[id]?.isPinned = project.isPinned
+            }
+        }
+        var reordered: [Workspace] = []
+        var topLevelIds: [UUID] = []
+        var emitted = Set<UUID>()
+        for row in layout.order {
+            switch row {
+            case let .project(path):
+                guard let id = projectWorkspaceIds[path], let workspace = tabManager.workspacesById[id],
+                      workspace.groupId == nil, emitted.insert(id).inserted else { continue }
+                topLevelIds.append(id)
+                reordered.append(workspace)
+            case let .group(id):
+                guard let group = restoredGroups.first(where: { $0.id == id }) else { continue }
+                topLevelIds.append(group.anchorWorkspaceId)
+                for member in membersByGroup[id] ?? [] where emitted.insert(member.id).inserted {
+                    reordered.append(member)
+                }
+            }
+        }
+        reordered.append(contentsOf: tabManager.tabs.filter { emitted.insert($0.id).inserted })
+        tabManager.tabs = reordered
+        tabManager.workspaces.normalizeWorkspaceGroupContiguity(preservingTopLevelIds: topLevelIds)
+    }
+
+    private func isGroupAnchor(_ workspaceId: UUID) -> Bool {
+        tabManager.workspaceGroups.contains { $0.liveAnchorWorkspaceId == workspaceId }
     }
 
     func tearDown() {
         guard !didTearDown else { return }
+        saveProjectLayout()
+        UserDefaults.standard.synchronize()
         didTearDown = true
+        EmbeddedTerminalOwnerRegistry.managers.remove(tabManager)
         subscriptions.removeAll()
         suspendWindowIntegration()
         tabManager.finalizeAllWorkspacesForWindowClose()
