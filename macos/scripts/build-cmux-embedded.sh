@@ -116,6 +116,13 @@ elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedde
   exit 1
 fi
 
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-notification-indicators.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-notification-indicators.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-notification-indicators.patch" 2>/dev/null; then
+  echo "cmux embedded notification-indicators patch does not match the pinned source" >&2
+  exit 1
+fi
+
 if [[ ! -d "$CMUX_DIR/GhosttyKit.xcframework" ]]; then
   (cd "$CMUX_DIR" && ./scripts/download-prebuilt-ghosttykit.sh)
 fi

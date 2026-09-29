@@ -1,0 +1,199 @@
+--- a/Sources/TabManager+NotificationDismissalHosting.swift
++++ b/Sources/TabManager+NotificationDismissalHosting.swift
+@@ -9,6 +9,12 @@
+ /// so a gone workspace/panel makes every read `false`/`nil` and every
+ /// mutation a no-op.
+ extension TabManager: NotificationDismissalHosting {
++    /// Embedded views and dismissal must share the same store without requiring
++    /// the standalone application's delegate. Preserve standalone ownership.
++    var workspaceNotificationStore: TerminalNotificationStore? {
++        isEmbeddedInHost ? TerminalNotificationStore.shared : AppDelegate.shared?.notificationStore
++    }
++
+     func isNotificationTargetSelected(workspaceId: UUID, surfaceId: UUID?) -> Bool {
+         guard let surfaceId,
+               let dock = DockSplitStore.liveStore(containingPanel: surfaceId) else {
+@@ -27,11 +33,11 @@
+     }
+
+     var hasNotificationStore: Bool {
+-        AppDelegate.shared?.notificationStore != nil
++        workspaceNotificationStore != nil
+     }
+
+     func storeHasDismissibleState(workspaceId: UUID) -> Bool {
+-        AppDelegate.shared?.notificationStore?.hasDismissibleState(forTabId: workspaceId) ?? false
++        workspaceNotificationStore?.hasDismissibleState(forTabId: workspaceId) ?? false
+     }
+
+     func workspaceHasDismissiblePanelState(workspaceId: UUID) -> Bool {
+@@ -84,54 +90,54 @@
+     }
+
+     func storeHasManualUnread(workspaceId: UUID) -> Bool {
+-        AppDelegate.shared?.notificationStore?.hasManualUnread(forTabId: workspaceId) ?? false
++        workspaceNotificationStore?.hasManualUnread(forTabId: workspaceId) ?? false
+     }
+
+     func storeHasManualUnread(workspaceId: UUID, surfaceId: UUID) -> Bool {
+-        AppDelegate.shared?.notificationStore?
++        workspaceNotificationStore?
+             .hasManualUnread(forTabId: workspaceId, surfaceId: surfaceId) ?? false
+     }
+
+     func storeHasRestoredUnreadIndicator(workspaceId: UUID) -> Bool {
+-        AppDelegate.shared?.notificationStore?.hasRestoredUnreadIndicator(forTabId: workspaceId) ?? false
++        workspaceNotificationStore?.hasRestoredUnreadIndicator(forTabId: workspaceId) ?? false
+     }
+
+     func storeHasUnreadNotification(workspaceId: UUID, surfaceId: UUID?) -> Bool {
+-        AppDelegate.shared?.notificationStore?.hasUnreadNotification(forTabId: workspaceId, surfaceId: surfaceId) ?? false
++        workspaceNotificationStore?.hasUnreadNotification(forTabId: workspaceId, surfaceId: surfaceId) ?? false
+     }
+
+     func storeHasPendingNotification(workspaceId: UUID, surfaceId: UUID?) -> Bool {
+-        AppDelegate.shared?.notificationStore?
++        workspaceNotificationStore?
+             .hasPendingNotification(forTabId: workspaceId, surfaceId: surfaceId) ?? false
+     }
+
+     func storeHasVisibleNotificationIndicator(workspaceId: UUID, surfaceId: UUID?) -> Bool {
+-        AppDelegate.shared?.notificationStore?
++        workspaceNotificationStore?
+             .hasVisibleNotificationIndicator(forTabId: workspaceId, surfaceId: surfaceId) ?? false
+     }
+
+     func storeMarkRead(workspaceId: UUID, surfaceId: UUID?) {
+-        AppDelegate.shared?.notificationStore?.markRead(forTabId: workspaceId, surfaceId: surfaceId)
++        workspaceNotificationStore?.markRead(forTabId: workspaceId, surfaceId: surfaceId)
+     }
+
+     @discardableResult
+     func storeClearManualUnread(workspaceId: UUID) -> Bool {
+-        AppDelegate.shared?.notificationStore?.clearManualUnread(forTabId: workspaceId) ?? false
++        workspaceNotificationStore?.clearManualUnread(forTabId: workspaceId) ?? false
+     }
+
+     @discardableResult
+     func storeClearManualUnread(workspaceId: UUID, surfaceId: UUID) -> Bool {
+-        AppDelegate.shared?.notificationStore?
++        workspaceNotificationStore?
+             .clearManualUnread(forTabId: workspaceId, surfaceId: surfaceId) ?? false
+     }
+
+     @discardableResult
+     func storeClearRestoredUnreadIndicator(workspaceId: UUID) -> Bool {
+-        AppDelegate.shared?.notificationStore?.clearRestoredUnreadIndicator(forTabId: workspaceId) ?? false
++        workspaceNotificationStore?.clearRestoredUnreadIndicator(forTabId: workspaceId) ?? false
+     }
+
+     func storeClearFocusedReadIndicator(workspaceId: UUID, surfaceId: UUID?) {
+-        AppDelegate.shared?.notificationStore?.clearFocusedReadIndicator(forTabId: workspaceId, surfaceId: surfaceId)
++        workspaceNotificationStore?.clearFocusedReadIndicator(forTabId: workspaceId, surfaceId: surfaceId)
+     }
+
+     /// Notification hashing for session autosave extracted because
+--- a/Sources/Workspace.swift
++++ b/Sources/Workspace.swift
+@@ -5380,11 +5380,11 @@
+     }
+
+     private func hasVisibleNotificationIndicator(panelId: UUID) -> Bool {
+-        AppDelegate.shared?.notificationStore?.hasVisibleNotificationIndicator(forTabId: id, surfaceId: panelId) ?? false
++        workspaceNotificationStore?.hasVisibleNotificationIndicator(forTabId: id, surfaceId: panelId) ?? false
+     }
+
+     private func attentionPersistentState() -> WorkspaceAttentionPersistentState {
+-        let notificationStore = AppDelegate.shared?.notificationStore
++        let notificationStore = workspaceNotificationStore
+         let unreadPanelIDs = Set(
+             panels.keys.filter {
+                 restoredUnreadPanelIds.contains($0) ||
+@@ -5410,7 +5410,7 @@
+
+     private func syncUnreadBadgeStateForPanel(_ panelId: UUID) {
+         guard let tabId = surfaceIdFromPanelId(panelId) else { return }
+-        let notificationStore = AppDelegate.shared?.notificationStore
++        let notificationStore = workspaceNotificationStore
+         let shouldShowUnread = Self.shouldShowUnreadIndicator(
+             hasUnreadNotification: hasVisibleNotificationIndicator(panelId: panelId),
+             hasPanelUnreadIndicator: manualUnreadPanelIds.contains(panelId) || restoredUnreadPanelIds.contains(panelId),
+@@ -5430,7 +5430,7 @@
+     }
+
+     func syncPanelDerivedWorkspaceUnread() {
+-        AppDelegate.shared?.notificationStore?.setPanelDerivedUnread(
++        workspaceNotificationStore?.setPanelDerivedUnread(
+             !manualUnreadPanelIds.isEmpty ||
+                 hasWorkspaceContributingRestoredUnreadIndicator,
+             forTabId: id
+@@ -5679,7 +5679,7 @@
+
+     func markPanelRead(_ panelId: UUID) {
+         guard panels[panelId] != nil else { return }
+-        let notificationStore = AppDelegate.shared?.notificationStore
++        let notificationStore = workspaceNotificationStore
+         notificationStore?.markRead(forTabId: id, surfaceId: panelId)
+         // An explicit user mark-read dismisses the focused-read indicator too.
+         // The store's markRead deliberately does not: that indicator marks
+@@ -5703,7 +5703,7 @@
+             markPanelRead(panelId)
+             return
+         }
+-        AppDelegate.shared?.notificationStore?.markRead(forTabId: id)
++        workspaceNotificationStore?.markRead(forTabId: id)
+     }
+
+     func clearManualUnread(panelId: UUID) {
+--- a/Sources/Workspace+AttentionFlashRouting.swift
++++ b/Sources/Workspace+AttentionFlashRouting.swift
+@@ -3,6 +3,21 @@
+
+ @MainActor
+ extension Workspace {
++    var workspaceNotificationStore: TerminalNotificationStore? {
++        owningTabManager?.workspaceNotificationStore ?? AppDelegate.shared?.notificationStore
++    }
++
++    private func ownsEmbeddedTerminalFocus(_ panel: TerminalPanel) -> Bool {
++        guard let manager = owningTabManager, manager.isEmbeddedInHost,
++              manager.selectedTabId == id,
++              isFocusedTerminalInputSurface(panel.id),
++              NSApp.isActive,
++              let window = panel.hostedView.window, window.isKeyWindow,
++              window.attachedSheet == nil,
++              !panel.hostedView.isHiddenOrHasHiddenAncestor else { return false }
++        return panel.hostedView.isSurfaceViewFirstResponder()
++    }
++
+     /// Installs visual-BEL routing at the terminal's authoritative owner.
+     /// Ownership changes replace this callback during surface transfer, so a
+     /// background bell never needs an app-wide surface or focus scan.
+@@ -37,14 +52,19 @@
+                 return
+             }
+             let ownerWindow = self.owningTabManager?.window
+-            let ownsActiveFocus = AppFocusState.isAppFocused()
+-                && ownerWindow?.isKeyWindow == true
+-                && AppDelegate.shared?.ownsMainPanelKeyboardFocus(
+-                    workspaceId: self.id,
+-                    containerPanelId: target.containerPanelID,
+-                    surfaceId: target.surfaceID,
+-                    in: ownerWindow
+-                ) == true
++            let ownsActiveFocus: Bool
++            if self.owningTabManager?.isEmbeddedInHost == true {
++                ownsActiveFocus = self.ownsEmbeddedTerminalFocus(ownedTerminal)
++            } else {
++                ownsActiveFocus = AppFocusState.isAppFocused()
++                    && ownerWindow?.isKeyWindow == true
++                    && AppDelegate.shared?.ownsMainPanelKeyboardFocus(
++                        workspaceId: self.id,
++                        containerPanelId: target.containerPanelID,
++                        surfaceId: target.surfaceID,
++                        in: ownerWindow
++                    ) == true
++            }
+             let response = TerminalVisualBellResponse.resolve(
+                 ownsActiveFocus: ownsActiveFocus,
+                 isManuallyUnread: self.manualUnreadPanelIds.contains(target.containerPanelID)
