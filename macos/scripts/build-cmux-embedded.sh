@@ -167,11 +167,15 @@ xcodebuild \
   -jobs "${CMUX_EMBEDDED_JOBS:-8}" \
   build
 
-FRAMEWORK_PATH="$DERIVED_DATA_DIR/Build/Products/$BUILD_CONFIGURATION/CmuxEmbedded.framework"
+BUILD_PRODUCTS_DIR="$DERIVED_DATA_DIR/Build/Products/$BUILD_CONFIGURATION"
+FRAMEWORK_PATH="$BUILD_PRODUCTS_DIR/CmuxEmbedded.framework"
 [[ -d "$FRAMEWORK_PATH" ]] || {
   echo "Missing cmux embedded framework at $FRAMEWORK_PATH" >&2
   exit 1
 }
+
+bash "$SCRIPT_DIR/prepare-cmux-link-dependencies.sh" \
+  "$BUILD_PRODUCTS_DIR" "$MACOS_DIR/Vendor/CmuxBuildProducts" "$BUILD_ARCH"
 
 install_name_tool -id \
   "@rpath/CmuxEmbedded.framework/Versions/A/CmuxEmbedded" \
@@ -179,7 +183,7 @@ install_name_tool -id \
 
 python3 "$SCRIPT_DIR/prepare-cmux-localization.py" prepare \
   --source "$CMUX_DIR" \
-  --products "$DERIVED_DATA_DIR/Build/Products/$BUILD_CONFIGURATION" \
+  --products "$BUILD_PRODUCTS_DIR" \
   --framework "$FRAMEWORK_PATH"
 
 rm -rf "$OUTPUT_DIR"
