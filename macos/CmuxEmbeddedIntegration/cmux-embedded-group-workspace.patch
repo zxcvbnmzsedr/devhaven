@@ -1,0 +1,112 @@
+--- a/Sources/Sidebar/AppKitList/Cells/SidebarGroupHeaderRowModel.swift
++++ b/Sources/Sidebar/AppKitList/Cells/SidebarGroupHeaderRowModel.swift
+@@ -61,6 +61,8 @@
+     let onDelete: () -> Void
+     let onEditConfig: () -> Void
+     let onOpenDocs: () -> Void
++    var onOpenGroupTerminal: (() -> Void)? = nil
++    var onLaunchGroupCodex: (() -> Void)? = nil
+     /// Resolves current notification availability for retained rows.
+     var notificationState: () -> NotificationState = { .unavailable }
+ }
+--- a/Sources/Sidebar/AppKitList/Cells/SidebarGroupHeaderRowView.swift
++++ b/Sources/Sidebar/AppKitList/Cells/SidebarGroupHeaderRowView.swift
+@@ -514,10 +514,13 @@
+     private func makePlusMenu() -> NSMenu {
+         guard let actions else { return NSMenu() }
+         let menu = trackedMenu()
+-        menu.addItem(menuItem(
+-            String(localized: "workspaceGroup.plus.contextMenu.newWorkspace", defaultValue: "New Workspace in Group"),
+-            action: actions.onTapPlus
+-        ))
++        if actions.onOpenGroupTerminal == nil {
++            menu.addItem(menuItem(
++                String(localized: "workspaceGroup.plus.contextMenu.newWorkspace", defaultValue: "New Workspace in Group"),
++                action: actions.onTapPlus
++            ))
++        }
++        appendEmbeddedGroupItems(to: menu)
+         appendResolvedConfigItems(to: menu)
+         menu.addItem(.separator())
+         appendConfigAndDocsItems(to: menu)
+@@ -549,6 +552,13 @@
+         ))
+     }
+ 
++    private func appendEmbeddedGroupItems(to menu: NSMenu) {
++        guard let actions, let terminal = actions.onOpenGroupTerminal,
++              let codex = actions.onLaunchGroupCodex else { return }
++        menu.addItem(menuItem("打开分组终端", action: terminal))
++        menu.addItem(menuItem("启动分组 Codex", action: codex))
++    }
++
+     private func makeHeaderMenu() -> NSMenu {
+         guard let model, let actions else { return NSMenu() }
+         let menu = trackedMenu()
+@@ -556,10 +566,13 @@
+         // older anchor snapshot while the group was being promoted, but the
+         // action bundle owns the authoritative live notification check.
+         let notificationState = actions.notificationState()
+-        menu.addItem(menuItem(
+-            String(localized: "workspaceGroup.plus.contextMenu.newWorkspace", defaultValue: "New Workspace in Group"),
+-            action: actions.onTapPlus
+-        ))
++        appendEmbeddedGroupItems(to: menu)
++        if actions.onOpenGroupTerminal == nil {
++            menu.addItem(menuItem(
++                String(localized: "workspaceGroup.plus.contextMenu.newWorkspace", defaultValue: "New Workspace in Group"),
++                action: actions.onTapPlus
++            ))
++        }
+         menu.addItem(.separator())
+         menu.addItem(menuItem(
+             String(localized: "workspaceGroup.contextMenu.rename", defaultValue: "Rename Group..."),
+--- a/Sources/VerticalTabsSidebar+WorkspaceGroups.swift
++++ b/Sources/VerticalTabsSidebar+WorkspaceGroups.swift
+@@ -403,6 +403,13 @@
+             },
+             onTapPlus: { [weak tabManager] in
+                 guard let tabManager else { return }
++                if tabManager.isEmbeddedInHost {
++                    NotificationCenter.default.post(
++                        name: Notification.Name("DevHaven.CmuxEmbedded.OpenGroupWorkspace"),
++                        object: tabManager, userInfo: ["groupId": groupId]
++                    )
++                    return
++                }
+                 _ = tabManager.createWorkspaceInGroup(
+                     groupId: groupId,
+                     placement: resolvePlacement()
+@@ -504,6 +511,18 @@
+                 SidebarWorkspaceGroupConfigOpener.openWorkspaceGroupsDocs()
+             }
+         )
++        if tabManager.isEmbeddedInHost {
++            let openGroup: (Bool) -> Void = { [weak tabManager] codex in
++                guard let tabManager else { return }
++                NotificationCenter.default.post(
++                    name: Notification.Name("DevHaven.CmuxEmbedded.OpenGroupWorkspace"),
++                    object: tabManager,
++                    userInfo: ["groupId": groupId, "codex": codex]
++                )
++            }
++            actions.onOpenGroupTerminal = { openGroup(false) }
++            actions.onLaunchGroupCodex = { openGroup(true) }
++        }
+         actions.notificationState = resolveNotificationState
+         return actions
+     }
+@@ -517,6 +536,13 @@
+         selectedTabIds: Binding<Set<UUID>>,
+         lastSidebarSelectionIndex: Binding<Int?>
+     ) {
++        if tabManager.isEmbeddedInHost && !modifiers.contains(.command) && !modifiers.contains(.shift) {
++            NotificationCenter.default.post(
++                name: Notification.Name("DevHaven.CmuxEmbedded.OpenGroupWorkspace"),
++                object: tabManager, userInfo: ["groupId": groupId]
++            )
++            return
++        }
+         let anchorId: UUID
+         if modifiers.contains(.command) || modifiers.contains(.shift) {
+             guard let anchor = tabManager.workspaceGroupAnchor(for: groupId) else { return }

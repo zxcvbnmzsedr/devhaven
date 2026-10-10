@@ -133,7 +133,15 @@ struct AppRootView: View {
         }
         .background(NativeTheme.window.ignoresSafeArea())
         .background(
-            MainWindowCloseShortcutBridge(onHandleCloseShortcut: handleMainWindowCloseShortcut)
+            MainWindowShortcutBridge(
+                projectShortcut: viewModel.snapshot.appState.settings.workspaceOpenProjectShortcut,
+                onHandleProjectShortcut: {
+                    guard let action = openWorkspaceProjectPickerAction else { return false }
+                    action()
+                    return true
+                },
+                onHandleCloseShortcut: handleMainWindowCloseShortcut
+            )
                 .allowsHitTesting(false)
         )
         .background(
@@ -238,8 +246,7 @@ struct AppRootView: View {
             viewModel.activateWorkspaceSidebarProject(path)
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.OpenProjectPicker"))) { _ in
-            guard viewModel.isWorkspacePresented else { return }
-            isCmuxProjectPickerPresented = true
+            openWorkspaceProjectPickerAction?()
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.ClosedProject"))) { notification in
             guard let path = notification.object as? String else { return }
@@ -285,6 +292,20 @@ struct AppRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(NativeTheme.window)
+    }
+
+    private var openWorkspaceProjectPickerAction: (() -> Void)? {
+        guard viewModel.isWorkspacePresented,
+              !isCmuxProjectPickerPresented,
+              !viewModel.isDashboardPresented,
+              !viewModel.isSettingsPresented,
+              !viewModel.isRecycleBinPresented,
+              !viewModel.isDetailPanelPresented,
+              viewModel.worktreeInteractionState == nil,
+              viewModel.errorMessage == nil else {
+            return nil
+        }
+        return { isCmuxProjectPickerPresented = true }
     }
 
     private func handleMainWindowCloseShortcut() -> Bool {
@@ -543,7 +564,9 @@ struct AppKitApplicationActivationProxy: ApplicationActivating {
     }
 }
 
-private struct MainWindowCloseShortcutBridge: NSViewRepresentable {
+private struct MainWindowShortcutBridge: NSViewRepresentable {
+    let projectShortcut: AppMenuShortcut
+    let onHandleProjectShortcut: () -> Bool
     let onHandleCloseShortcut: () -> Bool
 
     func makeCoordinator() -> Coordinator {
@@ -552,16 +575,24 @@ private struct MainWindowCloseShortcutBridge: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
+        context.coordinator.hostView = view
+        context.coordinator.projectShortcut = projectShortcut
+        context.coordinator.onHandleProjectShortcut = onHandleProjectShortcut
         context.coordinator.onHandleCloseShortcut = onHandleCloseShortcut
         return view
     }
 
     func updateNSView(_ view: NSView, context: Context) {
+        context.coordinator.projectShortcut = projectShortcut
+        context.coordinator.onHandleProjectShortcut = onHandleProjectShortcut
         context.coordinator.onHandleCloseShortcut = onHandleCloseShortcut
     }
 
     @MainActor
     final class Coordinator {
+        weak var hostView: NSView?
+        var projectShortcut = AppMenuShortcut()
+        var onHandleProjectShortcut: () -> Bool = { false }
         var onHandleCloseShortcut: () -> Bool = { false }
         private var localMonitor: Any?
 
@@ -570,11 +601,28 @@ private struct MainWindowCloseShortcutBridge: NSViewRepresentable {
                 guard let self else {
                     return event
                 }
+                if let window = self.hostView?.window,
+                   window.isKeyWindow,
+                   window.attachedSheet == nil,
+                   event.windowNumber == window.windowNumber,
+                   self.matchesProjectShortcut(event),
+                   self.onHandleProjectShortcut() {
+                    return nil
+                }
                 guard Self.matchesCloseShortcut(event) else {
                     return event
                 }
                 return self.onHandleCloseShortcut() ? nil : event
             }
+        }
+
+        private func matchesProjectShortcut(_ event: NSEvent) -> Bool {
+            var modifiers: NSEvent.ModifierFlags = [.command]
+            if projectShortcut.usesShift { modifiers.insert(.shift) }
+            if projectShortcut.usesOption { modifiers.insert(.option) }
+            if projectShortcut.usesControl { modifiers.insert(.control) }
+            return event.modifierFlags.intersection([.command, .shift, .option, .control]) == modifiers
+                && event.charactersIgnoringModifiers?.lowercased() == projectShortcut.key.rawValue
         }
 
         private static func matchesCloseShortcut(_ event: NSEvent) -> Bool {

@@ -26,8 +26,10 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
   - `cmux-embedded-window-buttons.patch` 让内嵌标题栏按 AppKit 系统按钮的真实 bounds 排除关闭、最小化和缩放按钮，统一用于单击拖动与双击标题栏动作；不得只检查 `contentView.hitTest`，因为 full-size content 会命中按钮下方的拖动层。回归入口为 `macos/scripts/test-cmux-window-buttons.sh <DevHaven.app 绝对路径>`
   - `cmux-embedded-terminal-focus.patch` 将终端工作区归属、自动焦点恢复与当前输入 pane 校验接到 `EmbeddedTerminalOwnerRegistry`；内嵌模式不得依赖独立 cmux 的 `AppDelegate.shared` 判断终端是否聚焦，否则鼠标按下会被当作 focus-only 点击丢弃，无法拖选。保留 selected workspace / input surface / 可见性校验，后台会话不得抢焦点。回归入口为 `macos/scripts/test-cmux-terminal-selection.sh <DevHaven.app 绝对路径>`。
   - `cmux-embedded-notification-indicators.patch` 让内嵌模式的通知清除、未读标记与 badge 同步使用宿主同一份 `TerminalNotificationStore.shared`，不依赖独立 cmux 的 `AppDelegate.shared`；visual BEL 的焦点判断同时校验当前项目、输入 surface、可见性与真实窗口 responder，避免聚焦终端误标未读。独立 cmux 保留原有通知存储与焦点路径。回归入口为 `macos/scripts/test-cmux-notification-indicators.sh <DevHaven.app 绝对路径>`。
+  - `cmux-embedded-desktop-notifications.patch` 将 OSC 桌面通知入口、异步 hook 前后与最终投递的 owner 解析接到内嵌 registry，同时补齐焦点和项目静音判断；关闭的 surface 不得接收迟到通知，移动的 surface 按当前归属投递。通知回归必须同时覆盖 BEL、OSC 9 和 OSC 777，只有 BEL 通过不能证明 Codex 通知正常。
   - `cmux-embedded-workspace-groups.patch` 将侧边栏空分组菜单直接接到当前 `TabManager`；分组 anchor 是 cmux 的原生工作区，项目同步不得把它当成未关联项目清理，也不得复用为新打开项目。`tabsPublisher` 会在拖动排序的 remove/insert 中间态发布，宿主必须合并到下一次主队列执行并读取最终 tabs，再判断项目关闭或未关联项目；不能用单次发布的缺失 ID 直接移除项目映射。回归入口为 `macos/scripts/test-cmux-workspace-groups.sh <DevHaven.app 绝对路径>`
   - `CmuxEmbeddedRootView.swift` 按项目路径将分组名称、成员、侧边栏顺序、折叠/置顶及颜色/图标保存在宿主 `UserDefaults` 的 `DevHaven.CmuxEmbedded.ProjectLayout.v1`，在首批项目同步完毕后映射到新 workspace ID；不得持久化运行时 workspace ID 作为项目身份，也不得通过恢复分组额外打开项目。监听 tabs/groups 的最终状态并在退出前保存；跨进程回归使用 `test-cmux-workspace-groups.sh <App 路径> --restore`。
+  - `cmux-embedded-group-workspace.patch` 为内嵌分组提供“打开分组终端 / 启动分组 Codex”菜单，并将普通分组单击和“＋”接到当前宿主的分组协同工作区。独立 cmux 保留原行为。分组终端使用独立 anchor，不能向成员项目的既有 shell 注入命令；每次启动 Codex 都创建一个分组级会话并按当前成员传入 `--add-dir`，不得向正在运行的 Codex 注入 shell 命令。已有会话的目录访问范围不随成员增删改变，需要新建会话使用新的成员范围。四项目真实菜单与终端启动回归为 `test-cmux-workspace-groups.sh <App 路径> --group-workspace`，Debug 框架用假 CLI 捕获参数，不启动真实 AI 会话。
 - `macos/ThirdParty/cmux/`
   - 构建脚本获取的 cmux 源码工作树，不纳入 DevHaven 版本库；`CmuxEmbedded` target 从其 `ContentView` 构建 Workspace 二级界面，不通过外部 cmux App 跳转
 - `macos/Sources/DevHavenApp/CmuxEmbeddedHostView.swift`
@@ -60,7 +62,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 - `macos/Sources/DevHavenApp/WorkspaceTerminalCommands.swift`
   - 工作区 terminal 的查找类菜单命令与 FocusedValue key；只负责把 App 菜单动作桥接到当前 focused pane，不持有 pane/runtime 真相源
 - `macos/Sources/DevHavenApp/WorkspaceProjectCommands.swift`
-  - 工作区“打开项目”菜单命令与 FocusedValue key；只负责把 App 菜单动作桥接到当前 workspace 壳层的 project picker 展示态，不持有 Core 业务状态真相源
+  - 工作区“打开项目”菜单命令；同文件的 `WorkspaceProjectCommandState` 将 `NativeAppViewModel` 的快捷键和启用态桥接为 `ObservableObject`。默认 `⌘K` 发送 `DevHaven.CmuxEmbedded.OpenProjectPicker`，由 `AppRootView` 与 cmux 的“＋”入口共用项目选择器展示动作；主页及其它弹窗时禁用，根视图防止重复展示。内嵌 cmux 有独立 `NSHostingView`，不能依赖旧侧边栏或外层 `FocusedValue` 传递此菜单动作；`AppRootView` 的 `MainWindowShortcutBridge` 在当前主窗口无 sheet 时优先路由项目快捷键，避免终端绑定及原生菜单焦点校验吞掉按键
 - `macos/Sources/DevHavenApp/WorkspaceSplitTreeView.swift`
   - 工作区 pane 扁平布局渲染；根据 `WorkspacePaneTree` 的 leaf frame / split handle 结果平铺 pane 与 divider overlay，不再让 pane host 跟着递归 split 树迁移
 - `macos/Sources/DevHavenApp/WorkspaceRootView.swift`
@@ -183,6 +185,8 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
   - 监听 `~/.devhaven/agent-status/sessions/` signal 文件、清理陈旧状态并向 ViewModel 推送快照
 - `macos/Sources/DevHavenCore/Storage/WorkspaceRestoreStore.swift`
   - 工作区恢复快照存储；负责 `~/.devhaven/session-restore/manifest{,.prev}.json` 与 `panes/*.txt` 的主/回退 manifest、pane 文本分文件读写，并保证 current/prev 两代快照引用的 pane 文本同时可回退
+- `macos/Sources/DevHavenCore/Storage/CmuxGroupWorkspaceRootStore.swift`
+  - cmux 分组的协同目录协议与 Codex 启动参数；以分组 UUID 在 `~/.devhaven/workspaces/cmux-group--<UUID>/` 保存 `WORKSPACE.json`、`WORKSPACE.md`、`AGENTS.md` 和成员目录符号链接。同名项目使用稳定别名，不复制源码、不统一成员分支。构建脚本将同一份纯 Foundation 源码与嵌入层入口拼接编入 CmuxEmbedded，供 C ABI 两侧使用同一协议；不得手改 ThirdParty 生成副本。
 - `macos/Sources/DevHavenCore/Restore/WorkspaceRestoreCoordinator.swift`
   - 工作区恢复协调器；负责启动 hydrate、自动保存节流、pane 上下文 merge 与空工作区时清理恢复快照
 - `macos/Sources/DevHavenApp/WorkspaceNotificationPresenter.swift`
@@ -278,7 +282,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
   - `GhosttySurfaceLifecycleDiagnostics` 只用于 split/attach/focus/reuse/resize 边界的运行期排障；日志应保持结构化、低歧义，默认不要记录终端可见文本或其它高噪音/高敏感内容
   - 搜索 UI 的展示条件以 `GhosttySurfaceState.searchNeedle` 为唯一真相源；不要再在 `WorkspaceShellView` / `DevHavenApp` 复制一份“是否显示搜索栏”的平行状态
   - App 菜单的搜索动作必须经由 `WorkspaceTerminalCommands` + `FocusedValue` 路由到当前 focused pane；不要在 `DevHavenApp.swift` 里直接查 pane/store/runtime，避免把场景态耦合回全局菜单层
-  - App 菜单的“打开项目”动作必须经由 `WorkspaceProjectCommands` + `FocusedValue` 路由到当前 `WorkspaceShellView` 的 project picker 展示态；不要把这类壳层弹窗状态下沉到 `NativeAppViewModel`
+  - App 菜单的“打开项目”动作经由 `WorkspaceProjectCommands` + `WorkspaceProjectCommandState` 发送通知，由 `AppRootView` 统一展示项目选择器；`MainWindowShortcutBridge` 负责当前主窗口的快捷键路由。不要把这类壳层弹窗状态下沉到 `NativeAppViewModel`
   - 对 zsh / bash 这类会继续加载用户 rc 文件的 shell，不能假设“进程启动时注入的 PATH”会一直保留；如果 Agent wrapper 依赖 PATH 前缀，必须在 shell integration 的 prompt/precmd 阶段再补一次，并把 wrapper bin 归一化到 PATH 首位，避免被用户 `.zshrc` / `.bashrc` 覆盖后直接绕过 wrapper
   - `DevHavenAppResourceBundleLocator` 是非 actor 的 bundle candidate 真相源；`GhosttyAppRuntime` 与 `DevHavenAppResourceLocator` 都应复用它，不要在非 UI 资源查找逻辑里直接耦合 `@MainActor` runtime
   - `AgentResources/bin/claude` 负责给 Claude 注入 hooks 与 session id；`AgentResources/hooks/devhaven-claude-hook` 把结构化 hook 事件写成 signal；`AgentResources/bin/codex` 负责写 running/completed/failed signal，并通过单次 CLI config override 给真实 Codex 注入 `notify`；`AgentResources/bin/devhaven-codex-notify` 负责把 `agent-turn-complete` payload 写成 waiting signal；`devhaven-agent-emit` 是唯一 signal 落盘入口

@@ -218,7 +218,6 @@ struct WorkspaceProjectSidebarHostView: View {
         .onChange(of: viewModel.workspaceSidebarProjectionRevision) { _, _ in
             syncSidebarProjection()
         }
-        .focusedSceneValue(\.openWorkspaceProjectPickerAction, openWorkspaceProjectPickerAction)
         .sheet(isPresented: $isProjectPickerPresented) {
             WorkspaceProjectPickerView(
                 projects: sidebarProjectionStore.projection.availableProjects,
@@ -406,15 +405,6 @@ struct WorkspaceProjectSidebarHostView: View {
             }
         } message: { request in
             Text("将删除工作区「\(request.name)」。不会删除项目本体，也不会删除已有仓库或 worktree。")
-        }
-    }
-
-    private var openWorkspaceProjectPickerAction: (() -> Void)? {
-        guard !sidebarProjectionStore.projection.availableProjects.isEmpty else {
-            return nil
-        }
-        return {
-            isProjectPickerPresented = true
         }
     }
 

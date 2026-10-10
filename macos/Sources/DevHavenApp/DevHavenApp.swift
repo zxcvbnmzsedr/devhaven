@@ -44,12 +44,16 @@ final class DevHavenAppDelegate: NSObject, NSApplicationDelegate {
 
 struct DevHavenApp: App {
     @NSApplicationDelegateAdaptor(DevHavenAppDelegate.self) private var appDelegate
-    @State private var viewModel = Self.makeViewModel()
+    @State private var viewModel: NativeAppViewModel
+    @StateObject private var projectCommandState: WorkspaceProjectCommandState
     @State private var cmuxHostStore = CmuxEmbeddedHostStore()
     @StateObject private var updateController = DevHavenUpdateController()
     @StateObject private var quitGuard = AppQuitGuard()
 
     init() {
+        let viewModel = Self.makeViewModel()
+        _viewModel = State(initialValue: viewModel)
+        _projectCommandState = StateObject(wrappedValue: WorkspaceProjectCommandState(viewModel: viewModel))
         _ = GhosttyAppRuntime.shared.runtime
     }
 
@@ -108,7 +112,13 @@ struct DevHavenApp: App {
             WorkspaceSearchCommands()
             WorkspaceEditorCommands()
             WorkspaceProjectCommands(
-                shortcut: viewModel.snapshot.appState.settings.workspaceOpenProjectShortcut
+                state: projectCommandState,
+                onOpenProjectPicker: {
+                    NotificationCenter.default.post(
+                        name: Notification.Name("DevHaven.CmuxEmbedded.OpenProjectPicker"),
+                        object: nil
+                    )
+                }
             )
         }
     }

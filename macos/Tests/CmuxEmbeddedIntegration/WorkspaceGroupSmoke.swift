@@ -128,6 +128,95 @@ struct WorkspaceGroupSmoke: App {
         }
     }
 
+    func clickGroupMenu(_ title: String, groupID: UUID) {
+        guard let view = views.first(where: { view in
+            guard String(reflecting: type(of: view)).hasSuffix(".SidebarGroupHeaderTableCellView"),
+                  let model = field(field(view, "model")!, "some") else { return false }
+            return field(model, "groupId") as? UUID == groupID
+        }), let event = NSEvent.mouseEvent(with: .rightMouseDown,
+            location: view.convert(NSPoint(x: 80, y: 10), to: nil), modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1),
+              let item = view.menu(for: event)?.items.first(where: { $0.title == title }),
+              let action = item.action else { fail("missing group menu: \(title)") }
+        check(NSApp.sendAction(action, to: item.target, from: item), "group menu dispatched: \(title)")
+    }
+
+    func moveProjectsToGroup(_ paths: [String], groupID: UUID, then finish: @escaping @MainActor @Sendable () -> Void) {
+        guard let path = paths.first else { finish(); return }
+        let id = projectIDs[path]!
+        let group = groups.first { field($0, "id") as? UUID == groupID }!
+        let groupName = field(group, "name") as! String
+        guard let view = views.first(where: { view in
+            guard String(reflecting: type(of: view)).hasSuffix(".SidebarWorkspaceRowTableCellView"),
+                  let model = field(field(view, "model")!, "some") else { return false }
+            return field(model, "workspaceId") as? UUID == id
+        }), let event = NSEvent.mouseEvent(with: .rightMouseDown,
+            location: view.convert(NSPoint(x: 80, y: 10), to: nil), modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1),
+              let menu = view.menu(for: event),
+              let submenu = menu.items.first(where: { $0.title == String(localized: "contextMenu.workspaceGroup.moveTo", defaultValue: "Move to Group") })?.submenu,
+              let item = submenu.items.first(where: { $0.title == groupName }), item.isEnabled,
+              let action = item.action else { fail("missing move-to-group menu for \(path)") }
+        check(NSApp.sendAction(action, to: item.target, from: item), "project move-to-group menu dispatched: \(path)")
+        later {
+            let workspace = workspaces.first { field($0, "id") as? UUID == id }!
+            check(self.groupID(of: workspace) == groupID, "project joined the group: \(path)")
+            moveProjectsToGroup(Array(paths.dropFirst()), groupID: groupID, then: finish)
+        }
+    }
+
+    func verifyGroupWorkspace() {
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent("devhaven-group-smoke-\(UUID())")
+        // /tmp 与 /private/tmp 是同一目录。四项目用例必须使用四个不同目录。
+        let extraPaths = ["second project", "third'project", "fourth project"].map { fixture.appendingPathComponent($0).path }
+        for path in extraPaths { try! FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true) }
+        let capture = fixture.appendingPathComponent("argv.bin")
+        let fakeCodex = fixture.appendingPathComponent("fake-codex")
+        let quotedCapture = "'" + capture.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        try! "#!/bin/bash\nprintf '%s\\0' \"$PWD\" \"$@\" > \(quotedCapture)\nsleep 20\n".write(to: fakeCodex, atomically: true, encoding: .utf8)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeCodex.path)
+        setenv("DEVHAVEN_TEST_REAL_CODEX", fakeCodex.path, 1)
+        projects = projects.filter { $0.path != "/private/tmp" }
+            + extraPaths.enumerated().map { .init(path: $0.element, name: "Project \($0.offset + 2)") }
+        later {
+            let originalIDs = projectIDs
+            let groupID = field(groups[0], "id") as! UUID
+            moveProjectsToGroup(projects.map(\.path), groupID: groupID) {
+                let root = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".devhaven/workspaces/cmux-group--\(groupID.uuidString.lowercased())")
+                let manifest = try! JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("WORKSPACE.json"))) as! [String: Any]
+                let members = manifest["members"] as! [[String: String]]
+                check(members.count == 4 && Set(members.compactMap { $0["path"] }) == Set(projects.map(\.path)),
+                      "group root includes all four actual projects")
+                check(projectIDs == originalIDs && closedProjects.isEmpty && pickerRequests == 0,
+                      "group membership retains every project session")
+                clickGroupMenu("打开分组终端", groupID: groupID)
+                later {
+                    check(projectIDs == originalIDs && closedProjects.isEmpty && pickerRequests == 0,
+                          "group terminal is separate from member projects")
+                    clickGroupMenu("启动分组 Codex", groupID: groupID)
+                    later {
+                        guard let data = try? Data(contentsOf: capture) else { fail("fake Codex did not launch") }
+                        let args = String(decoding: data, as: UTF8.self).split(separator: "\0").map(String.init)
+                        check(args.first == root.path && args.dropFirst().prefix(2) == ["--cd", root.path],
+                              "Codex starts in the shared group directory")
+                        let scope = args.enumerated().compactMap { index, arg in arg == "--add-dir" ? args[index + 1] : nil }
+                        check(scope.count == 4 && Set(scope) == Set(projects.map(\.path)),
+                              "one Codex receives all four real paths including spaces and quotes")
+                        check(projectIDs == originalIDs && closedProjects.isEmpty && pickerRequests == 0,
+                              "launching group Codex leaves member terminals intact")
+                        store.destroyAll()
+                        try? FileManager.default.removeItem(at: root)
+                        try? FileManager.default.removeItem(at: fixture)
+                        print("PASS: workspace group regression complete"); fflush(stdout); exit(0)
+                    }
+                }
+            }
+        }
+    }
+
     func later(_ action: @escaping @MainActor @Sendable () -> Void) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: action)
     }
@@ -199,6 +288,8 @@ struct WorkspaceGroupSmoke: App {
         dropProject("/private/tmp", intoGroupAt: 1)
         later {
             let id = field(groups[1], "id") as! UUID
+            clickGroupMenu("打开分组终端", groupID: id)
+            UserDefaults.standard.set(id.uuidString, forKey: "smoke.groupRootId")
             groupAction("onToggleCollapsed", groupID: id)
             groupAction("onTogglePinned", groupID: id)
             later {
@@ -224,6 +315,21 @@ struct WorkspaceGroupSmoke: App {
         let oldIDs = UserDefaults.standard.dictionary(forKey: "smoke.oldProjectIds") as! [String: String]
         check(projectIDs.allSatisfy { oldIDs[$0.key] != $0.value.uuidString },
               "restoration maps project paths to newly created workspace IDs")
+        if let saved = UserDefaults.standard.string(forKey: "smoke.groupRootId"), let id = UUID(uuidString: saved) {
+            let root = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".devhaven/workspaces/cmux-group--\(id.uuidString.lowercased())")
+            let pathsByID = Dictionary(uniqueKeysWithValues: projectIDs.map { ($0.value, $0.key) })
+            guard let anchor = workspaces.first(where: {
+                groupID(of: $0) == id && pathsByID[field($0, "id") as! UUID] == nil
+            }), var directory = field(anchor, "_currentDirectory") as? Published<String> else {
+                fail("restored group has no dedicated anchor")
+            }
+            var currentDirectory = ""
+            let subscription = directory.projectedValue.sink { currentDirectory = $0 }
+            subscription.cancel()
+            check(currentDirectory == root.path && FileManager.default.fileExists(atPath: root.appendingPathComponent("WORKSPACE.json").path),
+                  "fresh process restores the group terminal in its shared root")
+        }
         guard removeGroup else {
             store.destroyAll()
             print("PASS: group restore deleted complete"); fflush(stdout); exit(0)
@@ -266,6 +372,10 @@ struct WorkspaceGroupSmoke: App {
                               "groups survive host detach and reattach")
                         if CommandLine.arguments.contains("--restore-write") {
                             preparePersistentLayout()
+                            return
+                        }
+                        if CommandLine.arguments.contains("--group-workspace") {
+                            verifyGroupWorkspace()
                             return
                         }
                         verifyGroupDrops {

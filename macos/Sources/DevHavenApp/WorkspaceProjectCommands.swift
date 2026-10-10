@@ -1,30 +1,50 @@
 import SwiftUI
+import Observation
 import DevHavenCore
 
 struct WorkspaceProjectCommands: Commands {
-    let shortcut: AppMenuShortcut
-
-    @FocusedValue(\.openWorkspaceProjectPickerAction) private var openWorkspaceProjectPickerAction
+    @ObservedObject var state: WorkspaceProjectCommandState
+    let onOpenProjectPicker: () -> Void
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
-            Button("打开项目") {
-                openWorkspaceProjectPickerAction?()
-            }
-            .keyboardShortcut(shortcut.keyEquivalent, modifiers: shortcut.eventModifiers)
-            .disabled(openWorkspaceProjectPickerAction == nil)
+            Button("打开项目", action: onOpenProjectPicker)
+                .keyboardShortcut(state.shortcut.keyEquivalent, modifiers: state.shortcut.eventModifiers)
+                .disabled(!state.isEnabled)
         }
     }
 }
 
-private struct OpenWorkspaceProjectPickerActionKey: FocusedValueKey {
-    typealias Value = () -> Void
-}
+// Commands need an ObservableObject publisher to refresh an existing AppKit menu;
+// reading the Core's @Observable model in a command builder leaves stale items.
+@MainActor
+final class WorkspaceProjectCommandState: ObservableObject {
+    @Published private(set) var shortcut = AppMenuShortcut()
+    @Published private(set) var isEnabled = false
+    private let viewModel: NativeAppViewModel
 
-extension FocusedValues {
-    var openWorkspaceProjectPickerAction: (() -> Void)? {
-        get { self[OpenWorkspaceProjectPickerActionKey.self] }
-        set { self[OpenWorkspaceProjectPickerActionKey.self] = newValue }
+    init(viewModel: NativeAppViewModel) {
+        self.viewModel = viewModel
+        refresh()
+    }
+
+    private func refresh() {
+        let presentation = withObservationTracking {
+            (
+                shortcut: viewModel.snapshot.appState.settings.workspaceOpenProjectShortcut,
+                isEnabled: viewModel.isWorkspacePresented
+                    && !viewModel.isDashboardPresented
+                    && !viewModel.isSettingsPresented
+                    && !viewModel.isRecycleBinPresented
+                    && !viewModel.isDetailPanelPresented
+                    && viewModel.worktreeInteractionState == nil
+                    && viewModel.errorMessage == nil
+            )
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.refresh() }
+        }
+        if shortcut != presentation.shortcut { shortcut = presentation.shortcut }
+        if isEnabled != presentation.isEnabled { isEnabled = presentation.isEnabled }
     }
 }
 

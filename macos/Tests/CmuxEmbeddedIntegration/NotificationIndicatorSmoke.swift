@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Runs against the packaged framework without cmux's standalone AppDelegate.
-/// Sends a real shell BEL and AppKit input, then inspects the persistent ring layer.
+/// Sends real shell BEL/OSC notifications and AppKit input, then inspects the ring.
 @MainActor
 @main
 struct NotificationIndicatorSmoke: App {
@@ -98,6 +98,40 @@ struct NotificationIndicatorSmoke: App {
         view.mouseUp(with: event(.leftMouseUp, in: view, x: 20, y: 20))
     }
 
+    func testDesktopNotifications(first: NSView, second: NSView, index: Int = 0) {
+        let sequences = [
+            ("OSC 9", "\\033]9;Codex turn complete\\007"),
+            ("OSC 777", "\\033]777;notify;Codex;Turn complete\\007"),
+        ]
+        guard index < sequences.count else {
+            store.destroyAll()
+            print("PASS: notification indicator regression complete")
+            fflush(stdout)
+            exit(0)
+        }
+        let (name, sequence) = sequences[index]
+        click(second)
+        // Drain focus restoration from the preceding input/click before
+        // injecting the next notification into the background shell.
+        later {
+            check(window.firstResponder === second, "other pane owns input before \(name)")
+            first.insertText("sleep 0.5; printf '\(sequence)'\n")
+            later {
+                let ring = notificationRing(in: first)
+                check(ring.opacity == 1, "background \(name) creates a persistent unread ring")
+                guard window.firstResponder === second else {
+                    fail("\(name) changed focus: responder=\(String(describing: window.firstResponder)), sheet=\(String(describing: window.attachedSheet))")
+                }
+                check(true, "\(name) does not steal focus")
+                click(first)
+                later {
+                    check(ring.opacity == 0, "click clears \(name) unread state")
+                    testDesktopNotifications(first: first, second: second, index: index + 1)
+                }
+            }
+        }
+    }
+
     func run() {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -135,10 +169,7 @@ struct NotificationIndicatorSmoke: App {
                                     first.insertText(" ")
                                     later {
                                         check(ring.opacity == 0, "explicit terminal input clears unread state")
-                                        store.destroyAll()
-                                        print("PASS: notification indicator regression complete")
-                                        fflush(stdout)
-                                        exit(0)
+                                        testDesktopNotifications(first: first, second: second)
                                     }
                                 }
                             }

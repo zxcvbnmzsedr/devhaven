@@ -41,8 +41,14 @@ if [[ ! -f "$CMUX_DIR/cmux.xcodeproj/xcshareddata/xcschemes/CmuxEmbedded.xcschem
 fi
 cmp -s "$INTEGRATION_DIR/CmuxEmbedded.xcscheme" "$CMUX_DIR/cmux.xcodeproj/xcshareddata/xcschemes/CmuxEmbedded.xcscheme" ||
   cp "$INTEGRATION_DIR/CmuxEmbedded.xcscheme" "$CMUX_DIR/cmux.xcodeproj/xcshareddata/xcschemes/"
-cmp -s "$INTEGRATION_DIR/CmuxEmbeddedRootView.swift" "$CMUX_DIR/Sources/CmuxEmbeddedRootView.swift" ||
-  cp "$INTEGRATION_DIR/CmuxEmbeddedRootView.swift" "$CMUX_DIR/Sources/"
+# 分组目录存储是纯 Foundation 代码。将同一份 Core 源码编入独立框架，
+# 避免 C ABI 边界两侧维护两份目录协议，也不引入 DevHavenCore 链接依赖。
+embedded_source="$(mktemp "${TMPDIR:-/tmp}/devhaven-cmux-root.XXXXXX")"
+cat "$MACOS_DIR/Sources/DevHavenCore/Storage/CmuxGroupWorkspaceRootStore.swift" \
+    "$INTEGRATION_DIR/CmuxEmbeddedRootView.swift" > "$embedded_source"
+cmp -s "$embedded_source" "$CMUX_DIR/Sources/CmuxEmbeddedRootView.swift" ||
+  cp "$embedded_source" "$CMUX_DIR/Sources/CmuxEmbeddedRootView.swift"
+rm -f "$embedded_source"
 
 # This follow-up extends workspace-list/titlebar hunks. Peel it off before
 # checking those base patches, then reapply it after the base layer is ready.
@@ -106,6 +112,13 @@ elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedde
   exit 1
 fi
 
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-group-workspace.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-group-workspace.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-group-workspace.patch" 2>/dev/null; then
+  echo "cmux embedded group-workspace patch does not match the pinned source" >&2
+  exit 1
+fi
+
 if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-localization.patch" 2>/dev/null; then
   git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-localization.patch"
 elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-localization.patch" 2>/dev/null; then
@@ -131,6 +144,13 @@ if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-notification
   git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-notification-indicators.patch"
 elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-notification-indicators.patch" 2>/dev/null; then
   echo "cmux embedded notification-indicators patch does not match the pinned source" >&2
+  exit 1
+fi
+
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-desktop-notifications.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-desktop-notifications.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-desktop-notifications.patch" 2>/dev/null; then
+  echo "cmux embedded desktop-notifications patch does not match the pinned source" >&2
   exit 1
 fi
 

@@ -229,6 +229,10 @@ private final class CmuxEmbeddedHostView: NSView {
     private var titlebarDragMonitor: Any?
     private var needsPortalRebind = false
     private var didTearDown = false
+    private let groupRootStore = CmuxGroupWorkspaceRootStore()
+    private var groupRootSnapshots: [UUID: CmuxGroupWorkspaceRootStore.Manifest] = [:]
+    private var groupTerminalPanels: [UUID: UUID] = [:]
+    private var lastHostActivePath: String?
 
     private struct OriginalWindowState {
         let identifier: NSUserInterfaceItemIdentifier?
@@ -275,6 +279,14 @@ private final class CmuxEmbeddedHostView: NSView {
         tabManager.workspaceGroupsPublisher
             .sink { [weak self] _ in self?.scheduleProjectReconciliation() }
             .store(in: &subscriptions)
+        NotificationCenter.default.publisher(for: Notification.Name("DevHaven.CmuxEmbedded.OpenGroupWorkspace"))
+            .sink { [weak self] notification in
+                guard let self, let owner = notification.object as? TabManager,
+                      owner === self.tabManager,
+                      let id = notification.userInfo?["groupId"] as? UUID else { return }
+                self.openGroupWorkspace(id, launchCodex: notification.userInfo?["codex"] as? Bool == true)
+            }
+            .store(in: &subscriptions)
         NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
             .sink { [weak self] _ in
                 self?.saveProjectLayout()
@@ -305,6 +317,7 @@ private final class CmuxEmbeddedHostView: NSView {
 
     private func reconcileProjectsAfterWorkspaceMutation() {
         defer { saveProjectLayout() }
+        syncGroupRoots()
         // tabsPublisher emits during willSet, including remove/insert steps of
         // a single drag reorder. Reconcile only the settled live list: a missing
         // ID in an intermediate publication is not a closed project. Group
@@ -476,6 +489,8 @@ private final class CmuxEmbeddedHostView: NSView {
         isSynchronizingProjects = true
         defer {
             isSynchronizingProjects = false
+            lastHostActivePath = snapshot.activePath
+            syncGroupRoots()
             saveProjectLayout()
         }
 
@@ -521,12 +536,110 @@ private final class CmuxEmbeddedHostView: NSView {
         if let activePath = snapshot.activePath,
            let id = projectWorkspaceIds[activePath],
            let workspace = tabManager.tabs.first(where: { $0.id == id }),
+           !(lastHostActivePath == activePath && tabManager.selectedTabId.map(isGroupAnchor) == true),
            tabManager.selectedTabId != id {
             tabManager.selectWorkspace(workspace)
         }
         // Restore after active-project selection so its normal auto-expand
         // behavior cannot overwrite a saved collapsed group during startup.
         restoreProjectLayoutIfNeeded()
+    }
+
+    private func groupMembers(_ id: UUID) -> [CmuxGroupWorkspaceRootStore.Member] {
+        tabManager.tabs.filter { $0.groupId == id }.compactMap { workspace in
+            guard let path = projectPathsByWorkspaceId[workspace.id] else { return nil }
+            return .init(name: workspace.customTitle ?? workspace.title, path: path)
+        }
+    }
+
+    private func syncGroupRoots() {
+        let liveIds = Set(tabManager.workspaceGroups.map(\.id))
+        groupRootSnapshots = groupRootSnapshots.filter { liveIds.contains($0.key) }
+        groupTerminalPanels = groupTerminalPanels.filter { liveIds.contains($0.key) }
+        for group in tabManager.workspaceGroups {
+            let snapshot = CmuxGroupWorkspaceRootStore.Manifest(
+                version: 1, id: group.id, name: group.name, members: groupMembers(group.id)
+            )
+            guard groupRootSnapshots[group.id] != snapshot else { continue }
+            do {
+                try groupRootStore.sync(id: group.id, name: group.name, members: snapshot.members)
+                groupRootSnapshots[group.id] = snapshot
+            } catch {
+                // 后台同步失败不弹出对话框；用户打开分组时会获得具体错误。
+                NSLog("DevHaven 分组目录同步失败：%@", error.localizedDescription)
+            }
+        }
+    }
+
+    private func openGroupWorkspace(_ id: UUID, launchCodex: Bool) {
+        guard !didTearDown, let window, window.attachedSheet == nil,
+              NSApp.modalWindow == nil,
+              let group = tabManager.workspaceGroups.first(where: { $0.id == id }) else { return }
+        let members = groupMembers(id)
+        guard !members.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "分组还没有项目"
+            alert.informativeText = "先将项目拖入分组，再打开分组终端或启动 Codex。"
+            alert.beginSheetModal(for: window)
+            return
+        }
+        do {
+            let root = try groupRootStore.sync(id: id, name: group.name, members: members)
+            // 不向已有项目 shell 注入命令。分组始终有独立的终端工作区。
+            let existing = tabManager.workspaceGroupAnchor(for: id)
+            let workspace: Workspace
+            if let existing, projectPathsByWorkspaceId[existing.id] == nil {
+                workspace = existing
+            } else {
+                isSynchronizingProjects = true
+                defer { isSynchronizingProjects = false }
+                guard let created = tabManager.addWorkspaceIfActive(
+                    title: group.name, workingDirectory: root.path,
+                    workspaceEnvironment: ["DEVHAVEN_CMUX_GROUP_ID": id.uuidString],
+                    inheritWorkingDirectory: false, select: false,
+                    eagerLoadTerminal: false, autoWelcomeIfNeeded: false,
+                    normalizeWorkspaceGroupsAfterInsert: false
+                ) else { return }
+                workspace = created
+                workspace.groupId = id
+                tabManager.setWorkspaceGroupAnchor(groupId: id, workspaceId: workspace.id)
+                if let index = tabManager.workspaceGroups.firstIndex(where: { $0.id == id }) {
+                    tabManager.workspaceGroups[index].anchorWorkspaceProvenance = .generated
+                }
+            }
+            workspace.workspaceEnvironment["DEVHAVEN_CMUX_GROUP_ID"] = id.uuidString
+            tabManager.selectWorkspace(workspace)
+            tabManager.setWorkspaceGroupCollapsed(groupId: id, isCollapsed: false)
+            if launchCodex {
+                var executable = "codex"
+#if DEBUG
+                // 回归测试使用假 CLI 捕获参数，不启动真实 AI 会话。
+                if let override = getenv("DEVHAVEN_TEST_REAL_CODEX") {
+                    executable = String(cString: override)
+                }
+#endif
+                if let pane = workspace.bonsplitController.focusedPaneId {
+                    _ = workspace.newTerminalSurface(
+                        inPane: pane, focus: true, workingDirectory: root.path,
+                        initialInput: groupRootStore.codexCommand(id: id, members: members, executable: executable) + "\n"
+                    )
+                }
+            } else if let panelId = groupTerminalPanels[id], workspace.panels[panelId] != nil {
+                workspace.focusPanel(panelId)
+            } else if workspace.currentDirectory == root.path, let panelId = workspace.focusedPanelId,
+                      workspace.panels[panelId] is TerminalPanel {
+                groupTerminalPanels[id] = panelId
+            } else if let pane = workspace.bonsplitController.focusedPaneId,
+                      let panel = workspace.newTerminalSurface(inPane: pane, focus: true, workingDirectory: root.path) {
+                groupTerminalPanels[id] = panel.id
+            }
+            saveProjectLayout()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "无法打开分组工作区"
+            alert.informativeText = error.localizedDescription
+            alert.beginSheetModal(for: window)
+        }
     }
 
     // Persist only sidebar organization. DevHaven remains the owner of which
@@ -571,7 +684,11 @@ private final class CmuxEmbeddedHostView: NSView {
                 customColor: group.customColor, iconSymbol: group.iconSymbol,
                 externalID: group.externalID, isEmpty: group.isEmpty,
                 anchorProjectPath: group.liveAnchorWorkspaceId.flatMap { projectPathsByWorkspaceId[$0] },
-                anchorDirectory: group.liveAnchorWorkspaceId.flatMap { tabManager.workspacesById[$0]?.currentDirectory },
+                anchorDirectory: group.liveAnchorWorkspaceId.flatMap { id in
+                    guard let workspace = tabManager.workspacesById[id] else { return nil }
+                    return workspace.workspaceEnvironment["DEVHAVEN_CMUX_GROUP_ID"] != nil
+                        ? groupRootStore.rootURL(for: group.id).path : workspace.currentDirectory
+                },
                 projectPaths: tabManager.tabs.filter { $0.groupId == group.id }.compactMap { projectPathsByWorkspaceId[$0.id] }
             )
         }
@@ -620,6 +737,17 @@ private final class CmuxEmbeddedHostView: NSView {
             } else if saved.isEmpty && members.isEmpty {
                 anchor = nil
             } else {
+                if saved.anchorDirectory == groupRootStore.rootURL(for: saved.id).path {
+                    // 恢复的 shell 启动前先准备协同目录，兼容目录被用户清理的情况。
+                    _ = try? groupRootStore.sync(
+                        id: saved.id, name: saved.name,
+                        members: members.compactMap { workspace in
+                            projectPathsByWorkspaceId[workspace.id].map {
+                                .init(name: workspace.customTitle ?? workspace.title, path: $0)
+                            }
+                        }
+                    )
+                }
                 anchor = tabManager.addWorkspaceIfActive(
                     title: saved.name, workingDirectory: saved.anchorDirectory,
                     inheritWorkingDirectory: false, select: false,
@@ -631,6 +759,9 @@ private final class CmuxEmbeddedHostView: NSView {
                 members.insert(anchor, at: 0)
                 if projectPathsByWorkspaceId[anchor.id] == nil {
                     tabManager.setCustomTitle(tabId: anchor.id, title: saved.name, propagateToCloud: false)
+                    if saved.anchorDirectory == groupRootStore.rootURL(for: saved.id).path {
+                        anchor.workspaceEnvironment["DEVHAVEN_CMUX_GROUP_ID"] = saved.id.uuidString
+                    }
                 }
             }
             for member in members { member.groupId = saved.id }

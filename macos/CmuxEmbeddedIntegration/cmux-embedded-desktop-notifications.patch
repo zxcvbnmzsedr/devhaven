@@ -1,0 +1,200 @@
+--- a/Sources/GhosttyDesktopNotificationIngress.swift
++++ b/Sources/GhosttyDesktopNotificationIngress.swift
+@@ -47,12 +47,11 @@
+ 
+     @MainActor
+     private static func deliver(_ request: GhosttyDesktopNotificationRequest) async {
+-        guard let appDelegate = AppDelegate.shared,
+-              let target = appDelegate.agentNotificationDeliveryTarget(
++        guard let target = TerminalNotificationOwnerRouting.target(
+                 claimedTabId: request.tabId,
+                 surfaceId: request.surfaceId
+               ),
+-              let owningManager = appDelegate.tabManagerFor(tabId: target.tabId) ?? appDelegate.tabManager else {
++              let owningManager = TerminalNotificationOwnerRouting.manager(for: target.tabId) else {
+             return
+         }
+         let workspace = owningManager.workspacesById[target.tabId]
+@@ -72,3 +71,34 @@
+         )
+     }
+ }
++
++/// Shared by ingress, async hook resolution and final delivery. Embedded hosts
++/// have no cmux AppDelegate; standalone cmux keeps its existing owner resolver.
++@MainActor
++enum TerminalNotificationOwnerRouting {
++    static func manager(for tabId: UUID) -> TabManager? {
++        EmbeddedTerminalOwnerRegistry.manager(for: tabId)
++            ?? AppDelegate.shared?.tabManagerFor(tabId: tabId)
++            ?? AppDelegate.shared?.tabManager
++    }
++
++    static func target(claimedTabId: UUID?, surfaceId: UUID?) -> (tabId: UUID, surfaceId: UUID?)? {
++        if let surfaceId {
++            // Resolve again after asynchronous hooks: panes may move or close.
++            for manager in EmbeddedTerminalOwnerRegistry.managers.allObjects
++                where manager.isEmbeddedInHost && !manager.isFinalizedForWindowClose {
++                for workspace in manager.tabs {
++                    if let owner = workspace.surfaceOwnershipTarget(for: surfaceId) {
++                        return (workspace.id, owner.surfaceID)
++                    }
++                }
++            }
++        } else if let claimedTabId,
++                  EmbeddedTerminalOwnerRegistry.manager(for: claimedTabId) != nil {
++            return (claimedTabId, nil)
++        }
++        return AppDelegate.shared?.agentNotificationDeliveryTarget(
++            claimedTabId: claimedTabId, surfaceId: surfaceId
++        )
++    }
++}
+--- a/Sources/TerminalNotificationStore+HookResolution.swift
++++ b/Sources/TerminalNotificationStore+HookResolution.swift
+@@ -14,8 +14,8 @@
+         subtitle: String = "",
+         origin: TerminalNotificationOrigin = .local
+     ) async {
+-        guard let appDelegate = AppDelegate.shared,
+-              let initialTarget = appDelegate.agentNotificationDeliveryTarget(
++        let appDelegate = AppDelegate.shared
++        guard let initialTarget = TerminalNotificationOwnerRouting.target(
+                 claimedTabId: tabId,
+                 surfaceId: surfaceId
+               ) else {
+@@ -25,15 +25,14 @@
+             return
+         }
+         let initialManager = initialTarget.surfaceId.flatMap {
+-            appDelegate.notificationSurfaceOwner(
++            appDelegate?.notificationSurfaceOwner(
+                 surfaceID: $0,
+                 preferredTabID: initialTarget.tabId
+             )?.tabManager
+         }
+-            ?? appDelegate.tabManagerFor(tabId: initialTarget.tabId)
+-            ?? appDelegate.tabManager
++            ?? TerminalNotificationOwnerRouting.manager(for: initialTarget.tabId)
+         let globalConfigPath = initialManager.flatMap {
+-            appDelegate.mainWindowContext(for: $0)?.cmuxConfigStore?.globalConfigPath
++            appDelegate?.mainWindowContext(for: $0)?.cmuxConfigStore?.globalConfigPath
+         }
+             ?? CmuxConfigStore.defaultGlobalConfigPath()
+         let policyRequestId = beginDesktopNotificationHookResolution(
+@@ -55,7 +54,7 @@
+             globalConfigPath: globalConfigPath
+         )
+         guard !Task.isCancelled else { return }
+-        guard let target = appDelegate.agentNotificationDeliveryTarget(
++        guard let target = TerminalNotificationOwnerRouting.target(
+                 claimedTabId: tabId,
+                 surfaceId: surfaceId
+               ) else {
+@@ -65,13 +64,12 @@
+             return
+         }
+         let owningManager = target.surfaceId.flatMap {
+-            appDelegate.notificationSurfaceOwner(
++            appDelegate?.notificationSurfaceOwner(
+                 surfaceID: $0,
+                 preferredTabID: target.tabId
+             )?.tabManager
+         }
+-            ?? appDelegate.tabManagerFor(tabId: target.tabId)
+-            ?? appDelegate.tabManager
++            ?? TerminalNotificationOwnerRouting.manager(for: target.tabId)
+         guard let owningManager else {
+             return
+         }
+--- a/Sources/TerminalNotificationStore+FocusState.swift
++++ b/Sources/TerminalNotificationStore+FocusState.swift
+@@ -1,10 +1,29 @@
+ import Foundation
++import AppKit
+ 
+ extension TerminalNotificationStore {
+     func notificationFocusState(
+         tabId: UUID,
+         surfaceId: UUID?
+     ) -> NotificationFocusState {
++        if let manager = EmbeddedTerminalOwnerRegistry.manager(for: tabId),
++           let workspace = manager.workspacesById[tabId] {
++            let focusedSurfaceId = manager.focusedSurfaceId(for: tabId)
++            let panel = focusedSurfaceId.flatMap { workspace.surfaceOwnershipTarget(for: $0)?.panel as? TerminalPanel }
++            let view = panel?.hostedView
++            let window = view?.window
++            let ownsFocus = NSApp.isActive && window?.isKeyWindow == true
++                && window?.attachedSheet == nil
++                && view?.isHiddenOrHasHiddenAncestor == false
++                && view?.isSurfaceViewFirstResponder() == true
++            return NotificationFocusState(
++                isAppFocused: ownsFocus,
++                isActiveTab: manager.selectedTabId == tabId,
++                isFocusedSurface: surfaceId == nil || focusedSurfaceId == surfaceId,
++                workspace: workspace,
++                cmuxConfigStore: nil
++            )
++        }
+         let appDelegate = AppDelegate.shared
+         let context = appDelegate?.contextContainingTabId(tabId)
+         let tabManager = context?.tabManager
+--- a/Sources/TerminalNotificationStore+Mute.swift
++++ b/Sources/TerminalNotificationStore+Mute.swift
+@@ -9,6 +9,9 @@
+ @MainActor
+ extension TerminalNotificationStore {
+     private func workspace(for tabId: UUID) -> Workspace? {
++        if let manager = EmbeddedTerminalOwnerRegistry.manager(for: tabId) {
++            return manager.workspacesById[tabId]
++        }
+         guard let appDelegate = AppDelegate.shared else { return nil }
+         if let workspace = appDelegate.workspaceFor(tabId: tabId) {
+             return workspace
+@@ -35,7 +38,7 @@
+     ) -> UUID {
+         guard retargetsToLiveSurfaceOwner,
+               let surfaceId,
+-              let liveTarget = AppDelegate.shared?.agentNotificationDeliveryTarget(
++              let liveTarget = TerminalNotificationOwnerRouting.target(
+                   claimedTabId: claimedTabId,
+                   surfaceId: surfaceId
+               ) else {
+--- a/Sources/TerminalNotificationLiveRetargetDelivery.swift
++++ b/Sources/TerminalNotificationLiveRetargetDelivery.swift
+@@ -28,7 +28,7 @@
+             // Trusted local delivery follows the surface's CURRENT workspace.
+             // A missing live target fails closed instead of filing under a
+             // stale claimed address.
+-            guard let liveTarget = AppDelegate.shared?.agentNotificationDeliveryTarget(
++            guard let liveTarget = TerminalNotificationOwnerRouting.target(
+                 claimedTabId: tabId,
+                 surfaceId: surfaceId
+             ) else { return nil }
+@@ -89,7 +89,7 @@
+         notificationGeneration: UInt64,
+         soundContext: NotificationSoundOverrideContext? = nil
+     ) {
+-        guard let target = AppDelegate.shared?.agentNotificationDeliveryTarget(
++        guard let target = TerminalNotificationOwnerRouting.target(
+             claimedTabId: claimedTabId,
+             surfaceId: surfaceId
+         ) else {
+@@ -126,7 +126,7 @@
+         _ request: TerminalNotificationPolicyRequest
+     ) -> TerminalNotificationPolicyRequest? {
+         guard request.retargetsToLiveSurfaceOwner else { return request }
+-        guard let target = AppDelegate.shared?.agentNotificationDeliveryTarget(
++        guard let target = TerminalNotificationOwnerRouting.target(
+             claimedTabId: request.tabId,
+             surfaceId: request.surfaceId
+         ) else { return nil }
+@@ -169,7 +169,7 @@
+         pendingNotificationSequencesResolvingLiveOwner(
+             forTabId: tabId,
+             liveOwnerResolver: { claimedTabId, surfaceId in
+-                AppDelegate.shared?.agentNotificationDeliveryTarget(
++                TerminalNotificationOwnerRouting.target(
+                     claimedTabId: claimedTabId,
+                     surfaceId: surfaceId
+                 )?.tabId

@@ -34,7 +34,11 @@ if [[ "${2:-}" == "--restore" ]]; then
     rg -q "^PASS: group restore $stage complete$" "$STAGE_LOG"
   done
 else
-  open -n -W --stdout "$SMOKE_LOG" --stderr "$SMOKE_LOG" "$SMOKE_APP"
+  if [[ "${2:-}" == "--group-workspace" ]]; then
+    open -n -W --stdout "$SMOKE_LOG" --stderr "$SMOKE_LOG" "$SMOKE_APP" --args --group-workspace
+  else
+    open -n -W --stdout "$SMOKE_LOG" --stderr "$SMOKE_LOG" "$SMOKE_APP"
+  fi
   cat "$SMOKE_LOG"
   rg -q '^PASS: workspace group regression complete$' "$SMOKE_LOG"
 fi
