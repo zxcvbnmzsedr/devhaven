@@ -1,0 +1,17 @@
+--- a/Sources/PaneTransferDropRouter.swift
++++ b/Sources/PaneTransferDropRouter.swift
+@@ -33,3 +33,13 @@
+         containerResolver: @escaping ContainerResolver = { context in
+-            AppDelegate.shared?.paneDropContainer(for: context)
++            // 内嵌宿主没有独立 cmux 的 AppDelegate，按目标工作区解析归属。
++            if let manager = EmbeddedTerminalOwnerRegistry.manager(for: context.workspaceId) {
++                guard !context.isDockHosted,
++                      let workspace = manager.workspacesById[context.workspaceId],
++                      let surfaceId = workspace.surfaceIdFromPanelId(context.panelId),
++                      workspace.bonsplitController.paneId(containing: surfaceId) == context.paneId else {
++                    return nil
++                }
++                return workspace
++            }
++            return AppDelegate.shared?.paneDropContainer(for: context)
+         },

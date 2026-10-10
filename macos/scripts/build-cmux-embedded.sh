@@ -133,6 +133,13 @@ elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedde
   exit 1
 fi
 
+if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-file-drop.patch" 2>/dev/null; then
+  git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-file-drop.patch"
+elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-file-drop.patch" 2>/dev/null; then
+  echo "cmux embedded file-drop patch does not match the pinned source" >&2
+  exit 1
+fi
+
 if git -C "$CMUX_DIR" apply --check "$INTEGRATION_DIR/cmux-embedded-window-buttons.patch" 2>/dev/null; then
   git -C "$CMUX_DIR" apply "$INTEGRATION_DIR/cmux-embedded-window-buttons.patch"
 elif ! git -C "$CMUX_DIR" apply --reverse --check "$INTEGRATION_DIR/cmux-embedded-window-buttons.patch" 2>/dev/null; then
