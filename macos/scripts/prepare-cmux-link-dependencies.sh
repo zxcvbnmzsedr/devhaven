@@ -22,7 +22,8 @@ for framework in Sentry Iroh; do
     echo "Missing cmux link dependency: $binary" >&2
     exit 1
   }
-  lipo -verify_arch "$build_arch" "$binary" || {
+  # 输入文件必须放在 -verify_arch 前，避免 Xcode lipo 将路径解析为架构名称。
+  lipo "$binary" -verify_arch "$build_arch" || {
     echo "cmux link dependency does not support $build_arch: $binary" >&2
     exit 1
   }

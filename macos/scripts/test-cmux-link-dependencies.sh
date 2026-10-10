@@ -8,6 +8,22 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 products="$TEST_DIR/Build Products"
 destination="$TEST_DIR/Clean Vendor/CmuxBuildProducts"
 
+# 本机部分 lipo 版本允许旧参数顺序，CI 的 Xcode lipo 会拒绝。
+# 只收紧参数解析；架构检查、静态库合并和链接仍使用真实工具。
+export DEVHAVEN_TEST_REAL_LIPO="$(command -v lipo)"
+mkdir -p "$TEST_DIR/tools"
+cat > "$TEST_DIR/tools/lipo" <<'LIPO'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "-verify_arch" ]]; then
+  echo "lipo: -verify_arch requires the input file before the option" >&2
+  exit 1
+fi
+exec "$DEVHAVEN_TEST_REAL_LIPO" "$@"
+LIPO
+chmod +x "$TEST_DIR/tools/lipo"
+export PATH="$TEST_DIR/tools:$PATH"
+
 # Real versioned static frameworks exercise symlinks, architecture validation,
 # and the same -F / -framework lookup used by SwiftPM on a clean CI runner.
 for framework in Sentry Iroh; do
@@ -35,7 +51,7 @@ for arch in arm64 x86_64; do
   [[ -L "$destination/Sentry.framework/Sentry" ]]
   xcrun clang -target "$arch-apple-macos14.0" "$TEST_DIR/main.c" \
     -F "$destination" -framework Sentry -framework Iroh -o "$TEST_DIR/probe-$arch"
-  lipo -verify_arch "$arch" "$TEST_DIR/probe-$arch"
+  lipo "$TEST_DIR/probe-$arch" -verify_arch "$arch"
 done
 "$TEST_DIR/probe-$(uname -m)"
 
@@ -58,6 +74,6 @@ if bash "$PREPARE_SCRIPT" "$products" "$destination" x86_64 > "$TEST_DIR/error.l
   echo "Wrong architecture unexpectedly accepted" >&2; exit 1
 fi
 grep -q 'does not support x86_64' "$TEST_DIR/error.log"
-lipo -verify_arch x86_64 "$destination/Iroh.framework/Iroh"
+lipo "$destination/Iroh.framework/Iroh" -verify_arch x86_64
 
 echo "cmux link dependencies smoke ok (arm64 + x86_64)"

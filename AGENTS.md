@@ -208,7 +208,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 - `macos/scripts/build-cmux-embedded.sh`
   - 固定 cmux commit、应用 `CmuxEmbeddedIntegration` 补丁，并按目标架构构建 `CmuxEmbedded.xcframework`，供 DevHaven 原生入口加载
 - `macos/scripts/prepare-cmux-link-dependencies.sh`
-  - 由 cmux 构建入口调用，从本次 Debug / Release 构建产物复制 `Sentry.framework`、`Iroh.framework` 到 `macos/Vendor/CmuxBuildProducts`，供 `Package.swift` 链接；复制前必须校验两个框架及目标架构，不能依赖本机残留产物。这两个依赖是静态框架，无需另行嵌入 App。回归入口为 `bash macos/scripts/test-cmux-link-dependencies.sh`。
+  - 由 cmux 构建入口调用，从本次 Debug / Release 构建产物复制 `Sentry.framework`、`Iroh.framework` 到 `macos/Vendor/CmuxBuildProducts`，供 `Package.swift` 链接；复制前必须校验两个框架及目标架构，不能依赖本机残留产物。架构校验使用 `lipo <输入文件> -verify_arch <架构>`，输入文件必须在选项前，并使用 Xcode 工具链执行回归，避免系统工具与 CI 的参数解析差异。这两个依赖是静态框架，无需另行嵌入 App。回归入口为 `bash macos/scripts/test-cmux-link-dependencies.sh`。
 - `macos/scripts/prepare-cmux-localization.py`、`macos/CmuxEmbeddedIntegration/Localization/`
   - 编译上游 cmux 与 macOS/共享 package 的简体中文资源，补齐 Bonsplit 标签栏中文；翻译补充保存在 `Main.json` / `Bonsplit.json`，不要直接修改忽略的 ThirdParty catalog。品牌、快捷键和命令语法保留原文，并在构建时检查上游变化与缺失翻译。
   - cmux 的 `String(localized:)` 默认查找 `Bundle.main`，因此打包脚本必须将中文 `.lproj` 安装到 App 主 Resources；`dev` 必须安装到 SwiftPM executable 所在目录。Swift package 的资源 bundle 随 CmuxEmbedded.framework 分发，供 `Bundle.module` 独立查找。
