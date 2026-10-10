@@ -72,6 +72,7 @@ done
 
 command -v ditto >/dev/null 2>&1 || fail "未检测到 ditto"
 command -v lipo >/dev/null 2>&1 || fail "未检测到 lipo"
+command -v codesign >/dev/null 2>&1 || fail "未检测到 codesign"
 command -v /usr/libexec/PlistBuddy >/dev/null 2>&1 || fail "未检测到 PlistBuddy"
 
 ARM64_APP="$(resolve_path "$ARM64_APP")"
@@ -118,6 +119,11 @@ output_cmux="$OUTPUT_APP/$cmux_relative_path"
 [[ -f "$x86_cmux" ]] || fail "x86_64 .app 缺少 CmuxEmbedded.framework"
 lipo -create "$arm64_cmux" "$x86_cmux" -output "$output_cmux"
 chmod +x "$output_cmux"
+
+# lipo 改写主程序和嵌入框架后，原有代码签名失效。
+# 先恢复有效的 ad-hoc 签名；发布流程仍可继续执行 Developer ID 签名。
+codesign --force --deep --sign - "$OUTPUT_APP"
+codesign --verify --deep --strict "$OUTPUT_APP"
 
 printf 'UNIVERSAL_APP=%s\n' "$OUTPUT_APP"
 file "$output_exec"

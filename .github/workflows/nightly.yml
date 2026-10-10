@@ -287,6 +287,9 @@ jobs:
           name: nightly-native-app-zip-x86_64
           path: ${{ runner.temp }}/download/x86_64
 
+      - name: Test universal app signing
+        run: bash macos/scripts/test-create-universal-app.sh
+
       - name: Assemble universal nightly .app
         id: universal
         shell: bash

@@ -10,6 +10,11 @@ on:
         description: "Optional tag to release (e.g. v3.0.1). Leave empty to use the triggering ref."
         required: false
         type: string
+      publish_existing:
+        description: "Reuse an existing release's arm64/x86_64 assets to rebuild the universal archive and appcast."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -47,6 +52,16 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
 
+      - name: Validate existing release architecture assets
+        if: ${{ inputs.publish_existing }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.resolve-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          usable="$(gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | (index("DevHaven-macos-arm64.zip") != null and index("DevHaven-macos-x86_64.zip") != null)')"
+          [[ "$usable" == true ]] || { echo "现有 Release 缺少两个架构安装包，无法恢复发布。" >&2; exit 1; }
+
       - name: Remove duplicate draft releases for tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -81,6 +96,7 @@ jobs:
           fi
 
   prepare-ghostty-vendor:
+    if: ${{ !inputs.publish_existing }}
     runs-on: macos-26
 
     steps:
@@ -142,6 +158,7 @@ jobs:
           if-no-files-found: error
 
   build-macos-native:
+    if: ${{ !inputs.publish_existing }}
     needs:
       - prepare-release
       - prepare-ghostty-vendor
@@ -261,6 +278,7 @@ jobs:
           gh release upload "$RELEASE_TAG" "${{ steps.archive.outputs.zip_path }}" --clobber
 
   publish-appcast:
+    if: ${{ !cancelled() && needs.prepare-release.result == 'success' && (needs.build-macos-native.result == 'success' || inputs.publish_existing) }}
     needs:
       - prepare-release
       - build-macos-native
@@ -301,16 +319,29 @@ jobs:
           bash macos/scripts/setup-sparkle-framework.sh --ensure-worktree-vendor
 
       - name: Download arm64 archive artifact
+        if: ${{ !inputs.publish_existing }}
         uses: actions/download-artifact@v4
         with:
           name: native-app-zip-arm64
           path: ${{ runner.temp }}/download/arm64
 
       - name: Download x86_64 archive artifact
+        if: ${{ !inputs.publish_existing }}
         uses: actions/download-artifact@v4
         with:
           name: native-app-zip-x86_64
           path: ${{ runner.temp }}/download/x86_64
+
+      - name: Download existing release architecture archives
+        if: ${{ inputs.publish_existing }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --pattern 'DevHaven-macos-arm64.zip' --dir "$RUNNER_TEMP/download/arm64"
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --pattern 'DevHaven-macos-x86_64.zip' --dir "$RUNNER_TEMP/download/x86_64"
+
+      - name: Test universal app signing
+        run: bash macos/scripts/test-create-universal-app.sh
 
       - name: Assemble universal .app
         id: universal

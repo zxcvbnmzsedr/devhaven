@@ -219,7 +219,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 - `macos/scripts/setup-sparkle-framework.sh`
   - 准备 `macos/Vendor` 的 Sparkle.xcframework 与 SparkleTools
 - `macos/scripts/create-universal-app.sh`
-  - 把 arm64 / x86_64 `.app` 及其 CmuxEmbedded.framework 合成 universal `.app`，供 Sparkle feed 发布使用
+  - 把 arm64 / x86_64 `.app` 及其 CmuxEmbedded.framework 合成 universal `.app`，供 Sparkle feed 发布使用。`lipo` 会使原有嵌套签名失效，合成后必须重新执行 ad-hoc 签名及深度严格校验；发布流程仍可进一步使用 Developer ID 签名。真实双架构与签名回归入口为 `bash macos/scripts/test-create-universal-app.sh`，release/nightly 在合成前执行。
 - `macos/scripts/generate-appcast.sh`
   - Sparkle `generate_appcast` 的统一封装，负责生成 stable/nightly appcast
 - `macos/scripts/promote-appcast.sh`
@@ -229,7 +229,7 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
 - `macos/Resources/DevHaven.icns`
   - 原生 App 图标
 - `.github/workflows/release.yml`
-  - stable release / staged appcast / universal updater 资产发布链路
+  - stable release / staged appcast / universal updater 资产发布链路；手动运行的 `publish_existing=true` 可从指定 `tag` 已上传的 arm64/x86_64 资产重新合成 Universal 安装包并恢复 appcast 发布，跳过源码编译，不移动版本标签，也不重建两个架构的安装包。
 - `.github/workflows/nightly.yml`
   - nightly 独立构建、独立 appcast feed 与 alias promote 链路
 - `docs/releases/`
