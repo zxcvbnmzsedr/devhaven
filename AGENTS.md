@@ -206,6 +206,8 @@ DevHaven 当前仓库已经收口为 **纯 macOS 原生主线**：唯一保留�
   - 原生 UI / Core 测试
 - `macos/scripts/build-native-app.sh`
   - 原生 `.app` 本地打包脚本；负责嵌入 Sparkle.framework 与 CmuxEmbedded.framework，并写入 `CFBundleVersion` / `SUFeedURL` / `DevHavenUpdateDeliveryMode` / 下载页 URL / `SUPublicEDKey`
+- `macos/scripts/prepare-native-app-release.sh`
+  - Release App 组装后的精简入口；仅处理 staging App，使用 `strip -S -x` 清理主程序、CLI 和 CmuxEmbedded 的调试与局部符号，保留动态加载所需的全局符号；移除 CmuxEmbedded 的 Swift 编译模块及顶层 Modules 链接。精简必须在最终签名前执行，不修改 Vendor / SwiftPM / Xcode 原始产物，Debug 打包不执行。双架构与动态入口回归为 `bash macos/scripts/test-native-app-release.sh`。
 - `macos/scripts/build-cmux-embedded.sh`
   - 固定 cmux commit、应用 `CmuxEmbeddedIntegration` 补丁，并按目标架构构建 `CmuxEmbedded.xcframework`，供 DevHaven 原生入口加载
 - `macos/scripts/prepare-cmux-link-dependencies.sh`

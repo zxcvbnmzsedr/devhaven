@@ -363,6 +363,11 @@ chmod +x "$APP_STAGE_PATH/Contents/MacOS/DevHavenApp"
 chmod +x "$APP_STAGE_PATH/Contents/MacOS/DevHavenCLI"
 plutil -lint "$INFO_PLIST_PATH" >/dev/null
 
+if [[ "$CONFIGURATION" == "release" ]]; then
+  log "精简 Release App 的符号与 Swift 编译模块"
+  bash "$SCRIPT_DIR/prepare-native-app-release.sh" "$APP_STAGE_PATH"
+fi
+
 mkdir -p "$OUTPUT_DIR"
 if [[ -e "$APP_OUTPUT_PATH" ]]; then
   log "清理旧产物：${APP_OUTPUT_PATH}"

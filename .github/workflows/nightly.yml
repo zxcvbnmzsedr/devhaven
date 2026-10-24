@@ -178,6 +178,9 @@ jobs:
       - name: Test cmux link dependency staging
         run: bash macos/scripts/test-cmux-link-dependencies.sh
 
+      - name: 验证 Release App 精简
+        run: bash macos/scripts/test-native-app-release.sh
+
       - name: Build embedded cmux framework
         env:
           CMUX_EMBEDDED_ARCH: ${{ matrix.arch }}

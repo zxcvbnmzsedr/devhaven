@@ -82,7 +82,7 @@ struct TerminalExitSmoke: App {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: action)
     }
 
-    func controlD() {
+    func controlD(settleFocus: Bool = true) {
         window.makeKeyAndOrderFront(nil)
         guard let surface = descendants(window.contentView!.superview ?? window.contentView!).last(where: {
             String(reflecting: type(of: $0)).hasSuffix(".GhosttyNSView") &&
@@ -101,8 +101,16 @@ struct TerminalExitSmoke: App {
             timestamp: ProcessInfo.processInfo.systemUptime + 0.001, windowNumber: window.windowNumber,
             context: nil, characters: "\u{04}", charactersIgnoringModifiers: "d", isARepeat: false, keyCode: 2)
         else { fail("key event creation") }
-        NSApp.sendEvent(down)
-        NSApp.sendEvent(up)
+        let send: @MainActor @Sendable () -> Void = {
+            NSApp.sendEvent(down)
+            NSApp.sendEvent(up)
+        }
+        if settleFocus {
+            // 让 AppKit 焦点与 cmux 输入 surface 完成同步，再模拟用户按键。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: send)
+        } else {
+            send()
+        }
     }
 
     func updateProjects() {
@@ -150,7 +158,7 @@ struct TerminalExitSmoke: App {
                             generation += 1
                             later {
                                 check(panelCounts == [1], "reopening creates a fresh live terminal")
-                                controlD()
+                                controlD(settleFocus: false)
                                 // The child-exit callback is asynchronous. Suspend the
                                 // host now, as returning home does, before it is delivered.
                                 typealias Suspend = @convention(c) (UnsafeMutableRawPointer?) -> Void
